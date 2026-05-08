@@ -20,10 +20,10 @@ export function Stat({ label, value, delta, icon, accent }) {
 
 export function Badge({ status, children }) {
   const map = {
-    active: 'badge-success', paid: 'badge-success', success: 'badge-success', approved: 'badge-success', completed: 'badge-success', available: 'badge-success',
+    active: 'badge-success', paid: 'badge-success', success: 'badge-success', approved: 'badge-success', completed: 'badge-success', available: 'badge-success', sent: 'badge-success',
     pending: 'badge-warn', submitted: 'badge-warn', under_review: 'badge-warn', partial: 'badge-warn', maintenance: 'badge-warn',
     overdue: 'badge-danger', rejected: 'badge-danger', defaulted: 'badge-danger', failed: 'badge-danger', suspended: 'badge-danger',
-    allocated: 'badge-info', sold: 'badge-info', signed: 'badge-info'
+    allocated: 'badge-info', sold: 'badge-info', signed: 'badge-info', read: 'badge-info'
   };
   return <span className={`badge ${map[status] || 'badge-muted'}`}>{children || status}</span>;
 }

@@ -225,7 +225,7 @@ router.get('/:id', authRequired, (req, res) => {
   res.json({ application: app, documents, agreement });
 });
 
-router.post('/:id/approve', authRequired, adminOnly, (req, res) => {
+router.post('/:id/approve', authRequired, adminOnly, async (req, res) => {
   const { bike_id, weekly_amount, total_weeks, start_date } = req.body;
   if (!bike_id || !weekly_amount || !start_date) {
     return res.status(400).json({ error: 'bike_id, weekly_amount, start_date required' });
@@ -274,6 +274,14 @@ router.post('/:id/approve', authRequired, adminOnly, (req, res) => {
       'verified',
       req.user.id
     );
+
+  await sendNotification({
+    userId: app.user_id,
+    channel: 'email',
+    type: 'application_approved',
+    title: 'OnFleet application approved',
+    message: `Hi ${rider.full_name.split(' ')[0]}, your application has been approved. Your bike has been allocated and your agreement ${agreementNo} is now ready for review and signature on the platform.`
+  });
 
   logAudit(req.user.id, 'application.approve', 'applications', Number(req.params.id), { agreementId });
   res.json({ ok: true, agreement_id: agreementId, agreement_no: agreementNo, contract_file_path: contractPath });

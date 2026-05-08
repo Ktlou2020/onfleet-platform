@@ -1,7 +1,7 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth';
 import Logo from '../../components/Logo';
-import { LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ShieldCheck, ClipboardList, BrainCircuit, LogOut, UploadCloud } from 'lucide-react';
+import { LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ShieldCheck, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell } from 'lucide-react';
 
 export default function AdminShell() {
   const { user, logout } = useAuth();
@@ -19,6 +19,7 @@ export default function AdminShell() {
           <NavLink to="/admin/agreements"><FileText size={16} /> Agreements</NavLink>
           <NavLink to="/admin/bikes"><Bike size={16} /> Bikes Fleet</NavLink>
           <NavLink to="/admin/payments"><CreditCard size={16} /> Payments</NavLink>
+          <NavLink to="/admin/notifications"><Bell size={16} /> Notifications</NavLink>
           <NavLink to="/admin/imports"><UploadCloud size={16} /> CSV Imports</NavLink>
           <NavLink to="/admin/strategy"><BrainCircuit size={16} /> AI Strategy</NavLink>
           <NavLink to="/admin/kyc"><ShieldCheck size={16} /> KYC Review</NavLink>
@@ -38,7 +39,10 @@ export default function AdminShell() {
       <div className="main">
         <div className="topbar">
           <div className="text-sm muted">Admin Console · OnFleet Africa</div>
-          <div className="text-xs muted">Logged in as <strong>{user?.email}</strong></div>
+          <div className="row" style={{ gap: 10 }}>
+            <NavLink to="/admin/notifications" className="btn btn-secondary btn-sm"><Bell size={16} /> Notifications</NavLink>
+            <div className="text-xs muted">Logged in as <strong>{user?.email}</strong></div>
+          </div>
         </div>
         <div className="content"><Outlet /></div>
       </div>

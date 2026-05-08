@@ -14,6 +14,7 @@ export default function RiderShell() {
           <NavLink to="/dashboard"><LayoutDashboard size={16} /> Dashboard</NavLink>
           <NavLink to="/agreements"><FileText size={16} /> My Agreement</NavLink>
           <NavLink to="/payments"><CreditCard size={16} /> Payments</NavLink>
+          <NavLink to="/notifications"><Bell size={16} /> Notifications</NavLink>
           <NavLink to="/application"><Bike size={16} /> Application</NavLink>
           <NavLink to="/kyc"><ShieldCheck size={16} /> Documents Centre</NavLink>
           <NavLink to="/profile"><User size={16} /> Profile</NavLink>
@@ -30,7 +31,7 @@ export default function RiderShell() {
       <div className="main">
         <div className="topbar">
           <div className="text-sm muted">Welcome back, {user?.full_name?.split(' ')[0]} 👋</div>
-          <Bell size={18} className="muted" />
+          <NavLink to="/notifications" className="btn btn-secondary btn-sm"><Bell size={16} /> Notifications</NavLink>
         </div>
         <div className="content"><Outlet /></div>
       </div>

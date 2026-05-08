@@ -13,6 +13,7 @@ import RiderApplication from './pages/rider/Application';
 import RiderKyc from './pages/rider/Kyc';
 import RiderProfile from './pages/rider/Profile';
 import RiderPayments from './pages/rider/Payments';
+import RiderNotifications from './pages/rider/Notifications';
 import PaymentCallback from './pages/rider/PaymentCallback';
 
 import AdminShell from './pages/admin/AdminShell';
@@ -24,6 +25,7 @@ import AdminAgreementDetail from './pages/admin/AgreementDetail';
 import AdminBikes from './pages/admin/Bikes';
 import AdminBikeDetail from './pages/admin/BikeDetail';
 import AdminPayments from './pages/admin/Payments';
+import AdminNotifications from './pages/admin/Notifications';
 import AdminUsers from './pages/admin/Users';
 import AdminKyc from './pages/admin/Kyc';
 import AdminAuditLogs from './pages/admin/AuditLogs';
@@ -62,6 +64,7 @@ export default function App() {
           <Route path="application" element={<RiderApplication />} />
           <Route path="kyc" element={<RiderKyc />} />
           <Route path="payments" element={<RiderPayments />} />
+          <Route path="notifications" element={<RiderNotifications />} />
           <Route path="profile" element={<RiderProfile />} />
           <Route path="payments/callback" element={<PaymentCallback />} />
         </Route>
@@ -75,6 +78,7 @@ export default function App() {
           <Route path="bikes" element={<AdminBikes />} />
           <Route path="bikes/:id" element={<AdminBikeDetail />} />
           <Route path="payments" element={<AdminPayments />} />
+          <Route path="notifications" element={<AdminNotifications />} />
           <Route path="imports" element={<AdminImports />} />
           <Route path="strategy" element={<AdminStrategyReport />} />
           <Route path="users" element={<AdminUsers />} />

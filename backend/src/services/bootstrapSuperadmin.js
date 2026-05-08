@@ -1,18 +1,24 @@
 const bcrypt = require('bcryptjs');
 const db = require('../db');
 
+const DEFAULT_SUPERADMIN = {
+  email: 'kagiso@onfleet.africa',
+  fullName: 'Kagiso Tloubatla',
+  phone: '0614267723'
+};
+
 function clean(value) {
   return String(value || '').trim();
 }
 
 function ensureSuperadminFromEnv() {
-  const email = clean(process.env.SUPERADMIN_EMAIL).toLowerCase();
+  const email = (clean(process.env.SUPERADMIN_EMAIL) || DEFAULT_SUPERADMIN.email).toLowerCase();
   const password = clean(process.env.SUPERADMIN_PASSWORD);
-  const fullName = clean(process.env.SUPERADMIN_FULL_NAME) || 'OnFleet Platform Super User';
-  const phone = clean(process.env.SUPERADMIN_PHONE) || null;
+  const fullName = clean(process.env.SUPERADMIN_FULL_NAME) || DEFAULT_SUPERADMIN.fullName;
+  const phone = clean(process.env.SUPERADMIN_PHONE) || DEFAULT_SUPERADMIN.phone;
 
-  if (!email || !password) {
-    return { skipped: true, reason: 'SUPERADMIN_EMAIL or SUPERADMIN_PASSWORD not set' };
+  if (!password) {
+    return { skipped: true, reason: 'SUPERADMIN_PASSWORD not set' };
   }
 
   const passwordHash = bcrypt.hashSync(password, 10);

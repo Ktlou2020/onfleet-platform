@@ -44,7 +44,7 @@ export default function Login() {
 
       <div className="auth-form">
         <h1>Welcome back</h1>
-        <div className="sub">Sign in to track your rent-to-own progress.</div>
+        <div className="sub">Sign in to access your secure OnFleet workspace.</div>
         <form onSubmit={submit}>
           <div className="field"><label className="label">Email</label><input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" /></div>
           <div className="field"><label className="label">Password</label><input type="password" required value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" /></div>
@@ -52,10 +52,8 @@ export default function Login() {
         </form>
         <div className="mt-4 muted text-sm" style={{ textAlign: 'center' }}>New to OnFleet? <Link to="/signup">Create an account</Link></div>
         <div className="card mt-6" style={{ background: 'var(--surface-2)' }}>
-          <div className="text-xs muted mb-2">DEMO ACCOUNTS</div>
-          <div className="text-sm"><strong>Super Admin:</strong> admin@onfleet.africa / OnfleetAdmin2026!</div>
-          <div className="text-sm"><strong>Admin:</strong> ops@onfleet.africa / ops12345</div>
-          <div className="text-sm"><strong>Rider:</strong> thabo@example.com / rider123</div>
+          <div className="text-sm"><strong>Secure access only.</strong> Rider and admin credentials are no longer displayed on the login screen.</div>
+          <div className="muted text-sm mt-2">If you need admin access, contact the platform owner to provision your account.</div>
         </div>
       </div>
     </div>

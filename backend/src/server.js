@@ -5,6 +5,7 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const path = require('path');
 const fs = require('fs');
+const { ensureSuperadminFromEnv } = require('./services/bootstrapSuperadmin');
 
 const app = express();
 app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: false, crossOriginEmbedderPolicy: false }));
@@ -37,6 +38,13 @@ app.use((err, req, res, next) => {
   console.error(err);
   res.status(err.status || 500).json({ error: err.message || 'Server error' });
 });
+
+const superadminBootstrap = ensureSuperadminFromEnv();
+if (superadminBootstrap?.skipped) {
+  console.log(`ℹ️  Superadmin bootstrap skipped: ${superadminBootstrap.reason}`);
+} else {
+  console.log(`🔐 Superadmin ${superadminBootstrap.created ? 'created' : 'updated'} for ${superadminBootstrap.email}`);
+}
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {

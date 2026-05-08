@@ -1,6 +1,7 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const db = require('./db');
 const { generateAgreementNo, buildPaymentSchedule, addDays, recalcScheduleStatuses } = require('./utils/helpers');
@@ -31,12 +32,23 @@ db.exec(`DELETE FROM payments; DELETE FROM payment_schedules; DELETE FROM agreem
 DELETE FROM application_documents; DELETE FROM applications; DELETE FROM kyc_documents; DELETE FROM service_records;
 DELETE FROM gps_pings; DELETE FROM notifications; DELETE FROM audit_logs; DELETE FROM bikes; DELETE FROM users;`);
 
-const adminHash = bcrypt.hashSync('OnfleetAdmin2026!', 10);
-const opsHash = bcrypt.hashSync('ops12345', 10);
-const riderHash = bcrypt.hashSync('rider123', 10);
+function generatedPassword() {
+  return crypto.randomBytes(12).toString('base64url');
+}
+
+const liveSuperadminEmail = (process.env.SUPERADMIN_EMAIL || 'superadmin@example.com').trim().toLowerCase();
+const liveSuperadminPassword = process.env.SUPERADMIN_PASSWORD || generatedPassword();
+const liveSuperadminName = (process.env.SUPERADMIN_FULL_NAME || 'OnFleet Platform Super User').trim();
+const liveSuperadminPhone = (process.env.SUPERADMIN_PHONE || '').trim() || null;
+const seedAdminPassword = process.env.SEED_ADMIN_PASSWORD || generatedPassword();
+const seedRiderPassword = process.env.SEED_RIDER_PASSWORD || generatedPassword();
+
+const adminHash = bcrypt.hashSync(liveSuperadminPassword, 10);
+const opsHash = bcrypt.hashSync(seedAdminPassword, 10);
+const riderHash = bcrypt.hashSync(seedRiderPassword, 10);
 
 const admin = db.prepare(`INSERT INTO users (email, password_hash, full_name, phone, role)
-  VALUES (?,?,?,?, 'superadmin')`).run('admin@onfleet.africa', adminHash, 'OnFleet Super Admin', '+27110000000');
+  VALUES (?,?,?,?, 'superadmin')`).run(liveSuperadminEmail, adminHash, liveSuperadminName, liveSuperadminPhone);
 const opsAdmin = db.prepare(`INSERT INTO users (email, password_hash, full_name, phone, role)
   VALUES (?,?,?,?, 'admin')`).run('ops@onfleet.africa', opsHash, 'Operations Admin', '+27110000001');
 
@@ -185,9 +197,8 @@ db.prepare(`INSERT INTO service_records (bike_id, service_date, odometer_km, ser
   );
 
 console.log('✅ Seed complete');
-console.log('   Super Admin: admin@onfleet.africa / OnfleetAdmin2026!');
-console.log('   Admin: ops@onfleet.africa / ops12345');
-console.log('   Rider: thabo@example.com / rider123 (active agreement, signed contract)');
-console.log('   Rider: lerato@example.com / rider123 (active agreement, signed contract)');
-console.log('   Rider: sipho@example.com / rider123 (pre-approved application)');
-console.log('   Rider: ayanda@example.com / rider123 (auto-declined, retry in 2 weeks)');
+console.log(`   Super Admin email: ${liveSuperadminEmail}`);
+console.log(`   Super Admin password source: ${process.env.SUPERADMIN_PASSWORD ? 'SUPERADMIN_PASSWORD env var' : 'generated at seed time'}`);
+console.log(`   Seed admin password source: ${process.env.SEED_ADMIN_PASSWORD ? 'SEED_ADMIN_PASSWORD env var' : 'generated at seed time'}`);
+console.log(`   Seed rider password source: ${process.env.SEED_RIDER_PASSWORD ? 'SEED_RIDER_PASSWORD env var' : 'generated at seed time'}`);
+console.log('   Sample riders seeded: thabo@example.com, lerato@example.com, sipho@example.com, ayanda@example.com');

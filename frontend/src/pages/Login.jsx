@@ -50,6 +50,7 @@ export default function Login() {
           <div className="field"><label className="label">Password</label><input type="password" required value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" /></div>
           <button className="btn btn-block" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
         </form>
+        <div className="mt-3 text-sm" style={{ textAlign: 'right' }}><Link to="/forgot-password">Forgot password?</Link></div>
         <div className="mt-4 muted text-sm" style={{ textAlign: 'center' }}>New to OnFleet? <Link to="/signup">Create an account</Link></div>
         <div className="card mt-6" style={{ background: 'var(--surface-2)' }}>
           <div className="text-sm"><strong>Secure access only.</strong> Rider and admin credentials are no longer displayed on the login screen.</div>

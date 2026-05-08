@@ -1,5 +1,6 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const path = require('path');
@@ -53,6 +54,24 @@ function toBool(value, fallback = false) {
   if (value === undefined || value === null || value === '') return fallback;
   if (typeof value === 'boolean') return value;
   return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
+}
+
+function normalizeEmail(email) {
+  return String(email || '').trim().toLowerCase();
+}
+
+function passwordResetExpiryIso() {
+  const ttlMinutes = Number(process.env.PASSWORD_RESET_TOKEN_TTL_MINUTES || 60);
+  return new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+}
+
+function hashResetToken(token) {
+  return crypto.createHash('sha256').update(String(token)).digest('hex');
+}
+
+function buildResetUrl(token) {
+  const base = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+  return `${base}/reset-password?token=${encodeURIComponent(token)}`;
 }
 
 function getRequiredFile(req, field) {
@@ -168,7 +187,7 @@ router.post('/signup',
     const { email, password, full_name, phone, id_number, address, city, province, postal_code,
             date_of_birth, emergency_contact_name, emergency_contact_phone } = req.body;
 
-    const existing = db.prepare('SELECT id FROM users WHERE email = ? AND deleted_at IS NULL').get(email.toLowerCase());
+    const existing = db.prepare('SELECT id FROM users WHERE email = ? AND deleted_at IS NULL').get(normalizeEmail(email));
     if (existing) return res.status(409).json({ error: 'Email already registered' });
 
     const hash = bcrypt.hashSync(password, 10);
@@ -176,7 +195,7 @@ router.post('/signup',
       (email, password_hash, full_name, phone, id_number, address, city, province, postal_code,
        date_of_birth, emergency_contact_name, emergency_contact_phone, role)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'rider')`).run(
-        email.toLowerCase(), hash, full_name, phone || null, id_number || null,
+        normalizeEmail(email), hash, full_name, phone || null, id_number || null,
         address || null, city || null, province || null, postal_code || null,
         date_of_birth || null, emergency_contact_name || null, emergency_contact_phone || null
       );
@@ -220,7 +239,7 @@ router.post('/signup-complete', signupUpload.fields([
       return res.status(400).json({ error: 'Please provide an e-wallet number' });
     }
 
-    const existing = db.prepare('SELECT id FROM users WHERE email = ? AND deleted_at IS NULL').get(email.toLowerCase());
+    const existing = db.prepare('SELECT id FROM users WHERE email = ? AND deleted_at IS NULL').get(normalizeEmail(email));
     if (existing) return res.status(409).json({ error: 'Email already registered' });
 
     const payload = {
@@ -244,7 +263,7 @@ router.post('/signup-complete', signupUpload.fields([
         (email, password_hash, full_name, phone, id_number, address, city, province, postal_code,
          date_of_birth, emergency_contact_name, emergency_contact_phone, role)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'rider')`).run(
-          email.toLowerCase(), hash, full_name, phone || null, id_number || null,
+          normalizeEmail(email), hash, full_name, phone || null, id_number || null,
           address || null, city || null, province || null, postal_code || null,
           date_of_birth || null, emergency_contact_name || null, emergency_contact_phone || null
         );
@@ -292,8 +311,9 @@ router.post('/login',
   body('email').isEmail(),
   body('password').notEmpty(),
   (req, res) => {
-    const { email, password } = req.body;
-    const user = db.prepare('SELECT * FROM users WHERE email = ? AND deleted_at IS NULL').get(email.toLowerCase());
+    const email = normalizeEmail(req.body.email);
+    const { password } = req.body;
+    const user = db.prepare('SELECT * FROM users WHERE email = ? AND deleted_at IS NULL').get(email);
     if (!user) return res.status(401).json({ error: 'Invalid credentials' });
     if (user.status !== 'active') return res.status(403).json({ error: 'Account suspended' });
     if (!bcrypt.compareSync(password, user.password_hash)) return res.status(401).json({ error: 'Invalid credentials' });
@@ -301,6 +321,60 @@ router.post('/login',
     logAudit(user.id, 'user.login', 'users', user.id, {}, req.ip);
     const safe = { id: user.id, email: user.email, full_name: user.full_name, role: user.role };
     res.json({ token: signToken(safe), user: safe });
+  });
+
+router.post('/forgot-password',
+  body('email').isEmail(),
+  async (req, res) => {
+    const email = normalizeEmail(req.body.email);
+    const generic = { ok: true, message: 'If an account exists for that email, a reset link has been sent.' };
+    const user = db.prepare(`SELECT id, email, full_name, status FROM users WHERE email = ? AND deleted_at IS NULL`).get(email);
+
+    if (!user || user.status !== 'active') return res.json(generic);
+
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = hashResetToken(rawToken);
+    db.prepare(`UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE user_id = ? AND used_at IS NULL`).run(user.id);
+    db.prepare(`INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, requested_ip, user_agent)
+      VALUES (?,?,?,?,?)`).run(user.id, tokenHash, passwordResetExpiryIso(), req.ip || null, req.get('user-agent') || null);
+
+    const firstName = user.full_name?.split(' ')?.[0] || 'there';
+    const resetUrl = buildResetUrl(rawToken);
+    await sendNotification({
+      userId: user.id,
+      channel: 'email',
+      type: 'password_reset',
+      title: 'Reset your OnFleet password',
+      message: `Hi ${firstName},\n\nWe received a request to reset your OnFleet password.\n\nReset link: ${resetUrl}\n\nThis link expires in ${process.env.PASSWORD_RESET_TOKEN_TTL_MINUTES || 60} minutes. If you did not request this, you can ignore this email.`
+    });
+
+    logAudit(user.id, 'user.password_reset_requested', 'users', user.id, {}, req.ip);
+    res.json(generic);
+  });
+
+router.post('/reset-password',
+  body('token').notEmpty(),
+  body('new_password').isLength({ min: 6 }),
+  (req, res) => {
+    const tokenHash = hashResetToken(req.body.token);
+    const tokenRow = db.prepare(`SELECT prt.id, prt.user_id, u.email
+      FROM password_reset_tokens prt
+      JOIN users u ON u.id = prt.user_id
+      WHERE prt.token_hash = ?
+        AND prt.used_at IS NULL
+        AND prt.expires_at > CURRENT_TIMESTAMP
+        AND u.deleted_at IS NULL`).get(tokenHash);
+
+    if (!tokenRow) return res.status(400).json({ error: 'Reset link is invalid or has expired' });
+
+    const passwordHash = bcrypt.hashSync(req.body.new_password, 10);
+    db.transaction(() => {
+      db.prepare(`UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(passwordHash, tokenRow.user_id);
+      db.prepare(`UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE user_id = ? AND used_at IS NULL`).run(tokenRow.user_id);
+    })();
+
+    logAudit(tokenRow.user_id, 'user.password_reset_completed', 'users', tokenRow.user_id, {}, req.ip);
+    res.json({ ok: true, message: 'Password reset successful. You can now sign in.' });
   });
 
 router.get('/me', authRequired, (req, res) => {

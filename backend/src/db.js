@@ -252,6 +252,18 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   FOREIGN KEY(actor_id) REFERENCES users(id)
 );
 
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  expires_at DATETIME NOT NULL,
+  used_at DATETIME,
+  requested_ip TEXT,
+  user_agent TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_payments_agreement ON payments(agreement_id);
 CREATE INDEX IF NOT EXISTS idx_schedule_agreement ON payment_schedules(agreement_id);
 CREATE INDEX IF NOT EXISTS idx_kyc_user ON kyc_documents(user_id);
@@ -259,6 +271,8 @@ CREATE INDEX IF NOT EXISTS idx_apps_user ON applications(user_id);
 CREATE INDEX IF NOT EXISTS idx_appdocs_application ON application_documents(application_id);
 CREATE INDEX IF NOT EXISTS idx_appdocs_user ON application_documents(user_id);
 CREATE INDEX IF NOT EXISTS idx_gps_bike ON gps_pings(bike_id);
+CREATE INDEX IF NOT EXISTS idx_password_reset_user ON password_reset_tokens(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_password_reset_expires ON password_reset_tokens(expires_at);
 `);
 
 // ---------- LIGHTWEIGHT MIGRATIONS FOR EXISTING DEPLOYS ----------

@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS users (
   emergency_contact_name TEXT,
   emergency_contact_phone TEXT,
   avatar_url TEXT,
+  country_of_origin TEXT,
   deleted_at TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -277,6 +278,7 @@ CREATE INDEX IF NOT EXISTS idx_password_reset_expires ON password_reset_tokens(e
 
 // ---------- LIGHTWEIGHT MIGRATIONS FOR EXISTING DEPLOYS ----------
 ensureColumn('users', 'deleted_at', 'TEXT');
+ensureColumn('users', 'country_of_origin', 'TEXT');
 ensureColumn('applications', 'payout_preference', 'TEXT');
 ensureColumn('applications', 'bank_name', 'TEXT');
 ensureColumn('applications', 'account_holder', 'TEXT');

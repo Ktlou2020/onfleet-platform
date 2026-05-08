@@ -42,7 +42,8 @@ router.get('/:id', authRequired, (req, res) => {
     FROM application_documents WHERE application_id = ? ORDER BY uploaded_at DESC`).all(ag.application_id) : [];
 
   const successfulPayments = payments.filter((payment) => payment.status === 'success');
-  const totalPaid = successfulPayments.reduce((sum, payment) => sum + payment.amount, 0);
+  const creditedAmount = (payment) => Number(payment.net_amount || payment.amount || 0);
+  const totalPaid = successfulPayments.reduce((sum, payment) => sum + creditedAmount(payment), 0);
   const remaining = +(ag.total_amount - totalPaid).toFixed(2);
   const weeksPaid = schedule.filter((row) => row.status === 'paid').length;
   const overdue = schedule.filter((row) => row.status === 'overdue').reduce((sum, row) => sum + (row.amount_due - row.amount_paid), 0);

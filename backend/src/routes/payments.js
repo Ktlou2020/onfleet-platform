@@ -18,6 +18,9 @@ function calcGrossAmount(amountZAR) {
   const fee = calcPaystackFee(amountZAR);
   return +(amountZAR + fee).toFixed(2);
 }
+function creditedAmount(payment) {
+  return Number(payment?.net_amount || payment?.amount || 0);
+}
 
 function applyPaymentToSchedule(agreementId, amountZAR) {
   const schedule = db.prepare(`SELECT * FROM payment_schedules WHERE agreement_id = ?
@@ -112,9 +115,14 @@ router.post('/paystack/init', authRequired, async (req, res) => {
       VALUES (?,?,?,?, 'paystack', ?, ?, 'pending', ?, ?)`).run(
       agreement_id, req.user.id, grossAmount, 'ZAR', reference, reference, fee, netAmount);
 
-    return res.json({
-      authorization_url: resp.data.data.authorization_url, reference, access_code: resp.data.data.access_code,
-      amount: grossAmount, fee, net_amount: netAmount, base_amount: netAmount
+    res.json({
+      authorization_url: resp.data.data.authorization_url,
+      reference,
+      access_code: resp.data.data.access_code,
+      amount: grossAmount,
+      fee,
+      net_amount: netAmount,
+      base_amount: netAmount
     });
   } catch (e) {
     res.status(500).json({ error: 'Paystack init failed', details: e.response?.data || e.message });
@@ -135,7 +143,14 @@ router.get('/paystack/verify/:reference', authRequired, async (req, res) => {
       applyPaymentToSchedule(payment.agreement_id, netAmount);
       logAudit(req.user.id, 'payment.success', 'payments', payment.id, { amount: grossAmount, fee, net_amount: netAmount });
     }
-    res.json({ status: data.status, amount: data.amount / 100, fee: calcPaystackFee(payment.net_amount || data.amount / 100), net_amount: payment.net_amount || data.amount / 100, payment });
+    res.json({
+      status: data.status,
+      amount: data.amount / 100,
+      fee: calcPaystackFee(payment.net_amount || data.amount / 100),
+      net_amount: payment.net_amount || data.amount / 100,
+      credited_amount: creditedAmount(payment),
+      payment
+    });
   } catch (e) {
     res.status(500).json({ error: 'Verify failed', details: e.response?.data || e.message });
   }

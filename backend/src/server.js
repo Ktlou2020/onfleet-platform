@@ -23,6 +23,7 @@ app.use('/api/applications', require('./routes/applications'));
 app.use('/api/agreements', require('./routes/agreements'));
 app.use('/api/payments', require('./routes/payments'));
 app.use('/api/admin', require('./routes/admin'));
+app.use('/api/imports', require('./routes/imports'));
 app.use('/api/notifications', require('./routes/notifications'));
 
 // Serve built frontend (production preview)

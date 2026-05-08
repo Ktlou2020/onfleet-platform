@@ -11,6 +11,10 @@ const bikeIcon = new L.DivIcon({
   className: '', iconSize: [30, 30], iconAnchor: [15, 15]
 });
 
+const creditedAmount = (payment) => Number(payment?.net_amount || payment?.amount || 0);
+const feeAmount = (payment) => Number(payment?.fee_amount || 0);
+const grossAmount = (payment) => Number(payment?.amount || 0);
+
 export default function RiderAgreementDetail() {
   const { id } = useParams();
   const [data, setData] = useState(null);
@@ -52,8 +56,8 @@ export default function RiderAgreementDetail() {
       </div>
 
       <div className="grid grid-4 mb-4">
-        <Stat label="Weekly" value={fmt(agreement.weekly_amount)} />
-        <Stat label="Paid" value={fmt(summary.total_paid)} accent="var(--success)" />
+        <Stat label="Weekly rental" value={fmt(agreement.weekly_amount)} />
+        <Stat label="Received" value={fmt(summary.total_paid)} accent="var(--success)" />
         <Stat label="Remaining" value={fmt(summary.remaining)} accent="var(--accent)" />
         <Stat label="Progress" value={`${summary.progress_pct}%`} accent="var(--primary)" />
       </div>
@@ -67,7 +71,7 @@ export default function RiderAgreementDetail() {
             {!agreement.signed_at && <button className="btn btn-sm" onClick={signAgreement} disabled={signing}>{signing ? 'Signing…' : 'Sign now'}</button>}
           </div>
         </div>
-        <div className="muted text-sm">Once you sign, the signed copy is saved back onto your application record for admin review and auditing.</div>
+        <div className="muted text-sm">The contract now uses the longer OnFleet rental wording structure, including ownership, payment, insurance, breach, and domicilium clauses.</div>
         {agreement.signed_at && <div className="mt-2 text-sm">Signed on {fmtDateTime(agreement.signed_at)}</div>}
       </div>
 
@@ -112,10 +116,17 @@ export default function RiderAgreementDetail() {
           <h3 className="mb-3">Payment history</h3>
           {!payments.length && <div className="muted text-sm">No payments yet.</div>}
           <table className="table">
-            <thead><tr><th>Date</th><th>Method</th><th>Reference</th><th>Amount</th></tr></thead>
+            <thead><tr><th>Date</th><th>Method</th><th>Reference</th><th>Rental</th><th>Fee</th><th>Gross</th></tr></thead>
             <tbody>
               {payments.map((payment) => (
-                <tr key={payment.id}><td>{fmtDate(payment.paid_at || payment.created_at)}</td><td><Badge>{payment.method}</Badge></td><td className="text-xs muted">{payment.reference}</td><td><strong>{fmt(payment.amount)}</strong></td></tr>
+                <tr key={payment.id}>
+                  <td>{fmtDate(payment.paid_at || payment.created_at)}</td>
+                  <td><Badge>{payment.method}</Badge></td>
+                  <td className="text-xs muted">{payment.reference}</td>
+                  <td><strong>{fmt(creditedAmount(payment))}</strong></td>
+                  <td>{feeAmount(payment) > 0 ? fmt(feeAmount(payment)) : '—'}</td>
+                  <td>{fmt(grossAmount(payment))}</td>
+                </tr>
               ))}
             </tbody>
           </table>

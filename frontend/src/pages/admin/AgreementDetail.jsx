@@ -4,6 +4,10 @@ import api from '../../api';
 import toast from 'react-hot-toast';
 import { Loading, Badge, Stat, Modal, fmt, fmtDate, fmtDateTime } from '../../components/ui';
 
+const creditedAmount = (payment) => Number(payment?.net_amount || payment?.amount || 0);
+const feeAmount = (payment) => Number(payment?.fee_amount || 0);
+const grossAmount = (payment) => Number(payment?.amount || 0);
+
 export default function AdminAgreementDetail() {
   const { id } = useParams();
   const [data, setData] = useState(null);
@@ -49,7 +53,7 @@ export default function AdminAgreementDetail() {
 
       <div className="grid grid-4 mb-4">
         <Stat label="Total contract" value={fmt(agreement.total_amount)} />
-        <Stat label="Paid" value={fmt(summary.total_paid)} accent="var(--success)" />
+        <Stat label="Received" value={fmt(summary.total_paid)} accent="var(--success)" />
         <Stat label="Remaining" value={fmt(summary.remaining)} accent="var(--accent)" />
         <Stat label="Overdue" value={fmt(summary.overdue)} accent="var(--danger)" />
       </div>
@@ -97,7 +101,7 @@ export default function AdminAgreementDetail() {
         <div className="card">
           <h3 className="mb-3">Payment history</h3>
           <table className="table">
-            <thead><tr><th>Date</th><th>Method</th><th>Ref</th><th>Status</th><th>Amount</th></tr></thead>
+            <thead><tr><th>Date</th><th>Method</th><th>Ref</th><th>Status</th><th>Rental</th><th>Fee</th><th>Gross</th></tr></thead>
             <tbody>
               {payments.map((payment) => (
                 <tr key={payment.id}>
@@ -105,7 +109,9 @@ export default function AdminAgreementDetail() {
                   <td>{payment.method}</td>
                   <td className="text-xs muted">{payment.reference}</td>
                   <td><Badge status={payment.status} /></td>
-                  <td><strong>{fmt(payment.amount)}</strong></td>
+                  <td><strong>{fmt(creditedAmount(payment))}</strong></td>
+                  <td>{feeAmount(payment) > 0 ? fmt(feeAmount(payment)) : '—'}</td>
+                  <td>{fmt(grossAmount(payment))}</td>
                 </tr>
               ))}
             </tbody>

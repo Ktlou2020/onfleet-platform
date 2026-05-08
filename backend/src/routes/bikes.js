@@ -31,7 +31,7 @@ const invoiceUpload = multer({
 });
 
 function computeBikeRoi(bikeId) {
-  const revenue = db.prepare(`SELECT COALESCE(SUM(p.amount),0) total FROM payments p
+  const revenue = db.prepare(`SELECT COALESCE(SUM(COALESCE(p.net_amount, p.amount)),0) total FROM payments p
     JOIN agreements a ON a.id = p.agreement_id
     WHERE a.bike_id = ? AND p.status = 'success'`).get(bikeId).total || 0;
   const serviceCost = db.prepare(`SELECT COALESCE(SUM(cost),0) total FROM service_records WHERE bike_id = ?`).get(bikeId).total || 0;

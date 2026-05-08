@@ -28,6 +28,7 @@ import AdminUsers from './pages/admin/Users';
 import AdminKyc from './pages/admin/Kyc';
 import AdminAuditLogs from './pages/admin/AuditLogs';
 import AdminStrategyReport from './pages/admin/StrategyReport';
+import AdminImports from './pages/admin/Imports';
 
 function PrivateRoute({ children, role }) {
   const { user } = useAuth();
@@ -40,7 +41,7 @@ function PrivateRoute({ children, role }) {
 function HomeRoute() {
   const { user } = useAuth();
   if (!user) return <Landing />;
-  if (['admin','superadmin'].includes(user.role)) return <Navigate to="/admin" replace />;
+  if (['admin', 'superadmin'].includes(user.role)) return <Navigate to="/admin" replace />;
   return <Navigate to="/dashboard" replace />;
 }
 
@@ -54,7 +55,6 @@ export default function App() {
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/reset-password" element={<ResetPassword />} />
 
-        {/* Rider portal */}
         <Route path="/" element={<PrivateRoute role="rider"><RiderShell /></PrivateRoute>}>
           <Route path="dashboard" element={<RiderDashboard />} />
           <Route path="agreements" element={<RiderAgreements />} />
@@ -66,7 +66,6 @@ export default function App() {
           <Route path="payments/callback" element={<PaymentCallback />} />
         </Route>
 
-        {/* Admin portal */}
         <Route path="/admin" element={<PrivateRoute role="admin"><AdminShell /></PrivateRoute>}>
           <Route index element={<AdminDashboard />} />
           <Route path="applications" element={<AdminApplications />} />
@@ -76,6 +75,7 @@ export default function App() {
           <Route path="bikes" element={<AdminBikes />} />
           <Route path="bikes/:id" element={<AdminBikeDetail />} />
           <Route path="payments" element={<AdminPayments />} />
+          <Route path="imports" element={<AdminImports />} />
           <Route path="strategy" element={<AdminStrategyReport />} />
           <Route path="users" element={<AdminUsers />} />
           <Route path="kyc" element={<AdminKyc />} />

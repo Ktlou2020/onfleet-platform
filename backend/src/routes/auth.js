@@ -14,7 +14,9 @@ const { sendNotification } = require('../services/notifier');
 
 const router = express.Router();
 const uploadDir = path.join(__dirname, '../../uploads/applications');
+const profileUploadDir = path.join(__dirname, '../../uploads/profiles');
 fs.mkdirSync(uploadDir, { recursive: true });
+fs.mkdirSync(profileUploadDir, { recursive: true });
 
 const storage = multer.diskStorage({
   destination: uploadDir,
@@ -30,6 +32,21 @@ const signupUpload = multer({
   fileFilter: (req, file, cb) => {
     const ok = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'].includes(file.mimetype);
     cb(ok ? null : new Error('Only PDF, JPG, JPEG, and PNG files are allowed'), ok);
+  }
+});
+
+const profileUpload = multer({
+  storage: multer.diskStorage({
+    destination: profileUploadDir,
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname).toLowerCase();
+      cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 9)}${ext}`);
+    }
+  }),
+  limits: { fileSize: 8 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ok = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(file.mimetype);
+    cb(ok ? null : new Error('Only JPG, PNG, and WEBP images are allowed'), ok);
   }
 });
 
@@ -185,7 +202,7 @@ router.post('/signup',
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
     const { email, password, full_name, phone, id_number, address, city, province, postal_code,
-            date_of_birth, emergency_contact_name, emergency_contact_phone } = req.body;
+            date_of_birth, emergency_contact_name, emergency_contact_phone, country_of_origin } = req.body;
 
     const existing = db.prepare('SELECT id FROM users WHERE email = ? AND deleted_at IS NULL').get(normalizeEmail(email));
     if (existing) return res.status(409).json({ error: 'Email already registered' });
@@ -193,11 +210,11 @@ router.post('/signup',
     const hash = bcrypt.hashSync(password, 10);
     const info = db.prepare(`INSERT INTO users
       (email, password_hash, full_name, phone, id_number, address, city, province, postal_code,
-       date_of_birth, emergency_contact_name, emergency_contact_phone, role)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'rider')`).run(
+       date_of_birth, emergency_contact_name, emergency_contact_phone, country_of_origin, role)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'rider')`).run(
         normalizeEmail(email), hash, full_name, phone || null, id_number || null,
         address || null, city || null, province || null, postal_code || null,
-        date_of_birth || null, emergency_contact_name || null, emergency_contact_phone || null
+        date_of_birth || null, emergency_contact_name || null, emergency_contact_phone || null, country_of_origin || null
       );
 
     const user = db.prepare('SELECT id, email, full_name, role FROM users WHERE id = ?').get(info.lastInsertRowid);
@@ -216,7 +233,7 @@ router.post('/signup-complete', signupUpload.fields([
   try {
     const {
       email, password, full_name, phone, id_number, address, city, province, postal_code,
-      date_of_birth, emergency_contact_name, emergency_contact_phone,
+      date_of_birth, emergency_contact_name, emergency_contact_phone, country_of_origin,
       preferred_bike_id, monthly_income, years_riding, payout_preference,
       bank_name, account_holder, account_number, branch_code, ewallet_number
     } = req.body;
@@ -261,11 +278,11 @@ router.post('/signup-complete', signupUpload.fields([
     const created = db.transaction(() => {
       const userInfo = db.prepare(`INSERT INTO users
         (email, password_hash, full_name, phone, id_number, address, city, province, postal_code,
-         date_of_birth, emergency_contact_name, emergency_contact_phone, role)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'rider')`).run(
+         date_of_birth, emergency_contact_name, emergency_contact_phone, country_of_origin, role)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'rider')`).run(
           normalizeEmail(email), hash, full_name, phone || null, id_number || null,
           address || null, city || null, province || null, postal_code || null,
-          date_of_birth || null, emergency_contact_name || null, emergency_contact_phone || null
+          date_of_birth || null, emergency_contact_name || null, emergency_contact_phone || null, country_of_origin || null
         );
       const userId = userInfo.lastInsertRowid;
       const applicationId = createApplication(userId, payload);
@@ -380,14 +397,14 @@ router.post('/reset-password',
 router.get('/me', authRequired, (req, res) => {
   const u = db.prepare(`SELECT id, email, full_name, phone, role, status, id_number, date_of_birth,
                         address, city, province, postal_code, emergency_contact_name,
-                        emergency_contact_phone, avatar_url, created_at
+                        emergency_contact_phone, avatar_url, country_of_origin, created_at
                         FROM users WHERE id = ? AND deleted_at IS NULL`).get(req.user.id);
   res.json({ user: u });
 });
 
 router.put('/me', authRequired, (req, res) => {
   const fields = ['full_name','phone','id_number','date_of_birth','address','city','province',
-                  'postal_code','emergency_contact_name','emergency_contact_phone','avatar_url'];
+                  'postal_code','emergency_contact_name','emergency_contact_phone','avatar_url','country_of_origin'];
   const updates = [];
   const values = [];
   for (const f of fields) {
@@ -397,6 +414,21 @@ router.put('/me', authRequired, (req, res) => {
   values.push(req.user.id);
   db.prepare(`UPDATE users SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...values);
   res.json({ ok: true });
+});
+
+router.post('/me/selfie', authRequired, profileUpload.single('selfie'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Selfie image is required' });
+  const avatarUrl = `/uploads/profiles/${req.file.filename}`;
+  db.prepare(`UPDATE users SET avatar_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(avatarUrl, req.user.id);
+  const existing = db.prepare(`SELECT id FROM kyc_documents WHERE user_id = ? AND doc_type = 'selfie'`).get(req.user.id);
+  if (existing) {
+    db.prepare(`UPDATE kyc_documents SET file_path = ?, original_name = ?, uploaded_at = CURRENT_TIMESTAMP WHERE id = ?`)
+      .run(avatarUrl, req.file.originalname, existing.id);
+  } else {
+    db.prepare(`INSERT INTO kyc_documents (user_id, doc_type, file_path, original_name, status)
+      VALUES (?, 'selfie', ?, ?, 'approved')`).run(req.user.id, avatarUrl, req.file.originalname);
+  }
+  res.json({ ok: true, avatar_url: avatarUrl });
 });
 
 router.post('/change-password', authRequired,

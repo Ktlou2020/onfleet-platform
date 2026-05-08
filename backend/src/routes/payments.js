@@ -112,12 +112,10 @@ router.post('/paystack/init', authRequired, async (req, res) => {
       VALUES (?,?,?,?, 'paystack', ?, ?, 'pending', ?, ?)`).run(
       agreement_id, req.user.id, grossAmount, 'ZAR', reference, reference, fee, netAmount);
 
-    res.json({
+    return res.json({
       authorization_url: resp.data.data.authorization_url, reference, access_code: resp.data.data.access_code,
       amount: grossAmount, fee, net_amount: netAmount, base_amount: netAmount
     });
-
-    res.json({ authorization_url: resp.data.data.authorization_url, reference, access_code: resp.data.data.access_code });
   } catch (e) {
     res.status(500).json({ error: 'Paystack init failed', details: e.response?.data || e.message });
   }

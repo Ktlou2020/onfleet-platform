@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import api from '../../api';
 import toast from 'react-hot-toast';
-import { Loading, Badge, fmt, fmtDate, EmptyState } from '../../components/ui';
+import { Loading, Badge, SearchInput, Pagination, fmt, fmtDate, EmptyState, matchesSearch, paginateItems } from '../../components/ui';
 import { CreditCard } from 'lucide-react';
 
 const calcFee = (amt) => +(Number(amt || 0) * 0.029 + 1).toFixed(2);
@@ -17,6 +17,9 @@ export default function RiderPayments() {
   const [amount, setAmount] = useState('');
   const [busy, setBusy] = useState(false);
   const [feeInfo, setFeeInfo] = useState(null);
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(8);
 
   useEffect(() => {
     api.get('/agreements/mine').then((r) => {
@@ -32,6 +35,21 @@ export default function RiderPayments() {
       updateAmount(r.data.agreement.weekly_amount);
     });
   }, [selected]);
+  useEffect(() => { setPage(1); }, [search, selected]);
+
+  const filteredPayments = useMemo(() => (data?.payments || []).filter((payment) => matchesSearch(
+    search,
+    payment.method,
+    payment.status,
+    payment.reference,
+    payment.amount,
+    payment.net_amount,
+    payment.fee_amount,
+    payment.paid_at,
+    payment.created_at
+  )), [data, search]);
+
+  const pagination = useMemo(() => paginateItems(filteredPayments, page, pageSize), [filteredPayments, page, pageSize]);
 
   function updateAmount(val) {
     setAmount(val);
@@ -67,7 +85,7 @@ export default function RiderPayments() {
             <>
               <div className="field"><label className="label">Agreement</label>
                 <select value={selected} onChange={(e) => setSelected(Number(e.target.value))}>
-                  {agreements.map((a) => <option key={a.id} value={a.id}>{a.agreement_no} — {a.make} {a.model}</option>)}
+                  {agreements.map((agreement) => <option key={agreement.id} value={agreement.id}>{agreement.agreement_no} — {agreement.make} {agreement.model}</option>)}
                 </select>
               </div>
               <div className="card mb-3" style={{ background: 'var(--surface-2)' }}>
@@ -98,22 +116,26 @@ export default function RiderPayments() {
         </div>
         {data && (
           <div className="card">
-            <h3 className="mb-3">Recent transactions</h3>
+            <div className="flex-between mb-3" style={{ gap: 12, flexWrap: 'wrap' }}>
+              <h3 style={{ marginBottom: 0 }}>Recent transactions</h3>
+              <SearchInput value={search} onChange={setSearch} placeholder="Search date, method, status, reference" style={{ width: 320 }} />
+            </div>
             <table className="table">
               <thead><tr><th>Date</th><th>Method</th><th>Status</th><th>Rental</th><th>Fee</th><th>Gross</th></tr></thead>
               <tbody>
-                {data.payments.length ? data.payments.map((p) => (
-                  <tr key={p.id}>
-                    <td>{fmtDate(p.paid_at || p.created_at)}</td>
-                    <td>{p.method}</td>
-                    <td><Badge status={p.status} /></td>
-                    <td><strong>{fmt(creditedAmount(p))}</strong></td>
-                    <td>{feeAmount(p) > 0 ? fmt(feeAmount(p)) : '—'}</td>
-                    <td>{fmt(grossAmount(p))}</td>
+                {pagination.items.length ? pagination.items.map((payment) => (
+                  <tr key={payment.id}>
+                    <td>{fmtDate(payment.paid_at || payment.created_at)}</td>
+                    <td>{payment.method}</td>
+                    <td><Badge status={payment.status} /></td>
+                    <td><strong>{fmt(creditedAmount(payment))}</strong></td>
+                    <td>{feeAmount(payment) > 0 ? fmt(feeAmount(payment)) : '—'}</td>
+                    <td>{fmt(grossAmount(payment))}</td>
                   </tr>
-                )) : <tr><td colSpan="6" className="muted">No payments yet.</td></tr>}
+                )) : <tr><td colSpan="6" className="muted">{search ? 'No transactions match your search.' : 'No payments yet.'}</td></tr>}
               </tbody>
             </table>
+            <Pagination page={pagination.currentPage} pageSize={pagination.pageSize} totalItems={pagination.totalItems} onPageChange={setPage} onPageSizeChange={setPageSize} label="transactions" />
           </div>
         )}
       </div>

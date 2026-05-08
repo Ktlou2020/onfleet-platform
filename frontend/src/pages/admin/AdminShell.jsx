@@ -1,11 +1,38 @@
+import { useMemo, useState } from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth';
 import Logo from '../../components/Logo';
-import { LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ShieldCheck, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell } from 'lucide-react';
+import { SearchInput, matchesSearch } from '../../components/ui';
+import { LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell } from 'lucide-react';
+
+const navItems = [
+  { to: '/admin', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/admin/applications', label: 'Applications', icon: FileCheck },
+  { to: '/admin/agreements', label: 'Agreements', icon: FileText },
+  { to: '/admin/bikes', label: 'Bikes Fleet', icon: Bike },
+  { to: '/admin/payments', label: 'Payments', icon: CreditCard },
+  { to: '/admin/notifications', label: 'Notifications', icon: Bell },
+  { to: '/admin/imports', label: 'CSV Imports', icon: UploadCloud },
+  { to: '/admin/strategy', label: 'AI Strategy', icon: BrainCircuit },
+  { to: '/admin/users', label: 'Users', icon: Users },
+  { to: '/admin/audit', label: 'Audit Logs', icon: ClipboardList }
+];
 
 export default function AdminShell() {
   const { user, logout } = useAuth();
   const nav = useNavigate();
+  const [search, setSearch] = useState('');
+
+  const filteredNav = useMemo(() => navItems.filter((item) => matchesSearch(search, item.label, item.to)), [search]);
+
+  const goToFirstMatch = (event) => {
+    if (event.key === 'Enter' && filteredNav[0]) {
+      event.preventDefault();
+      nav(filteredNav[0].to);
+      setSearch('');
+    }
+  };
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -14,17 +41,10 @@ export default function AdminShell() {
           <span className="badge badge-info" style={{ fontSize: 9 }}>ADMIN</span>
         </div>
         <nav>
-          <NavLink to="/admin" end><LayoutDashboard size={16} /> Dashboard</NavLink>
-          <NavLink to="/admin/applications"><FileCheck size={16} /> Applications</NavLink>
-          <NavLink to="/admin/agreements"><FileText size={16} /> Agreements</NavLink>
-          <NavLink to="/admin/bikes"><Bike size={16} /> Bikes Fleet</NavLink>
-          <NavLink to="/admin/payments"><CreditCard size={16} /> Payments</NavLink>
-          <NavLink to="/admin/notifications"><Bell size={16} /> Notifications</NavLink>
-          <NavLink to="/admin/imports"><UploadCloud size={16} /> CSV Imports</NavLink>
-          <NavLink to="/admin/strategy"><BrainCircuit size={16} /> AI Strategy</NavLink>
-          <NavLink to="/admin/kyc"><ShieldCheck size={16} /> KYC Review</NavLink>
-          <NavLink to="/admin/users"><Users size={16} /> Users</NavLink>
-          <NavLink to="/admin/audit"><ClipboardList size={16} /> Audit Logs</NavLink>
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            return <NavLink key={item.to} to={item.to} end={item.to === '/admin'}><Icon size={16} /> {item.label}</NavLink>;
+          })}
         </nav>
         <div className="user-mini">
           <div className="avatar">{user?.full_name?.[0]}</div>
@@ -32,17 +52,24 @@ export default function AdminShell() {
             <div className="text-sm" style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user?.full_name}</div>
             <div className="text-xs muted">{user?.role}</div>
           </div>
-          <button onClick={() => { logout(); nav('/login'); }} title="Log out"
-            style={{ background: 'transparent', color: 'var(--muted)', padding: 8, border: 'none' }}><LogOut size={16} /></button>
+          <button onClick={() => { logout(); nav('/login'); }} title="Log out" style={{ background: 'transparent', color: 'var(--muted)', padding: 8, border: 'none' }}><LogOut size={16} /></button>
         </div>
       </aside>
       <div className="main">
-        <div className="topbar">
+        <div className="topbar" style={{ gap: 16 }}>
           <div className="text-sm muted">Admin Console · OnFleet Africa</div>
-          <div className="row" style={{ gap: 10 }}>
-            <NavLink to="/admin/notifications" className="btn btn-secondary btn-sm"><Bell size={16} /> Notifications</NavLink>
-            <div className="text-xs muted">Logged in as <strong>{user?.email}</strong></div>
+          <div style={{ position: 'relative', width: 'min(520px, 100%)', marginLeft: 'auto' }}>
+            <SearchInput value={search} onChange={setSearch} placeholder="Search admin tabs and press Enter" inputProps={{ onKeyDown: goToFirstMatch }} style={{ width: '100%' }} />
+            {!!search && (
+              <div className="card" style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: '100%', zIndex: 20, padding: 12 }}>
+                {filteredNav.length ? filteredNav.map((item) => {
+                  const Icon = item.icon;
+                  return <button key={item.to} className="btn btn-secondary btn-sm" style={{ width: '100%', justifyContent: 'flex-start', marginBottom: 8 }} onClick={() => { nav(item.to); setSearch(''); }}><Icon size={14} /> {item.label}</button>;
+                }) : <div className="muted text-sm">No admin tabs match your search.</div>}
+              </div>
+            )}
           </div>
+          <div className="text-xs muted">Logged in as <strong>{user?.email}</strong></div>
         </div>
         <div className="content"><Outlet /></div>
       </div>

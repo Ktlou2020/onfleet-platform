@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import api from '../../api';
 import toast from 'react-hot-toast';
-import { Loading, Badge, Modal, fmt, fmtDate } from '../../components/ui';
+import { Loading, Badge, Modal, Pagination, fmt, fmtDate, paginateItems } from '../../components/ui';
 
 export default function AdminApplicationDetail() {
   const { id } = useParams();
@@ -11,6 +11,8 @@ export default function AdminApplicationDetail() {
   const [bikes, setBikes] = useState([]);
   const [showApprove, setShowApprove] = useState(false);
   const [showReject, setShowReject] = useState(false);
+  const [docPage, setDocPage] = useState(1);
+  const [docPageSize, setDocPageSize] = useState(10);
   const [approveForm, setApproveForm] = useState({ bike_id: '', weekly_amount: '', total_weeks: 78, start_date: new Date().toISOString().slice(0, 10) });
   const [rejectReason, setRejectReason] = useState('');
 
@@ -19,11 +21,13 @@ export default function AdminApplicationDetail() {
     load();
     api.get('/bikes', { params: { status: 'available' } }).then((response) => setBikes(response.data.bikes));
   }, [id]);
+  useEffect(() => { setDocPage(1); }, [data?.documents?.length]);
 
   if (!data) return <Loading />;
   const application = data.application;
   const documents = data.documents || [];
   const payslips = documents.filter((doc) => doc.doc_type === 'payslip');
+  const docPagination = paginateItems(documents, docPage, docPageSize);
 
   const approve = async () => {
     if (!approveForm.bike_id || !approveForm.weekly_amount) return toast.error('Bike and weekly amount are required');
@@ -47,6 +51,8 @@ export default function AdminApplicationDetail() {
     }
   };
 
+  const riderSelfie = application.avatar_url;
+
   return (
     <>
       <Link to="/admin/applications" className="muted text-sm">← Back</Link>
@@ -65,9 +71,15 @@ export default function AdminApplicationDetail() {
         <Stat label="Payout" value={application.payout_preference || '—'} />
       </div>
 
-      <div className="grid grid-2">
+      <div className="grid grid-2 mb-4">
         <div className="card">
-          <h3 className="mb-3">Rider details</h3>
+          <div className="row mb-3" style={{ alignItems: 'center', gap: 16 }}>
+            <div className="avatar" style={{ width: 88, height: 88, backgroundImage: riderSelfie ? `url(${riderSelfie})` : 'none', backgroundSize: 'cover', backgroundPosition: 'center', fontSize: 28 }}>{riderSelfie ? '' : application.full_name?.[0]}</div>
+            <div>
+              <h3 style={{ marginBottom: 4 }}>Rider details</h3>
+              <div className="muted text-sm">Selfie from the rider profile</div>
+            </div>
+          </div>
           <Row k="Name" v={application.full_name} />
           <Row k="Email" v={application.email} />
           <Row k="Phone" v={application.phone} />
@@ -75,8 +87,12 @@ export default function AdminApplicationDetail() {
           <Row k="Address" v={[application.address, application.city, application.province].filter(Boolean).join(', ')} />
         </div>
         <div className="card">
-          <h3 className="mb-3">Application details</h3>
-          <Row k="Bike preference" v={application.make ? `${application.make} ${application.model}` : '—'} />
+          <h3 className="mb-3">Bike preference</h3>
+          {application.image_url ? (
+            <div style={{ height: 220, borderRadius: 12, background: '#0a1219 center/cover no-repeat', backgroundImage: `url("${application.image_url}")`, marginBottom: 16 }} />
+          ) : null}
+          <Row k="Preferred bike" v={application.make ? `${application.make} ${application.model}` : '—'} />
+          <Row k="Registration" v={application.registration || '—'} />
           <Row k="Delivery platforms" v={application.delivery_platforms || '—'} />
           <Row k="Riding experience" v={application.has_riding_experience ? `${application.years_riding || 0} years` : 'None'} />
           <Row k="Driver's licence" v={application.has_drivers_license ? 'Yes' : 'No'} />
@@ -100,14 +116,14 @@ export default function AdminApplicationDetail() {
       </div>
 
       <div className="card mt-4">
-        <div className="flex-between mb-3">
+        <div className="flex-between mb-3" style={{ gap: 12, flexWrap: 'wrap' }}>
           <h3>Application documents</h3>
           {data.agreement?.contract_file_path && <a className="btn btn-sm btn-secondary" href={data.agreement.contract_file_path} target="_blank" rel="noreferrer">View contract</a>}
         </div>
         <table className="table">
           <thead><tr><th>Type</th><th>File</th><th>Uploaded</th><th>Extracted amount</th><th></th></tr></thead>
           <tbody>
-            {documents.map((doc) => (
+            {docPagination.items.map((doc) => (
               <tr key={doc.id}>
                 <td>{doc.doc_type.replace(/_/g, ' ')}</td>
                 <td>{doc.original_name}</td>
@@ -118,7 +134,8 @@ export default function AdminApplicationDetail() {
             ))}
           </tbody>
         </table>
-        {!documents.length && <div className="muted text-sm">No documents uploaded yet.</div>}
+        {!docPagination.items.length && <div className="muted text-sm">No documents uploaded yet.</div>}
+        <Pagination page={docPagination.currentPage} pageSize={docPagination.pageSize} totalItems={docPagination.totalItems} onPageChange={setDocPage} onPageSizeChange={setDocPageSize} label="documents" />
         {data.agreement?.signed_contract_path && <div className="mt-3"><a href={data.agreement.signed_contract_path} target="_blank" rel="noreferrer">Signed contract</a></div>}
       </div>
 
@@ -137,7 +154,7 @@ export default function AdminApplicationDetail() {
               setApproveForm({ ...approveForm, bike_id: e.target.value, weekly_amount: bike?.rental_weekly || '', total_weeks: bike?.total_weeks || 78 });
             }}>
               <option value="">— Select available bike —</option>
-              {bikes.map((bike) => <option key={bike.id} value={bike.id}>{bike.make} {bike.model} · {fmt(bike.rental_weekly)}/week</option>)}
+              {bikes.map((bike) => <option key={bike.id} value={bike.id}>{bike.make} {bike.model} · {bike.registration || 'no reg'} · {fmt(bike.rental_weekly)}/week</option>)}
             </select></div>
           <div className="grid grid-2">
             <div className="field"><label className="label">Weekly amount</label><input type="number" value={approveForm.weekly_amount} onChange={(e) => setApproveForm({ ...approveForm, weekly_amount: e.target.value })} /></div>

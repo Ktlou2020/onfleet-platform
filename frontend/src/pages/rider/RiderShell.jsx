@@ -1,23 +1,43 @@
+import { useMemo, useState } from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth';
 import Logo from '../../components/Logo';
-import { LayoutDashboard, FileText, Bike, CreditCard, ShieldCheck, User, LogOut, Bell } from 'lucide-react';
+import { SearchInput, matchesSearch } from '../../components/ui';
+import { LayoutDashboard, FileText, Bike, CreditCard, User, LogOut, Bell } from 'lucide-react';
+
+const navItems = [
+  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/agreements', label: 'My Agreement', icon: FileText },
+  { to: '/payments', label: 'Payments', icon: CreditCard },
+  { to: '/notifications', label: 'Notifications', icon: Bell },
+  { to: '/application', label: 'Application', icon: Bike },
+  { to: '/profile', label: 'Profile', icon: User }
+];
 
 export default function RiderShell() {
   const { user, logout } = useAuth();
   const nav = useNavigate();
+  const [search, setSearch] = useState('');
+
+  const filteredNav = useMemo(() => navItems.filter((item) => matchesSearch(search, item.label, item.to)), [search]);
+
+  const goToFirstMatch = (event) => {
+    if (event.key === 'Enter' && filteredNav[0]) {
+      event.preventDefault();
+      nav(filteredNav[0].to);
+      setSearch('');
+    }
+  };
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <Logo />
         <nav>
-          <NavLink to="/dashboard"><LayoutDashboard size={16} /> Dashboard</NavLink>
-          <NavLink to="/agreements"><FileText size={16} /> My Agreement</NavLink>
-          <NavLink to="/payments"><CreditCard size={16} /> Payments</NavLink>
-          <NavLink to="/notifications"><Bell size={16} /> Notifications</NavLink>
-          <NavLink to="/application"><Bike size={16} /> Application</NavLink>
-          <NavLink to="/kyc"><ShieldCheck size={16} /> Documents Centre</NavLink>
-          <NavLink to="/profile"><User size={16} /> Profile</NavLink>
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            return <NavLink key={item.to} to={item.to}><Icon size={16} /> {item.label}</NavLink>;
+          })}
         </nav>
         <div className="user-mini">
           <div className="avatar">{user?.full_name?.[0]}</div>
@@ -29,9 +49,19 @@ export default function RiderShell() {
         </div>
       </aside>
       <div className="main">
-        <div className="topbar">
+        <div className="topbar" style={{ gap: 16 }}>
           <div className="text-sm muted">Welcome back, {user?.full_name?.split(' ')[0]} 👋</div>
-          <NavLink to="/notifications" className="btn btn-secondary btn-sm"><Bell size={16} /> Notifications</NavLink>
+          <div style={{ position: 'relative', width: 'min(460px, 100%)', marginLeft: 'auto' }}>
+            <SearchInput value={search} onChange={setSearch} placeholder="Search rider tabs and press Enter" inputProps={{ onKeyDown: goToFirstMatch }} style={{ width: '100%' }} />
+            {!!search && (
+              <div className="card" style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: '100%', zIndex: 20, padding: 12 }}>
+                {filteredNav.length ? filteredNav.map((item) => {
+                  const Icon = item.icon;
+                  return <button key={item.to} className="btn btn-secondary btn-sm" style={{ width: '100%', justifyContent: 'flex-start', marginBottom: 8 }} onClick={() => { nav(item.to); setSearch(''); }}><Icon size={14} /> {item.label}</button>;
+                }) : <div className="muted text-sm">No rider tabs match your search.</div>}
+              </div>
+            )}
+          </div>
         </div>
         <div className="content"><Outlet /></div>
       </div>

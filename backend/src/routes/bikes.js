@@ -48,6 +48,36 @@ function computeBikeRoi(bikeId) {
   };
 }
 
+const bikeSelectSql = `SELECT b.*,
+  (
+    SELECT u.full_name FROM agreements a
+    JOIN users u ON u.id = a.user_id
+    WHERE a.bike_id = b.id
+    ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.created_at DESC
+    LIMIT 1
+  ) AS allocated_rider_name,
+  (
+    SELECT u.phone FROM agreements a
+    JOIN users u ON u.id = a.user_id
+    WHERE a.bike_id = b.id
+    ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.created_at DESC
+    LIMIT 1
+  ) AS allocated_rider_phone,
+  (
+    SELECT u.avatar_url FROM agreements a
+    JOIN users u ON u.id = a.user_id
+    WHERE a.bike_id = b.id
+    ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.created_at DESC
+    LIMIT 1
+  ) AS allocated_rider_avatar_url,
+  (
+    SELECT a.agreement_no FROM agreements a
+    WHERE a.bike_id = b.id
+    ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.created_at DESC
+    LIMIT 1
+  ) AS allocated_agreement_no
+FROM bikes b`;
+
 router.get('/catalog', (req, res) => {
   const bikes = db.prepare(`SELECT id, make, model, year, engine_cc, condition, rental_weekly, total_weeks, image_url
     FROM bikes WHERE status = 'available' ORDER BY make, model`).all();
@@ -56,12 +86,13 @@ router.get('/catalog', (req, res) => {
 
 router.get('/', authRequired, adminOnly, (req, res) => {
   const status = req.query.status;
-  const bikes = status ? db.prepare('SELECT * FROM bikes WHERE status = ? ORDER BY id DESC').all(status) : db.prepare('SELECT * FROM bikes ORDER BY id DESC').all();
+  const sql = `${bikeSelectSql} ${status ? 'WHERE b.status = ?' : ''} ORDER BY b.id DESC`;
+  const bikes = status ? db.prepare(sql).all(status) : db.prepare(sql).all();
   res.json({ bikes });
 });
 
 router.get('/:id', authRequired, (req, res) => {
-  const bike = db.prepare('SELECT * FROM bikes WHERE id = ?').get(req.params.id);
+  const bike = db.prepare(`${bikeSelectSql} WHERE b.id = ?`).get(req.params.id);
   if (!bike) return res.status(404).json({ error: 'Not found' });
 
   if (!['admin', 'superadmin'].includes(req.user.role)) {

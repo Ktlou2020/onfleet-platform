@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import api from '../../api';
 import toast from 'react-hot-toast';
-import { Loading, Badge, fmt, fmtDate } from '../../components/ui';
+import { Loading, Badge, SearchInput, Pagination, fmt, fmtDate, matchesSearch, paginateItems } from '../../components/ui';
 
 const PLATFORMS = ['Uber Eats', 'Mr D', 'Bolt Food', 'Takealot', 'Checkers Sixty60', 'Other'];
 
@@ -10,6 +10,12 @@ export default function RiderApplication() {
   const [bikes, setBikes] = useState([]);
   const [submitting, setSubmitting] = useState(false);
   const [uploading, setUploading] = useState('');
+  const [historySearch, setHistorySearch] = useState('');
+  const [docSearch, setDocSearch] = useState('');
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyPageSize, setHistoryPageSize] = useState(6);
+  const [docPage, setDocPage] = useState(1);
+  const [docPageSize, setDocPageSize] = useState(8);
   const [form, setForm] = useState({
     preferred_bike_id: '',
     delivery_platforms: [],
@@ -35,6 +41,32 @@ export default function RiderApplication() {
   const latest = useMemo(() => (apps && apps.length ? apps[0] : null), [apps]);
   const payslips = latest?.documents?.filter((doc) => doc.doc_type === 'payslip') || [];
   const canCreate = !latest || (latest.status === 'rejected' && (!latest.retry_after_date || latest.retry_after_date <= new Date().toISOString().slice(0, 10)));
+
+  const filteredHistory = useMemo(() => (apps || []).filter((application) => matchesSearch(
+    historySearch,
+    application.id,
+    application.make,
+    application.model,
+    application.registration,
+    application.status,
+    application.auto_decision,
+    application.average_weekly_earnings,
+    application.submitted_at
+  )), [apps, historySearch]);
+
+  const filteredDocs = useMemo(() => (latest?.documents || []).filter((doc) => matchesSearch(
+    docSearch,
+    doc.doc_type,
+    doc.original_name,
+    doc.uploaded_at,
+    doc.extracted_amount
+  )), [latest, docSearch]);
+
+  useEffect(() => { setHistoryPage(1); }, [historySearch]);
+  useEffect(() => { setDocPage(1); }, [docSearch, latest?.id]);
+
+  const historyPagination = useMemo(() => paginateItems(filteredHistory, historyPage, historyPageSize), [filteredHistory, historyPage, historyPageSize]);
+  const docPagination = useMemo(() => paginateItems(filteredDocs, docPage, docPageSize), [filteredDocs, docPage, docPageSize]);
 
   const togglePlatform = (platform) => setForm((current) => ({
     ...current,
@@ -100,14 +132,17 @@ export default function RiderApplication() {
 
       {apps.length > 0 && (
         <div className="card mb-4">
-          <h3 className="mb-3">Application history</h3>
+          <div className="flex-between mb-3" style={{ gap: 12, flexWrap: 'wrap' }}>
+            <h3 style={{ marginBottom: 0 }}>Application history</h3>
+            <SearchInput value={historySearch} onChange={setHistorySearch} placeholder="Search bike, registration, status, application ID" style={{ width: 320 }} />
+          </div>
           <table className="table">
             <thead><tr><th>Submitted</th><th>Bike</th><th>Status</th><th>Avg weekly</th><th>Docs</th></tr></thead>
             <tbody>
-              {apps.map((application) => (
+              {historyPagination.items.map((application) => (
                 <tr key={application.id}>
                   <td>{fmtDate(application.submitted_at)}</td>
-                  <td>{application.make ? `${application.make} ${application.model}` : '—'}</td>
+                  <td>{application.make ? `${application.make} ${application.model}` : '—'}<div className="text-xs muted">{application.registration || 'No registration yet'}</div></td>
                   <td>
                     <Badge status={application.status}>{application.auto_decision === 'pre_approved' ? 'pre-approved' : application.status}</Badge>
                   </td>
@@ -117,6 +152,8 @@ export default function RiderApplication() {
               ))}
             </tbody>
           </table>
+          {!historyPagination.items.length && <div className="muted text-sm" style={{ paddingTop: 16 }}>{historySearch ? 'No applications match your search.' : 'No application history yet.'}</div>}
+          <Pagination page={historyPagination.currentPage} pageSize={historyPagination.pageSize} totalItems={historyPagination.totalItems} onPageChange={setHistoryPage} onPageSizeChange={setHistoryPageSize} label="applications" />
         </div>
       )}
 
@@ -211,11 +248,14 @@ export default function RiderApplication() {
           </div>
 
           <div className="card">
-            <h3 className="mb-3">Uploaded documents</h3>
+            <div className="flex-between mb-3" style={{ gap: 12, flexWrap: 'wrap' }}>
+              <h3 style={{ marginBottom: 0 }}>Uploaded documents</h3>
+              <SearchInput value={docSearch} onChange={setDocSearch} placeholder="Search document type or filename" style={{ width: 320 }} />
+            </div>
             <table className="table">
               <thead><tr><th>Type</th><th>File</th><th>Uploaded</th><th>Extracted amount</th><th></th></tr></thead>
               <tbody>
-                {(latest.documents || []).map((doc) => (
+                {docPagination.items.map((doc) => (
                   <tr key={doc.id}>
                     <td>{doc.doc_type.replace(/_/g, ' ')}</td>
                     <td>{doc.original_name}</td>
@@ -226,7 +266,8 @@ export default function RiderApplication() {
                 ))}
               </tbody>
             </table>
-            {!latest.documents?.length && <div className="muted text-sm">No documents uploaded yet.</div>}
+            {!docPagination.items.length && <div className="muted text-sm">{docSearch ? 'No documents match your search.' : 'No documents uploaded yet.'}</div>}
+            <Pagination page={docPagination.currentPage} pageSize={docPagination.pageSize} totalItems={docPagination.totalItems} onPageChange={setDocPage} onPageSizeChange={setDocPageSize} label="documents" />
           </div>
         </>
       )}

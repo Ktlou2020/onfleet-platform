@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import api from '../../api';
 import toast from 'react-hot-toast';
-import { Badge, EmptyState, Loading, fmtDateTime, Stat } from '../../components/ui';
+import { Badge, EmptyState, Loading, Pagination, SearchInput, fmtDateTime, Stat, matchesSearch, paginateItems } from '../../components/ui';
 import { Bell, Mail, MessageSquare, Smartphone, RefreshCw } from 'lucide-react';
 
 const channelIcon = {
@@ -40,6 +40,9 @@ function NotificationRow({ item }) {
 export default function AdminNotifications() {
   const [list, setList] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const load = async () => {
     try {
@@ -54,6 +57,21 @@ export default function AdminNotifications() {
   };
 
   useEffect(() => { load(); }, []);
+  useEffect(() => { setPage(1); }, [search]);
+
+  const filtered = useMemo(() => (list || []).filter((item) => matchesSearch(
+    search,
+    item.full_name,
+    item.email,
+    item.role,
+    item.channel,
+    item.type,
+    item.title,
+    item.message,
+    item.status
+  )), [list, search]);
+
+  const pagination = useMemo(() => paginateItems(filtered, page, pageSize), [filtered, page, pageSize]);
 
   const stats = useMemo(() => {
     const notifications = list || [];
@@ -77,6 +95,11 @@ export default function AdminNotifications() {
         <button className="btn btn-secondary" onClick={load} disabled={busy}><RefreshCw size={16} /> Refresh</button>
       </div>
 
+      <div className="row mb-3" style={{ flexWrap: 'wrap', justifyContent: 'space-between' }}>
+        <SearchInput value={search} onChange={setSearch} placeholder="Search recipient, channel, title, message" style={{ flex: '1 1 320px', maxWidth: 480 }} />
+        <div className="muted text-sm">Showing {filtered.length} matching notifications</div>
+      </div>
+
       <div className="grid grid-4 mb-4">
         <Stat label="Total updates" value={stats.total} icon={<Bell size={16} />} />
         <Stat label="Sent" value={stats.sent} icon={<Mail size={16} />} accent="var(--success)" />
@@ -84,27 +107,30 @@ export default function AdminNotifications() {
         <Stat label="Failed" value={stats.failed} icon={<Smartphone size={16} />} accent="var(--danger)" />
       </div>
 
-      {list.length ? (
-        <div className="card" style={{ padding: 0 }}>
-          <table className="table">
-            <thead>
-              <tr>
-                <th>When</th>
-                <th>Recipient</th>
-                <th>Role</th>
-                <th>Channel</th>
-                <th>Update</th>
-                <th>Message</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {list.map((item) => <NotificationRow key={item.id} item={item} />)}
-            </tbody>
-          </table>
-        </div>
+      {pagination.items.length ? (
+        <>
+          <div className="card" style={{ padding: 0 }}>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>When</th>
+                  <th>Recipient</th>
+                  <th>Role</th>
+                  <th>Channel</th>
+                  <th>Update</th>
+                  <th>Message</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pagination.items.map((item) => <NotificationRow key={item.id} item={item} />)}
+              </tbody>
+            </table>
+          </div>
+          <Pagination page={pagination.currentPage} pageSize={pagination.pageSize} totalItems={pagination.totalItems} onPageChange={setPage} onPageSizeChange={setPageSize} label="notifications" />
+        </>
       ) : (
-        <EmptyState title="No notifications yet" sub="Emails, approval updates, rejections, and other platform messages will appear here." />
+        <EmptyState title="No notifications found" sub={search ? 'Try a different search term for recipients, channels, or message content.' : 'Emails, approval updates, rejections, and other platform messages will appear here.'} />
       )}
     </>
   );

@@ -1,18 +1,40 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../api';
 import toast from 'react-hot-toast';
-import { Loading, Badge, Modal, fmt, fmtDate } from '../../components/ui';
+import { Loading, Badge, Modal, Pagination, SearchInput, fmt, fmtDate, matchesSearch, paginateItems } from '../../components/ui';
 import { Plus } from 'lucide-react';
 
 export default function AdminBikes() {
   const [bikes, setBikes] = useState(null);
   const [filter, setFilter] = useState('');
   const [showAdd, setShowAdd] = useState(false);
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(9);
   const [form, setForm] = useState({ vin: '', make: '', model: '', year: 2024, engine_cc: 125, color: '', condition: 'new', purchase_price: '', rental_weekly: '850', total_weeks: 78, registration: '', image_url: '' });
 
   const load = () => api.get('/bikes', { params: filter ? { status: filter } : {} }).then((response) => setBikes(response.data.bikes));
   useEffect(() => { load(); }, [filter]);
+  useEffect(() => { setPage(1); }, [search, filter]);
+
+  const filtered = useMemo(() => (bikes || []).filter((bike) => matchesSearch(
+    search,
+    bike.vin,
+    bike.registration,
+    bike.make,
+    bike.model,
+    bike.year,
+    bike.color,
+    bike.status,
+    bike.engine_cc,
+    bike.odometer_km,
+    bike.allocated_rider_name,
+    bike.allocated_rider_phone,
+    bike.allocated_agreement_no
+  )), [bikes, search]);
+
+  const pagination = useMemo(() => paginateItems(filtered, page, pageSize), [filtered, page, pageSize]);
 
   const create = async () => {
     try {
@@ -31,9 +53,13 @@ export default function AdminBikes() {
       <div className="flex-between mb-2">
         <div>
           <h1 className="page-title">Bike Fleet</h1>
-          <p className="page-sub">Manage inventory, upload bike images, log repairs, and track ROI in each bike detail page.</p>
+          <p className="page-sub">Manage inventory, assigned riders, bike images, service records, and ROI.</p>
         </div>
         <button className="btn" onClick={() => setShowAdd(true)}><Plus size={16} /> Add bike</button>
+      </div>
+      <div className="row mb-3" style={{ flexWrap: 'wrap', justifyContent: 'space-between' }}>
+        <SearchInput value={search} onChange={setSearch} placeholder="Search VIN, registration, make, model, rider" style={{ flex: '1 1 320px', maxWidth: 420 }} />
+        <div className="muted text-sm">Showing {filtered.length} matching bikes</div>
       </div>
       <div className="row mb-4">
         {['', 'available', 'allocated', 'maintenance', 'sold', 'retired'].map((value) => (
@@ -42,9 +68,19 @@ export default function AdminBikes() {
       </div>
 
       <div className="grid grid-3">
-        {bikes.map((bike) => (
+        {pagination.items.map((bike) => (
           <Link key={bike.id} to={`/admin/bikes/${bike.id}`} className="bike-card" style={{ color: 'var(--text)', display: 'block' }}>
-            <div className="img" style={{ height: 160, backgroundImage: bike.image_url ? `url("${bike.image_url}")` : 'none', backgroundSize: 'cover', backgroundPosition: 'center', backgroundColor: '#0a1219' }} />
+            <div className="img" style={{ height: 180, backgroundImage: bike.image_url ? `url("${bike.image_url}")` : 'none', backgroundSize: 'cover', backgroundPosition: 'center', backgroundColor: '#0a1219', position: 'relative' }}>
+              {bike.allocated_rider_name && (
+                <div style={{ position: 'absolute', left: 12, right: 12, bottom: 12, display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 12, background: 'rgba(8,12,18,0.76)', backdropFilter: 'blur(8px)' }}>
+                  <div className="avatar" style={{ width: 36, height: 36, backgroundImage: bike.allocated_rider_avatar_url ? `url(${bike.allocated_rider_avatar_url})` : 'none', backgroundSize: 'cover', backgroundPosition: 'center', flexShrink: 0 }}>{bike.allocated_rider_avatar_url ? '' : bike.allocated_rider_name?.[0]}</div>
+                  <div style={{ minWidth: 0 }}>
+                    <div className="text-xs muted">Allocated rider</div>
+                    <div style={{ fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{bike.allocated_rider_name}</div>
+                  </div>
+                </div>
+              )}
+            </div>
             <div className="body" style={{ padding: 16 }}>
               <div className="flex-between mb-2">
                 <h3>{bike.make} {bike.model}</h3>
@@ -56,10 +92,20 @@ export default function AdminBikes() {
               <div className="flex-between mt-3 mb-1"><span className="muted text-sm">Weekly</span><strong style={{ color: 'var(--primary-light)' }}>{fmt(bike.rental_weekly)}</strong></div>
               <div className="flex-between"><span className="muted text-sm">Odometer</span><span>{bike.odometer_km || 0} km</span></div>
               {bike.next_service_date && <div className="flex-between"><span className="muted text-sm">Next service</span><span className="text-xs">{fmtDate(bike.next_service_date)}</span></div>}
+              {bike.allocated_rider_name && (
+                <div className="card mt-3" style={{ background: 'var(--surface-2)', padding: 12 }}>
+                  <div className="text-xs muted">Allocated to</div>
+                  <div style={{ fontWeight: 700 }}>{bike.allocated_rider_name}</div>
+                  <div className="text-xs muted">{bike.allocated_rider_phone || 'No phone'} · {bike.allocated_agreement_no || 'No agreement number'}</div>
+                </div>
+              )}
             </div>
           </Link>
         ))}
       </div>
+
+      {!pagination.items.length && <div className="card muted" style={{ textAlign: 'center' }}>{search ? 'No bikes match your search.' : 'No bikes found.'}</div>}
+      <Pagination page={pagination.currentPage} pageSize={pagination.pageSize} totalItems={pagination.totalItems} onPageChange={setPage} onPageSizeChange={setPageSize} label="bikes" />
 
       {showAdd && (
         <Modal title="Add new bike" onClose={() => setShowAdd(false)}>

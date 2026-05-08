@@ -121,6 +121,102 @@ function hydrateDocuments(applicationId) {
     FROM application_documents WHERE application_id = ? ORDER BY uploaded_at DESC`).all(applicationId);
 }
 
+function getApplicationWithRelations(applicationId) {
+  return db.prepare(`SELECT a.*, u.full_name, u.email, u.phone, u.id_number, u.address, u.city, u.province, u.avatar_url,
+      b.make, b.model, b.registration, b.image_url
+    FROM applications a
+    JOIN users u ON u.id = a.user_id
+    LEFT JOIN bikes b ON b.id = a.preferred_bike_id
+    WHERE a.id = ?`).get(applicationId);
+}
+
+async function approveApplication({ applicationId, bikeId, weeklyAmount, totalWeeks, startDate, reviewerId }) {
+  if (!bikeId || !weeklyAmount || !startDate) {
+    throw new Error('bike_id, weekly_amount, start_date required');
+  }
+
+  const app = db.prepare('SELECT * FROM applications WHERE id = ?').get(applicationId);
+  if (!app) throw new Error('Application not found');
+  if (!['submitted', 'under_review'].includes(app.status)) {
+    throw new Error('Only submitted or under review applications can be approved');
+  }
+
+  const rider = db.prepare('SELECT * FROM users WHERE id = ?').get(app.user_id);
+  const bike = db.prepare('SELECT * FROM bikes WHERE id = ?').get(bikeId);
+  if (!bike) throw new Error('Bike not found');
+  if (bike.status !== 'available') throw new Error('Bike not available');
+
+  const weeks = Number(totalWeeks || bike.total_weeks || 78);
+  const weekly = Number(weeklyAmount);
+  if (!weekly || weekly <= 0) throw new Error('Weekly amount must be greater than zero');
+
+  const total = +(weekly * weeks).toFixed(2);
+  const endDate = addDays(startDate, weeks * 7);
+  const agreementNo = generateAgreementNo();
+
+  const agreementId = db.transaction(() => {
+    db.prepare(`UPDATE applications
+      SET status = 'approved', reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP, rejection_reason = NULL
+      WHERE id = ?`).run(reviewerId, applicationId);
+    db.prepare(`UPDATE bikes SET status = 'allocated' WHERE id = ?`).run(bikeId);
+    const info = db.prepare(`INSERT INTO agreements
+      (agreement_no, user_id, bike_id, application_id, weekly_amount, total_weeks, total_amount,
+       start_date, end_date, status, created_by)
+      VALUES (?,?,?,?,?,?,?,?,?, 'active', ?)`).run(
+        agreementNo, app.user_id, bikeId, app.id, weekly, weeks, total, startDate, endDate, reviewerId
+      );
+    buildPaymentSchedule(info.lastInsertRowid, weekly, weeks, startDate);
+    return info.lastInsertRowid;
+  })();
+
+  const agreement = db.prepare('SELECT * FROM agreements WHERE id = ?').get(agreementId);
+  const contractPath = writeContractSnapshot({ agreement, rider, bike, application: app, kind: 'unsigned' });
+  db.prepare(`UPDATE agreements SET contract_file_path = ?, contract_pdf_path = ? WHERE id = ?`).run(contractPath, contractPath, agreementId);
+  db.prepare(`INSERT INTO application_documents
+    (application_id, user_id, doc_type, file_path, original_name, mime_type, status, uploaded_by)
+    VALUES (?,?,?,?,?,?,?,?)`).run(
+      app.id,
+      app.user_id,
+      'unsigned_contract',
+      contractPath,
+      `${agreementNo}-contract.html`,
+      'text/html',
+      'verified',
+      reviewerId
+    );
+
+  await sendNotification({
+    userId: app.user_id,
+    channel: 'email',
+    type: 'application_approved',
+    title: 'OnFleet application approved',
+    message: `Hi ${rider.full_name.split(' ')[0]}, your application has been approved. Your bike has been allocated and your agreement ${agreementNo} is now ready for review and signature on the platform.`
+  });
+
+  logAudit(reviewerId, 'application.approve', 'applications', Number(applicationId), { agreementId, bikeId });
+  return { ok: true, agreement_id: agreementId, agreement_no: agreementNo, contract_file_path: contractPath, bike_id: Number(bikeId) };
+}
+
+async function rejectApplication({ applicationId, reviewerId, reason }) {
+  const app = db.prepare(`SELECT a.*, u.full_name FROM applications a JOIN users u ON u.id = a.user_id WHERE a.id = ?`).get(applicationId);
+  if (!app) throw new Error('Application not found');
+  if (!['submitted', 'under_review'].includes(app.status)) {
+    throw new Error('Only submitted or under review applications can be declined');
+  }
+
+  db.prepare(`UPDATE applications SET status = 'rejected', rejection_reason = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ?`)
+    .run(reason || null, reviewerId, applicationId);
+  await sendNotification({
+    userId: app.user_id,
+    channel: 'email',
+    type: 'application_rejected',
+    title: 'OnFleet application update',
+    message: `Hi ${app.full_name.split(' ')[0]}, your application has been declined. ${reason || 'Please contact OnFleet support for more information.'}`
+  });
+  logAudit(reviewerId, 'application.reject', 'applications', Number(applicationId), { reason: reason || null });
+  return { ok: true };
+}
+
 router.post('/', authRequired, async (req, res) => {
   const lastRejected = db.prepare(`SELECT retry_after_date FROM applications
     WHERE user_id = ? AND status = 'rejected' AND retry_after_date IS NOT NULL
@@ -179,7 +275,7 @@ router.post('/:id/documents', authRequired, upload.single('file'), async (req, r
 });
 
 router.get('/mine', authRequired, (req, res) => {
-  const apps = db.prepare(`SELECT a.*, b.make, b.model,
+  const apps = db.prepare(`SELECT a.*, b.make, b.model, b.registration, b.image_url,
       (SELECT COUNT(*) FROM application_documents d WHERE d.application_id = a.id) AS document_count,
       (SELECT COUNT(*) FROM application_documents d WHERE d.application_id = a.id AND d.doc_type = 'payslip') AS payslip_count
     FROM applications a
@@ -195,7 +291,7 @@ router.get('/mine', authRequired, (req, res) => {
 router.get('/', authRequired, adminOnly, (req, res) => {
   const status = req.query.status;
   const where = status ? 'WHERE a.status = ?' : '';
-  const sql = `SELECT a.*, u.full_name, u.email, u.phone, b.make, b.model,
+  const sql = `SELECT a.*, u.full_name, u.email, u.phone, u.avatar_url, b.make, b.model, b.registration, b.image_url,
       (SELECT COUNT(*) FROM application_documents d WHERE d.application_id = a.id) AS document_count,
       (SELECT COUNT(*) FROM application_documents d WHERE d.application_id = a.id AND d.doc_type = 'payslip') AS payslip_count
     FROM applications a
@@ -207,13 +303,57 @@ router.get('/', authRequired, adminOnly, (req, res) => {
   res.json({ applications: apps });
 });
 
+router.post('/bulk-review', authRequired, adminOnly, async (req, res) => {
+  const { action, application_ids, approvals, reason } = req.body || {};
+  if (!['approve', 'reject'].includes(action)) {
+    return res.status(400).json({ error: 'action must be approve or reject' });
+  }
+
+  if (action === 'approve') {
+    if (!Array.isArray(approvals) || !approvals.length) {
+      return res.status(400).json({ error: 'approvals are required' });
+    }
+
+    const results = [];
+    const errors = [];
+    for (const approval of approvals) {
+      try {
+        const result = await approveApplication({
+          applicationId: approval.application_id,
+          bikeId: approval.bike_id,
+          weeklyAmount: approval.weekly_amount,
+          totalWeeks: approval.total_weeks,
+          startDate: approval.start_date,
+          reviewerId: req.user.id
+        });
+        results.push({ application_id: Number(approval.application_id), ...result });
+      } catch (error) {
+        errors.push({ application_id: Number(approval.application_id), error: error.message });
+      }
+    }
+
+    return res.json({ ok: errors.length === 0, action, processed: results.length, failed: errors.length, results, errors });
+  }
+
+  const ids = Array.isArray(application_ids) ? application_ids : [];
+  if (!ids.length) return res.status(400).json({ error: 'application_ids are required' });
+
+  const results = [];
+  const errors = [];
+  for (const applicationId of ids) {
+    try {
+      await rejectApplication({ applicationId, reviewerId: req.user.id, reason });
+      results.push({ application_id: Number(applicationId), ok: true });
+    } catch (error) {
+      errors.push({ application_id: Number(applicationId), error: error.message });
+    }
+  }
+
+  res.json({ ok: errors.length === 0, action, processed: results.length, failed: errors.length, results, errors });
+});
+
 router.get('/:id', authRequired, (req, res) => {
-  const app = db.prepare(`SELECT a.*, u.full_name, u.email, u.phone, u.id_number, u.address, u.city, u.province,
-      b.make, b.model
-    FROM applications a
-    JOIN users u ON u.id = a.user_id
-    LEFT JOIN bikes b ON b.id = a.preferred_bike_id
-    WHERE a.id = ?`).get(req.params.id);
+  const app = getApplicationWithRelations(req.params.id);
   if (!app) return res.status(404).json({ error: 'Not found' });
   if (app.user_id !== req.user.id && !['admin', 'superadmin'].includes(req.user.role)) {
     return res.status(403).json({ error: 'Forbidden' });
@@ -226,81 +366,28 @@ router.get('/:id', authRequired, (req, res) => {
 });
 
 router.post('/:id/approve', authRequired, adminOnly, async (req, res) => {
-  const { bike_id, weekly_amount, total_weeks, start_date } = req.body;
-  if (!bike_id || !weekly_amount || !start_date) {
-    return res.status(400).json({ error: 'bike_id, weekly_amount, start_date required' });
+  try {
+    const result = await approveApplication({
+      applicationId: req.params.id,
+      bikeId: req.body.bike_id,
+      weeklyAmount: req.body.weekly_amount,
+      totalWeeks: req.body.total_weeks,
+      startDate: req.body.start_date,
+      reviewerId: req.user.id
+    });
+    res.json(result);
+  } catch (error) {
+    res.status(error.message === 'Application not found' || error.message === 'Bike not found' ? 404 : 400).json({ error: error.message });
   }
-
-  const app = db.prepare('SELECT * FROM applications WHERE id = ?').get(req.params.id);
-  if (!app) return res.status(404).json({ error: 'Application not found' });
-  const rider = db.prepare('SELECT * FROM users WHERE id = ?').get(app.user_id);
-  const bike = db.prepare('SELECT * FROM bikes WHERE id = ?').get(bike_id);
-  if (!bike) return res.status(404).json({ error: 'Bike not found' });
-  if (bike.status !== 'available') return res.status(400).json({ error: 'Bike not available' });
-
-  const weeks = Number(total_weeks || 78);
-  const weekly = Number(weekly_amount);
-  const total = +(weekly * weeks).toFixed(2);
-  const endDate = addDays(start_date, weeks * 7);
-  const agreementNo = generateAgreementNo();
-
-  const agreementId = db.transaction(() => {
-    db.prepare(`UPDATE applications
-      SET status = 'approved', reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP, rejection_reason = NULL
-      WHERE id = ?`).run(req.user.id, req.params.id);
-    db.prepare(`UPDATE bikes SET status = 'allocated' WHERE id = ?`).run(bike_id);
-    const info = db.prepare(`INSERT INTO agreements
-      (agreement_no, user_id, bike_id, application_id, weekly_amount, total_weeks, total_amount,
-       start_date, end_date, status, created_by)
-      VALUES (?,?,?,?,?,?,?,?,?, 'active', ?)`).run(
-        agreementNo, app.user_id, bike_id, app.id, weekly, weeks, total, start_date, endDate, req.user.id
-      );
-    buildPaymentSchedule(info.lastInsertRowid, weekly, weeks, start_date);
-    return info.lastInsertRowid;
-  })();
-
-  const agreement = db.prepare('SELECT * FROM agreements WHERE id = ?').get(agreementId);
-  const contractPath = writeContractSnapshot({ agreement, rider, bike, application: app, kind: 'unsigned' });
-  db.prepare(`UPDATE agreements SET contract_file_path = ?, contract_pdf_path = ? WHERE id = ?`).run(contractPath, contractPath, agreementId);
-  db.prepare(`INSERT INTO application_documents
-    (application_id, user_id, doc_type, file_path, original_name, mime_type, status, uploaded_by)
-    VALUES (?,?,?,?,?,?,?,?)`).run(
-      app.id,
-      app.user_id,
-      'unsigned_contract',
-      contractPath,
-      `${agreementNo}-contract.html`,
-      'text/html',
-      'verified',
-      req.user.id
-    );
-
-  await sendNotification({
-    userId: app.user_id,
-    channel: 'email',
-    type: 'application_approved',
-    title: 'OnFleet application approved',
-    message: `Hi ${rider.full_name.split(' ')[0]}, your application has been approved. Your bike has been allocated and your agreement ${agreementNo} is now ready for review and signature on the platform.`
-  });
-
-  logAudit(req.user.id, 'application.approve', 'applications', Number(req.params.id), { agreementId });
-  res.json({ ok: true, agreement_id: agreementId, agreement_no: agreementNo, contract_file_path: contractPath });
 });
 
 router.post('/:id/reject', authRequired, adminOnly, async (req, res) => {
-  const app = db.prepare(`SELECT a.*, u.full_name FROM applications a JOIN users u ON u.id = a.user_id WHERE a.id = ?`).get(req.params.id);
-  if (!app) return res.status(404).json({ error: 'Application not found' });
-  db.prepare(`UPDATE applications SET status = 'rejected', rejection_reason = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ?`)
-    .run(req.body.reason || null, req.user.id, req.params.id);
-  await sendNotification({
-    userId: app.user_id,
-    channel: 'email',
-    type: 'application_rejected',
-    title: 'OnFleet application update',
-    message: `Hi ${app.full_name.split(' ')[0]}, your application has been declined. ${req.body.reason || 'Please contact OnFleet support for more information.'}`
-  });
-  logAudit(req.user.id, 'application.reject', 'applications', Number(req.params.id));
-  res.json({ ok: true });
+  try {
+    const result = await rejectApplication({ applicationId: req.params.id, reviewerId: req.user.id, reason: req.body.reason });
+    res.json(result);
+  } catch (error) {
+    res.status(error.message === 'Application not found' ? 404 : 400).json({ error: error.message });
+  }
 });
 
 module.exports = router;

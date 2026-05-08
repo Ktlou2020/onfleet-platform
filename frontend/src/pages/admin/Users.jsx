@@ -2,18 +2,22 @@ import { useEffect, useMemo, useState } from 'react';
 import api from '../../api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../auth';
-import { Loading, Badge, fmtDate, Modal } from '../../components/ui';
+import { Loading, Badge, SearchInput, fmtDate, Modal, Pagination, matchesSearch, paginateItems } from '../../components/ui';
 
 export default function AdminUsers() {
   const { user } = useAuth();
   const [users, setUsers] = useState(null);
   const [filter, setFilter] = useState('');
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState({ full_name: '', email: '', phone: '', password: '', role: 'rider' });
   const [roleEdits, setRoleEdits] = useState({});
 
   const load = () => api.get('/admin/users', { params: filter ? { role: filter } : {} }).then((response) => setUsers(response.data.users));
   useEffect(() => { load(); }, [filter]);
+  useEffect(() => { setPage(1); }, [search, filter]);
 
   useEffect(() => {
     if (!users) return;
@@ -21,6 +25,19 @@ export default function AdminUsers() {
     users.forEach((account) => { next[account.id] = account.role; });
     setRoleEdits(next);
   }, [users]);
+
+  const filtered = useMemo(() => (users || []).filter((account) => matchesSearch(
+    search,
+    account.full_name,
+    account.email,
+    account.phone,
+    account.country_of_origin,
+    account.role,
+    account.status,
+    account.id
+  )), [users, search]);
+
+  const pagination = useMemo(() => paginateItems(filtered, page, pageSize), [filtered, page, pageSize]);
 
   const dirtyRoles = useMemo(() => Object.entries(roleEdits).filter(([id, role]) => {
     const account = users?.find((row) => row.id === Number(id));
@@ -83,6 +100,10 @@ export default function AdminUsers() {
           {user?.role === 'superadmin' && <button className="btn" onClick={() => setShowCreate(true)}>+ Add user</button>}
         </div>
       </div>
+      <div className="row mb-3" style={{ flexWrap: 'wrap', justifyContent: 'space-between' }}>
+        <SearchInput value={search} onChange={setSearch} placeholder="Search name, email, phone, role, country" style={{ flex: '1 1 320px', maxWidth: 460 }} />
+        <div className="muted text-sm">Showing {filtered.length} matching users</div>
+      </div>
       <div className="row mb-4" style={{ flexWrap: 'wrap' }}>
         {[['', 'All'], ['rider', 'Riders'], ['admin', 'Admins'], ['superadmin', 'Superadmins']].map(([value, label]) => (
           <button key={value} onClick={() => setFilter(value)} className={`btn btn-sm ${filter === value ? '' : 'btn-secondary'}`}>{label}</button>
@@ -93,7 +114,7 @@ export default function AdminUsers() {
         <table className="table">
           <thead><tr><th>User</th><th>Phone</th><th>Country</th><th>Role</th><th>Status</th><th>Joined</th><th></th></tr></thead>
           <tbody>
-            {users.map((account) => {
+            {pagination.items.map((account) => {
               const pendingRole = roleEdits[account.id] || account.role;
               const roleChanged = pendingRole !== account.role;
               return (
@@ -136,7 +157,9 @@ export default function AdminUsers() {
             })}
           </tbody>
         </table>
+        {!pagination.items.length && <div className="muted" style={{ padding: 24, textAlign: 'center' }}>{search ? 'No users match your search.' : 'No users found.'}</div>}
       </div>
+      <Pagination page={pagination.currentPage} pageSize={pagination.pageSize} totalItems={pagination.totalItems} onPageChange={setPage} onPageSizeChange={setPageSize} label="users" />
 
       {showCreate && (
         <Modal title="Add user" onClose={() => setShowCreate(false)}>

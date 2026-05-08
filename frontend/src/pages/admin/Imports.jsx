@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import api from '../../api';
 import toast from 'react-hot-toast';
+import { SearchInput, matchesSearch } from '../../components/ui';
 
 function ResultCard({ title, result }) {
   if (!result) return null;
@@ -51,6 +52,7 @@ export default function AdminImports() {
   const [bundleFiles, setBundleFiles] = useState({ riders_file: null, bikes_file: null, payments_file: null });
   const [results, setResults] = useState({});
   const [bundleBusy, setBundleBusy] = useState(false);
+  const [search, setSearch] = useState('');
 
   const uploadBundle = async () => {
     if (!bundleFiles.riders_file && !bundleFiles.bikes_file && !bundleFiles.payments_file) {
@@ -72,6 +74,16 @@ export default function AdminImports() {
     }
   };
 
+  const cardMatches = {
+    bundle: matchesSearch(search, 'Legacy bundle import', 'Drivers Fleet Collections', 'bundle', 'riders bikes payments'),
+    riders: matchesSearch(search, 'Import riders', 'drivers export create update rider profiles selfie country origin linked KYC documents', results.riders && JSON.stringify(results.riders)),
+    bikes: matchesSearch(search, 'Import bikes', 'fleet export create update bikes registration VIN', results.bikes && JSON.stringify(results.bikes)),
+    agreements: matchesSearch(search, 'Import agreements', 'fleet export create agreements imported bike rider name', results.agreements && JSON.stringify(results.agreements)),
+    payments: matchesSearch(search, 'Import payments', 'collections export resolves agreement bike registration VIN', results.payments && JSON.stringify(results.payments))
+  };
+
+  const visibleCards = useMemo(() => Object.values(cardMatches).filter(Boolean).length, [cardMatches]);
+
   return (
     <>
       <div className="flex-between mb-2">
@@ -81,72 +93,48 @@ export default function AdminImports() {
         </div>
       </div>
 
-      <div className="card mb-4">
-        <h3 className="mb-1">Legacy bundle import</h3>
-        <p className="page-sub" style={{ marginBottom: 16 }}>Recommended for your current exports: Drivers → Fleet → Collections. This creates rider profiles, adds country/selfie data, imports bikes, builds agreements from the fleet export, and applies imported collections to the matching agreement.</p>
-        <div className="grid grid-3">
-          <div className="field">
-            <label className="label">Drivers CSV</label>
-            <input type="file" accept=".csv,text/csv" onChange={(e) => setBundleFiles((prev) => ({ ...prev, riders_file: e.target.files?.[0] || null }))} />
-          </div>
-          <div className="field">
-            <label className="label">Fleet CSV</label>
-            <input type="file" accept=".csv,text/csv" onChange={(e) => setBundleFiles((prev) => ({ ...prev, bikes_file: e.target.files?.[0] || null }))} />
-          </div>
-          <div className="field">
-            <label className="label">Collections CSV</label>
-            <input type="file" accept=".csv,text/csv" onChange={(e) => setBundleFiles((prev) => ({ ...prev, payments_file: e.target.files?.[0] || null }))} />
-          </div>
-        </div>
-        <div className="row" style={{ marginTop: 12 }}>
-          <button className="btn" onClick={uploadBundle} disabled={bundleBusy}>{bundleBusy ? 'Importing…' : 'Run bundle import'}</button>
-        </div>
+      <div className="row mb-4" style={{ flexWrap: 'wrap', justifyContent: 'space-between' }}>
+        <SearchInput value={search} onChange={setSearch} placeholder="Search import type, result, or CSV workflow" style={{ flex: '1 1 320px', maxWidth: 460 }} />
+        <div className="muted text-sm">Showing {visibleCards} import sections</div>
       </div>
+
+      {cardMatches.bundle && (
+        <div className="card mb-4">
+          <h3 className="mb-1">Legacy bundle import</h3>
+          <p className="page-sub" style={{ marginBottom: 16 }}>Recommended for your current exports: Drivers → Fleet → Collections. This creates rider profiles, adds country/selfie data, imports bikes, builds agreements from the fleet export, and applies imported collections to the matching agreement.</p>
+          <div className="grid grid-3">
+            <div className="field">
+              <label className="label">Drivers CSV</label>
+              <input type="file" accept=".csv,text/csv" onChange={(e) => setBundleFiles((prev) => ({ ...prev, riders_file: e.target.files?.[0] || null }))} />
+            </div>
+            <div className="field">
+              <label className="label">Fleet CSV</label>
+              <input type="file" accept=".csv,text/csv" onChange={(e) => setBundleFiles((prev) => ({ ...prev, bikes_file: e.target.files?.[0] || null }))} />
+            </div>
+            <div className="field">
+              <label className="label">Collections CSV</label>
+              <input type="file" accept=".csv,text/csv" onChange={(e) => setBundleFiles((prev) => ({ ...prev, payments_file: e.target.files?.[0] || null }))} />
+            </div>
+          </div>
+          <div className="row" style={{ marginTop: 12 }}>
+            <button className="btn" onClick={uploadBundle} disabled={bundleBusy}>{bundleBusy ? 'Importing…' : 'Run bundle import'}</button>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-2">
-        <UploadCard
-          title="Import riders"
-          sub="Use the drivers export to create or update rider profiles, selfie, country of origin, and linked KYC documents."
-          endpoint="/imports/riders"
-          files={singleFiles}
-          setFiles={setSingleFiles}
-          resultKey="riders"
-          setResults={setResults}
-        />
-        <UploadCard
-          title="Import bikes"
-          sub="Use the fleet export to create or update bikes. Matching happens with registration and VIN."
-          endpoint="/imports/bikes"
-          files={singleFiles}
-          setFiles={setSingleFiles}
-          resultKey="bikes"
-          setResults={setResults}
-        />
-        <UploadCard
-          title="Import agreements"
-          sub="Use the fleet export to create agreements by matching the imported bike to the rider name."
-          endpoint="/imports/agreements"
-          files={singleFiles}
-          setFiles={setSingleFiles}
-          resultKey="agreements"
-          setResults={setResults}
-        />
-        <UploadCard
-          title="Import payments"
-          sub="Use the collections export. The importer now resolves by agreement first and falls back to the bike registration or VIN."
-          endpoint="/imports/payments"
-          files={singleFiles}
-          setFiles={setSingleFiles}
-          resultKey="payments"
-          setResults={setResults}
-        />
+        {cardMatches.riders && <UploadCard title="Import riders" sub="Use the drivers export to create or update rider profiles, selfie, country of origin, and linked KYC documents." endpoint="/imports/riders" files={singleFiles} setFiles={setSingleFiles} resultKey="riders" setResults={setResults} />}
+        {cardMatches.bikes && <UploadCard title="Import bikes" sub="Use the fleet export to create or update bikes. Matching happens with registration and VIN." endpoint="/imports/bikes" files={singleFiles} setFiles={setSingleFiles} resultKey="bikes" setResults={setResults} />}
+        {cardMatches.agreements && <UploadCard title="Import agreements" sub="Use the fleet export to create agreements by matching the imported bike to the rider name." endpoint="/imports/agreements" files={singleFiles} setFiles={setSingleFiles} resultKey="agreements" setResults={setResults} />}
+        {cardMatches.payments && <UploadCard title="Import payments" sub="Use the collections export. The importer now resolves by agreement first and falls back to the bike registration or VIN." endpoint="/imports/payments" files={singleFiles} setFiles={setSingleFiles} resultKey="payments" setResults={setResults} />}
       </div>
 
-      <ResultCard title="Latest bundle result" result={results.legacy_bundle} />
-      <ResultCard title="Riders import result" result={results.riders} />
-      <ResultCard title="Bikes import result" result={results.bikes} />
-      <ResultCard title="Agreements import result" result={results.agreements} />
-      <ResultCard title="Payments import result" result={results.payments} />
+      {cardMatches.bundle && <ResultCard title="Latest bundle result" result={results.legacy_bundle} />}
+      {cardMatches.riders && <ResultCard title="Riders import result" result={results.riders} />}
+      {cardMatches.bikes && <ResultCard title="Bikes import result" result={results.bikes} />}
+      {cardMatches.agreements && <ResultCard title="Agreements import result" result={results.agreements} />}
+      {cardMatches.payments && <ResultCard title="Payments import result" result={results.payments} />}
+      {!visibleCards && <div className="card muted" style={{ textAlign: 'center' }}>No import sections match your search.</div>}
     </>
   );
 }

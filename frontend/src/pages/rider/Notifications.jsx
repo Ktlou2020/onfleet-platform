@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import api from '../../api';
 import toast from 'react-hot-toast';
-import { Badge, EmptyState, Loading, fmtDateTime } from '../../components/ui';
+import { Badge, EmptyState, Loading, Pagination, SearchInput, fmtDateTime, matchesSearch, paginateItems } from '../../components/ui';
 import { Bell, CheckCheck, RefreshCw, Mail, MessageSquare, Smartphone } from 'lucide-react';
 
 const channelIcon = {
@@ -45,6 +45,9 @@ function NotificationCard({ item, onRead }) {
 export default function RiderNotifications() {
   const [list, setList] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(6);
 
   const load = async () => {
     const response = await api.get('/notifications/mine');
@@ -52,6 +55,18 @@ export default function RiderNotifications() {
   };
 
   useEffect(() => { load(); }, []);
+  useEffect(() => { setPage(1); }, [search]);
+
+  const filtered = useMemo(() => (list || []).filter((item) => matchesSearch(
+    search,
+    item.channel,
+    item.type,
+    item.title,
+    item.message,
+    item.status
+  )), [list, search]);
+
+  const pagination = useMemo(() => paginateItems(filtered, page, pageSize), [filtered, page, pageSize]);
 
   const markRead = async (id) => {
     try {
@@ -95,18 +110,26 @@ export default function RiderNotifications() {
         </div>
       </div>
 
+      <div className="row mb-3" style={{ flexWrap: 'wrap', justifyContent: 'space-between' }}>
+        <SearchInput value={search} onChange={setSearch} placeholder="Search notification title, message, type" style={{ flex: '1 1 320px', maxWidth: 440 }} />
+        <div className="muted text-sm">Showing {filtered.length} matching updates</div>
+      </div>
+
       <div className="grid grid-3 mb-4">
         <div className="stat"><div className="stat-label">Total updates</div><div className="stat-value">{list.length}</div></div>
         <div className="stat"><div className="stat-label">Unread</div><div className="stat-value">{unread}</div></div>
         <div className="stat"><div className="stat-label">Last update</div><div className="stat-value" style={{ fontSize: 18 }}>{list[0] ? fmtDateTime(list[0].sent_at || list[0].created_at) : '—'}</div></div>
       </div>
 
-      {list.length ? (
-        <div className="grid">
-          {list.map((item) => <NotificationCard key={item.id} item={item} onRead={markRead} />)}
-        </div>
+      {pagination.items.length ? (
+        <>
+          <div className="grid">
+            {pagination.items.map((item) => <NotificationCard key={item.id} item={item} onRead={markRead} />)}
+          </div>
+          <Pagination page={pagination.currentPage} pageSize={pagination.pageSize} totalItems={pagination.totalItems} onPageChange={setPage} onPageSizeChange={setPageSize} label="updates" />
+        </>
       ) : (
-        <EmptyState title="No notifications yet" sub="Updates from approvals, agreements, payments, and support will appear here." />
+        <EmptyState title="No notifications found" sub={search ? 'Try a different search term for the notification title or message.' : 'Updates from approvals, agreements, payments, and support will appear here.'} />
       )}
     </>
   );

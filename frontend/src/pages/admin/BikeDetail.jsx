@@ -4,7 +4,7 @@ import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import L from 'leaflet';
 import api from '../../api';
 import toast from 'react-hot-toast';
-import { Loading, Badge, Modal, fmt, fmtDate } from '../../components/ui';
+import { Loading, Badge, Modal, Pagination, fmt, fmtDate, paginateItems } from '../../components/ui';
 
 const bikeIcon = new L.DivIcon({
   html: `<div style="background:var(--primary);width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;border:3px solid white">🏍️</div>`,
@@ -18,6 +18,8 @@ export default function AdminBikeDetail() {
   const [form, setForm] = useState({});
   const [showService, setShowService] = useState(false);
   const [imageFile, setImageFile] = useState(null);
+  const [servicePage, setServicePage] = useState(1);
+  const [servicePageSize, setServicePageSize] = useState(10);
   const [service, setService] = useState({ service_date: new Date().toISOString().slice(0, 10), service_type: 'monthly', description: '', odometer_km: '', cost: 0, next_service_date: '', next_service_km: '', performed_by: 'OnFleet Workshop', invoice: null });
 
   const load = () => api.get(`/bikes/${id}`).then((response) => { setData(response.data); setForm(response.data.bike); });
@@ -25,6 +27,7 @@ export default function AdminBikeDetail() {
   if (!data) return <Loading />;
   const bike = data.bike;
   const pos = bike.last_known_lat ? [bike.last_known_lat, bike.last_known_lng] : null;
+  const servicePagination = paginateItems(data.services, servicePage, servicePageSize);
 
   const save = async () => {
     try { await api.put(`/bikes/${id}`, form); toast.success('Saved'); setEdit(false); load(); } catch (error) { toast.error(error.response?.data?.error || 'Failed'); }
@@ -66,7 +69,18 @@ export default function AdminBikeDetail() {
       <div className="grid grid-2 mb-4">
         <div className="card">
           <h3 className="mb-3">Bike image</h3>
-          <div style={{ height: 240, borderRadius: 12, background: '#0a1219 center/cover no-repeat', backgroundImage: bike.image_url ? `url("${bike.image_url}")` : 'none' }} />
+          <div style={{ height: 260, borderRadius: 12, background: '#0a1219 center/cover no-repeat', backgroundImage: bike.image_url ? `url("${bike.image_url}")` : 'none', position: 'relative' }}>
+            {bike.allocated_rider_name && (
+              <div style={{ position: 'absolute', left: 16, right: 16, bottom: 16, display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 12, background: 'rgba(8,12,18,0.76)', backdropFilter: 'blur(8px)' }}>
+                <div className="avatar" style={{ width: 44, height: 44, backgroundImage: bike.allocated_rider_avatar_url ? `url(${bike.allocated_rider_avatar_url})` : 'none', backgroundSize: 'cover', backgroundPosition: 'center' }}>{bike.allocated_rider_avatar_url ? '' : bike.allocated_rider_name?.[0]}</div>
+                <div>
+                  <div className="text-xs muted">Allocated rider</div>
+                  <div style={{ fontWeight: 700 }}>{bike.allocated_rider_name}</div>
+                  <div className="text-xs muted">{bike.allocated_rider_phone || 'No phone'} · {bike.allocated_agreement_no || 'No agreement number'}</div>
+                </div>
+              </div>
+            )}
+          </div>
           <div className="row mt-3"><input type="file" accept="image/jpeg,image/jpg,image/png,image/webp" onChange={(e) => setImageFile(e.target.files?.[0] || null)} /><button className="btn btn-secondary" onClick={uploadImage}>Upload image</button></div>
         </div>
         <div className="card">
@@ -87,11 +101,34 @@ export default function AdminBikeDetail() {
             </>
           ) : (
             <>
-              <Row k="VIN" v={bike.vin} /><Row k="Year" v={bike.year} /><Row k="Engine" v={`${bike.engine_cc}cc`} /><Row k="Color" v={bike.color} /><Row k="Condition" v={bike.condition} /><Row k="Weekly rental" v={fmt(bike.rental_weekly)} /><Row k="Purchase price" v={fmt(bike.purchase_price)} /><Row k="Odometer" v={`${bike.odometer_km || 0} km`} /><Row k="Insurance" v={`${bike.insurance_provider || '—'} · expires ${fmtDate(bike.insurance_expiry)}`} /><Row k="Next service" v={`${fmtDate(bike.next_service_date)} or ${bike.next_service_km || '—'} km`} />
+              <Row k="VIN" v={bike.vin} />
+              <Row k="Year" v={bike.year} />
+              <Row k="Engine" v={`${bike.engine_cc}cc`} />
+              <Row k="Color" v={bike.color} />
+              <Row k="Condition" v={bike.condition} />
+              <Row k="Weekly rental" v={fmt(bike.rental_weekly)} />
+              <Row k="Purchase price" v={fmt(bike.purchase_price)} />
+              <Row k="Odometer" v={`${bike.odometer_km || 0} km`} />
+              <Row k="Insurance" v={`${bike.insurance_provider || '—'} · expires ${fmtDate(bike.insurance_expiry)}`} />
+              <Row k="Next service" v={`${fmtDate(bike.next_service_date)} or ${bike.next_service_km || '—'} km`} />
             </>
           )}
         </div>
       </div>
+
+      {bike.allocated_rider_name && (
+        <div className="card mb-4">
+          <h3 className="mb-3">Allocated rider</h3>
+          <div className="row" style={{ alignItems: 'center', gap: 16 }}>
+            <div className="avatar" style={{ width: 72, height: 72, backgroundImage: bike.allocated_rider_avatar_url ? `url(${bike.allocated_rider_avatar_url})` : 'none', backgroundSize: 'cover', backgroundPosition: 'center', fontSize: 28 }}>{bike.allocated_rider_avatar_url ? '' : bike.allocated_rider_name?.[0]}</div>
+            <div>
+              <div style={{ fontSize: 20, fontWeight: 700 }}>{bike.allocated_rider_name}</div>
+              <div className="muted">{bike.allocated_rider_phone || 'No phone saved'}</div>
+              <div className="text-xs muted">Agreement {bike.allocated_agreement_no || '—'}</div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-2 mb-4">
         <div className="card">
@@ -103,7 +140,7 @@ export default function AdminBikeDetail() {
           <table className="table">
             <thead><tr><th>Date</th><th>Type</th><th>Cost</th><th>Invoice</th></tr></thead>
             <tbody>
-              {data.services.map((serviceRow) => (
+              {servicePagination.items.map((serviceRow) => (
                 <tr key={serviceRow.id}>
                   <td>{fmtDate(serviceRow.service_date)}</td>
                   <td>{serviceRow.service_type}</td>
@@ -113,7 +150,8 @@ export default function AdminBikeDetail() {
               ))}
             </tbody>
           </table>
-          {!data.services.length && <div className="muted text-sm">No service records yet.</div>}
+          {!servicePagination.items.length && <div className="muted text-sm">No service records yet.</div>}
+          <Pagination page={servicePagination.currentPage} pageSize={servicePagination.pageSize} totalItems={servicePagination.totalItems} onPageChange={setServicePage} onPageSizeChange={setServicePageSize} label="service records" />
         </div>
       </div>
 

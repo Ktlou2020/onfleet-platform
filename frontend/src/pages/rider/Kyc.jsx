@@ -1,13 +1,22 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../api';
-import { Loading, fmt, fmtDate } from '../../components/ui';
+import { Loading, SearchInput, fmt, fmtDate, matchesSearch } from '../../components/ui';
 
 export default function RiderKyc() {
   const [apps, setApps] = useState(null);
+  const [search, setSearch] = useState('');
+
   useEffect(() => { api.get('/applications/mine').then((response) => setApps(response.data.applications)); }, []);
   if (!apps) return <Loading />;
   const latest = apps[0];
+  const filteredDocs = useMemo(() => (latest?.documents || []).filter((doc) => matchesSearch(
+    search,
+    doc.doc_type,
+    doc.original_name,
+    doc.uploaded_at,
+    doc.extracted_amount
+  )), [latest, search]);
 
   return (
     <>
@@ -21,17 +30,20 @@ export default function RiderKyc() {
         </div>
       ) : (
         <div className="card">
-          <div className="flex-between mb-3">
+          <div className="flex-between mb-3" style={{ gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
             <div>
               <strong>Latest application #{latest.id}</strong>
               <div className="muted text-sm">Average weekly earnings: {latest.average_weekly_earnings ? fmt(latest.average_weekly_earnings) : 'Pending'}</div>
             </div>
-            <Link to="/application" className="btn btn-secondary">Manage documents</Link>
+            <div className="row" style={{ flexWrap: 'wrap' }}>
+              <SearchInput value={search} onChange={setSearch} placeholder="Search document type or filename" style={{ width: 320 }} />
+              <Link to="/application" className="btn btn-secondary">Manage documents</Link>
+            </div>
           </div>
           <table className="table">
             <thead><tr><th>Type</th><th>File</th><th>Uploaded</th><th>Extracted amount</th><th></th></tr></thead>
             <tbody>
-              {(latest.documents || []).map((doc) => (
+              {filteredDocs.map((doc) => (
                 <tr key={doc.id}>
                   <td>{doc.doc_type.replace(/_/g, ' ')}</td>
                   <td>{doc.original_name}</td>
@@ -42,6 +54,7 @@ export default function RiderKyc() {
               ))}
             </tbody>
           </table>
+          {!filteredDocs.length && <div className="muted text-sm" style={{ paddingTop: 16 }}>{search ? 'No documents match your search.' : 'No documents uploaded yet.'}</div>}
         </div>
       )}
     </>

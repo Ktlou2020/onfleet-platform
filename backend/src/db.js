@@ -10,6 +10,16 @@ const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
+function tableHasColumn(table, column) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
+}
+
+function ensureColumn(table, column, definition) {
+  if (!tableHasColumn(table, column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
 // ---------- SCHEMA ----------
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
@@ -29,6 +39,7 @@ CREATE TABLE IF NOT EXISTS users (
   emergency_contact_name TEXT,
   emergency_contact_phone TEXT,
   avatar_url TEXT,
+  deleted_at TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -83,11 +94,21 @@ CREATE TABLE IF NOT EXISTS applications (
   preferred_bike_id INTEGER,
   employment_status TEXT,
   monthly_income REAL,
-  delivery_platforms TEXT, -- comma list: UberEats,MrD,Bolt
+  delivery_platforms TEXT,
   has_riding_experience INTEGER DEFAULT 0,
   years_riding INTEGER,
   has_drivers_license INTEGER DEFAULT 0,
   references_json TEXT,
+  payout_preference TEXT,
+  bank_name TEXT,
+  account_holder TEXT,
+  account_number TEXT,
+  branch_code TEXT,
+  ewallet_number TEXT,
+  total_paid_last_3 REAL DEFAULT 0,
+  average_weekly_earnings REAL DEFAULT 0,
+  auto_decision TEXT,
+  retry_after_date TEXT,
   status TEXT NOT NULL DEFAULT 'submitted' CHECK(status IN ('draft','submitted','under_review','approved','rejected','withdrawn')),
   rejection_reason TEXT,
   reviewed_by INTEGER,
@@ -98,6 +119,24 @@ CREATE TABLE IF NOT EXISTS applications (
   FOREIGN KEY(reviewed_by) REFERENCES users(id)
 );
 
+CREATE TABLE IF NOT EXISTS application_documents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  application_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  doc_type TEXT NOT NULL CHECK(doc_type IN ('id_document','drivers_license','payslip','signed_contract','unsigned_contract','other')),
+  file_path TEXT NOT NULL,
+  original_name TEXT,
+  mime_type TEXT,
+  extracted_amount REAL,
+  extracted_text TEXT,
+  status TEXT NOT NULL DEFAULT 'uploaded' CHECK(status IN ('uploaded','verified','rejected','signed')),
+  uploaded_by INTEGER,
+  uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(application_id) REFERENCES applications(id) ON DELETE CASCADE,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY(uploaded_by) REFERENCES users(id)
+);
+
 CREATE TABLE IF NOT EXISTS agreements (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   agreement_no TEXT UNIQUE NOT NULL,
@@ -105,7 +144,7 @@ CREATE TABLE IF NOT EXISTS agreements (
   bike_id INTEGER NOT NULL,
   application_id INTEGER,
   weekly_amount REAL NOT NULL,
-  total_weeks INTEGER NOT NULL DEFAULT 78, -- 18 months ≈ 78 weeks
+  total_weeks INTEGER NOT NULL DEFAULT 78,
   total_amount REAL NOT NULL,
   start_date TEXT NOT NULL,
   end_date TEXT NOT NULL,
@@ -113,6 +152,8 @@ CREATE TABLE IF NOT EXISTS agreements (
   signed_at DATETIME,
   signature_data TEXT,
   contract_pdf_path TEXT,
+  contract_file_path TEXT,
+  signed_contract_path TEXT,
   notes TEXT,
   created_by INTEGER,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -168,6 +209,8 @@ CREATE TABLE IF NOT EXISTS service_records (
   next_service_km INTEGER,
   next_service_date TEXT,
   performed_by TEXT,
+  invoice_file_path TEXT,
+  invoice_original_name TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(bike_id) REFERENCES bikes(id),
   FOREIGN KEY(agreement_id) REFERENCES agreements(id)
@@ -213,7 +256,28 @@ CREATE INDEX IF NOT EXISTS idx_payments_agreement ON payments(agreement_id);
 CREATE INDEX IF NOT EXISTS idx_schedule_agreement ON payment_schedules(agreement_id);
 CREATE INDEX IF NOT EXISTS idx_kyc_user ON kyc_documents(user_id);
 CREATE INDEX IF NOT EXISTS idx_apps_user ON applications(user_id);
+CREATE INDEX IF NOT EXISTS idx_appdocs_application ON application_documents(application_id);
+CREATE INDEX IF NOT EXISTS idx_appdocs_user ON application_documents(user_id);
 CREATE INDEX IF NOT EXISTS idx_gps_bike ON gps_pings(bike_id);
 `);
+
+// ---------- LIGHTWEIGHT MIGRATIONS FOR EXISTING DEPLOYS ----------
+ensureColumn('users', 'deleted_at', 'TEXT');
+ensureColumn('applications', 'payout_preference', 'TEXT');
+ensureColumn('applications', 'bank_name', 'TEXT');
+ensureColumn('applications', 'account_holder', 'TEXT');
+ensureColumn('applications', 'account_number', 'TEXT');
+ensureColumn('applications', 'branch_code', 'TEXT');
+ensureColumn('applications', 'ewallet_number', 'TEXT');
+ensureColumn('applications', 'total_paid_last_3', 'REAL DEFAULT 0');
+ensureColumn('applications', 'average_weekly_earnings', 'REAL DEFAULT 0');
+ensureColumn('applications', 'auto_decision', 'TEXT');
+ensureColumn('applications', 'retry_after_date', 'TEXT');
+ensureColumn('agreements', 'contract_file_path', 'TEXT');
+ensureColumn('agreements', 'signed_contract_path', 'TEXT');
+ensureColumn('service_records', 'invoice_file_path', 'TEXT');
+ensureColumn('service_records', 'invoice_original_name', 'TEXT');
+ensureColumn('payments', 'fee_amount', 'REAL DEFAULT 0');
+ensureColumn('payments', 'net_amount', 'REAL DEFAULT 0');
 
 module.exports = db;

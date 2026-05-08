@@ -7,7 +7,7 @@ function authRequired(req, res, next) {
   if (!token) return res.status(401).json({ error: 'Missing token' });
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
-    const user = db.prepare('SELECT id, email, full_name, role, status FROM users WHERE id = ?').get(payload.uid);
+    const user = db.prepare('SELECT id, email, full_name, role, status FROM users WHERE id = ? AND deleted_at IS NULL').get(payload.uid);
     if (!user || user.status !== 'active') return res.status(401).json({ error: 'Invalid user' });
     req.user = user;
     next();

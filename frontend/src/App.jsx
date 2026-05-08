@@ -25,6 +25,7 @@ import AdminPayments from './pages/admin/Payments';
 import AdminUsers from './pages/admin/Users';
 import AdminKyc from './pages/admin/Kyc';
 import AdminAuditLogs from './pages/admin/AuditLogs';
+import AdminStrategyReport from './pages/admin/StrategyReport';
 
 function PrivateRoute({ children, role }) {
   const { user } = useAuth();
@@ -71,6 +72,7 @@ export default function App() {
           <Route path="bikes" element={<AdminBikes />} />
           <Route path="bikes/:id" element={<AdminBikeDetail />} />
           <Route path="payments" element={<AdminPayments />} />
+          <Route path="strategy" element={<AdminStrategyReport />} />
           <Route path="users" element={<AdminUsers />} />
           <Route path="kyc" element={<AdminKyc />} />
           <Route path="audit" element={<AdminAuditLogs />} />

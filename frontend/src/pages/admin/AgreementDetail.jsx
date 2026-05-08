@@ -10,21 +10,30 @@ export default function AdminAgreementDetail() {
   const [showPay, setShowPay] = useState(false);
   const [pay, setPay] = useState({ amount: '', method: 'eft', reference: '', notes: '' });
 
-  const load = () => api.get(`/agreements/${id}`).then(r => { setData(r.data); setPay(p => ({ ...p, amount: r.data.agreement.weekly_amount })); });
+  const load = () => api.get(`/agreements/${id}`).then((response) => {
+    setData(response.data);
+    setPay((current) => ({ ...current, amount: response.data.agreement.weekly_amount }));
+  });
   useEffect(() => { load(); }, [id]);
   if (!data) return <Loading />;
-  const { agreement, schedule, payments, summary } = data;
+  const { agreement, schedule, payments, summary, application_documents: applicationDocuments = [] } = data;
 
   const recordPayment = async () => {
-    try { await api.post('/payments/manual', { agreement_id: +id, ...pay, amount: +pay.amount });
-      toast.success('Payment recorded'); setShowPay(false); load(); }
-    catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
+    try {
+      await api.post('/payments/manual', { agreement_id: Number(id), ...pay, amount: Number(pay.amount) });
+      toast.success('Payment recorded');
+      setShowPay(false);
+      load();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Failed');
+    }
   };
 
   const updateStatus = async (status) => {
-    if (!confirm(`Change status to ${status}?`)) return;
+    if (!window.confirm(`Change status to ${status}?`)) return;
     await api.post(`/agreements/${id}/status`, { status });
-    toast.success('Status updated'); load();
+    toast.success('Status updated');
+    load();
   };
 
   return (
@@ -50,6 +59,8 @@ export default function AdminAgreementDetail() {
           <h3>Progress to ownership · {summary.progress_pct}%</h3>
           <div className="row">
             <button className="btn btn-sm" onClick={() => setShowPay(true)}>+ Record manual payment</button>
+            {agreement.contract_file_path && <a className="btn btn-sm btn-secondary" href={agreement.contract_file_path} target="_blank" rel="noreferrer">Contract</a>}
+            {agreement.signed_contract_path && <a className="btn btn-sm btn-secondary" href={agreement.signed_contract_path} target="_blank" rel="noreferrer">Signed copy</a>}
             {agreement.status === 'active' && <button className="btn btn-sm btn-secondary" onClick={() => updateStatus('paused')}>Pause</button>}
             {agreement.status === 'paused' && <button className="btn btn-sm btn-secondary" onClick={() => updateStatus('active')}>Resume</button>}
             {agreement.status !== 'completed' && <button className="btn btn-sm btn-success" onClick={() => updateStatus('completed')}>Mark completed</button>}
@@ -64,17 +75,20 @@ export default function AdminAgreementDetail() {
         </div>
       </div>
 
-      <div className="grid grid-2">
+      <div className="grid grid-2 mb-4">
         <div className="card">
           <h3 className="mb-3">Payment schedule</h3>
-          <div style={{ maxHeight: 400, overflowY: 'auto' }}>
+          <div style={{ maxHeight: 420, overflowY: 'auto' }}>
             <table className="table">
               <thead><tr><th>#</th><th>Due</th><th>Paid</th><th>Status</th></tr></thead>
               <tbody>
-                {schedule.map(s => (
-                  <tr key={s.id}><td>{s.week_number}</td><td>{fmtDate(s.due_date)}</td>
-                    <td>{fmt(s.amount_paid)} / {fmt(s.amount_due)}</td>
-                    <td><Badge status={s.status}/></td></tr>
+                {schedule.map((row) => (
+                  <tr key={row.id}>
+                    <td>{row.week_number}</td>
+                    <td>{fmtDate(row.due_date)}</td>
+                    <td>{fmt(row.amount_paid)} / {fmt(row.amount_due)}</td>
+                    <td><Badge status={row.status} /></td>
+                  </tr>
                 ))}
               </tbody>
             </table>
@@ -85,13 +99,13 @@ export default function AdminAgreementDetail() {
           <table className="table">
             <thead><tr><th>Date</th><th>Method</th><th>Ref</th><th>Status</th><th>Amount</th></tr></thead>
             <tbody>
-              {payments.map(p => (
-                <tr key={p.id}>
-                  <td>{fmtDateTime(p.paid_at)}</td>
-                  <td>{p.method}</td>
-                  <td className="text-xs muted">{p.reference}</td>
-                  <td><Badge status={p.status}/></td>
-                  <td><strong>{fmt(p.amount)}</strong></td>
+              {payments.map((payment) => (
+                <tr key={payment.id}>
+                  <td>{fmtDateTime(payment.paid_at || payment.created_at)}</td>
+                  <td>{payment.method}</td>
+                  <td className="text-xs muted">{payment.reference}</td>
+                  <td><Badge status={payment.status} /></td>
+                  <td><strong>{fmt(payment.amount)}</strong></td>
                 </tr>
               ))}
             </tbody>
@@ -99,23 +113,38 @@ export default function AdminAgreementDetail() {
         </div>
       </div>
 
-      {showPay && <Modal title="Record manual payment" onClose={() => setShowPay(false)}>
-        <div className="grid grid-2">
-          <div className="field"><label className="label">Amount</label>
-            <input type="number" value={pay.amount} onChange={e => setPay({...pay, amount: e.target.value})} /></div>
-          <div className="field"><label className="label">Method</label>
-            <select value={pay.method} onChange={e => setPay({...pay, method: e.target.value})}>
-              <option value="eft">EFT</option><option value="cash">Cash</option>
-              <option value="card">Card</option><option value="other">Other</option>
-            </select></div>
-        </div>
-        <div className="field"><label className="label">Reference (optional)</label>
-          <input value={pay.reference} onChange={e => setPay({...pay, reference: e.target.value})} /></div>
-        <div className="field"><label className="label">Notes</label>
-          <textarea rows={3} value={pay.notes} onChange={e => setPay({...pay, notes: e.target.value})} /></div>
-        <div className="row"><button className="btn" onClick={recordPayment}>Record</button>
-          <button className="btn btn-secondary" onClick={() => setShowPay(false)}>Cancel</button></div>
-      </Modal>}
+      <div className="card">
+        <h3 className="mb-3">Application documents linked to this agreement</h3>
+        <table className="table">
+          <thead><tr><th>Type</th><th>File</th><th>Uploaded</th><th></th></tr></thead>
+          <tbody>
+            {applicationDocuments.map((doc) => (
+              <tr key={doc.id}>
+                <td>{doc.doc_type.replace(/_/g, ' ')}</td>
+                <td>{doc.original_name}</td>
+                <td>{fmtDate(doc.uploaded_at)}</td>
+                <td><a className="btn btn-sm btn-secondary" href={doc.file_path} target="_blank" rel="noreferrer">Open</a></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!applicationDocuments.length && <div className="muted text-sm">No linked application documents.</div>}
+      </div>
+
+      {showPay && (
+        <Modal title="Record manual payment" onClose={() => setShowPay(false)}>
+          <div className="grid grid-2">
+            <div className="field"><label className="label">Amount</label><input type="number" value={pay.amount} onChange={(e) => setPay({ ...pay, amount: e.target.value })} /></div>
+            <div className="field"><label className="label">Method</label>
+              <select value={pay.method} onChange={(e) => setPay({ ...pay, method: e.target.value })}>
+                <option value="eft">EFT</option><option value="cash">Cash</option><option value="card">Card</option><option value="other">Other</option>
+              </select></div>
+          </div>
+          <div className="field"><label className="label">Reference</label><input value={pay.reference} onChange={(e) => setPay({ ...pay, reference: e.target.value })} /></div>
+          <div className="field"><label className="label">Notes</label><textarea rows={3} value={pay.notes} onChange={(e) => setPay({ ...pay, notes: e.target.value })} /></div>
+          <div className="row"><button className="btn" onClick={recordPayment}>Record</button><button className="btn btn-secondary" onClick={() => setShowPay(false)}>Cancel</button></div>
+        </Modal>
+      )}
     </>
   );
 }

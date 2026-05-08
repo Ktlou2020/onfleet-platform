@@ -1,64 +1,49 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import api from '../../api';
-import toast from 'react-hot-toast';
-import { Loading, Badge, fmtDate } from '../../components/ui';
-import { Upload } from 'lucide-react';
-
-const TYPES = [
-  { v: 'id_document', l: 'ID Document' },
-  { v: 'proof_of_address', l: 'Proof of Address (≤ 3 months)' },
-  { v: 'drivers_license', l: 'Driver\'s License' },
-  { v: 'bank_statement', l: 'Bank Statement (≤ 3 months)' },
-  { v: 'selfie', l: 'Selfie holding ID' }
-];
+import { Loading, fmt, fmtDate } from '../../components/ui';
 
 export default function RiderKyc() {
-  const [docs, setDocs] = useState(null);
-  const load = () => api.get('/kyc/mine').then(r => setDocs(r.data.documents));
-  useEffect(() => { load(); }, []);
+  const [apps, setApps] = useState(null);
+  useEffect(() => { api.get('/applications/mine').then((response) => setApps(response.data.applications)); }, []);
+  if (!apps) return <Loading />;
+  const latest = apps[0];
 
-  const upload = async (e, doc_type) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const fd = new FormData();
-    fd.append('file', file); fd.append('doc_type', doc_type);
-    try {
-      await api.post('/kyc/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      toast.success('Uploaded. Pending review.');
-      load();
-    } catch { toast.error('Upload failed'); }
-  };
-
-  if (!docs) return <Loading />;
   return (
     <>
-      <h1 className="page-title">KYC Documents</h1>
-      <p className="page-sub">Upload required documents for verification</p>
-
-      <div className="grid grid-2">
-        {TYPES.map(t => {
-          const mine = docs.filter(d => d.doc_type === t.v);
-          return (
-            <div className="card" key={t.v}>
-              <div className="flex-between mb-3">
-                <h3>{t.l}</h3>
-                {mine[0] && <Badge status={mine[0].status} />}
-              </div>
-              {mine.length === 0 && <div className="muted text-sm mb-3">Not uploaded yet.</div>}
-              {mine.map(d => (
-                <div key={d.id} className="text-sm muted mb-2">
-                  📄 {d.original_name} · {fmtDate(d.uploaded_at)}
-                  {d.rejection_reason && <div className="text-xs" style={{ color: 'var(--danger)' }}>Reason: {d.rejection_reason}</div>}
-                </div>
-              ))}
-              <label className="btn btn-secondary btn-block" style={{ cursor: 'pointer' }}>
-                <Upload size={14} /> {mine.length ? 'Upload another' : 'Upload'}
-                <input type="file" accept="image/*,application/pdf" hidden onChange={e => upload(e, t.v)} />
-              </label>
+      <h1 className="page-title">Documents Centre</h1>
+      <p className="page-sub">All KYC and application documents now live under your Application tab.</p>
+      {!latest ? (
+        <div className="card">
+          <strong>No application yet</strong>
+          <div className="muted text-sm mt-2">Create an application first, then upload your ID, driver's licence, and 3 latest payslips.</div>
+          <div className="mt-3"><Link to="/application" className="btn">Start application</Link></div>
+        </div>
+      ) : (
+        <div className="card">
+          <div className="flex-between mb-3">
+            <div>
+              <strong>Latest application #{latest.id}</strong>
+              <div className="muted text-sm">Average weekly earnings: {latest.average_weekly_earnings ? fmt(latest.average_weekly_earnings) : 'Pending'}</div>
             </div>
-          );
-        })}
-      </div>
+            <Link to="/application" className="btn btn-secondary">Manage documents</Link>
+          </div>
+          <table className="table">
+            <thead><tr><th>Type</th><th>File</th><th>Uploaded</th><th>Extracted amount</th><th></th></tr></thead>
+            <tbody>
+              {(latest.documents || []).map((doc) => (
+                <tr key={doc.id}>
+                  <td>{doc.doc_type.replace(/_/g, ' ')}</td>
+                  <td>{doc.original_name}</td>
+                  <td>{fmtDate(doc.uploaded_at)}</td>
+                  <td>{doc.extracted_amount ? fmt(doc.extracted_amount) : '—'}</td>
+                  <td><a className="btn btn-sm btn-secondary" href={doc.file_path} target="_blank" rel="noreferrer">View</a></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </>
   );
 }

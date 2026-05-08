@@ -42,6 +42,9 @@ router.get('/file/:id', authRequired, (req, res) => {
   if (!doc) return res.status(404).end();
   if (doc.user_id !== req.user.id && !['admin','superadmin'].includes(req.user.role))
     return res.status(403).end();
+  if (String(doc.file_path || '').startsWith('/uploads/')) {
+    return res.sendFile(path.join(__dirname, '../../', doc.file_path.replace(/^\//, '')));
+  }
   res.sendFile(path.join(uploadDir, doc.file_path));
 });
 

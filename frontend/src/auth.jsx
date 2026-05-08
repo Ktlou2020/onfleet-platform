@@ -28,7 +28,10 @@ export function AuthProvider({ children }) {
   };
 
   const signup = async (payload) => {
-    const { data } = await api.post('/auth/signup', payload);
+    const isFormData = typeof FormData !== 'undefined' && payload instanceof FormData;
+    const { data } = await api.post(isFormData ? '/auth/signup-complete' : '/auth/signup', payload, isFormData
+      ? { headers: { 'Content-Type': 'multipart/form-data' } }
+      : undefined);
     localStorage.setItem('of_token', data.token);
     localStorage.setItem('of_user', JSON.stringify(data.user));
     setUser(data.user);

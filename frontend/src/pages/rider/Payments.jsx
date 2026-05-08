@@ -10,6 +10,7 @@ export default function RiderPayments() {
   const [data, setData] = useState(null);
   const [amount, setAmount] = useState('');
   const [busy, setBusy] = useState(false);
+  const [feeInfo, setFeeInfo] = useState(null);
 
   useEffect(() => {
     api.get('/agreements/mine').then(r => {
@@ -23,8 +24,20 @@ export default function RiderPayments() {
     api.get(`/agreements/${selected}`).then(r => {
       setData(r.data);
       setAmount(r.data.agreement.weekly_amount);
+      setFeeInfo({ amount: r.data.agreement.weekly_amount, fee: calcFee(r.data.agreement.weekly_amount), net: calcNet(r.data.agreement.weekly_amount) });
     });
   }, [selected]);
+
+  // Paystack fee: 2.9% + R1 added on top — net (credit to agreement) stays as entered
+  function calcFee(amt) { return +(amt * 0.029 + 1).toFixed(2); }
+  function calcGross(amt) { return +(amt + calcFee(amt)).toFixed(2); }
+
+  function updateAmount(val) {
+    setAmount(val);
+    const n = +val;
+    if (n > 0) setFeeInfo({ amount: n, fee: calcFee(n), gross: calcGross(n) });
+    else setFeeInfo(null);
+  }
 
   const pay = async () => {
     if (!amount || +amount < 1) return toast.error('Enter an amount');
@@ -61,15 +74,23 @@ export default function RiderPayments() {
                 <div className="flex-between"><span className="muted">Overdue</span><strong style={{ color: data.summary.overdue > 0 ? 'var(--danger)' : '' }}>{fmt(data.summary.overdue)}</strong></div>
               </div>
               <div className="field"><label className="label">Amount (ZAR)</label>
-                <input type="number" value={amount} onChange={e => setAmount(e.target.value)} min="1" /></div>
+                <input type="number" value={amount} onChange={e => updateAmount(e.target.value)} min="1" /></div>
+              {feeInfo && (
+                <div className="card mb-3" style={{ background: 'var(--surface-2)', fontSize: '0.85rem' }}>
+                  <div className="flex-between"><span className="muted">Amount credited to agreement</span><strong>{fmt(feeInfo.amount)}</strong></div>
+                  <div className="flex-between"><span className="muted">+ Paystack fee (2.9% + R1)</span><strong style={{ color: 'var(--warn)' }}>+ R{feeInfo.fee.toFixed(2)}</strong></div>
+                  <div className="flex-between" style={{ borderTop: '1px solid var(--border)', marginTop: 6, paddingTop: 6 }}>
+                    <span className="muted">Total you pay</span><strong style={{ color: 'var(--accent)' }}>{fmt(feeInfo.gross)}</strong></div>
+                </div>
+              )}
               <div className="row" style={{ flexWrap: 'wrap', marginBottom: 12 }}>
-                <button type="button" className="btn btn-sm btn-secondary" onClick={() => setAmount(data.agreement.weekly_amount)}>1 week</button>
-                <button type="button" className="btn btn-sm btn-secondary" onClick={() => setAmount(data.agreement.weekly_amount * 2)}>2 weeks</button>
-                <button type="button" className="btn btn-sm btn-secondary" onClick={() => setAmount(data.agreement.weekly_amount * 4)}>1 month</button>
-                <button type="button" className="btn btn-sm btn-secondary" onClick={() => setAmount(data.summary.remaining)}>Pay off</button>
+                <button type="button" className="btn btn-sm btn-secondary" onClick={() => updateAmount(data.agreement.weekly_amount)}>1 week</button>
+                <button type="button" className="btn btn-sm btn-secondary" onClick={() => updateAmount(data.agreement.weekly_amount * 2)}>2 weeks</button>
+                <button type="button" className="btn btn-sm btn-secondary" onClick={() => updateAmount(data.agreement.weekly_amount * 4)}>1 month</button>
+                <button type="button" className="btn btn-sm btn-secondary" onClick={() => updateAmount(data.summary.remaining)}>Pay off</button>
               </div>
               <button className="btn btn-block" onClick={pay} disabled={busy}><CreditCard size={16} />{busy ? 'Redirecting…' : `Pay ${fmt(amount)} via Paystack`}</button>
-              <div className="muted text-xs mt-3">Secure payment powered by Paystack — Visa, Mastercard, EFT.</div>
+              <div className="muted text-xs mt-3">Secure payment via Paystack · Fee: 2.9% + R1 per transaction · Visa, Mastercard, EFT.</div>
             </>
           )}
         </div>
@@ -85,6 +106,7 @@ export default function RiderPayments() {
                     <td>{p.method}</td>
                     <td><Badge status={p.status}/></td>
                     <td><strong>{fmt(p.amount)}</strong></td>
+                    {p.fee_amount > 0 && <td className="muted text-xs">fee R{p.fee_amount.toFixed(2)}</td>}
                   </tr>
                 )) : <tr><td colSpan="4" className="muted">No payments yet.</td></tr>}
               </tbody>

@@ -12,8 +12,13 @@ export default function AdminDashboard() {
   const s = d.stats;
   return (
     <>
-      <h1 className="page-title">Dashboard</h1>
-      <p className="page-sub">Real-time business overview</p>
+      <div className="flex-between mb-3" style={{ gap: 16, alignItems: 'flex-start' }}>
+        <div>
+          <h1 className="page-title">Dashboard</h1>
+          <p className="page-sub">Real-time business overview</p>
+        </div>
+        <Link to="/admin/strategy" className="btn btn-secondary">AI strategy report</Link>
+      </div>
 
       <div className="grid grid-4 mb-4">
         <Stat label="Total revenue" value={fmt(s.revenue_total)} delta={`${fmt(s.revenue_30d)} last 30 days`} icon={<TrendingUp size={16}/>} accent="var(--success)" />

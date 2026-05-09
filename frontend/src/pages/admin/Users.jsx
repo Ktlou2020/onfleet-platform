@@ -26,7 +26,7 @@ export default function AdminUsers() {
     setRoleEdits(next);
   }, [users]);
 
-  const filtered = useMemo(() => (users || []).filter((account) => matchesSearch(
+  const filtered = (users || []).filter((account) => matchesSearch(
     search,
     account.full_name,
     account.email,
@@ -35,7 +35,7 @@ export default function AdminUsers() {
     account.role,
     account.status,
     account.id
-  )), [users, search]);
+  ));
 
   const pagination = useMemo(() => paginateItems(filtered, page, pageSize), [filtered, page, pageSize]);
 

@@ -8,8 +8,9 @@ export default function RiderKyc() {
   const [search, setSearch] = useState('');
 
   useEffect(() => { api.get('/applications/mine').then((response) => setApps(response.data.applications)); }, []);
-  if (!apps) return <Loading />;
-  const latest = apps[0];
+
+  const appList = apps || [];
+  const latest = appList[0];
   const filteredDocs = useMemo(() => (latest?.documents || []).filter((doc) => matchesSearch(
     search,
     doc.doc_type,
@@ -17,6 +18,8 @@ export default function RiderKyc() {
     doc.uploaded_at,
     doc.extracted_amount
   )), [latest, search]);
+
+  if (!apps) return <Loading />;
 
   return (
     <>

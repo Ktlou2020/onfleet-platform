@@ -12,9 +12,12 @@ export default function AdminPayments() {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(15);
+
   useEffect(() => { api.get('/payments/all').then((r) => setList(r.data.payments)); }, []);
   useEffect(() => { setPage(1); }, [search]);
-  const filtered = (list || []).filter((payment) => matchesSearch(
+
+  const payments = list || [];
+  const filtered = useMemo(() => payments.filter((payment) => matchesSearch(
     search,
     payment.full_name,
     payment.email,
@@ -25,12 +28,14 @@ export default function AdminPayments() {
     payment.amount,
     payment.net_amount,
     payment.fee_amount
-  ));
-  if (!list) return <Loading />;
-  const totalCredited = list.filter((p) => p.status === 'success').reduce((sum, p) => sum + creditedAmount(p), 0);
-  const totalFees = list.filter((p) => p.status === 'success').reduce((sum, p) => sum + feeAmount(p), 0);
-  const totalGross = list.filter((p) => p.status === 'success').reduce((sum, p) => sum + grossAmount(p), 0);
+  )), [payments, search]);
+
   const pagination = useMemo(() => paginateItems(filtered, page, pageSize), [filtered, page, pageSize]);
+  const totalCredited = useMemo(() => payments.filter((p) => p.status === 'success').reduce((sum, p) => sum + creditedAmount(p), 0), [payments]);
+  const totalFees = useMemo(() => payments.filter((p) => p.status === 'success').reduce((sum, p) => sum + feeAmount(p), 0), [payments]);
+  const totalGross = useMemo(() => payments.filter((p) => p.status === 'success').reduce((sum, p) => sum + grossAmount(p), 0), [payments]);
+
+  if (!list) return <Loading />;
 
   return (
     <>

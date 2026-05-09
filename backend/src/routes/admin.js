@@ -15,8 +15,18 @@ function superadminOnly(req, res, next) {
   next();
 }
 
+function readEnv(name, fallback = '') {
+  const raw = process.env[name];
+  if (raw === undefined || raw === null || raw === '') return fallback;
+  const value = String(raw).trim();
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    return value.slice(1, -1).trim();
+  }
+  return value;
+}
+
 function passwordResetExpiryIso() {
-  const ttlMinutes = Number(process.env.PASSWORD_RESET_TOKEN_TTL_MINUTES || 60);
+  const ttlMinutes = Number(readEnv('PASSWORD_RESET_TOKEN_TTL_MINUTES', '60') || 60);
   return new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
 }
 
@@ -25,7 +35,7 @@ function hashResetToken(token) {
 }
 
 function buildResetUrl(token) {
-  const base = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+  const base = readEnv('FRONTEND_URL', 'http://localhost:5173').replace(/\/$/, '');
   return `${base}/reset-password?token=${encodeURIComponent(token)}`;
 }
 
@@ -77,7 +87,7 @@ function issuePasswordResetToken(userId, req) {
 function buildBulkResetMessage(user, resetUrl, actorName, customMessage) {
   const firstName = user.full_name?.split(' ')?.[0] || 'there';
   const intro = customMessage ? `${String(customMessage).trim()}\n\n` : '';
-  return `Hi ${firstName},\n\n${intro}${actorName} triggered a secure password reset for your OnFleet account.\n\nReset link: ${resetUrl}\n\nThis link expires in ${process.env.PASSWORD_RESET_TOKEN_TTL_MINUTES || 60} minutes. If you were not expecting this email, please contact the OnFleet team.`;
+  return `Hi ${firstName},\n\n${intro}${actorName} triggered a secure password reset for your OnFleet account.\n\nReset link: ${resetUrl}\n\nThis link expires in ${readEnv('PASSWORD_RESET_TOKEN_TTL_MINUTES', '60') || 60} minutes. If you were not expecting this email, please contact the OnFleet team.`;
 }
 
 router.get('/dashboard', (req, res) => {

@@ -4,6 +4,16 @@ const db = require('../db');
 
 let transporter;
 
+function readEnv(name, fallback = '') {
+  const raw = process.env[name];
+  if (raw === undefined || raw === null || raw === '') return fallback;
+  const value = String(raw).trim();
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    return value.slice(1, -1).trim();
+  }
+  return value;
+}
+
 function parseIdentity(rawValue, fallbackEmail = 'no-reply@onfleet.africa', fallbackName = 'OnFleet Africa') {
   const raw = String(rawValue || '').trim();
   const match = raw.match(/^(.*)<([^>]+)>$/);
@@ -20,25 +30,25 @@ function parseIdentity(rawValue, fallbackEmail = 'no-reply@onfleet.africa', fall
 }
 
 function getSenderIdentity() {
-  const fallbackEmail = (process.env.BREVO_SENDER_EMAIL || process.env.SMTP_USER || 'no-reply@onfleet.africa').trim() || 'no-reply@onfleet.africa';
-  const base = parseIdentity(process.env.EMAIL_FROM, fallbackEmail, process.env.EMAIL_FROM_NAME || 'OnFleet Africa');
+  const fallbackEmail = readEnv('BREVO_SENDER_EMAIL', readEnv('SMTP_USER', 'no-reply@onfleet.africa')) || 'no-reply@onfleet.africa';
+  const base = parseIdentity(readEnv('EMAIL_FROM', ''), fallbackEmail, readEnv('EMAIL_FROM_NAME', 'OnFleet Africa'));
   return {
-    name: (process.env.EMAIL_FROM_NAME || base.name || 'OnFleet Africa').trim(),
-    email: (process.env.BREVO_SENDER_EMAIL || base.email || fallbackEmail).trim()
+    name: readEnv('EMAIL_FROM_NAME', base.name || 'OnFleet Africa').trim(),
+    email: readEnv('BREVO_SENDER_EMAIL', base.email || fallbackEmail).trim()
   };
 }
 
 function getReplyToIdentity() {
-  const raw = String(process.env.EMAIL_REPLY_TO || '').trim();
+  const raw = readEnv('EMAIL_REPLY_TO', '');
   if (!raw) return null;
   return parseIdentity(raw, getSenderIdentity().email, getSenderIdentity().name);
 }
 
 function detectEmailProvider() {
-  const preferred = String(process.env.EMAIL_PROVIDER || '').trim().toLowerCase();
+  const preferred = readEnv('EMAIL_PROVIDER', '').toLowerCase();
   const sender = getSenderIdentity();
-  const hasBrevo = !!String(process.env.BREVO_API_KEY || '').trim();
-  const hasSmtp = !!String(process.env.SMTP_HOST || '').trim();
+  const hasBrevo = !!readEnv('BREVO_API_KEY', '');
+  const hasSmtp = !!readEnv('SMTP_HOST', '');
 
   if ((preferred === 'brevo' && hasBrevo) || (!preferred && hasBrevo)) {
     return {
@@ -72,10 +82,10 @@ function detectEmailProvider() {
 function getTransporter() {
   if (transporter !== undefined) return transporter;
 
-  const host = (process.env.SMTP_HOST || '').trim();
-  const port = Number(process.env.SMTP_PORT || 587);
-  const user = (process.env.SMTP_USER || '').trim();
-  const pass = process.env.SMTP_PASS || '';
+  const host = readEnv('SMTP_HOST', '');
+  const port = Number(readEnv('SMTP_PORT', '587') || 587);
+  const user = readEnv('SMTP_USER', '');
+  const pass = readEnv('SMTP_PASS', '');
 
   if (!host) {
     transporter = null;
@@ -100,7 +110,7 @@ function toHtml(body) {
 }
 
 async function sendWithBrevo(to, subject, body) {
-  const apiKey = String(process.env.BREVO_API_KEY || '').trim();
+  const apiKey = readEnv('BREVO_API_KEY', '');
   if (!apiKey) throw new Error('BREVO_API_KEY is not configured');
 
   const sender = getSenderIdentity();
@@ -114,14 +124,20 @@ async function sendWithBrevo(to, subject, body) {
   };
   if (replyTo?.email) payload.replyTo = replyTo;
 
-  await axios.post('https://api.brevo.com/v3/smtp/email', payload, {
-    headers: {
-      'api-key': apiKey,
-      'content-type': 'application/json',
-      accept: 'application/json'
-    },
-    timeout: 30000
-  });
+  try {
+    await axios.post('https://api.brevo.com/v3/smtp/email', payload, {
+      headers: {
+        'api-key': apiKey,
+        'content-type': 'application/json',
+        accept: 'application/json'
+      },
+      timeout: 30000
+    });
+  } catch (error) {
+    const status = error.response?.status;
+    const detail = error.response?.data?.message || error.response?.data?.code || error.message;
+    throw new Error(status ? `Brevo API ${status}: ${detail}` : `Brevo API error: ${detail}`);
+  }
 }
 
 async function sendWithSmtp(to, subject, body) {
@@ -177,6 +193,7 @@ async function sendNotification({ userId, channel, type, title, message }) {
     db.prepare(`UPDATE notifications SET status = 'sent', sent_at = CURRENT_TIMESTAMP WHERE id = ?`)
       .run(info.lastInsertRowid);
   } catch (e) {
+    console.error(`[notification:${channel}:${type}]`, e.message);
     db.prepare(`UPDATE notifications SET status = 'failed' WHERE id = ?`).run(info.lastInsertRowid);
     throw e;
   }

@@ -59,7 +59,7 @@ export default function AdminNotifications() {
   useEffect(() => { load(); }, []);
   useEffect(() => { setPage(1); }, [search]);
 
-  const filtered = useMemo(() => (list || []).filter((item) => matchesSearch(
+  const filtered = (list || []).filter((item) => matchesSearch(
     search,
     item.full_name,
     item.email,
@@ -69,7 +69,7 @@ export default function AdminNotifications() {
     item.title,
     item.message,
     item.status
-  )), [list, search]);
+  ));
 
   const pagination = useMemo(() => paginateItems(filtered, page, pageSize), [filtered, page, pageSize]);
 

@@ -43,7 +43,7 @@ export default function AdminAgreements() {
     }
   };
 
-  const filtered = useMemo(() => (list || []).filter((agreement) => matchesSearch(
+  const filtered = (list || []).filter((agreement) => matchesSearch(
     search,
     agreement.agreement_no,
     agreement.full_name,
@@ -54,7 +54,7 @@ export default function AdminAgreements() {
     agreement.status,
     agreement.weekly_amount,
     agreement.total_amount
-  )), [list, search]);
+  ));
 
   const pagination = useMemo(() => paginateItems(filtered, page, pageSize), [filtered, page, pageSize]);
 

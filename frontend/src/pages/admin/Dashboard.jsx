@@ -10,9 +10,15 @@ export default function AdminDashboard() {
   const [search, setSearch] = useState('');
 
   useEffect(() => { api.get('/admin/dashboard').then((r) => setD(r.data)); }, []);
-  if (!d) return <Loading />;
-  const s = d.stats;
-  const { pending_applications, pending_kyc, overdue_count, upcoming_services, expiring_license_disc, expiring_insurance } = s;
+  const s = d?.stats || {};
+  const {
+    pending_applications = 0,
+    pending_kyc = 0,
+    overdue_count = 0,
+    upcoming_services = 0,
+    expiring_license_disc = 0,
+    expiring_insurance = 0
+  } = s;
 
   const actions = useMemo(() => ([
     { icon: '📋', count: pending_applications, label: 'Pending applications', link: '/admin/applications?status=submitted' },
@@ -22,6 +28,8 @@ export default function AdminDashboard() {
     { icon: '🪪', count: expiring_license_disc, label: 'License discs expiring (30d)', link: '/admin/bikes', danger: true },
     { icon: '🛡️', count: expiring_insurance, label: 'Insurance expiring (30d)', link: '/admin/bikes' }
   ].filter((item) => matchesSearch(search, item.label, item.count))), [pending_applications, pending_kyc, overdue_count, upcoming_services, expiring_license_disc, expiring_insurance, search]);
+
+  if (!d) return <Loading />;
 
   return (
     <>

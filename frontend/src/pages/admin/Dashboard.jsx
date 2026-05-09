@@ -12,15 +12,16 @@ export default function AdminDashboard() {
   useEffect(() => { api.get('/admin/dashboard').then((r) => setD(r.data)); }, []);
   if (!d) return <Loading />;
   const s = d.stats;
+  const { pending_applications, pending_kyc, overdue_count, upcoming_services, expiring_license_disc, expiring_insurance } = s;
 
   const actions = useMemo(() => ([
-    { icon: '📋', count: s.pending_applications, label: 'Pending applications', link: '/admin/applications?status=submitted' },
-    { icon: '🆔', count: s.pending_kyc, label: 'Application documents to review', link: '/admin/applications' },
-    { icon: '⚠️', count: s.overdue_count, label: 'Overdue agreements', link: '/admin/agreements?status=active', danger: true },
-    { icon: '🔧', count: s.upcoming_services, label: 'Bikes due for service (14d)', link: '/admin/bikes?status=allocated' },
-    { icon: '🪪', count: s.expiring_license_disc, label: 'License discs expiring (30d)', link: '/admin/bikes', danger: true },
-    { icon: '🛡️', count: s.expiring_insurance, label: 'Insurance expiring (30d)', link: '/admin/bikes' }
-  ].filter((item) => matchesSearch(search, item.label, item.count))), [s, search]);
+    { icon: '📋', count: pending_applications, label: 'Pending applications', link: '/admin/applications?status=submitted' },
+    { icon: '🆔', count: pending_kyc, label: 'Application documents to review', link: '/admin/applications' },
+    { icon: '⚠️', count: overdue_count, label: 'Overdue agreements', link: '/admin/agreements?status=active', danger: true },
+    { icon: '🔧', count: upcoming_services, label: 'Bikes due for service (14d)', link: '/admin/bikes?status=allocated' },
+    { icon: '🪪', count: expiring_license_disc, label: 'License discs expiring (30d)', link: '/admin/bikes', danger: true },
+    { icon: '🛡️', count: expiring_insurance, label: 'Insurance expiring (30d)', link: '/admin/bikes' }
+  ].filter((item) => matchesSearch(search, item.label, item.count))), [pending_applications, pending_kyc, overdue_count, upcoming_services, expiring_license_disc, expiring_insurance, search]);
 
   return (
     <>

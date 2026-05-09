@@ -141,6 +141,46 @@ function normalizeCountry(value) {
   return matched || raw;
 }
 
+function normalizeEmail(value) {
+  return normalizeText(value).toLowerCase();
+}
+
+function pickEmailField(row) {
+  if (!row || typeof row !== 'object') return '';
+  const preferredHeaders = ['Email', 'email', 'E-mail', 'e-mail', 'Email Address', 'email_address', 'email address'];
+  for (const header of preferredHeaders) {
+    if (normalizeEmail(row[header])) return row[header];
+  }
+  const discoveredHeader = Object.keys(row).find((key) => normalizeKey(key).includes('email'));
+  return discoveredHeader ? row[discoveredHeader] : '';
+}
+
+function mergeTagString(existingValue, tagToAdd) {
+  const normalizedTag = normalizeText(tagToAdd);
+  if (!normalizedTag) return normalizeText(existingValue) || null;
+  const tags = String(existingValue || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (tags.some((tag) => tag.toLowerCase() === normalizedTag.toLowerCase())) {
+    return tags.join(', ');
+  }
+  return [...tags, normalizedTag].join(', ');
+}
+
+function addUserTagByEmail(email, tag) {
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail) return { status: 'missing_email' };
+  const user = db.prepare(`SELECT id, email, user_tags, status FROM users WHERE email = ? AND deleted_at IS NULL`).get(normalizedEmail);
+  if (!user) return { status: 'not_found', email: normalizedEmail };
+  const nextTags = mergeTagString(user.user_tags, tag);
+  if (normalizeText(nextTags) === normalizeText(user.user_tags)) {
+    return { status: 'already_tagged', id: user.id, email: user.email, user_tags: user.user_tags || '' };
+  }
+  db.prepare(`UPDATE users SET user_tags = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(nextTags, user.id);
+  return { status: 'tagged', id: user.id, email: user.email, user_tags: nextTags, account_status: user.status };
+}
+
 function findUser({ email, fullName }) {
   const normalizedEmail = normalizeText(email).toLowerCase();
   const normalizedName = normalizeKey(fullName);
@@ -573,11 +613,44 @@ function importLegacyBundle({ ridersFile, bikesFile, paymentsFile, recordedBy })
   return output;
 }
 
+function importUserTagsCsv(buffer, { tag }) {
+  const rows = parseCsv(buffer.toString('utf8'));
+  const summary = {
+    tag: normalizeText(tag),
+    total_rows: rows.length,
+    tagged: 0,
+    already_tagged: 0,
+    missing_email: 0,
+    not_found: 0,
+    errors: [],
+    unmatched_emails: []
+  };
+
+  for (const [index, row] of rows.entries()) {
+    try {
+      const result = addUserTagByEmail(pickEmailField(row), tag);
+      if (result.status === 'tagged') summary.tagged += 1;
+      else if (result.status === 'already_tagged') summary.already_tagged += 1;
+      else if (result.status === 'missing_email') summary.missing_email += 1;
+      else if (result.status === 'not_found') {
+        summary.not_found += 1;
+        summary.unmatched_emails.push(result.email);
+      }
+    } catch (error) {
+      summary.errors.push({ row: index + 2, error: error.message });
+    }
+  }
+
+  summary.unmatched_emails = summary.unmatched_emails.slice(0, 100);
+  return summary;
+}
+
 module.exports = {
   africanCountries,
   importRidersCsv,
   importBikesCsv,
   importAgreementsCsv,
   importPaymentsCsv,
-  importLegacyBundle
+  importLegacyBundle,
+  importUserTagsCsv
 };

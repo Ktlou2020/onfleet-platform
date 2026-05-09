@@ -3,6 +3,8 @@ import api from '../../api';
 import toast from 'react-hot-toast';
 import { SearchInput, matchesSearch } from '../../components/ui';
 
+const SPECIAL_AUDIENCE_TAG = 'password-reset-batch-2026-05';
+
 function ResultCard({ title, result }) {
   if (!result) return null;
   return (
@@ -79,7 +81,8 @@ export default function AdminImports() {
     riders: matchesSearch(search, 'Import riders', 'drivers export create update rider profiles selfie country origin linked KYC documents', results.riders && JSON.stringify(results.riders)),
     bikes: matchesSearch(search, 'Import bikes', 'fleet export create update bikes registration VIN', results.bikes && JSON.stringify(results.bikes)),
     agreements: matchesSearch(search, 'Import agreements', 'fleet export create agreements imported bike rider name', results.agreements && JSON.stringify(results.agreements)),
-    payments: matchesSearch(search, 'Import payments', 'collections export resolves agreement bike registration VIN', results.payments && JSON.stringify(results.payments))
+    payments: matchesSearch(search, 'Import payments', 'collections export resolves agreement bike registration VIN', results.payments && JSON.stringify(results.payments)),
+    specialTag: matchesSearch(search, 'Import special email tag', SPECIAL_AUDIENCE_TAG, 'email match users add tag audience csv', results.special_tag && JSON.stringify(results.special_tag))
   };
 
   const visibleCards = Object.values(cardMatches).filter(Boolean).length;
@@ -89,7 +92,7 @@ export default function AdminImports() {
       <div className="flex-between mb-2">
         <div>
           <h1 className="page-title">CSV Imports</h1>
-          <p className="page-sub">Import rider profiles, bikes, agreements, and payments. The legacy bundle links the uploaded riders, fleet, and collections exports together automatically.</p>
+          <p className="page-sub">Import rider profiles, bikes, agreements, payments, and tagged email audiences. The legacy bundle links the uploaded riders, fleet, and collections exports together automatically.</p>
         </div>
       </div>
 
@@ -127,6 +130,7 @@ export default function AdminImports() {
         {cardMatches.bikes && <UploadCard title="Import bikes" sub="Use the fleet export to create or update bikes. Matching happens with registration and VIN." endpoint="/imports/bikes" files={singleFiles} setFiles={setSingleFiles} resultKey="bikes" setResults={setResults} />}
         {cardMatches.agreements && <UploadCard title="Import agreements" sub="Use the fleet export to create agreements by matching the imported bike to the rider name." endpoint="/imports/agreements" files={singleFiles} setFiles={setSingleFiles} resultKey="agreements" setResults={setResults} />}
         {cardMatches.payments && <UploadCard title="Import payments" sub="Use the collections export. The importer now resolves by agreement first and falls back to the bike registration or VIN." endpoint="/imports/payments" files={singleFiles} setFiles={setSingleFiles} resultKey="payments" setResults={setResults} />}
+        {cardMatches.specialTag && <UploadCard title="Import special email tag" sub={`Upload a CSV with an email column. OnFleet will match existing users by email and add the special audience tag ${SPECIAL_AUDIENCE_TAG}. Unmatched emails are reported back so you can review them.`} endpoint="/imports/special-tag-users" files={singleFiles} setFiles={setSingleFiles} resultKey="special_tag" setResults={setResults} />}
       </div>
 
       {cardMatches.bundle && <ResultCard title="Latest bundle result" result={results.legacy_bundle} />}
@@ -134,6 +138,7 @@ export default function AdminImports() {
       {cardMatches.bikes && <ResultCard title="Bikes import result" result={results.bikes} />}
       {cardMatches.agreements && <ResultCard title="Agreements import result" result={results.agreements} />}
       {cardMatches.payments && <ResultCard title="Payments import result" result={results.payments} />}
+      {cardMatches.specialTag && <ResultCard title="Special tag import result" result={results.special_tag} />}
       {!visibleCards && <div className="card muted" style={{ textAlign: 'center' }}>No import sections match your search.</div>}
     </>
   );

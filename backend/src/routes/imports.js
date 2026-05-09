@@ -7,8 +7,11 @@ const {
   importBikesCsv,
   importAgreementsCsv,
   importPaymentsCsv,
-  importLegacyBundle
+  importLegacyBundle,
+  importUserTagsCsv
 } = require('../services/csvImports');
+
+const SPECIAL_AUDIENCE_TAG = 'password-reset-batch-2026-05';
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 } });
@@ -64,6 +67,13 @@ router.post('/legacy-bundle', upload.fields([
   }
   const summary = importLegacyBundle({ ridersFile, bikesFile, paymentsFile, recordedBy: req.user.id });
   logAudit(req.user.id, 'import.legacy_bundle', 'imports', null, summary, req.ip);
+  res.json(summary);
+});
+
+router.post('/special-tag-users', upload.single('file'), (req, res) => {
+  if (!ensureFile(req, res)) return;
+  const summary = importUserTagsCsv(req.file.buffer, { tag: SPECIAL_AUDIENCE_TAG });
+  logAudit(req.user.id, 'import.special_tag_users_csv', 'users', null, summary, req.ip);
   res.json(summary);
 });
 

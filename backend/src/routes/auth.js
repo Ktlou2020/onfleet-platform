@@ -375,7 +375,7 @@ router.post('/forgot-password',
       channel: 'email',
       type: 'password_reset',
       title: 'Reset your OnFleet password',
-      message: `Hi ${firstName},\n\nWe received a request to reset your OnFleet password.\n\nReset link: ${resetUrl}\n\nThis link expires in ${readEnv('PASSWORD_RESET_TOKEN_TTL_MINUTES', '60') || 60} minutes. If you did not request this, you can ignore this email.`
+      message: `Hi ${firstName},\n\nWe received a request to reset your OnFleet password.\n\nReset link: ${resetUrl}\n\nThis link expires in ${readEnv('PASSWORD_RESET_TOKEN_TTL_MINUTES', '60') || 60} minutes. If you did not request this, you can ignore this email.\n\nKind Regards\nOnFleet Team`
     });
 
     logAudit(user.id, 'user.password_reset_requested', 'users', user.id, {}, req.ip);

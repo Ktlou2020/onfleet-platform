@@ -87,7 +87,7 @@ function issuePasswordResetToken(userId, req) {
 function buildBulkResetMessage(user, resetUrl, actorName, customMessage) {
   const firstName = user.full_name?.split(' ')?.[0] || 'there';
   const intro = customMessage ? `${String(customMessage).trim()}\n\n` : '';
-  return `Hi ${firstName},\n\n${intro}${actorName} triggered a secure password reset for your OnFleet account.\n\nReset link: ${resetUrl}\n\nThis link expires in ${readEnv('PASSWORD_RESET_TOKEN_TTL_MINUTES', '60') || 60} minutes. If you were not expecting this email, please contact the OnFleet team.`;
+  return `Hi ${firstName},\n\n${intro}We received a request to reset your OnFleet password.\n\nReset link: ${resetUrl}\n\nThis link expires in ${readEnv('PASSWORD_RESET_TOKEN_TTL_MINUTES', '60') || 60} minutes. If you were not expecting this email, please contact the OnFleet team.\n\nKind Regards\nOnFleet Team`;
 }
 
 router.get('/dashboard', (req, res) => {

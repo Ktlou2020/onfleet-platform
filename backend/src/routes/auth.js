@@ -302,15 +302,18 @@ router.post('/signup-complete', signupUpload.fields([
     insertKycDocument({ userId: created.userId, docType: 'drivers_license', file: driversLicense });
     insertKycDocument({ userId: created.userId, docType: 'selfie', file: selfie });
 
-    for (const payslip of payslipFiles) {
-      const insights = await extractPayslipInsights(path.join(uploadDir, payslip.filename), payslip.mimetype);
+    const payslipInsights = await Promise.all(
+      payslipFiles.map(payslip => extractPayslipInsights(path.join(uploadDir, payslip.filename), payslip.mimetype))
+    );
+
+    for (let i = 0; i < payslipFiles.length; i++) {
       insertApplicationDocument({
         applicationId: created.applicationId,
         userId: created.userId,
         docType: 'payslip',
-        file: payslip,
-        extracted_amount: insights.extracted_amount || null,
-        extracted_text: insights.extracted_text || null
+        file: payslipFiles[i],
+        extracted_amount: payslipInsights[i].extracted_amount || null,
+        extracted_text: payslipInsights[i].extracted_text || null
       });
     }
 

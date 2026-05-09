@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import api from '../../api';
 import toast from 'react-hot-toast';
 import { SearchInput, matchesSearch } from '../../components/ui';
@@ -82,7 +82,7 @@ export default function AdminImports() {
     payments: matchesSearch(search, 'Import payments', 'collections export resolves agreement bike registration VIN', results.payments && JSON.stringify(results.payments))
   };
 
-  const visibleCards = useMemo(() => Object.values(cardMatches).filter(Boolean).length, [cardMatches]);
+  const visibleCards = Object.values(cardMatches).filter(Boolean).length;
 
   return (
     <>

@@ -45,7 +45,7 @@ export default function AdminBikes() {
   useEffect(() => { load(); }, [filter]);
   useEffect(() => { setPage(1); }, [search, filter]);
 
-  const filtered = useMemo(() => (bikes || []).filter((bike) => matchesSearch(
+  const filtered = (bikes || []).filter((bike) => matchesSearch(
     search,
     bike.vin,
     bike.registration,
@@ -61,7 +61,7 @@ export default function AdminBikes() {
     bike.allocated_agreement_no,
     bike.license_disc_no,
     bike.license_disc_expiry
-  )), [bikes, search]);
+  ));
 
   const pagination = useMemo(() => paginateItems(filtered, page, pageSize), [filtered, page, pageSize]);
 

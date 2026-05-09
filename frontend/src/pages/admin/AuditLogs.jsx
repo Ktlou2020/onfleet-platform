@@ -11,7 +11,7 @@ export default function AdminAuditLogs() {
   useEffect(() => { api.get('/admin/audit-logs').then((r) => setLogs(r.data.logs)); }, []);
   useEffect(() => { setPage(1); }, [search]);
 
-  const filtered = useMemo(() => (logs || []).filter((log) => matchesSearch(
+  const filtered = (logs || []).filter((log) => matchesSearch(
     search,
     log.full_name,
     log.actor_id,
@@ -20,7 +20,7 @@ export default function AdminAuditLogs() {
     log.entity_id,
     log.metadata,
     log.ip
-  )), [logs, search]);
+  ));
 
   const pagination = useMemo(() => paginateItems(filtered, page, pageSize), [filtered, page, pageSize]);
 

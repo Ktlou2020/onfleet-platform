@@ -112,8 +112,8 @@ router.post('/', authRequired, adminOnly, (req, res) => {
   const info = db.prepare(`INSERT INTO bikes
     (vin, registration, make, model, year, engine_cc, color, condition, purchase_price,
      rental_weekly, total_weeks, status, gps_device_id, odometer_km, insurance_provider,
-     insurance_policy_no, insurance_expiry, image_url, notes)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+     insurance_policy_no, insurance_expiry, license_disc_no, license_disc_expiry, image_url, notes)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       b.vin,
       b.registration || null,
       b.make,
@@ -131,6 +131,8 @@ router.post('/', authRequired, adminOnly, (req, res) => {
       b.insurance_provider || null,
       b.insurance_policy_no || null,
       b.insurance_expiry || null,
+      b.license_disc_no || null,
+      b.license_disc_expiry || null,
       b.image_url || null,
       b.notes || null
     );
@@ -139,7 +141,7 @@ router.post('/', authRequired, adminOnly, (req, res) => {
 });
 
 router.put('/:id', authRequired, adminOnly, (req, res) => {
-  const allowed = ['registration','make','model','year','engine_cc','color','condition','purchase_price','rental_weekly','total_weeks','status','gps_device_id','odometer_km','next_service_km','next_service_date','insurance_provider','insurance_policy_no','insurance_expiry','image_url','notes'];
+  const allowed = ['registration','make','model','year','engine_cc','color','condition','purchase_price','rental_weekly','total_weeks','status','gps_device_id','odometer_km','next_service_km','next_service_date','insurance_provider','insurance_policy_no','insurance_expiry','license_disc_no','license_disc_expiry','image_url','notes'];
   const sets = [];
   const vals = [];
   for (const key of allowed) if (req.body[key] !== undefined) { sets.push(`${key} = ?`); vals.push(req.body[key]); }

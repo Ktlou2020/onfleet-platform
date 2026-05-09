@@ -4,6 +4,9 @@ import api from '../../api';
 import { Stat, Badge, Loading, SearchInput, fmt, fmtDate, EmptyState, matchesSearch } from '../../components/ui';
 import { Bike, TrendingUp, Calendar, AlertCircle } from 'lucide-react';
 
+const monthLabel = (monthKey) => new Date(`${monthKey}-01T00:00:00`).toLocaleDateString('en-ZA', { month: 'long', year: 'numeric' });
+const creditedAmount = (payment) => Number(payment?.net_amount || payment?.amount || 0);
+
 export default function RiderDashboard() {
   const [data, setData] = useState(null);
   const [apps, setApps] = useState([]);
@@ -47,11 +50,14 @@ export default function RiderDashboard() {
     );
   }
 
-  const { agreement, summary, schedule } = data;
+  const { agreement, summary, schedule, payments = [] } = data;
   const upcoming = schedule.filter((item) => item.status !== 'paid' && item.status !== 'waived').slice(0, 5).filter((item) => matchesSearch(search, item.week_number, item.due_date, item.amount_due, item.amount_paid, item.status));
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  const monthlyPaid = payments.filter((payment) => payment.status === 'success' && String(payment.paid_at || payment.created_at || '').slice(0, 7) === currentMonth).reduce((sum, payment) => sum + creditedAmount(payment), 0);
   const quickActions = [
     { label: "💳 Pay this week's fee", link: '/payments', primary: true },
-    { label: '📄 Download agreement', link: '/agreements' },
+    { label: '🧾 Monthly statement', link: `/agreements/${agreement.id}` },
+    { label: '🛠️ Book service / bike care', link: `/agreements/${agreement.id}` },
     { label: '⚙️ Update profile', link: '/profile' }
   ].filter((item) => matchesSearch(search, item.label));
 
@@ -61,7 +67,7 @@ export default function RiderDashboard() {
       <p className="page-sub">Track your rent-to-own progress</p>
 
       <div className="row mb-4" style={{ justifyContent: 'space-between', flexWrap: 'wrap' }}>
-        <SearchInput value={search} onChange={setSearch} placeholder="Search due dates, statuses, and quick actions" style={{ flex: '1 1 320px', maxWidth: 420 }} />
+        <SearchInput value={search} onChange={setSearch} placeholder="Search due dates, statements, and quick actions" style={{ flex: '1 1 320px', maxWidth: 420 }} />
         <div className="muted text-sm">Showing {upcoming.length + quickActions.length} dashboard matches</div>
       </div>
 
@@ -109,6 +115,21 @@ export default function RiderDashboard() {
         </div>
       </div>
 
+      <div className="card mb-4">
+        <div className="flex-between" style={{ gap: 16, alignItems: 'flex-start' }}>
+          <div>
+            <h3 className="mb-1">Monthly statement</h3>
+            <div className="muted text-sm">Your latest running statement for {monthLabel(currentMonth)} includes bike info, total paid, and outstanding balance.</div>
+          </div>
+          <Link to={`/agreements/${agreement.id}`} className="btn btn-secondary btn-sm">Open full statement</Link>
+        </div>
+        <div className="grid grid-3 mt-4">
+          <div className="stat"><div className="stat-label">Paid this month</div><div className="stat-value">{fmt(monthlyPaid)}</div></div>
+          <div className="stat"><div className="stat-label">Outstanding balance</div><div className="stat-value">{fmt(summary.remaining)}</div></div>
+          <div className="stat"><div className="stat-label">Bike reference</div><div className="stat-value" style={{ fontSize: 20 }}>{agreement.registration || agreement.vin}</div></div>
+        </div>
+      </div>
+
       <div className="grid grid-2">
         <div className="card">
           <h3 className="mb-3">Upcoming payments</h3>
@@ -130,7 +151,7 @@ export default function RiderDashboard() {
         <div className="card">
           <h3 className="mb-3">Quick actions</h3>
           {quickActions.map((item) => (
-            <Link key={item.link} to={item.link} className={`btn ${item.primary ? 'btn-block' : 'btn-secondary btn-block'} mb-2`}>{item.label}</Link>
+            <Link key={item.link + item.label} to={item.link} className={`btn ${item.primary ? 'btn-block' : 'btn-secondary btn-block'} mb-2`}>{item.label}</Link>
           ))}
           {!quickActions.length && <div className="muted text-sm">No quick actions match your search.</div>}
         </div>

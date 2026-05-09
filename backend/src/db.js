@@ -84,6 +84,8 @@ CREATE TABLE IF NOT EXISTS bikes (
   insurance_provider TEXT,
   insurance_policy_no TEXT,
   insurance_expiry TEXT,
+  license_disc_no TEXT,
+  license_disc_expiry TEXT,
   image_url TEXT,
   notes TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -295,5 +297,7 @@ ensureColumn('service_records', 'invoice_file_path', 'TEXT');
 ensureColumn('service_records', 'invoice_original_name', 'TEXT');
 ensureColumn('payments', 'fee_amount', 'REAL DEFAULT 0');
 ensureColumn('payments', 'net_amount', 'REAL DEFAULT 0');
+ensureColumn('bikes', 'license_disc_no', 'TEXT');
+ensureColumn('bikes', 'license_disc_expiry', 'TEXT');
 
 module.exports = db;

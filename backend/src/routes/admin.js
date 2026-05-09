@@ -29,7 +29,8 @@ router.get('/dashboard', (req, res) => {
     overdue_amount: db.prepare(`SELECT COALESCE(SUM(amount_due - amount_paid),0) s FROM payment_schedules WHERE status = 'overdue'`).get().s,
     overdue_count: db.prepare(`SELECT COUNT(DISTINCT agreement_id) c FROM payment_schedules WHERE status = 'overdue'`).get().c,
     upcoming_services: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE next_service_date IS NOT NULL AND next_service_date <= date('now','+14 days') AND status = 'allocated'`).get().c,
-    expiring_insurance: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE insurance_expiry IS NOT NULL AND insurance_expiry <= date('now','+30 days')`).get().c
+    expiring_insurance: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE insurance_expiry IS NOT NULL AND insurance_expiry <= date('now','+30 days')`).get().c,
+    expiring_license_disc: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE license_disc_expiry IS NOT NULL AND license_disc_expiry <= date('now','+30 days')`).get().c
   };
   const weekly = db.prepare(`SELECT strftime('%Y-%W', paid_at) week, COALESCE(SUM(COALESCE(net_amount, amount)),0) total
     FROM payments WHERE status = 'success' AND paid_at >= datetime('now','-90 days')

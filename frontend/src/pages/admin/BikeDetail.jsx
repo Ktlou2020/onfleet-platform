@@ -11,6 +11,18 @@ const bikeIcon = new L.DivIcon({
   className: '', iconSize: [30, 30], iconAnchor: [15, 15]
 });
 
+function getExpiryMeta(date) {
+  if (!date) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const expiry = new Date(`${date}T00:00:00`);
+  const days = Math.round((expiry - today) / 86400000);
+  if (days < 0) return { tone: 'var(--danger)', label: `License disc expired ${Math.abs(days)} day${Math.abs(days) === 1 ? '' : 's'} ago` };
+  if (days === 0) return { tone: 'var(--danger)', label: 'License disc expires today' };
+  if (days <= 30) return { tone: 'var(--warn)', label: `License disc expires in ${days} day${days === 1 ? '' : 's'}` };
+  return { tone: 'var(--muted)', label: `License disc valid until ${fmtDate(date)}` };
+}
+
 export default function AdminBikeDetail() {
   const { id } = useParams();
   const [data, setData] = useState(null);
@@ -28,6 +40,7 @@ export default function AdminBikeDetail() {
   const bike = data.bike;
   const pos = bike.last_known_lat ? [bike.last_known_lat, bike.last_known_lng] : null;
   const servicePagination = paginateItems(data.services, servicePage, servicePageSize);
+  const discMeta = getExpiryMeta(bike.license_disc_expiry);
 
   const save = async () => {
     try { await api.put(`/bikes/${id}`, form); toast.success('Saved'); setEdit(false); load(); } catch (error) { toast.error(error.response?.data?.error || 'Failed'); }
@@ -58,6 +71,13 @@ export default function AdminBikeDetail() {
         </div>
         <div className="row"><Badge status={bike.status} /><button className="btn btn-sm btn-secondary" onClick={() => setEdit(!edit)}>{edit ? 'Cancel' : 'Edit'}</button><button className="btn btn-sm" onClick={() => setShowService(true)}>+ Log service / repair</button></div>
       </div>
+
+      {discMeta && (
+        <div className="card mb-4" style={{ border: `1px solid ${discMeta.tone}`, background: 'rgba(255,255,255,0.01)' }}>
+          <div style={{ fontWeight: 700, marginBottom: 6, color: discMeta.tone }}>License disc alert</div>
+          <div className="muted text-sm">{discMeta.label}. Track renewals here so admins can action compliance before the bike is flagged.</div>
+        </div>
+      )}
 
       <div className="grid grid-4 mb-4">
         <div className="stat"><div className="stat-label">Revenue</div><div className="stat-value">{fmt(data.roi?.revenue_total)}</div></div>
@@ -94,6 +114,8 @@ export default function AdminBikeDetail() {
                 <div className="field"><label className="label">Weekly rental</label><input type="number" value={form.rental_weekly} onChange={(e) => setForm({ ...form, rental_weekly: Number(e.target.value) })} /></div>
                 <div className="field"><label className="label">Insurance provider</label><input value={form.insurance_provider || ''} onChange={(e) => setForm({ ...form, insurance_provider: e.target.value })} /></div>
                 <div className="field"><label className="label">Insurance expiry</label><input type="date" value={form.insurance_expiry || ''} onChange={(e) => setForm({ ...form, insurance_expiry: e.target.value })} /></div>
+                <div className="field"><label className="label">License disc no.</label><input value={form.license_disc_no || ''} onChange={(e) => setForm({ ...form, license_disc_no: e.target.value })} /></div>
+                <div className="field"><label className="label">License disc expiry</label><input type="date" value={form.license_disc_expiry || ''} onChange={(e) => setForm({ ...form, license_disc_expiry: e.target.value })} /></div>
                 <div className="field"><label className="label">Next service date</label><input type="date" value={form.next_service_date || ''} onChange={(e) => setForm({ ...form, next_service_date: e.target.value })} /></div>
                 <div className="field"><label className="label">Next service km</label><input type="number" value={form.next_service_km || 0} onChange={(e) => setForm({ ...form, next_service_km: Number(e.target.value) })} /></div>
               </div>
@@ -103,13 +125,14 @@ export default function AdminBikeDetail() {
             <>
               <Row k="VIN" v={bike.vin} />
               <Row k="Year" v={bike.year} />
-              <Row k="Engine" v={`${bike.engine_cc}cc`} />
+              <Row k="Engine" v={bike.engine_cc ? `${bike.engine_cc}cc` : '—'} />
               <Row k="Color" v={bike.color} />
               <Row k="Condition" v={bike.condition} />
               <Row k="Weekly rental" v={fmt(bike.rental_weekly)} />
               <Row k="Purchase price" v={fmt(bike.purchase_price)} />
               <Row k="Odometer" v={`${bike.odometer_km || 0} km`} />
               <Row k="Insurance" v={`${bike.insurance_provider || '—'} · expires ${fmtDate(bike.insurance_expiry)}`} />
+              <Row k="License disc" v={`${bike.license_disc_no || '—'} · expires ${fmtDate(bike.license_disc_expiry)}`} />
               <Row k="Next service" v={`${fmtDate(bike.next_service_date)} or ${bike.next_service_km || '—'} km`} />
             </>
           )}

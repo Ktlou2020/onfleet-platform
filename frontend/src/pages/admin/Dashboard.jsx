@@ -18,6 +18,7 @@ export default function AdminDashboard() {
     { icon: '🆔', count: s.pending_kyc, label: 'Application documents to review', link: '/admin/applications' },
     { icon: '⚠️', count: s.overdue_count, label: 'Overdue agreements', link: '/admin/agreements?status=active', danger: true },
     { icon: '🔧', count: s.upcoming_services, label: 'Bikes due for service (14d)', link: '/admin/bikes?status=allocated' },
+    { icon: '🪪', count: s.expiring_license_disc, label: 'License discs expiring (30d)', link: '/admin/bikes', danger: true },
     { icon: '🛡️', count: s.expiring_insurance, label: 'Insurance expiring (30d)', link: '/admin/bikes' }
   ].filter((item) => matchesSearch(search, item.label, item.count))), [s, search]);
 
@@ -26,7 +27,7 @@ export default function AdminDashboard() {
       <div className="flex-between mb-3" style={{ gap: 16, alignItems: 'flex-start' }}>
         <div>
           <h1 className="page-title">Dashboard</h1>
-          <p className="page-sub">Real-time business overview</p>
+          <p className="page-sub">Real-time business overview with compliance and fleet alerts.</p>
         </div>
         <Link to="/admin/strategy" className="btn btn-secondary">AI strategy report</Link>
       </div>
@@ -47,7 +48,7 @@ export default function AdminDashboard() {
         <Stat label="Bikes available" value={s.bikes_available} icon={<Bike size={16}/>} />
         <Stat label="Bikes allocated" value={s.bikes_allocated} icon={<Bike size={16}/>} accent="var(--accent)" />
         <Stat label="In maintenance" value={s.bikes_maintenance} icon={<Wrench size={16}/>} accent="var(--warn)" />
-        <Stat label="Documents pending review" value={s.pending_kyc} icon={<ShieldCheck size={16}/>} accent="var(--warn)" />
+        <Stat label="Compliance alerts" value={s.expiring_license_disc} delta={`${s.pending_kyc} docs pending · ${s.expiring_insurance} insurance`} icon={<ShieldCheck size={16}/>} accent="var(--warn)" />
       </div>
 
       <div className="grid grid-2 mb-4">

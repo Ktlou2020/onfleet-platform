@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth';
+import InstallPrompt from './components/InstallPrompt';
 import Landing from './pages/Landing';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
@@ -84,6 +85,7 @@ export default function App() {
           <Route path="audit" element={<AdminAuditLogs />} />
         </Route>
       </Routes>
+      <InstallPrompt />
     </AuthProvider>
   );
 }

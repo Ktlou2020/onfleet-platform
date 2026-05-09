@@ -4,14 +4,24 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../../auth';
 import { Loading, Badge, SearchInput, fmtDate, Modal, Pagination, matchesSearch } from '../../components/ui';
 
+const SPECIAL_AUDIENCE_TAG = 'password-reset-batch-2026-05';
+
 const bulkScopeOptions = [
   { value: 'selected', label: 'Selected users' },
   { value: 'filtered', label: 'Filtered results' },
+  { value: 'special_tagged', label: 'Special tagged users' },
   { value: 'all_active', label: 'All active users' },
   { value: 'riders_active', label: 'Active riders only' },
   { value: 'admins_active', label: 'Active admins only' },
   { value: 'all', label: 'All users including suspended' }
 ];
+
+function tagList(value) {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
 
 export default function AdminUsers() {
   const { user } = useAuth();
@@ -19,6 +29,7 @@ export default function AdminUsers() {
   const [providerInfo, setProviderInfo] = useState(null);
   const [filter, setFilter] = useState('');
   const [search, setSearch] = useState('');
+  const [tagFilter, setTagFilter] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [showCreate, setShowCreate] = useState(false);
@@ -50,7 +61,7 @@ export default function AdminUsers() {
   };
 
   useEffect(() => { load(); }, []);
-  useEffect(() => { setPage(1); }, [search, filter]);
+  useEffect(() => { setPage(1); }, [search, filter, tagFilter]);
 
   useEffect(() => {
     if (!users) return;
@@ -64,19 +75,25 @@ export default function AdminUsers() {
     setSelectedIds((prev) => prev.filter((id) => users.some((account) => account.id === id)));
   }, [users]);
 
-  const filtered = useMemo(() => (users || []).filter((account) => {
-    if (filter && account.role !== filter) return false;
-    return matchesSearch(
-      search,
-      account.full_name,
-      account.email,
-      account.phone,
-      account.country_of_origin,
-      account.role,
-      account.status,
-      account.id
-    );
-  }), [users, filter, search]);
+  const filtered = useMemo(() => {
+    const normalizedTag = tagFilter.trim().toLowerCase();
+    return (users || []).filter((account) => {
+      if (filter && account.role !== filter) return false;
+      const tags = tagList(account.user_tags);
+      if (normalizedTag && !tags.some((tag) => tag.toLowerCase().includes(normalizedTag))) return false;
+      return matchesSearch(
+        search,
+        account.full_name,
+        account.email,
+        account.phone,
+        account.country_of_origin,
+        account.role,
+        account.status,
+        account.id,
+        account.user_tags
+      );
+    });
+  }, [users, filter, search, tagFilter]);
 
   const pagination = useMemo(() => {
     const safeItems = Array.isArray(filtered) ? filtered : [];
@@ -111,6 +128,8 @@ export default function AdminUsers() {
     switch (scope) {
       case 'selected':
         return selectedUsers;
+      case 'special_tagged':
+        return allUsers.filter((account) => tagList(account.user_tags).some((tag) => tag.toLowerCase() === SPECIAL_AUDIENCE_TAG.toLowerCase()));
       case 'all_active':
         return allUsers.filter((account) => account.status === 'active');
       case 'riders_active':
@@ -246,13 +265,15 @@ export default function AdminUsers() {
   if (!users) return <Loading />;
 
   const pageAllSelected = pagination.items.length > 0 && pagination.items.every((account) => selectedIds.includes(account.id));
+  const taggedUsers = users.filter((account) => tagList(account.user_tags).length > 0).length;
+  const specialTaggedUsers = users.filter((account) => tagList(account.user_tags).some((tag) => tag.toLowerCase() === SPECIAL_AUDIENCE_TAG.toLowerCase())).length;
 
   return (
     <>
       <div className="flex-between mb-2">
         <div>
           <h1 className="page-title">Users</h1>
-          <p className="page-sub">Manage riders and admins, send announcement emails, and trigger secure bulk password reset links.</p>
+          <p className="page-sub">Manage riders and admins, send announcement emails, trigger secure password reset links, and filter audiences by user tag.</p>
         </div>
         <div className="row" style={{ flexWrap: 'wrap' }}>
           <div className="badge badge-info">{providerLabel}</div>
@@ -265,12 +286,13 @@ export default function AdminUsers() {
       <div className="grid grid-4 mb-4">
         <div className="stat"><div className="stat-label">All users</div><div className="stat-value">{users.length}</div><div className="stat-delta muted">Loaded for bulk actions</div></div>
         <div className="stat"><div className="stat-label">Active riders</div><div className="stat-value">{users.filter((account) => account.role === 'rider' && account.status === 'active').length}</div><div className="stat-delta muted">Eligible for outreach</div></div>
-        <div className="stat"><div className="stat-label">Active admins</div><div className="stat-value">{users.filter((account) => ['admin', 'superadmin'].includes(account.role) && account.status === 'active').length}</div><div className="stat-delta muted">Operations team</div></div>
+        <div className="stat"><div className="stat-label">Tagged users</div><div className="stat-value">{taggedUsers}</div><div className="stat-delta muted">{specialTaggedUsers} on the special email tag</div></div>
         <div className="stat"><div className="stat-label">Selected</div><div className="stat-value">{selectedIds.length}</div><div className="stat-delta muted">Use selected scope for precise targeting</div></div>
       </div>
 
       <div className="row mb-3" style={{ flexWrap: 'wrap', justifyContent: 'space-between', gap: 12 }}>
-        <SearchInput value={search} onChange={setSearch} placeholder="Search name, email, phone, role, country" style={{ flex: '1 1 320px', maxWidth: 460 }} />
+        <SearchInput value={search} onChange={setSearch} placeholder="Search name, email, phone, role, country or tag" style={{ flex: '1 1 320px', maxWidth: 460 }} />
+        <SearchInput value={tagFilter} onChange={setTagFilter} placeholder="Filter by tag" style={{ flex: '0 1 240px', minWidth: 220 }} />
         <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
           <button className="btn btn-sm btn-secondary" onClick={selectFiltered}>Select filtered</button>
           <button className="btn btn-sm btn-secondary" onClick={clearSelected} disabled={!selectedIds.length}>Clear selected</button>
@@ -283,6 +305,7 @@ export default function AdminUsers() {
           <button key={value} onClick={() => setFilter(value)} className={`btn btn-sm ${filter === value ? '' : 'btn-secondary'}`}>{label}</button>
         ))}
         {user?.role === 'superadmin' && dirtyRoles > 0 && <span className="muted text-sm">Unsaved role changes are highlighted per user.</span>}
+        {!!tagFilter && <span className="badge badge-muted">Tag filter: {tagFilter}</span>}
       </div>
 
       <div className="card" style={{ padding: 0 }}>
@@ -305,6 +328,7 @@ export default function AdminUsers() {
             {pagination.items.map((account) => {
               const pendingRole = roleEdits[account.id] || account.role;
               const roleChanged = pendingRole !== account.role;
+              const tags = tagList(account.user_tags);
               return (
                 <tr key={account.id}>
                   <td>
@@ -321,6 +345,11 @@ export default function AdminUsers() {
                       <div>
                         <strong>{account.full_name}</strong>
                         <div className="text-xs muted">{account.email}</div>
+                        {!!tags.length && (
+                          <div className="row" style={{ gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                            {tags.map((tag) => <span key={`${account.id}-${tag}`} className="badge badge-muted">{tag}</span>)}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </td>
@@ -353,7 +382,7 @@ export default function AdminUsers() {
             })}
           </tbody>
         </table>
-        {!pagination.items.length && <div className="muted" style={{ padding: 24, textAlign: 'center' }}>{search || filter ? 'No users match your filters.' : 'No users found.'}</div>}
+        {!pagination.items.length && <div className="muted" style={{ padding: 24, textAlign: 'center' }}>{search || filter || tagFilter ? 'No users match your filters.' : 'No users found.'}</div>}
       </div>
       <Pagination page={pagination.currentPage} pageSize={pagination.pageSize} totalItems={pagination.totalItems} onPageChange={setPage} onPageSizeChange={setPageSize} label="users" />
 
@@ -377,7 +406,7 @@ export default function AdminUsers() {
             <select value={bulkEmailForm.scope} onChange={(e) => setBulkEmailForm((prev) => ({ ...prev, scope: e.target.value }))}>
               {bulkScopeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
-            <div className="text-xs muted" style={{ marginTop: 6 }}>{bulkEmailTargets.length} user(s) will receive this email.</div>
+            <div className="text-xs muted" style={{ marginTop: 6 }}>{bulkEmailTargets.length} user(s) will receive this email. Choose “Special tagged users” to target only the {SPECIAL_AUDIENCE_TAG} audience, or use the tag filter above with “Filtered results” for any other tag.</div>
           </div>
           <div className="field">
             <label className="label">Subject</label>
@@ -405,7 +434,7 @@ export default function AdminUsers() {
             <select value={bulkResetForm.scope} onChange={(e) => setBulkResetForm((prev) => ({ ...prev, scope: e.target.value }))}>
               {bulkScopeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
-            <div className="text-xs muted" style={{ marginTop: 6 }}>{bulkResetTargets.filter((account) => account.status === 'active').length} active user(s) will receive secure reset links.</div>
+            <div className="text-xs muted" style={{ marginTop: 6 }}>{bulkResetTargets.filter((account) => account.status === 'active').length} active user(s) will receive secure reset links. Choose “Special tagged users” to target only the {SPECIAL_AUDIENCE_TAG} audience, or use the tag filter above with “Filtered results” to limit the reset run to any other tag.</div>
           </div>
           <div className="field">
             <label className="label">Email intro</label>

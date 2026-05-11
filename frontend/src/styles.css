@@ -240,6 +240,21 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 .section .sub { color: var(--muted); text-align: center; max-width: 600px; margin: 0 auto; }
 .landing-step-card,
 .landing-benefit-card { height: 100%; }
+.landing-filter-bar {
+  display: flex; justify-content: space-between; align-items: flex-end; gap: 18px; flex-wrap: wrap; margin-bottom: 24px;
+}
+.landing-filter-copy {
+  flex: 1 1 260px; display: grid; gap: 6px;
+}
+.landing-filter-controls {
+  flex: 1 1 540px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-items: end;
+}
+.landing-filter-field {
+  min-width: 0;
+}
+.landing-filter-reset {
+  min-height: 42px;
+}
 .bike-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
 .bike-card {
   background: var(--surface); border: 1px solid var(--border); border-radius: 16px; overflow: hidden;
@@ -252,6 +267,9 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   background: linear-gradient(180deg, transparent 60%, rgba(0,0,0,0.5)); }
 .bike-card .body { padding: 20px; }
 .bike-card .price { font-size: 22px; font-weight: 700; color: var(--primary-light); }
+.bike-card-meta-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+}
 .bike-card-action { white-space: nowrap; }
 
 .navbar {
@@ -372,6 +390,9 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   .section { padding: 52px 16px; }
   .section-head { margin-bottom: 28px; }
   .section h2 { font-size: 28px; }
+  .landing-filter-bar { padding: 16px; margin-bottom: 18px; }
+  .landing-filter-controls { grid-template-columns: 1fr; }
+  .landing-filter-reset { width: 100%; }
   .bike-grid { grid-template-columns: 1fr; gap: 16px; }
   .bike-card .body { padding: 16px; }
   .bike-card-header,

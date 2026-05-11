@@ -5,13 +5,51 @@ import Logo from '../components/Logo';
 import { fmt } from '../components/ui';
 import { Bike, ShieldCheck, Wrench, MapPin, Zap, CreditCard, Menu, X, CheckCircle2 } from 'lucide-react';
 
+const EMPTY_FILTERS = { make: '', model: '', condition: '' };
+const MONTHS_PER_WEEK = 12 / 52;
+
+function formatWeeksToMonths(totalWeeks) {
+  const weeks = Number(totalWeeks || 0);
+  if (!weeks) return 'Flexible term';
+  const months = weeks * MONTHS_PER_WEEK;
+  const roundedMonths = Number.isInteger(months) ? String(months) : months.toFixed(1).replace(/\.0$/, '');
+  return `${roundedMonths} month${Number(roundedMonths) === 1 ? '' : 's'} (${weeks} week${weeks === 1 ? '' : 's'})`;
+}
+
 export default function Landing() {
   const [bikes, setBikes] = useState([]);
+  const [catalogFilters, setCatalogFilters] = useState({ makes: [], models: [], conditions: [] });
+  const [bikeFilters, setBikeFilters] = useState(EMPTY_FILTERS);
+  const [bikesLoading, setBikesLoading] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
-    api.get('/bikes/catalog').then((r) => setBikes(r.data.bikes)).catch(() => {});
-  }, []);
+    let cancelled = false;
+    setBikesLoading(true);
+
+    api.get('/bikes/catalog', { params: bikeFilters })
+      .then((r) => {
+        if (cancelled) return;
+        setBikes(Array.isArray(r.data?.bikes) ? r.data.bikes : []);
+        setCatalogFilters({
+          makes: Array.isArray(r.data?.filters?.makes) ? r.data.filters.makes : [],
+          models: Array.isArray(r.data?.filters?.models) ? r.data.filters.models : [],
+          conditions: Array.isArray(r.data?.filters?.conditions) ? r.data.filters.conditions : []
+        });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setBikes([]);
+        setCatalogFilters({ makes: [], models: [], conditions: [] });
+      })
+      .finally(() => {
+        if (!cancelled) setBikesLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [bikeFilters.make, bikeFilters.model, bikeFilters.condition]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -30,6 +68,16 @@ export default function Landing() {
   }, [menuOpen]);
 
   const closeMenu = () => setMenuOpen(false);
+  const hasActiveFilters = Boolean(bikeFilters.make || bikeFilters.model || bikeFilters.condition);
+
+  const updateFilter = (key, value) => {
+    setBikeFilters((prev) => {
+      if (key === 'make') return { ...prev, make: value, model: '' };
+      return { ...prev, [key]: value };
+    });
+  };
+
+  const resetFilters = () => setBikeFilters(EMPTY_FILTERS);
 
   return (
     <div className="landing">
@@ -111,10 +159,45 @@ export default function Landing() {
       <section id="bikes" className="section">
         <div className="section-head">
           <h2>Available bikes</h2>
-          <div className="sub">Built for the South African hustle. Engineered to endure.</div>
+          <div className="sub">Only bikes marked Ready to go appear here. Filter the fleet by make, model, and condition.</div>
         </div>
+
+        <div className="landing-filter-bar card">
+          <div className="landing-filter-copy">
+            <strong>{bikesLoading ? 'Loading ready-to-go bikes…' : `${bikes.length} ready-to-go bike${bikes.length === 1 ? '' : 's'} available`}</strong>
+            <div className="muted text-sm">Browse what is immediately available on the homepage before starting your application.</div>
+          </div>
+          <div className="landing-filter-controls">
+            <div className="landing-filter-field">
+              <label htmlFor="bike-filter-make" className="label">Make</label>
+              <select id="bike-filter-make" value={bikeFilters.make} onChange={(e) => updateFilter('make', e.target.value)}>
+                <option value="">All makes</option>
+                {catalogFilters.makes.map((make) => <option key={make} value={make}>{make}</option>)}
+              </select>
+            </div>
+            <div className="landing-filter-field">
+              <label htmlFor="bike-filter-model" className="label">Model</label>
+              <select id="bike-filter-model" value={bikeFilters.model} onChange={(e) => updateFilter('model', e.target.value)}>
+                <option value="">All models</option>
+                {catalogFilters.models.map((model) => <option key={model} value={model}>{model}</option>)}
+              </select>
+            </div>
+            <div className="landing-filter-field">
+              <label htmlFor="bike-filter-condition" className="label">Condition</label>
+              <select id="bike-filter-condition" value={bikeFilters.condition} onChange={(e) => updateFilter('condition', e.target.value)}>
+                <option value="">All conditions</option>
+                {catalogFilters.conditions.map((condition) => <option key={condition} value={condition}>{condition}</option>)}
+              </select>
+            </div>
+            <button type="button" className="btn btn-secondary landing-filter-reset" onClick={resetFilters} disabled={!hasActiveFilters}>
+              Clear filters
+            </button>
+          </div>
+        </div>
+
         <div className="bike-grid">
-          {bikes.length ? bikes.map((b) => (
+          {bikesLoading ? <div className="card muted">Loading bikes…</div> : null}
+          {!bikesLoading && bikes.length ? bikes.map((b) => (
             <div key={b.id} className="bike-card">
               <div className="img" style={{ backgroundImage: b.image_url ? `url("${b.image_url}")` : 'none' }} />
               <div className="body">
@@ -122,17 +205,25 @@ export default function Landing() {
                   <h3>{b.make} {b.model}</h3>
                   <span className="badge badge-info">{b.condition}</span>
                 </div>
-                <div className="muted text-sm mt-1">{b.engine_cc}cc · {b.year || 'New'}</div>
+                <div className="bike-card-meta-row mt-2">
+                  <span className="badge badge-success">Ready to go</span>
+                  <span className="muted text-sm">{b.engine_cc}cc · {b.year || 'New'}</span>
+                </div>
                 <div className="flex-between mt-4 bike-card-footer">
                   <div>
                     <div className="price">{fmt(b.rental_weekly)}<span className="muted text-sm">/week</span></div>
-                    <div className="muted text-xs">{b.total_weeks} weeks to own</div>
+                    <div className="muted text-xs">{formatWeeksToMonths(b.total_weeks)} to own</div>
                   </div>
                   <Link to="/signup" className="btn btn-sm bike-card-action">Apply</Link>
                 </div>
               </div>
             </div>
-          )) : <div className="card muted">Loading bikes…</div>}
+          )) : null}
+          {!bikesLoading && !bikes.length ? (
+            <div className="card muted">
+              No ready-to-go bikes match the selected filters right now.
+            </div>
+          ) : null}
         </div>
       </section>
 

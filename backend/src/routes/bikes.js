@@ -79,10 +79,67 @@ const bikeSelectSql = `SELECT b.*,
   ) AS allocated_agreement_no
 FROM bikes b`;
 
+function listCatalogValues(column, whereClauses = [], params = []) {
+  const sql = `SELECT DISTINCT ${column} AS value
+    FROM bikes
+    WHERE status = 'ready_to_go'
+      ${whereClauses.length ? `AND ${whereClauses.join(' AND ')}` : ''}
+      AND COALESCE(TRIM(${column}), '') <> ''
+    ORDER BY ${column}`;
+  return db.prepare(sql).all(...params).map((row) => row.value);
+}
+
 router.get('/catalog', (req, res) => {
-  const bikes = db.prepare(`SELECT id, make, model, year, engine_cc, condition, rental_weekly, total_weeks, image_url
-    FROM bikes WHERE status = 'ready_to_go' ORDER BY make, model`).all();
-  res.json({ bikes });
+  const make = String(req.query.make || '').trim();
+  const model = String(req.query.model || '').trim();
+  const condition = String(req.query.condition || '').trim();
+  const whereClauses = [`status = 'ready_to_go'`];
+  const params = [];
+
+  if (make) {
+    whereClauses.push('make = ?');
+    params.push(make);
+  }
+  if (model) {
+    whereClauses.push('model = ?');
+    params.push(model);
+  }
+  if (condition) {
+    whereClauses.push('condition = ?');
+    params.push(condition);
+  }
+
+  const bikes = db.prepare(`SELECT id, make, model, year, engine_cc, condition, rental_weekly, total_weeks, image_url, status
+    FROM bikes
+    WHERE ${whereClauses.join(' AND ')}
+    ORDER BY make, model, year DESC, id DESC`).all(...params);
+
+  const modelWhereClauses = [];
+  const modelParams = [];
+  if (make) {
+    modelWhereClauses.push('make = ?');
+    modelParams.push(make);
+  }
+
+  const conditionWhereClauses = [];
+  const conditionParams = [];
+  if (make) {
+    conditionWhereClauses.push('make = ?');
+    conditionParams.push(make);
+  }
+  if (model) {
+    conditionWhereClauses.push('model = ?');
+    conditionParams.push(model);
+  }
+
+  res.json({
+    bikes,
+    filters: {
+      makes: listCatalogValues('make'),
+      models: listCatalogValues('model', modelWhereClauses, modelParams),
+      conditions: listCatalogValues('condition', conditionWhereClauses, conditionParams)
+    }
+  });
 });
 
 router.get('/', authRequired, adminOnly, (req, res) => {

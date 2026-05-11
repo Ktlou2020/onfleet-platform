@@ -103,6 +103,7 @@ export default function FleetOwnerPilot() {
         <nav className="landing-nav fleet-pilot-nav-inline">
           <a href="#plans">Plans</a>
           <a href="#features">Features</a>
+          <Link to="/fleet/workspace">Test workspace</Link>
           <a href="#pilot-form">Join pilot</a>
           <Link to="/login">Sign in</Link>
           <Link to="/" className="btn btn-secondary">Rider site</Link>
@@ -115,7 +116,8 @@ export default function FleetOwnerPilot() {
           <h1>Let fleet owners run operations on <span>OnFleet</span>.</h1>
           <p>Launch a live pilot for operators who want to manage bikes, agreements, payments, maintenance, and collections in one admin workspace — with a 14-day trial and Paystack billing ready for go-live.</p>
           <div className="hero-cta">
-            <a href="#pilot-form" className="btn hero-cta-btn">Join the pilot</a>
+            <Link to="/fleet/workspace" className="btn hero-cta-btn">Test workspace</Link>
+            <a href="#pilot-form" className="btn btn-secondary hero-cta-btn">Join the pilot</a>
             <a href="#plans" className="btn btn-secondary hero-cta-btn">View plans</a>
           </div>
           <div className="hero-trust-list">
@@ -132,6 +134,7 @@ export default function FleetOwnerPilot() {
               'Daily bike, rider, and agreement operations',
               'Collections workflows and default handling',
               'Bulk imports, filters, and contract actions',
+              'A live demo workspace fleet owners can click through now',
               'Plan-fit feedback before full commercial rollout'
             ].map((item) => (
               <div className="fleet-pilot-check" key={item}><CheckCircle2 size={16} /> {item}</div>

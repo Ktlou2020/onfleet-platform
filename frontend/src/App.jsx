@@ -7,6 +7,7 @@ import Signup from './pages/Signup';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
 import FleetOwnerPilot from './pages/FleetOwnerPilot';
+import FleetOwnerWorkspace from './pages/FleetOwnerWorkspace';
 import RiderShell from './pages/rider/RiderShell';
 import RiderDashboard from './pages/rider/Dashboard';
 import RiderAgreements from './pages/rider/Agreements';
@@ -58,6 +59,7 @@ export default function App() {
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/reset-password" element={<ResetPassword />} />
         <Route path="/fleet" element={<FleetOwnerPilot />} />
+        <Route path="/fleet/workspace" element={<FleetOwnerWorkspace />} />
 
         <Route path="/" element={<PrivateRoute role="rider"><RiderShell /></PrivateRoute>}>
           <Route path="dashboard" element={<RiderDashboard />} />

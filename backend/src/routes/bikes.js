@@ -6,12 +6,15 @@ const db = require('../db');
 const { authRequired, adminOnly } = require('../middleware/auth');
 const { logAudit } = require('../utils/helpers');
 const { setBikeStatus } = require('../utils/bikeStatus');
+const { extractLicenseDiscInsights } = require('../services/documentInsights');
 
 const router = express.Router();
 const bikeUploadDir = path.join(__dirname, '../../uploads/bikes');
 const invoiceUploadDir = path.join(__dirname, '../../uploads/service-invoices');
+const bikeDocumentUploadDir = path.join(__dirname, '../../uploads/bike-documents');
 fs.mkdirSync(bikeUploadDir, { recursive: true });
 fs.mkdirSync(invoiceUploadDir, { recursive: true });
+fs.mkdirSync(bikeDocumentUploadDir, { recursive: true });
 
 const bikeImageUpload = multer({
   storage: multer.diskStorage({
@@ -30,6 +33,19 @@ const invoiceUpload = multer({
   fileFilter: (req, file, cb) => cb(null, ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'].includes(file.mimetype)),
   limits: { fileSize: 10 * 1024 * 1024 }
 });
+
+const bikeDocumentUpload = multer({
+  storage: multer.diskStorage({
+    destination: bikeDocumentUploadDir,
+    filename: (req, file, cb) => cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${path.extname(file.originalname).toLowerCase()}`)
+  }),
+  fileFilter: (req, file, cb) => cb(null, file.mimetype === 'application/pdf'),
+  limits: { fileSize: 15 * 1024 * 1024 }
+});
+
+function getSetting(key) {
+  return db.prepare('SELECT setting_value FROM app_settings WHERE setting_key = ?').get(key)?.setting_value || null;
+}
 
 function computeBikeRoi(bikeId) {
   const revenue = db.prepare(`SELECT COALESCE(SUM(COALESCE(p.net_amount, p.amount)),0) total FROM payments p
@@ -109,7 +125,7 @@ router.get('/catalog', (req, res) => {
     params.push(condition);
   }
 
-  const bikes = db.prepare(`SELECT id, make, model, year, engine_cc, condition, rental_weekly, total_weeks, image_url, status
+  const bikes = db.prepare(`SELECT id, make, model, year, engine_cc, condition, rental_weekly, total_weeks, image_url, status, registration
     FROM bikes
     WHERE ${whereClauses.join(' AND ')}
     ORDER BY make, model, year DESC, id DESC`).all(...params);
@@ -138,7 +154,8 @@ router.get('/catalog', (req, res) => {
       makes: listCatalogValues('make'),
       models: listCatalogValues('model', modelWhereClauses, modelParams),
       conditions: listCatalogValues('condition', conditionWhereClauses, conditionParams)
-    }
+    },
+    hero_image_url: getSetting('landing_hero_image_url')
   });
 });
 
@@ -199,7 +216,7 @@ router.post('/', authRequired, adminOnly, (req, res) => {
 });
 
 router.put('/:id', authRequired, adminOnly, (req, res) => {
-  const allowed = ['registration','make','model','year','engine_cc','color','condition','purchase_price','rental_weekly','total_weeks','gps_device_id','odometer_km','next_service_km','next_service_date','insurance_provider','insurance_policy_no','insurance_expiry','license_disc_no','license_disc_expiry','image_url','notes'];
+  const allowed = ['registration', 'make', 'model', 'year', 'engine_cc', 'color', 'condition', 'purchase_price', 'rental_weekly', 'total_weeks', 'gps_device_id', 'odometer_km', 'next_service_km', 'next_service_date', 'insurance_provider', 'insurance_policy_no', 'insurance_expiry', 'license_disc_no', 'license_disc_expiry', 'image_url', 'notes'];
   const sets = [];
   const vals = [];
   let statusMeta = null;
@@ -237,6 +254,52 @@ router.post('/:id/image', authRequired, adminOnly, bikeImageUpload.single('image
   res.json({ image_url: publicPath });
 });
 
+router.post('/:id/documents/:documentType', authRequired, adminOnly, bikeDocumentUpload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'PDF file is required' });
+  const bike = db.prepare('SELECT id FROM bikes WHERE id = ?').get(req.params.id);
+  if (!bike) return res.status(404).json({ error: 'Bike not found' });
+
+  const documentType = String(req.params.documentType || '').trim().toLowerCase();
+  const publicPath = `/uploads/bike-documents/${req.file.filename}`;
+
+  if (documentType === 'rc1') {
+    db.prepare('UPDATE bikes SET rc1_file_path = ?, rc1_original_name = ? WHERE id = ?').run(publicPath, req.file.originalname, req.params.id);
+    logAudit(req.user.id, 'bike.rc1_upload', 'bikes', Number(req.params.id), { rc1_file_path: publicPath });
+    return res.json({ ok: true, rc1_file_path: publicPath, rc1_original_name: req.file.originalname });
+  }
+
+  if (documentType === 'license_disc') {
+    const extracted = await extractLicenseDiscInsights(req.file.path, req.file.mimetype);
+    db.prepare(`UPDATE bikes
+      SET license_disc_file_path = ?,
+          license_disc_original_name = ?,
+          license_disc_no = COALESCE(?, license_disc_no),
+          license_disc_expiry = COALESCE(?, license_disc_expiry)
+      WHERE id = ?`).run(
+      publicPath,
+      req.file.originalname,
+      extracted.license_disc_no || null,
+      extracted.license_disc_expiry || null,
+      req.params.id
+    );
+    logAudit(req.user.id, 'bike.license_disc_upload', 'bikes', Number(req.params.id), {
+      license_disc_file_path: publicPath,
+      extracted_license_disc_no: extracted.license_disc_no || null,
+      extracted_license_disc_expiry: extracted.license_disc_expiry || null
+    });
+    return res.json({
+      ok: true,
+      license_disc_file_path: publicPath,
+      license_disc_original_name: req.file.originalname,
+      license_disc_no: extracted.license_disc_no || null,
+      license_disc_expiry: extracted.license_disc_expiry || null
+    });
+  }
+
+  fs.unlinkSync(req.file.path);
+  return res.status(400).json({ error: 'Unsupported document type' });
+});
+
 router.post('/:id/ping', (req, res) => {
   const { lat, lng, speed_kmh, heading } = req.body;
   const bike = db.prepare('SELECT id FROM bikes WHERE id = ?').get(req.params.id);
@@ -271,6 +334,16 @@ router.post('/:id/service', authRequired, adminOnly, invoiceUpload.single('invoi
 
   logAudit(req.user.id, 'bike.service', 'service_records', info.lastInsertRowid, { bike_id: Number(req.params.id), invoice: publicInvoice });
   res.json({ id: info.lastInsertRowid, invoice_file_path: publicInvoice });
+});
+
+router.delete('/:id/service/:serviceId', authRequired, adminOnly, (req, res) => {
+  const service = db.prepare('SELECT id, bike_id FROM service_records WHERE id = ?').get(req.params.serviceId);
+  if (!service || Number(service.bike_id) !== Number(req.params.id)) {
+    return res.status(404).json({ error: 'Service record not found' });
+  }
+  db.prepare('DELETE FROM service_records WHERE id = ?').run(req.params.serviceId);
+  logAudit(req.user.id, 'bike.service_delete', 'service_records', Number(req.params.serviceId), { bike_id: Number(req.params.id) });
+  res.json({ ok: true });
 });
 
 module.exports = router;

@@ -154,9 +154,19 @@ CREATE TABLE IF NOT EXISTS bikes (
   insurance_expiry TEXT,
   license_disc_no TEXT,
   license_disc_expiry TEXT,
+  rc1_file_path TEXT,
+  rc1_original_name TEXT,
+  license_disc_file_path TEXT,
+  license_disc_original_name TEXT,
   image_url TEXT,
   notes TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+  setting_key TEXT PRIMARY KEY,
+  setting_value TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS applications (
@@ -368,6 +378,10 @@ ensureColumn('payments', 'fee_amount', 'REAL DEFAULT 0');
 ensureColumn('payments', 'net_amount', 'REAL DEFAULT 0');
 ensureColumn('bikes', 'license_disc_no', 'TEXT');
 ensureColumn('bikes', 'license_disc_expiry', 'TEXT');
+ensureColumn('bikes', 'rc1_file_path', 'TEXT');
+ensureColumn('bikes', 'rc1_original_name', 'TEXT');
+ensureColumn('bikes', 'license_disc_file_path', 'TEXT');
+ensureColumn('bikes', 'license_disc_original_name', 'TEXT');
 ensureBikeStatusSchema();
 
 module.exports = db;

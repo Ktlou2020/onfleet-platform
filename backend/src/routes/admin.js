@@ -1,6 +1,9 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const db = require('../db');
 const { authRequired, adminOnly } = require('../middleware/auth');
 const { logAudit } = require('../utils/helpers');
@@ -8,6 +11,16 @@ const { generateStrategicReport } = require('../services/strategicReport');
 const { sendNotification, detectEmailProvider } = require('../services/notifier');
 
 const router = express.Router();
+const brandingUploadDir = path.join(__dirname, '../../uploads/branding');
+fs.mkdirSync(brandingUploadDir, { recursive: true });
+const heroImageUpload = multer({
+  storage: multer.diskStorage({
+    destination: brandingUploadDir,
+    filename: (req, file, cb) => cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${path.extname(file.originalname).toLowerCase()}`)
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => cb(null, ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(file.mimetype))
+});
 router.use(authRequired, adminOnly);
 
 function superadminOnly(req, res, next) {
@@ -89,6 +102,28 @@ function buildBulkResetMessage(user, resetUrl, actorName, customMessage) {
   const intro = customMessage ? `${String(customMessage).trim()}\n\n` : '';
   return `Hi ${firstName},\n\n${intro}We received a request to reset your OnFleet password.\n\nReset link: ${resetUrl}\n\nThis link expires in ${readEnv('PASSWORD_RESET_TOKEN_TTL_MINUTES', '60') || 60} minutes. If you were not expecting this email, please contact the OnFleet team.\n\nKind Regards\nOnFleet Team`;
 }
+
+function getSetting(key) {
+  return db.prepare('SELECT setting_value FROM app_settings WHERE setting_key = ?').get(key)?.setting_value || null;
+}
+
+function setSetting(key, value) {
+  db.prepare(`INSERT INTO app_settings (setting_key, setting_value, updated_at)
+    VALUES (?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value, updated_at = CURRENT_TIMESTAMP`).run(key, value || null);
+}
+
+router.get('/branding', superadminOnly, (req, res) => {
+  res.json({ hero_image_url: getSetting('landing_hero_image_url') });
+});
+
+router.post('/branding/hero-image', superadminOnly, heroImageUpload.single('image'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Hero image file is required' });
+  const publicPath = `/uploads/branding/${req.file.filename}`;
+  setSetting('landing_hero_image_url', publicPath);
+  logAudit(req.user.id, 'branding.hero_image', 'app_settings', null, { hero_image_url: publicPath });
+  res.json({ ok: true, hero_image_url: publicPath });
+});
 
 router.get('/dashboard', (req, res) => {
   const stats = {

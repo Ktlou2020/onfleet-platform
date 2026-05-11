@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import api from '../../api';
 import toast from 'react-hot-toast';
 import { SearchInput, matchesSearch } from '../../components/ui';
@@ -15,16 +15,97 @@ function ResultCard({ title, result }) {
   );
 }
 
-function UploadCard({ title, sub, endpoint, fieldName = 'file', files, setFiles, resultKey, setResults }) {
+function MappingPreview({ preview, mapping, setMapping }) {
+  if (!preview) return null;
+  return (
+    <div className="card mt-3" style={{ background: 'var(--surface-2)' }}>
+      <div className="flex-between" style={{ gap: 12, alignItems: 'flex-start', marginBottom: 12 }}>
+        <div>
+          <div style={{ fontWeight: 700 }}>Column verification</div>
+          <div className="muted text-sm">Review how the uploaded CSV columns map into OnFleet before importing.</div>
+        </div>
+        <div className="badge badge-muted">{preview.total_rows} rows</div>
+      </div>
+
+      <div className="grid grid-2">
+        {preview.expected_fields.map((field) => (
+          <div className="field" key={field.key}>
+            <label className="label">{field.label}{field.required ? ' *' : ''}</label>
+            <select value={mapping[field.key] || ''} onChange={(e) => setMapping((current) => ({ ...current, [field.key]: e.target.value }))}>
+              <option value="">— Not mapped —</option>
+              {preview.headers.map((header) => <option key={header} value={header}>{header}</option>)}
+            </select>
+          </div>
+        ))}
+      </div>
+
+      {!!preview.warnings?.missing_required?.length && (
+        <div className="text-sm" style={{ color: 'var(--danger)', marginTop: 8 }}>
+          Required fields still missing: {preview.warnings.missing_required.join(', ')}
+        </div>
+      )}
+
+      <div className="muted text-sm" style={{ marginTop: 14, marginBottom: 8 }}>Sample rows</div>
+      <div style={{ overflowX: 'auto' }}>
+        <table className="table">
+          <thead>
+            <tr>
+              {preview.expected_fields.slice(0, 6).map((field) => <th key={field.key}>{field.label}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {preview.sample_rows.slice(0, 4).map((row, index) => (
+              <tr key={index}>
+                {preview.expected_fields.slice(0, 6).map((field) => <td key={field.key}>{mapping[field.key] ? row[mapping[field.key]] || '—' : '—'}</td>)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function UploadCard({ title, sub, endpoint, importType, resultKey, results, setResults }) {
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [mapping, setMapping] = useState({});
+  const [previewing, setPreviewing] = useState(false);
   const [busy, setBusy] = useState(false);
-  const selected = files?.[fieldName] || null;
+
+  const missingRequired = preview?.expected_fields?.filter((field) => field.required && !mapping[field.key]) || [];
+  const duplicateCount = Object.values(mapping).filter(Boolean).length - new Set(Object.values(mapping).filter(Boolean)).size;
+
+  const previewCsv = async () => {
+    if (!file) return toast.error('Choose a CSV file first');
+    setPreviewing(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('import_type', importType);
+      const { data } = await api.post('/imports/preview', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setPreview(data);
+      setMapping(data.suggested_mapping || {});
+      toast.success(`${title} preview ready`);
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not preview this CSV');
+    } finally {
+      setPreviewing(false);
+    }
+  };
 
   const upload = async () => {
-    if (!selected) return toast.error('Choose a CSV file first');
+    if (!file) return toast.error('Choose a CSV file first');
+    if (!preview) return toast.error('Preview the CSV before importing');
+    if (missingRequired.length) return toast.error(`Map the required fields first: ${missingRequired.map((field) => field.label).join(', ')}`);
+    if (duplicateCount > 0) return toast.error('Each CSV column can only be mapped once');
+
     setBusy(true);
     try {
       const fd = new FormData();
-      fd.append(fieldName, selected);
+      fd.append('file', file);
+      fd.append('import_type', importType);
+      fd.append('mappings', JSON.stringify(mapping));
       const { data } = await api.post(endpoint, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       setResults((prev) => ({ ...prev, [resultKey]: data }));
       toast.success(`${title} import completed`);
@@ -41,105 +122,100 @@ function UploadCard({ title, sub, endpoint, fieldName = 'file', files, setFiles,
       <p className="page-sub" style={{ marginBottom: 16 }}>{sub}</p>
       <div className="field">
         <label className="label">CSV file</label>
-        <input type="file" accept=".csv,text/csv" onChange={(e) => setFiles((prev) => ({ ...prev, [fieldName]: e.target.files?.[0] || null }))} />
+        <input type="file" accept=".csv,text/csv" onChange={(e) => { setFile(e.target.files?.[0] || null); setPreview(null); setMapping({}); }} />
       </div>
-      {selected && <div className="muted text-sm mb-3">Selected: {selected.name}</div>}
-      <button className="btn" onClick={upload} disabled={busy}>{busy ? 'Uploading…' : 'Import CSV'}</button>
+      {file && <div className="muted text-sm mb-3">Selected: {file.name}</div>}
+      <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+        <button className="btn btn-secondary" onClick={previewCsv} disabled={previewing}>{previewing ? 'Previewing…' : 'Preview CSV'}</button>
+        <button className="btn" onClick={upload} disabled={busy || !preview}>{busy ? 'Importing…' : 'Import CSV'}</button>
+      </div>
+      <MappingPreview preview={preview} mapping={mapping} setMapping={setMapping} />
+      <ResultCard title={`${title} result`} result={results[resultKey]} />
     </div>
   );
 }
 
 export default function AdminImports() {
-  const [singleFiles, setSingleFiles] = useState({});
-  const [bundleFiles, setBundleFiles] = useState({ riders_file: null, bikes_file: null, payments_file: null });
   const [results, setResults] = useState({});
-  const [bundleBusy, setBundleBusy] = useState(false);
   const [search, setSearch] = useState('');
 
-  const uploadBundle = async () => {
-    if (!bundleFiles.riders_file && !bundleFiles.bikes_file && !bundleFiles.payments_file) {
-      return toast.error('Choose at least one CSV file first');
+  const cards = useMemo(() => ([
+    {
+      key: 'riders',
+      title: 'Import riders',
+      sub: 'Use the drivers export to create or update rider profiles, selfie, country of origin, and linked KYC documents.',
+      endpoint: '/imports/riders',
+      importType: 'riders'
+    },
+    {
+      key: 'bikes',
+      title: 'Import bikes',
+      sub: 'Use the fleet export to create or update bikes. Matching happens with registration and VIN.',
+      endpoint: '/imports/bikes',
+      importType: 'bikes'
+    },
+    {
+      key: 'agreements',
+      title: 'Import agreements',
+      sub: 'Use the fleet export to create agreements by matching the imported bike to the rider name.',
+      endpoint: '/imports/agreements',
+      importType: 'agreements'
+    },
+    {
+      key: 'payments',
+      title: 'Import payments',
+      sub: 'Use the collections export. Match the columns before import so agreement number, amount, and dates land correctly.',
+      endpoint: '/imports/payments',
+      importType: 'payments'
+    },
+    {
+      key: 'special_tag',
+      title: 'Import special email tag',
+      sub: `Upload a CSV with an email column. OnFleet will match existing users by email and add the special audience tag ${SPECIAL_AUDIENCE_TAG}.`,
+      endpoint: '/imports/special-tag-users',
+      importType: 'special_tag_users'
     }
-    setBundleBusy(true);
-    try {
-      const fd = new FormData();
-      if (bundleFiles.riders_file) fd.append('riders_file', bundleFiles.riders_file);
-      if (bundleFiles.bikes_file) fd.append('bikes_file', bundleFiles.bikes_file);
-      if (bundleFiles.payments_file) fd.append('payments_file', bundleFiles.payments_file);
-      const { data } = await api.post('/imports/legacy-bundle', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      setResults((prev) => ({ ...prev, legacy_bundle: data }));
-      toast.success('Legacy bundle import completed');
-    } catch (error) {
-      toast.error(error.response?.data?.error || 'Bundle import failed');
-    } finally {
-      setBundleBusy(false);
-    }
-  };
+  ]), []);
 
-  const cardMatches = {
-    bundle: matchesSearch(search, 'Legacy bundle import', 'Drivers Fleet Collections', 'bundle', 'riders bikes payments'),
-    riders: matchesSearch(search, 'Import riders', 'drivers export create update rider profiles selfie country origin linked KYC documents', results.riders && JSON.stringify(results.riders)),
-    bikes: matchesSearch(search, 'Import bikes', 'fleet export create update bikes registration VIN', results.bikes && JSON.stringify(results.bikes)),
-    agreements: matchesSearch(search, 'Import agreements', 'fleet export create agreements imported bike rider name', results.agreements && JSON.stringify(results.agreements)),
-    payments: matchesSearch(search, 'Import payments', 'collections export resolves agreement bike registration VIN', results.payments && JSON.stringify(results.payments)),
-    specialTag: matchesSearch(search, 'Import special email tag', SPECIAL_AUDIENCE_TAG, 'email match users add tag audience csv', results.special_tag && JSON.stringify(results.special_tag))
-  };
-
-  const visibleCards = Object.values(cardMatches).filter(Boolean).length;
+  const visibleCards = cards.filter((card) => matchesSearch(search, card.title, card.sub, results[card.key] && JSON.stringify(results[card.key])));
 
   return (
     <>
       <div className="flex-between mb-2">
         <div>
           <h1 className="page-title">CSV Imports</h1>
-          <p className="page-sub">Import rider profiles, bikes, agreements, payments, and tagged email audiences. The legacy bundle links the uploaded riders, fleet, and collections exports together automatically.</p>
+          <p className="page-sub">Upload a CSV, verify the column mapping, then confirm the import. This prevents bad imports caused by shifted or mislabeled columns.</p>
         </div>
       </div>
 
       <div className="row mb-4" style={{ flexWrap: 'wrap', justifyContent: 'space-between' }}>
         <SearchInput value={search} onChange={setSearch} placeholder="Search import type, result, or CSV workflow" style={{ flex: '1 1 320px', maxWidth: 460 }} />
-        <div className="muted text-sm">Showing {visibleCards} import sections</div>
+        <div className="muted text-sm">Showing {visibleCards.length} import sections</div>
       </div>
 
-      {cardMatches.bundle && (
-        <div className="card mb-4">
-          <h3 className="mb-1">Legacy bundle import</h3>
-          <p className="page-sub" style={{ marginBottom: 16 }}>Recommended for your current exports: Drivers → Fleet → Collections. This creates rider profiles, adds country/selfie data, imports bikes, builds agreements from the fleet export, and applies imported collections to the matching agreement.</p>
-          <div className="grid grid-3">
-            <div className="field">
-              <label className="label">Drivers CSV</label>
-              <input type="file" accept=".csv,text/csv" onChange={(e) => setBundleFiles((prev) => ({ ...prev, riders_file: e.target.files?.[0] || null }))} />
-            </div>
-            <div className="field">
-              <label className="label">Fleet CSV</label>
-              <input type="file" accept=".csv,text/csv" onChange={(e) => setBundleFiles((prev) => ({ ...prev, bikes_file: e.target.files?.[0] || null }))} />
-            </div>
-            <div className="field">
-              <label className="label">Collections CSV</label>
-              <input type="file" accept=".csv,text/csv" onChange={(e) => setBundleFiles((prev) => ({ ...prev, payments_file: e.target.files?.[0] || null }))} />
-            </div>
-          </div>
-          <div className="row" style={{ marginTop: 12 }}>
-            <button className="btn" onClick={uploadBundle} disabled={bundleBusy}>{bundleBusy ? 'Importing…' : 'Run bundle import'}</button>
-          </div>
-        </div>
-      )}
+      <div className="card mb-4" style={{ background: 'var(--surface-2)' }}>
+        <h3 className="mb-1">Legacy bundle workflow</h3>
+        <p className="page-sub" style={{ marginBottom: 0 }}>
+          To verify column mapping before import, upload the Drivers, Fleet, and Collections CSVs individually using the preview cards below instead of the old one-click bundle flow.
+        </p>
+      </div>
 
       <div className="grid grid-2">
-        {cardMatches.riders && <UploadCard title="Import riders" sub="Use the drivers export to create or update rider profiles, selfie, country of origin, and linked KYC documents." endpoint="/imports/riders" files={singleFiles} setFiles={setSingleFiles} resultKey="riders" setResults={setResults} />}
-        {cardMatches.bikes && <UploadCard title="Import bikes" sub="Use the fleet export to create or update bikes. Matching happens with registration and VIN." endpoint="/imports/bikes" files={singleFiles} setFiles={setSingleFiles} resultKey="bikes" setResults={setResults} />}
-        {cardMatches.agreements && <UploadCard title="Import agreements" sub="Use the fleet export to create agreements by matching the imported bike to the rider name." endpoint="/imports/agreements" files={singleFiles} setFiles={setSingleFiles} resultKey="agreements" setResults={setResults} />}
-        {cardMatches.payments && <UploadCard title="Import payments" sub="Use the collections export. The importer now resolves by agreement first and falls back to the bike registration or VIN." endpoint="/imports/payments" files={singleFiles} setFiles={setSingleFiles} resultKey="payments" setResults={setResults} />}
-        {cardMatches.specialTag && <UploadCard title="Import special email tag" sub={`Upload a CSV with an email column. OnFleet will match existing users by email and add the special audience tag ${SPECIAL_AUDIENCE_TAG}. Unmatched emails are reported back so you can review them.`} endpoint="/imports/special-tag-users" files={singleFiles} setFiles={setSingleFiles} resultKey="special_tag" setResults={setResults} />}
+        {visibleCards.map((card) => (
+          <UploadCard
+            key={card.key}
+            title={card.title}
+            sub={card.sub}
+            endpoint={card.endpoint}
+            importType={card.importType}
+            resultKey={card.key}
+            results={results}
+            setResults={setResults}
+          />
+        ))}
       </div>
 
-      {cardMatches.bundle && <ResultCard title="Latest bundle result" result={results.legacy_bundle} />}
-      {cardMatches.riders && <ResultCard title="Riders import result" result={results.riders} />}
-      {cardMatches.bikes && <ResultCard title="Bikes import result" result={results.bikes} />}
-      {cardMatches.agreements && <ResultCard title="Agreements import result" result={results.agreements} />}
-      {cardMatches.payments && <ResultCard title="Payments import result" result={results.payments} />}
-      {cardMatches.specialTag && <ResultCard title="Special tag import result" result={results.special_tag} />}
-      {!visibleCards && <div className="card muted" style={{ textAlign: 'center' }}>No import sections match your search.</div>}
+      {!visibleCards.length && <div className="card muted" style={{ textAlign: 'center' }}>No import sections match your search.</div>}
     </>
   );
 }

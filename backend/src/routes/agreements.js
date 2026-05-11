@@ -3,13 +3,15 @@ const db = require('../db');
 const { authRequired, adminOnly } = require('../middleware/auth');
 const { logAudit, recalcScheduleStatuses } = require('../utils/helpers');
 const { writeContractSnapshot } = require('../services/contracts');
+const { reinstateDiscontinuedAgreement } = require('../services/agreementLifecycle');
 
 const router = express.Router();
+const AGREEMENT_STATUS_VALUES = ['active', 'completed', 'defaulted', 'cancelled', 'paused', 'discontinued'];
 
 function getAgreementBundle(agreementId) {
   const ag = db.prepare(`SELECT a.*, b.make, b.model, b.registration, b.image_url, b.vin,
       b.last_known_lat, b.last_known_lng, b.last_location_at, b.next_service_date,
-      b.next_service_km, b.odometer_km,
+      b.next_service_km, b.odometer_km, b.status AS bike_status,
       u.full_name, u.email, u.phone, u.id_number
     FROM agreements a
     JOIN bikes b ON b.id = a.bike_id
@@ -44,11 +46,12 @@ router.get('/:id', authRequired, (req, res) => {
   const successfulPayments = payments.filter((payment) => payment.status === 'success');
   const creditedAmount = (payment) => Number(payment.net_amount || payment.amount || 0);
   const totalPaid = successfulPayments.reduce((sum, payment) => sum + creditedAmount(payment), 0);
-  const remaining = +(ag.total_amount - totalPaid).toFixed(2);
+  const remainingRaw = +(ag.total_amount - totalPaid).toFixed(2);
   const weeksPaid = schedule.filter((row) => row.status === 'paid').length;
-  const overdue = schedule.filter((row) => row.status === 'overdue').reduce((sum, row) => sum + (row.amount_due - row.amount_paid), 0);
-  const nextDue = schedule.find((row) => row.status !== 'paid' && row.status !== 'waived');
+  const overdueRaw = schedule.filter((row) => row.status === 'overdue').reduce((sum, row) => sum + (row.amount_due - row.amount_paid), 0);
+  const nextDueRaw = schedule.find((row) => row.status !== 'paid' && row.status !== 'waived');
   const progressPct = ag.total_amount ? +((totalPaid / ag.total_amount) * 100).toFixed(1) : 0;
+  const isDiscontinued = ag.status === 'discontinued';
 
   res.json({
     agreement: ag,
@@ -58,11 +61,11 @@ router.get('/:id', authRequired, (req, res) => {
     payments,
     summary: {
       total_paid: +totalPaid.toFixed(2),
-      remaining,
+      remaining: isDiscontinued ? 0 : remainingRaw,
       weeks_paid: weeksPaid,
       weeks_total: ag.total_weeks,
-      overdue: +overdue.toFixed(2),
-      next_due: nextDue,
+      overdue: isDiscontinued ? 0 : +overdueRaw.toFixed(2),
+      next_due: isDiscontinued ? null : nextDueRaw,
       progress_pct: progressPct
     }
   });
@@ -122,15 +125,25 @@ router.post('/:id/sign', authRequired, (req, res) => {
 
 router.post('/:id/status', authRequired, adminOnly, (req, res) => {
   const { status } = req.body;
-  if (!['active', 'completed', 'defaulted', 'cancelled', 'paused'].includes(status)) {
+  if (!AGREEMENT_STATUS_VALUES.includes(status)) {
     return res.status(400).json({ error: 'Invalid status' });
   }
+  const agreement = db.prepare('SELECT * FROM agreements WHERE id = ?').get(req.params.id);
+  if (!agreement) return res.status(404).json({ error: 'Agreement not found' });
   db.prepare('UPDATE agreements SET status = ? WHERE id = ?').run(status, req.params.id);
-  const ag = db.prepare('SELECT bike_id FROM agreements WHERE id = ?').get(req.params.id);
-  if (status === 'completed') db.prepare(`UPDATE bikes SET status = 'paid_off' WHERE id = ?`).run(ag.bike_id);
-  if (status === 'cancelled') db.prepare(`UPDATE bikes SET status = 'ready_to_go' WHERE id = ?`).run(ag.bike_id);
-  logAudit(req.user.id, 'agreement.status', 'agreements', Number(req.params.id), { status });
+  if (status === 'completed') db.prepare(`UPDATE bikes SET status = 'paid_off' WHERE id = ?`).run(agreement.bike_id);
+  if (status === 'cancelled') db.prepare(`UPDATE bikes SET status = 'ready_to_go' WHERE id = ?`).run(agreement.bike_id);
+  logAudit(req.user.id, 'agreement.status', 'agreements', Number(req.params.id), { previous_status: agreement.status, status });
   res.json({ ok: true });
+});
+
+router.post('/:id/reinstate', authRequired, adminOnly, (req, res) => {
+  try {
+    const result = reinstateDiscontinuedAgreement({ agreementId: Number(req.params.id), actorId: req.user.id, ip: req.ip });
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
 });
 
 module.exports = router;

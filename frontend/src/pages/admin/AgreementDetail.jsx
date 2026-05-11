@@ -13,14 +13,20 @@ export default function AdminAgreementDetail() {
   const [data, setData] = useState(null);
   const [showPay, setShowPay] = useState(false);
   const [pay, setPay] = useState({ amount: '', method: 'eft', reference: '', notes: '' });
+  const [busyAction, setBusyAction] = useState('');
 
   const load = () => api.get(`/agreements/${id}`).then((response) => {
     setData(response.data);
     setPay((current) => ({ ...current, amount: response.data.agreement.weekly_amount }));
   });
+
   useEffect(() => { load(); }, [id]);
   if (!data) return <Loading />;
+
   const { agreement, schedule, payments, summary, application_documents: applicationDocuments = [] } = data;
+  const isDiscontinued = agreement.status === 'discontinued';
+  const canReinstate = isDiscontinued && agreement.discontinued_reason === 'bike_stolen';
+  const bikeStillStolen = agreement.bike_status === 'stolen';
 
   const recordPayment = async () => {
     try {
@@ -35,9 +41,30 @@ export default function AdminAgreementDetail() {
 
   const updateStatus = async (status) => {
     if (!window.confirm(`Change status to ${status}?`)) return;
-    await api.post(`/agreements/${id}/status`, { status });
-    toast.success('Status updated');
-    load();
+    try {
+      setBusyAction(status);
+      await api.post(`/agreements/${id}/status`, { status });
+      toast.success('Status updated');
+      load();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not update agreement status');
+    } finally {
+      setBusyAction('');
+    }
+  };
+
+  const reinstate = async () => {
+    if (!window.confirm('Reinstate this discontinued contract and resume future payments from today onward?')) return;
+    try {
+      setBusyAction('reinstate');
+      await api.post(`/agreements/${id}/reinstate`);
+      toast.success('Agreement reinstated');
+      load();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not reinstate this agreement');
+    } finally {
+      setBusyAction('');
+    }
   };
 
   return (
@@ -51,6 +78,28 @@ export default function AdminAgreementDetail() {
         <Badge status={agreement.status} />
       </div>
 
+      {isDiscontinued && (
+        <div className="card mb-4" style={{ border: '1px solid var(--danger)', background: 'rgba(239,68,68,0.08)' }}>
+          <div style={{ fontWeight: 700, marginBottom: 6, color: 'var(--danger)' }}>Agreement discontinued</div>
+          <div className="muted text-sm" style={{ marginBottom: 12 }}>
+            This contract was discontinued because the bike was marked stolen. No further payment is required while the agreement stays discontinued.
+          </div>
+          <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+            <div className="badge badge-muted">Bike status: {agreement.bike_status || '—'}</div>
+            {agreement.discontinued_at && <div className="badge badge-muted">Stopped {fmtDateTime(agreement.discontinued_at)}</div>}
+            {agreement.reinstated_at && <div className="badge badge-muted">Previously reinstated {fmtDateTime(agreement.reinstated_at)}</div>}
+          </div>
+          {canReinstate && (
+            <div className="row mt-3" style={{ gap: 8, flexWrap: 'wrap' }}>
+              <button className="btn" onClick={reinstate} disabled={busyAction === 'reinstate' || bikeStillStolen}>
+                {busyAction === 'reinstate' ? 'Reinstating…' : 'Reinstate contract'}
+              </button>
+              {bikeStillStolen && <div className="muted text-sm">Recover the bike from stolen status first, then reinstate the contract.</div>}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="grid grid-4 mb-4">
         <Stat label="Total contract" value={fmt(agreement.total_amount)} />
         <Stat label="Received" value={fmt(summary.total_paid)} accent="var(--success)" />
@@ -59,19 +108,19 @@ export default function AdminAgreementDetail() {
       </div>
 
       <div className="card mb-4">
-        <div className="flex-between mb-3">
+        <div className="flex-between mb-3" style={{ gap: 16, flexWrap: 'wrap' }}>
           <h3>Progress to ownership · {summary.progress_pct}%</h3>
-          <div className="row">
-            <button className="btn btn-sm" onClick={() => setShowPay(true)}>+ Record manual payment</button>
+          <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+            {!isDiscontinued && <button className="btn btn-sm" onClick={() => setShowPay(true)}>+ Record manual payment</button>}
             {agreement.contract_file_path && <a className="btn btn-sm btn-secondary" href={agreement.contract_file_path} target="_blank" rel="noreferrer">Contract</a>}
             {agreement.signed_contract_path && <a className="btn btn-sm btn-secondary" href={agreement.signed_contract_path} target="_blank" rel="noreferrer">Signed copy</a>}
-            {agreement.status === 'active' && <button className="btn btn-sm btn-secondary" onClick={() => updateStatus('paused')}>Pause</button>}
-            {agreement.status === 'paused' && <button className="btn btn-sm btn-secondary" onClick={() => updateStatus('active')}>Resume</button>}
-            {agreement.status !== 'completed' && <button className="btn btn-sm btn-success" onClick={() => updateStatus('completed')}>Mark completed</button>}
-            {agreement.status === 'active' && <button className="btn btn-sm btn-danger" onClick={() => updateStatus('defaulted')}>Default</button>}
+            {agreement.status === 'active' && <button className="btn btn-sm btn-secondary" onClick={() => updateStatus('paused')} disabled={busyAction === 'paused'}>Pause</button>}
+            {agreement.status === 'paused' && <button className="btn btn-sm btn-secondary" onClick={() => updateStatus('active')} disabled={busyAction === 'active'}>Resume</button>}
+            {!['completed', 'discontinued'].includes(agreement.status) && <button className="btn btn-sm btn-success" onClick={() => updateStatus('completed')} disabled={busyAction === 'completed'}>Mark completed</button>}
+            {agreement.status === 'active' && <button className="btn btn-sm btn-danger" onClick={() => updateStatus('defaulted')} disabled={busyAction === 'defaulted'}>Default</button>}
           </div>
         </div>
-        <div className="progress-bar"><div className="progress-fill" style={{ width: `${summary.progress_pct}%` }} /></div>
+        <div className="progress-bar"><div className="progress-fill" style={{ width: `${summary.progress_pct}%` }} /></div></div>
         <div className="flex-between mt-3 text-sm muted">
           <div>Start {fmtDate(agreement.start_date)}</div>
           <div>{summary.weeks_paid} / {summary.weeks_total} weeks</div>

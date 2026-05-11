@@ -90,9 +90,9 @@ export function Stat({ label, value, delta, icon, accent }) {
 export function Badge({ status, children }) {
   const map = {
     paid: 'badge-success', success: 'badge-success', approved: 'badge-success', completed: 'badge-success', ready_to_go: 'badge-success', sent: 'badge-success',
-    pending: 'badge-warn', submitted: 'badge-warn', under_review: 'badge-warn', partial: 'badge-warn', repairs: 'badge-warn', not_available: 'badge-warn', stationary: 'badge-warn',
-    overdue: 'badge-danger', rejected: 'badge-danger', defaulted: 'badge-danger', failed: 'badge-danger', suspended: 'badge-danger', written_off: 'badge-danger',
-    active: 'badge-info', sold: 'badge-info', paid_off: 'badge-info', signed: 'badge-info', read: 'badge-info'
+    pending: 'badge-warn', submitted: 'badge-warn', under_review: 'badge-warn', partial: 'badge-warn', repairs: 'badge-warn', not_available: 'badge-warn', stationary: 'badge-warn', paused: 'badge-warn',
+    overdue: 'badge-danger', rejected: 'badge-danger', defaulted: 'badge-danger', failed: 'badge-danger', suspended: 'badge-danger', written_off: 'badge-danger', discontinued: 'badge-danger', stolen: 'badge-danger',
+    active: 'badge-info', sold: 'badge-info', paid_off: 'badge-info', signed: 'badge-info', read: 'badge-info', cancelled: 'badge-muted'
   };
   return <span className={`badge ${map[status] || 'badge-muted'}`}>{children || status}</span>;
 }

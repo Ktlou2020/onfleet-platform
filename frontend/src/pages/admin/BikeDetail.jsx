@@ -13,6 +13,7 @@ const bikeStatusOptions = [
   { value: 'sold', label: 'Sold' },
   { value: 'paid_off', label: 'Paid off' },
   { value: 'written_off', label: 'Written off' },
+  { value: 'stolen', label: 'Stolen' },
   { value: 'repairs', label: 'Repairs' },
   { value: 'ready_to_go', label: 'Ready to go' },
   { value: 'stationary', label: 'Stationary' }
@@ -39,10 +40,14 @@ function getExpiryMeta(date) {
   return { tone: 'var(--muted)', label: `License disc valid until ${fmtDate(date)}` };
 }
 
+function Row({ k, v }) {
+  return <div className="flex-between" style={{ padding: '8px 0', borderBottom: '1px solid var(--border)' }}><span className="muted text-sm">{k}</span><span>{v || '—'}</span></div>;
+}
+
 export default function AdminBikeDetail() {
   const { user } = useAuth();
   const { id } = useParams();
-  const isSuperadmin = user?.role === 'superadmin';
+  const canManageDocuments = ['admin', 'superadmin'].includes(user?.role);
   const [data, setData] = useState(null);
   const [edit, setEdit] = useState(false);
   const [form, setForm] = useState({});
@@ -74,7 +79,7 @@ export default function AdminBikeDetail() {
 
   const handleDocumentUpload = async (documentType) => {
     const file = documentType === 'rc1' ? rc1File : licenseDiscFile;
-    if (!file) return toast.error(`Choose a ${documentType === 'rc1' ? 'RC1' : 'license disc'} PDF first`);
+    if (!file) return toast.error(`Choose a ${documentType === 'rc1' ? 'RC1' : 'license disc'} file first`);
     try {
       setUploadingDoc(documentType);
       const result = await uploadBikeDocument(documentType, file);
@@ -85,7 +90,7 @@ export default function AdminBikeDetail() {
         toast.success(`License disc uploaded · expiry set to ${fmtDate(result.license_disc_expiry)}`);
         setLicenseDiscFile(null);
       } else {
-        toast('License disc uploaded, but no expiry could be read automatically.');
+        toast('License disc uploaded, but no expiry could be read automatically. You can edit it manually.');
         setLicenseDiscFile(null);
       }
       await load();
@@ -101,11 +106,16 @@ export default function AdminBikeDetail() {
   const pos = bike.last_known_lat ? [bike.last_known_lat, bike.last_known_lng] : null;
   const servicePagination = paginateItems(data.services, servicePage, servicePageSize);
   const discMeta = getExpiryMeta(bike.license_disc_expiry);
+  const address = [bike.allocated_rider_address, bike.allocated_rider_city, bike.allocated_rider_province].filter(Boolean).join(', ');
 
   const save = async () => {
     try {
-      await api.put(`/bikes/${id}`, form);
-      toast.success('Saved');
+      const response = await api.put(`/bikes/${id}`, form);
+      if (form.status === 'stolen' && response.data?.discontinued_agreement_no) {
+        toast.success(`Bike marked stolen. Agreement ${response.data.discontinued_agreement_no} was discontinued.`);
+      } else {
+        toast.success('Saved');
+      }
       setEdit(false);
       load();
     } catch (error) {
@@ -168,6 +178,13 @@ export default function AdminBikeDetail() {
         </div>
         <div className="row"><Badge status={bike.status}>{getBikeStatusLabel(bike.status)}</Badge><button className="btn btn-sm btn-secondary" onClick={() => setEdit(!edit)}>{edit ? 'Cancel' : 'Edit'}</button><button className="btn btn-sm" onClick={() => setShowService(true)}>+ Log service / repair</button></div>
       </div>
+
+      {bike.status === 'stolen' && (
+        <div className="card mb-4" style={{ border: '1px solid var(--danger)', background: 'rgba(239,68,68,0.08)' }}>
+          <div style={{ fontWeight: 700, marginBottom: 6, color: 'var(--danger)' }}>Bike marked stolen</div>
+          <div className="muted text-sm">Any active agreement linked to this bike is automatically discontinued so no further payment is required until the bike is recovered and the contract is reinstated.</div>
+        </div>
+      )}
 
       {discMeta && (
         <div className="card mb-4" style={{ border: `1px solid ${discMeta.tone}`, background: 'rgba(255,255,255,0.01)' }}>
@@ -233,8 +250,8 @@ export default function AdminBikeDetail() {
               <Row k="Odometer" v={`${bike.odometer_km || 0} km`} />
               <Row k="Insurance" v={`${bike.insurance_provider || '—'} · expires ${fmtDate(bike.insurance_expiry)}`} />
               <Row k="License disc" v={`${bike.license_disc_no || '—'} · expires ${fmtDate(bike.license_disc_expiry)}`} />
-              <Row k="RC1 file" v={bike.rc1_file_path ? <a href={bike.rc1_file_path} target="_blank" rel="noreferrer">{bike.rc1_original_name || 'Open RC1 PDF'}</a> : '—'} />
-              <Row k="License disc file" v={bike.license_disc_file_path ? <a href={bike.license_disc_file_path} target="_blank" rel="noreferrer">{bike.license_disc_original_name || 'Open license disc PDF'}</a> : '—'} />
+              <Row k="RC1 file" v={bike.rc1_file_path ? <a href={bike.rc1_file_path} target="_blank" rel="noreferrer">{bike.rc1_original_name || 'Open RC1 document'}</a> : '—'} />
+              <Row k="License disc file" v={bike.license_disc_file_path ? <a href={bike.license_disc_file_path} target="_blank" rel="noreferrer">{bike.license_disc_original_name || 'Open license disc document'}</a> : '—'} />
               <Row k="Next service" v={`${fmtDate(bike.next_service_date)} or ${bike.next_service_km || '—'} km`} />
             </>
           )}
@@ -243,19 +260,19 @@ export default function AdminBikeDetail() {
             <div className="flex-between" style={{ alignItems: 'flex-start', gap: 12, marginBottom: 12 }}>
               <div>
                 <div style={{ fontWeight: 700 }}>Bike documents</div>
-                <div className="muted text-sm">Store the RC1 and the license disc PDF under this bike record.</div>
+                <div className="muted text-sm">Store the RC1 and the license disc under this bike record as a PDF or image.</div>
               </div>
-              {isSuperadmin && <div className="text-xs muted">Superadmin only</div>}
+              {canManageDocuments && <div className="text-xs muted">Admin upload enabled</div>}
             </div>
 
             <div className="grid grid-2">
               <div className="card" style={{ background: 'var(--surface-2)', padding: 12 }}>
                 <div style={{ fontWeight: 700, marginBottom: 6 }}>RC1</div>
-                <div className="text-sm muted" style={{ marginBottom: 10 }}>{bike.rc1_file_path ? 'PDF available for download' : 'No RC1 uploaded yet'}</div>
-                {bike.rc1_file_path && <a href={bike.rc1_file_path} target="_blank" rel="noreferrer">{bike.rc1_original_name || 'Open RC1 PDF'}</a>}
-                {isSuperadmin && (
+                <div className="text-sm muted" style={{ marginBottom: 10 }}>{bike.rc1_file_path ? 'Document available for download' : 'No RC1 uploaded yet'}</div>
+                {bike.rc1_file_path && <a href={bike.rc1_file_path} target="_blank" rel="noreferrer">{bike.rc1_original_name || 'Open RC1 document'}</a>}
+                {canManageDocuments && (
                   <>
-                    <div className="field mt-3"><label className="label">Replace / upload RC1 PDF</label><input type="file" accept="application/pdf" onChange={(e) => setRc1File(e.target.files?.[0] || null)} /></div>
+                    <div className="field mt-3"><label className="label">Replace / upload RC1 document</label><input type="file" accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" onChange={(e) => setRc1File(e.target.files?.[0] || null)} /></div>
                     <button className="btn btn-secondary btn-sm" onClick={() => handleDocumentUpload('rc1')} disabled={uploadingDoc === 'rc1'}>{uploadingDoc === 'rc1' ? 'Uploading…' : 'Upload RC1'}</button>
                   </>
                 )}
@@ -263,14 +280,14 @@ export default function AdminBikeDetail() {
 
               <div className="card" style={{ background: 'var(--surface-2)', padding: 12 }}>
                 <div style={{ fontWeight: 700, marginBottom: 6 }}>License disc</div>
-                <div className="text-sm muted" style={{ marginBottom: 10 }}>{bike.license_disc_file_path ? 'PDF available for download' : 'No license disc uploaded yet'}</div>
-                {bike.license_disc_file_path && <a href={bike.license_disc_file_path} target="_blank" rel="noreferrer">{bike.license_disc_original_name || 'Open license disc PDF'}</a>}
+                <div className="text-sm muted" style={{ marginBottom: 10 }}>{bike.license_disc_file_path ? 'Document available for download' : 'No license disc uploaded yet'}</div>
+                {bike.license_disc_file_path && <a href={bike.license_disc_file_path} target="_blank" rel="noreferrer">{bike.license_disc_original_name || 'Open license disc document'}</a>}
                 {bike.license_disc_expiry && <div className="text-xs" style={{ marginTop: 8, color: 'var(--primary-light)' }}>Current expiry: {fmtDate(bike.license_disc_expiry)}</div>}
-                {isSuperadmin && (
+                {canManageDocuments && (
                   <>
-                    <div className="field mt-3"><label className="label">Replace / upload license disc PDF</label><input type="file" accept="application/pdf" onChange={(e) => setLicenseDiscFile(e.target.files?.[0] || null)} /></div>
+                    <div className="field mt-3"><label className="label">Replace / upload license disc document</label><input type="file" accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" onChange={(e) => setLicenseDiscFile(e.target.files?.[0] || null)} /></div>
                     <button className="btn btn-secondary btn-sm" onClick={() => handleDocumentUpload('license_disc')} disabled={uploadingDoc === 'license_disc'}>{uploadingDoc === 'license_disc' ? 'Uploading…' : 'Upload license disc'}</button>
-                    <div className="text-xs muted mt-2">The system will read the PDF and update the stored disc expiry automatically when it can detect one.</div>
+                    <div className="text-xs muted mt-2">The system will read the document and update the stored disc expiry automatically when it can detect one.</div>
                   </>
                 )}
               </div>
@@ -284,10 +301,17 @@ export default function AdminBikeDetail() {
           <h3 className="mb-3">Allocated rider</h3>
           <div className="row" style={{ alignItems: 'center', gap: 16 }}>
             <div className="avatar" style={{ width: 72, height: 72, backgroundImage: bike.allocated_rider_avatar_url ? `url(${bike.allocated_rider_avatar_url})` : 'none', backgroundSize: 'cover', backgroundPosition: 'center', fontSize: 28 }}>{bike.allocated_rider_avatar_url ? '' : bike.allocated_rider_name?.[0]}</div>
-            <div>
+            <div style={{ flex: 1 }}>
               <div style={{ fontSize: 20, fontWeight: 700 }}>{bike.allocated_rider_name}</div>
+              {bike.allocated_rider_email && <div className="muted text-sm">{bike.allocated_rider_email}</div>}
               <CopyableContactValue value={bike.allocated_rider_phone} />
-              <div className="text-xs muted">Agreement {bike.allocated_agreement_no || '—'}</div>
+              {bike.allocated_rider_id_number && <div className="text-xs muted mt-1">ID / Passport / Asylum: {bike.allocated_rider_id_number}</div>}
+              {address && <div className="text-xs muted mt-1">{address}</div>}
+              {bike.allocated_rider_payout_preference && <div className="text-xs muted mt-1">Payout: {bike.allocated_rider_payout_preference}{bike.allocated_rider_payout_preference === 'ewallet' && bike.allocated_rider_ewallet_number ? ` · ${bike.allocated_rider_ewallet_number}` : ''}</div>}
+              <div className="row mt-2" style={{ gap: 8, flexWrap: 'wrap' }}>
+                <div className="text-xs muted">Agreement {bike.allocated_agreement_no || '—'}</div>
+                {bike.allocated_agreement_id && <Link to={`/admin/agreements/${bike.allocated_agreement_id}`} className="btn btn-sm btn-secondary">Open agreement</Link>}
+              </div>
             </div>
           </div>
         </div>
@@ -338,8 +362,4 @@ export default function AdminBikeDetail() {
       </Modal>}
     </>
   );
-}
-
-function Row({ k, v }) {
-  return <div className="flex-between" style={{ padding: '8px 0', borderBottom: '1px solid var(--border)' }}><span className="muted text-sm">{k}</span><span>{v || '—'}</span></div>;
 }

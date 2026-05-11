@@ -106,7 +106,7 @@ function mapAgreementStatus(value) {
   const status = normalizeKey(value);
   if (!status) return 'active';
   if (status.includes('paid off')) return 'completed';
-  if (status.includes('stolen')) return 'defaulted';
+  if (status.includes('stolen')) return 'discontinued';
   if (status.includes('cancel')) return 'cancelled';
   if (status.includes('pause')) return 'paused';
   return 'active';

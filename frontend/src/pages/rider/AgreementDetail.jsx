@@ -28,30 +28,12 @@ const SERVICE_BOOKING_LINKS = [
 ];
 
 const CARE_TIPS = [
-  {
-    title: 'Check tyres every week',
-    text: 'Keep tyre pressure correct, inspect tread and sidewalls, and never ride long distances on a puncture or soft tyre.'
-  },
-  {
-    title: 'Watch oil, chain, and brakes',
-    text: 'Check engine oil regularly, keep the chain clean and lubricated, and stop riding immediately if brakes feel weak or noisy.'
-  },
-  {
-    title: 'Keep it clean and report damage fast',
-    text: 'Wash off dirt, rain residue, and food spills. Report knocks, leaks, warning lights, or crashes as soon as they happen.'
-  },
-  {
-    title: 'Park smart',
-    text: 'Use well-lit areas, lock the steering, add a disc lock or chain if available, and avoid leaving the bike unattended in isolated streets.'
-  },
-  {
-    title: 'Protect your keys and documents',
-    text: 'Do not leave spare keys on the bike. Keep registration, licence disc, and insurance details secure and up to date.'
-  },
-  {
-    title: 'Reduce theft risk',
-    text: 'Vary parking spots, use busy pickup points, switch off quickly when stopping, and share suspicious activity with OnFleet immediately.'
-  }
+  { title: 'Check tyres every week', text: 'Keep tyre pressure correct, inspect tread and sidewalls, and never ride long distances on a puncture or soft tyre.' },
+  { title: 'Watch oil, chain, and brakes', text: 'Check engine oil regularly, keep the chain clean and lubricated, and stop riding immediately if brakes feel weak or noisy.' },
+  { title: 'Keep it clean and report damage fast', text: 'Wash off dirt, rain residue, and food spills. Report knocks, leaks, warning lights, or crashes as soon as they happen.' },
+  { title: 'Park smart', text: 'Use well-lit areas, lock the steering, add a disc lock or chain if available, and avoid leaving the bike unattended in isolated streets.' },
+  { title: 'Protect your keys and documents', text: 'Do not leave spare keys on the bike. Keep registration, licence disc, and insurance details secure and up to date.' },
+  { title: 'Reduce theft risk', text: 'Vary parking spots, use busy pickup points, switch off quickly when stopping, and share suspicious activity with OnFleet immediately.' }
 ];
 
 const creditedAmount = (payment) => Number(payment?.net_amount || payment?.amount || 0);
@@ -81,9 +63,10 @@ function buildStatement({ agreement, schedule, payments, month }) {
   const statementPaid = statementPayments.reduce((sum, payment) => sum + creditedAmount(payment), 0);
   const statementFees = statementPayments.reduce((sum, payment) => sum + feeAmount(payment), 0);
   const totalPaidToDate = successPayments.reduce((sum, payment) => sum + creditedAmount(payment), 0);
-  const scheduledThisMonth = schedule.filter((row) => monthKey(row.due_date) === month).reduce((sum, row) => sum + Number(row.amount_due || 0), 0);
-  const remainingOutstanding = Math.max(0, Number(agreement.total_amount || 0) - totalPaidToDate);
-  const nextDue = schedule.find((row) => row.status !== 'paid' && row.status !== 'waived');
+  const discontinued = agreement.status === 'discontinued';
+  const scheduledThisMonth = discontinued ? 0 : schedule.filter((row) => row.status !== 'waived' && monthKey(row.due_date) === month).reduce((sum, row) => sum + Number(row.amount_due || 0), 0);
+  const remainingOutstanding = discontinued ? 0 : Math.max(0, Number(agreement.total_amount || 0) - totalPaidToDate);
+  const nextDue = discontinued ? null : schedule.find((row) => row.status !== 'paid' && row.status !== 'waived');
   return {
     month,
     monthLabel: monthLabel(month),
@@ -157,12 +140,12 @@ export default function RiderAgreementDetail() {
   const schedule = data?.schedule || [];
   const payments = data?.payments || [];
   const summary = data?.summary || {};
-  const applicationDocuments = data?.application_documents || [];
   const positions = bike?.gps_history?.map((point) => [point.lat, point.lng]) || [];
   const currentPos = bike?.bike?.last_known_lat ? [bike.bike.last_known_lat, bike.bike.last_known_lng] : null;
   const monthOptions = useMemo(() => buildMonthOptions(agreement), [agreement]);
   const activeMonth = selectedMonth || monthOptions[0] || new Date().toISOString().slice(0, 7);
   const statement = useMemo(() => buildStatement({ agreement, schedule, payments, month: activeMonth }), [agreement, schedule, payments, activeMonth]);
+  const discontinued = agreement.status === 'discontinued';
 
   useEffect(() => {
     if (!selectedMonth && monthOptions[0]) setSelectedMonth(monthOptions[0]);
@@ -194,6 +177,13 @@ export default function RiderAgreementDetail() {
         <Badge status={agreement.status} />
       </div>
 
+      {discontinued && (
+        <div className="card mb-4" style={{ border: '1px solid var(--danger)', background: 'rgba(239,68,68,0.08)' }}>
+          <div style={{ fontWeight: 700, marginBottom: 6, color: 'var(--danger)' }}>Agreement discontinued</div>
+          <div className="muted text-sm">Your bike was marked stolen, so this contract has been discontinued and no further payment is required unless OnFleet later recovers the bike and reinstates the agreement.</div>
+        </div>
+      )}
+
       <div className="grid grid-4 mb-4">
         <Stat label="Weekly rental" value={fmt(agreement.weekly_amount)} />
         <Stat label="Received" value={fmt(summary.total_paid)} accent="var(--success)" />
@@ -207,7 +197,7 @@ export default function RiderAgreementDetail() {
           <div className="row">
             {agreement.contract_file_path && <a href={agreement.contract_file_path} target="_blank" rel="noreferrer" className="btn btn-secondary btn-sm">View contract</a>}
             {agreement.signed_contract_path && <a href={agreement.signed_contract_path} target="_blank" rel="noreferrer" className="btn btn-secondary btn-sm">Signed copy</a>}
-            {!agreement.signed_at && <button className="btn btn-sm" onClick={signAgreement} disabled={signing}>{signing ? 'Signing…' : 'Sign now'}</button>}
+            {!agreement.signed_at && !discontinued && <button className="btn btn-sm" onClick={signAgreement} disabled={signing}>{signing ? 'Signing…' : 'Sign now'}</button>}
           </div>
         </div>
         <div className="muted text-sm">The contract now uses the longer OnFleet rental wording structure, including ownership, payment, insurance, breach, and domicilium clauses.</div>
@@ -249,7 +239,7 @@ export default function RiderAgreementDetail() {
                 <div className="muted text-sm">Amount: {fmt(statement.nextDue.amount_due - statement.nextDue.amount_paid)}</div>
                 <div className="muted text-sm">Status: {statement.nextDue.status}</div>
               </>
-            ) : <div className="muted text-sm">No unpaid instalments remain.</div>}
+            ) : <div className="muted text-sm">{discontinued ? 'No payment is currently required on this discontinued agreement.' : 'No unpaid instalments remain.'}</div>}
           </div>
         </div>
         <div className="mt-4">
@@ -275,7 +265,7 @@ export default function RiderAgreementDetail() {
 
       <div className="card mb-4">
         <h3 className="mb-3">Progress to ownership</h3>
-        <div className="progress-bar"><div className="progress-fill" style={{ width: `${summary.progress_pct}%` }} /></div>
+        <div className="progress-bar"><div className="progress-fill" style={{ width: `${summary.progress_pct}%` }} /></div></div>
         <div className="flex-between mt-3 text-sm">
           <div className="muted">Started {fmtDate(agreement.start_date)}</div>
           <div className="muted">{summary.weeks_paid} of {summary.weeks_total} weeks</div>
@@ -298,7 +288,7 @@ export default function RiderAgreementDetail() {
 
       <div className="grid grid-2 mb-4">
         <div className="card">
-          <div className="card-title"><h3>Payment schedule</h3><Link to="/payments" className="btn btn-sm">Pay now</Link></div>
+          <div className="card-title"><h3>Payment schedule</h3>{!discontinued && <Link to="/payments" className="btn btn-sm">Pay now</Link>}</div>
           <div style={{ maxHeight: 400, overflowY: 'auto' }}>
             <table className="table">
               <thead><tr><th>#</th><th>Due</th><th>Amount</th><th>Paid</th><th>Status</th></tr></thead>
@@ -358,18 +348,6 @@ export default function RiderAgreementDetail() {
           ))}
           <div className="muted text-sm">Use the Google booking link for the workshop closest to you. If the bike feels unsafe to ride, contact OnFleet before travelling to the workshop.</div>
         </div>
-      </div>
-
-      <div className="card">
-        <h3 className="mb-3">Application documents</h3>
-        <table className="table">
-          <thead><tr><th>Type</th><th>File</th><th></th></tr></thead>
-          <tbody>
-            {applicationDocuments.map((doc) => (
-              <tr key={doc.id}><td>{doc.doc_type.replace(/_/g, ' ')}</td><td>{doc.original_name}</td><td><a href={doc.file_path} target="_blank" rel="noreferrer">Open</a></td></tr>
-            ))}
-          </tbody>
-        </table>
       </div>
     </>
   );

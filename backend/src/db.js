@@ -23,7 +23,7 @@ function ensureColumn(table, column, definition) {
 function ensureBikeStatusSchema() {
   const schemaRow = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'bikes'`).get();
   const schemaSql = String(schemaRow?.sql || '');
-  const expectedConstraint = `CHECK(status IN ('active','not_available','sold','paid_off','written_off','repairs','ready_to_go','stationary'))`;
+  const expectedConstraint = `CHECK(status IN ('active','not_available','sold','paid_off','written_off','stolen','repairs','ready_to_go','stationary'))`;
   if (!schemaSql || schemaSql.includes(expectedConstraint)) return;
 
   db.exec(`
@@ -42,7 +42,7 @@ function ensureBikeStatusSchema() {
       purchase_price REAL,
       rental_weekly REAL NOT NULL,
       total_weeks INTEGER NOT NULL DEFAULT 78,
-      status TEXT NOT NULL DEFAULT 'ready_to_go' CHECK(status IN ('active','not_available','sold','paid_off','written_off','repairs','ready_to_go','stationary')),
+      status TEXT NOT NULL DEFAULT 'ready_to_go' CHECK(status IN ('active','not_available','sold','paid_off','written_off','stolen','repairs','ready_to_go','stationary')),
       gps_device_id TEXT,
       last_known_lat REAL,
       last_known_lng REAL,
@@ -55,6 +55,10 @@ function ensureBikeStatusSchema() {
       insurance_expiry TEXT,
       license_disc_no TEXT,
       license_disc_expiry TEXT,
+      rc1_file_path TEXT,
+      rc1_original_name TEXT,
+      license_disc_file_path TEXT,
+      license_disc_original_name TEXT,
       image_url TEXT,
       notes TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -63,7 +67,8 @@ function ensureBikeStatusSchema() {
       id, vin, registration, make, model, year, engine_cc, color, condition, purchase_price,
       rental_weekly, total_weeks, status, gps_device_id, last_known_lat, last_known_lng, last_location_at,
       odometer_km, next_service_km, next_service_date, insurance_provider, insurance_policy_no,
-      insurance_expiry, license_disc_no, license_disc_expiry, image_url, notes, created_at
+      insurance_expiry, license_disc_no, license_disc_expiry, rc1_file_path, rc1_original_name,
+      license_disc_file_path, license_disc_original_name, image_url, notes, created_at
     )
     SELECT
       id, vin, registration, make, model, year, engine_cc, color, condition, purchase_price,
@@ -78,10 +83,66 @@ function ensureBikeStatusSchema() {
       END,
       gps_device_id, last_known_lat, last_known_lng, last_location_at,
       odometer_km, next_service_km, next_service_date, insurance_provider, insurance_policy_no,
-      insurance_expiry, license_disc_no, license_disc_expiry, image_url, notes, created_at
+      insurance_expiry, license_disc_no, license_disc_expiry, rc1_file_path, rc1_original_name,
+      license_disc_file_path, license_disc_original_name, image_url, notes, created_at
     FROM bikes;
     DROP TABLE bikes;
     ALTER TABLE bikes_new RENAME TO bikes;
+    COMMIT;
+    PRAGMA foreign_keys = ON;
+  `);
+}
+
+
+function ensureAgreementStatusSchema() {
+  const schemaRow = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agreements'`).get();
+  const schemaSql = String(schemaRow?.sql || '');
+  const expectedConstraint = `CHECK(status IN ('active','completed','defaulted','cancelled','paused','discontinued'))`;
+  if (schemaSql && schemaSql.includes(expectedConstraint) && schemaSql.includes('discontinued_reason') && schemaSql.includes('discontinued_at') && schemaSql.includes('reinstated_at')) return;
+
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    BEGIN TRANSACTION;
+    CREATE TABLE agreements_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agreement_no TEXT UNIQUE NOT NULL,
+      user_id INTEGER NOT NULL,
+      bike_id INTEGER NOT NULL,
+      application_id INTEGER,
+      weekly_amount REAL NOT NULL,
+      total_weeks INTEGER NOT NULL DEFAULT 78,
+      total_amount REAL NOT NULL,
+      start_date TEXT NOT NULL,
+      end_date TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','completed','defaulted','cancelled','paused','discontinued')),
+      signed_at DATETIME,
+      signature_data TEXT,
+      discontinued_reason TEXT,
+      discontinued_at DATETIME,
+      reinstated_at DATETIME,
+      contract_pdf_path TEXT,
+      contract_file_path TEXT,
+      signed_contract_path TEXT,
+      notes TEXT,
+      created_by INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id),
+      FOREIGN KEY(bike_id) REFERENCES bikes(id),
+      FOREIGN KEY(application_id) REFERENCES applications(id),
+      FOREIGN KEY(created_by) REFERENCES users(id)
+    );
+    INSERT INTO agreements_new (
+      id, agreement_no, user_id, bike_id, application_id, weekly_amount, total_weeks, total_amount,
+      start_date, end_date, status, signed_at, signature_data, discontinued_reason, discontinued_at, reinstated_at,
+      contract_pdf_path, contract_file_path, signed_contract_path, notes, created_by, created_at
+    )
+    SELECT
+      id, agreement_no, user_id, bike_id, application_id, weekly_amount, total_weeks, total_amount,
+      start_date, end_date, status, signed_at, signature_data, discontinued_reason, discontinued_at, reinstated_at,
+      contract_pdf_path, contract_file_path, signed_contract_path, notes, created_by, created_at
+    FROM agreements;
+    DROP TABLE agreements;
+    ALTER TABLE agreements_new RENAME TO agreements;
     COMMIT;
     PRAGMA foreign_keys = ON;
   `);
@@ -141,7 +202,7 @@ CREATE TABLE IF NOT EXISTS bikes (
   purchase_price REAL,
   rental_weekly REAL NOT NULL,
   total_weeks INTEGER NOT NULL DEFAULT 78,
-  status TEXT NOT NULL DEFAULT 'ready_to_go' CHECK(status IN ('active','not_available','sold','paid_off','written_off','repairs','ready_to_go','stationary')),
+  status TEXT NOT NULL DEFAULT 'ready_to_go' CHECK(status IN ('active','not_available','sold','paid_off','written_off','stolen','repairs','ready_to_go','stationary')),
   gps_device_id TEXT,
   last_known_lat REAL,
   last_known_lng REAL,
@@ -229,9 +290,12 @@ CREATE TABLE IF NOT EXISTS agreements (
   total_amount REAL NOT NULL,
   start_date TEXT NOT NULL,
   end_date TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','completed','defaulted','cancelled','paused')),
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','completed','defaulted','cancelled','paused','discontinued')),
   signed_at DATETIME,
   signature_data TEXT,
+  discontinued_reason TEXT,
+  discontinued_at DATETIME,
+  reinstated_at DATETIME,
   contract_pdf_path TEXT,
   contract_file_path TEXT,
   signed_contract_path TEXT,
@@ -372,6 +436,9 @@ ensureColumn('applications', 'auto_decision', 'TEXT');
 ensureColumn('applications', 'retry_after_date', 'TEXT');
 ensureColumn('agreements', 'contract_file_path', 'TEXT');
 ensureColumn('agreements', 'signed_contract_path', 'TEXT');
+ensureColumn('agreements', 'discontinued_reason', 'TEXT');
+ensureColumn('agreements', 'discontinued_at', 'DATETIME');
+ensureColumn('agreements', 'reinstated_at', 'DATETIME');
 ensureColumn('service_records', 'invoice_file_path', 'TEXT');
 ensureColumn('service_records', 'invoice_original_name', 'TEXT');
 ensureColumn('payments', 'fee_amount', 'REAL DEFAULT 0');
@@ -383,5 +450,6 @@ ensureColumn('bikes', 'rc1_original_name', 'TEXT');
 ensureColumn('bikes', 'license_disc_file_path', 'TEXT');
 ensureColumn('bikes', 'license_disc_original_name', 'TEXT');
 ensureBikeStatusSchema();
+ensureAgreementStatusSchema();
 
 module.exports = db;

@@ -6,6 +6,7 @@ const db = require('../db');
 const { authRequired, adminOnly } = require('../middleware/auth');
 const { logAudit } = require('../utils/helpers');
 const { setBikeStatus } = require('../utils/bikeStatus');
+const { discontinueAgreementForStolenBike } = require('../services/agreementLifecycle');
 const { extractLicenseDiscInsights } = require('../services/documentInsights');
 
 const router = express.Router();
@@ -39,12 +40,12 @@ const bikeDocumentUpload = multer({
     destination: bikeDocumentUploadDir,
     filename: (req, file, cb) => cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${path.extname(file.originalname).toLowerCase()}`)
   }),
-  fileFilter: (req, file, cb) => cb(null, file.mimetype === 'application/pdf'),
+  fileFilter: (req, file, cb) => cb(null, ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(file.mimetype)),
   limits: { fileSize: 15 * 1024 * 1024 }
 });
 
 function superadminOnly(req, res, next) {
-  if (req.user.role !== 'superadmin') return res.status(403).json({ error: 'Superadmin access required' });
+  if (!['admin', 'superadmin'].includes(req.user.role)) return res.status(403).json({ error: 'Admin access required' });
   next();
 }
 
@@ -86,12 +87,67 @@ const bikeSelectSql = `SELECT b.*,
     LIMIT 1
   ) AS allocated_rider_phone,
   (
+    SELECT u.email FROM agreements a
+    JOIN users u ON u.id = a.user_id
+    WHERE a.bike_id = b.id
+    ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.created_at DESC
+    LIMIT 1
+  ) AS allocated_rider_email,
+  (
+    SELECT u.id_number FROM agreements a
+    JOIN users u ON u.id = a.user_id
+    WHERE a.bike_id = b.id
+    ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.created_at DESC
+    LIMIT 1
+  ) AS allocated_rider_id_number,
+  (
+    SELECT u.address FROM agreements a
+    JOIN users u ON u.id = a.user_id
+    WHERE a.bike_id = b.id
+    ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.created_at DESC
+    LIMIT 1
+  ) AS allocated_rider_address,
+  (
+    SELECT u.city FROM agreements a
+    JOIN users u ON u.id = a.user_id
+    WHERE a.bike_id = b.id
+    ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.created_at DESC
+    LIMIT 1
+  ) AS allocated_rider_city,
+  (
+    SELECT u.province FROM agreements a
+    JOIN users u ON u.id = a.user_id
+    WHERE a.bike_id = b.id
+    ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.created_at DESC
+    LIMIT 1
+  ) AS allocated_rider_province,
+  (
     SELECT u.avatar_url FROM agreements a
     JOIN users u ON u.id = a.user_id
     WHERE a.bike_id = b.id
     ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.created_at DESC
     LIMIT 1
   ) AS allocated_rider_avatar_url,
+  (
+    SELECT ap.payout_preference FROM agreements a
+    LEFT JOIN applications ap ON ap.id = a.application_id
+    WHERE a.bike_id = b.id
+    ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.created_at DESC
+    LIMIT 1
+  ) AS allocated_rider_payout_preference,
+  (
+    SELECT ap.ewallet_number FROM agreements a
+    LEFT JOIN applications ap ON ap.id = a.application_id
+    WHERE a.bike_id = b.id
+    ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.created_at DESC
+    LIMIT 1
+  ) AS allocated_rider_ewallet_number,
+  (
+    SELECT a.id FROM agreements a
+    WHERE a.bike_id = b.id
+    ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.created_at DESC
+    LIMIT 1
+  ) AS allocated_agreement_id,
   (
     SELECT a.agreement_no FROM agreements a
     WHERE a.bike_id = b.id
@@ -171,8 +227,8 @@ router.get('/', authRequired, adminOnly, (req, res) => {
   res.json({ bikes });
 });
 
-router.post('/document-insights/license-disc', authRequired, superadminOnly, bikeDocumentUpload.single('file'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'PDF file is required' });
+router.post('/document-insights/license-disc', authRequired, adminOnly, bikeDocumentUpload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'A document file is required' });
   const extracted = await extractLicenseDiscInsights(req.file.path, req.file.mimetype);
   fs.unlink(req.file.path, () => {});
   res.json({
@@ -241,6 +297,12 @@ router.put('/:id', authRequired, adminOnly, (req, res) => {
   if (req.body.status !== undefined) {
     try {
       statusMeta = setBikeStatus(req.params.id, req.body.status);
+      if (statusMeta?.next_status === 'stolen') {
+        const discontinued = discontinueAgreementForStolenBike({ bikeId: Number(req.params.id), actorId: req.user.id, ip: req.ip });
+        statusMeta.discontinued_agreement_id = discontinued.agreement?.id || null;
+        statusMeta.discontinued_agreement_no = discontinued.agreement?.agreement_no || null;
+        statusMeta.waived_schedule_rows = discontinued.waived_rows || 0;
+      }
     } catch (error) {
       return res.status(400).json({ error: error.message });
     }
@@ -271,8 +333,8 @@ router.post('/:id/image', authRequired, adminOnly, bikeImageUpload.single('image
   res.json({ image_url: publicPath });
 });
 
-router.post('/:id/documents/:documentType', authRequired, superadminOnly, bikeDocumentUpload.single('file'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'PDF file is required' });
+router.post('/:id/documents/:documentType', authRequired, adminOnly, bikeDocumentUpload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'A document file is required' });
   const bike = db.prepare('SELECT id FROM bikes WHERE id = ?').get(req.params.id);
   if (!bike) return res.status(404).json({ error: 'Bike not found' });
 
@@ -314,7 +376,7 @@ router.post('/:id/documents/:documentType', authRequired, superadminOnly, bikeDo
     });
   }
 
-  fs.unlinkSync(req.file.path);
+  if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
   return res.status(400).json({ error: 'Unsupported document type' });
 });
 

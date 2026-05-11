@@ -13,6 +13,7 @@ const bikeStatusOptions = [
   { value: 'sold', label: 'Sold' },
   { value: 'paid_off', label: 'Paid off' },
   { value: 'written_off', label: 'Written off' },
+  { value: 'stolen', label: 'Stolen' },
   { value: 'repairs', label: 'Repairs' },
   { value: 'ready_to_go', label: 'Ready to go' },
   { value: 'stationary', label: 'Stationary' }
@@ -53,9 +54,33 @@ function buildInitialForm() {
   };
 }
 
+function AllocationDetails({ bike }) {
+  if (!bike?.allocated_rider_name) return null;
+  const address = [bike.allocated_rider_address, bike.allocated_rider_city, bike.allocated_rider_province].filter(Boolean).join(', ');
+  return (
+    <div className="card mt-3" style={{ background: 'var(--surface-2)', padding: 12 }}>
+      <div className="text-xs muted">Allocated rider</div>
+      <div style={{ fontWeight: 700 }}>{bike.allocated_rider_name}</div>
+      {bike.allocated_rider_email && <div className="text-xs muted mt-1">{bike.allocated_rider_email}</div>}
+      <div className="mt-1"><CopyableContactValue value={bike.allocated_rider_phone} compact /></div>
+      {bike.allocated_rider_id_number && <div className="text-xs muted mt-1">ID / Passport / Asylum: {bike.allocated_rider_id_number}</div>}
+      {address && <div className="text-xs muted mt-1">{address}</div>}
+      {bike.allocated_rider_payout_preference && (
+        <div className="text-xs muted mt-1">
+          Payout: {bike.allocated_rider_payout_preference}{bike.allocated_rider_payout_preference === 'ewallet' && bike.allocated_rider_ewallet_number ? ` · ${bike.allocated_rider_ewallet_number}` : ''}
+        </div>
+      )}
+      <div className="row mt-2" style={{ gap: 8, flexWrap: 'wrap' }}>
+        <div className="text-xs muted">{bike.allocated_agreement_no || 'No agreement number'}</div>
+        {bike.allocated_agreement_id && <Link to={`/admin/agreements/${bike.allocated_agreement_id}`} className="btn btn-sm btn-secondary">Open agreement</Link>}
+      </div>
+    </div>
+  );
+}
+
 export default function AdminBikes() {
   const { user } = useAuth();
-  const isSuperadmin = user?.role === 'superadmin';
+  const canManageDocuments = ['admin', 'superadmin'].includes(user?.role);
   const [bikes, setBikes] = useState(null);
   const [filter, setFilter] = useState('');
   const [showAdd, setShowAdd] = useState(false);
@@ -92,6 +117,12 @@ export default function AdminBikes() {
     bike.odometer_km,
     bike.allocated_rider_name,
     bike.allocated_rider_phone,
+    bike.allocated_rider_email,
+    bike.allocated_rider_id_number,
+    bike.allocated_rider_address,
+    bike.allocated_rider_city,
+    bike.allocated_rider_province,
+    bike.allocated_rider_payout_preference,
     bike.allocated_agreement_no,
     bike.license_disc_no,
     bike.license_disc_expiry,
@@ -117,7 +148,7 @@ export default function AdminBikes() {
   };
 
   const analyzeLicenseDisc = async (file) => {
-    if (!file || !isSuperadmin) return;
+    if (!file || !canManageDocuments) return;
     const fd = new FormData();
     fd.append('file', file);
     try {
@@ -133,10 +164,10 @@ export default function AdminBikes() {
       if (data.license_disc_expiry || data.license_disc_no) {
         toast.success(`License disc read${data.license_disc_expiry ? ` · expiry ${fmtDate(data.license_disc_expiry)}` : ''}`);
       } else {
-        toast('License disc uploaded, but no expiry could be read automatically.');
+        toast('License disc uploaded, but no expiry could be read automatically. You can fill it in manually.');
       }
     } catch (error) {
-      toast.error(error.response?.data?.error || 'Could not read license disc PDF');
+      toast.error(error.response?.data?.error || 'Could not read the license disc document');
     } finally {
       setReadingLicenseDisc(false);
     }
@@ -174,7 +205,7 @@ export default function AdminBikes() {
       let uploadedDocs = 0;
       let extractedExpiry = null;
 
-      if (isSuperadmin && docFiles.rc1) {
+      if (canManageDocuments && docFiles.rc1) {
         try {
           await uploadBikeDocument(data.id, 'rc1', docFiles.rc1);
           uploadedDocs += 1;
@@ -183,7 +214,7 @@ export default function AdminBikes() {
         }
       }
 
-      if (isSuperadmin && docFiles.license_disc) {
+      if (canManageDocuments && docFiles.license_disc) {
         try {
           const uploadResult = await uploadBikeDocument(data.id, 'license_disc', docFiles.license_disc);
           extractedExpiry = uploadResult.license_disc_expiry || null;
@@ -217,9 +248,14 @@ export default function AdminBikes() {
     if (nextStatus === bike.status) return toast('No status change to save');
     try {
       setSavingStatusId(bike.id);
-      await api.put(`/bikes/${bike.id}`, { status: nextStatus });
+      const { data } = await api.put(`/bikes/${bike.id}`, { status: nextStatus });
       setBikes((current) => (current || []).map((item) => item.id === bike.id ? { ...item, status: nextStatus } : item));
-      toast.success(`Bike status updated to ${getBikeStatusLabel(nextStatus)}`);
+      if (nextStatus === 'stolen' && data?.discontinued_agreement_no) {
+        toast.success(`Bike marked stolen. Agreement ${data.discontinued_agreement_no} was discontinued and future payments were waived.`);
+      } else {
+        toast.success(`Bike status updated to ${getBikeStatusLabel(nextStatus)}`);
+      }
+      await load();
     } catch (error) {
       toast.error(error.response?.data?.error || 'Could not update bike status');
       setStatusDrafts((current) => ({ ...current, [bike.id]: bike.status }));
@@ -280,14 +316,7 @@ export default function AdminBikes() {
                 <div className="flex-between"><span className="muted text-sm">License disc</span><span className="text-xs">{bike.license_disc_expiry ? fmtDate(bike.license_disc_expiry) : '—'}</span></div>
                 {discMeta && <div className="text-xs" style={{ marginTop: 8, color: discMeta.tone }}>{discMeta.label}</div>}
                 {bike.rc1_file_path && <div className="text-xs muted mt-2">RC1 on file</div>}
-                {bike.allocated_rider_name && (
-                  <div className="card mt-3" style={{ background: 'var(--surface-2)', padding: 12 }}>
-                    <div className="text-xs muted">Allocated to</div>
-                    <div style={{ fontWeight: 700 }}>{bike.allocated_rider_name}</div>
-                    <div className="mt-1"><CopyableContactValue value={bike.allocated_rider_phone} compact /></div>
-                    <div className="text-xs muted mt-1">{bike.allocated_agreement_no || 'No agreement number'}</div>
-                  </div>
-                )}
+                <AllocationDetails bike={bike} />
                 <div className="card mt-3" style={{ background: 'var(--surface-2)', padding: 12 }}>
                   <div className="text-xs muted" style={{ marginBottom: 8 }}>Quick status update</div>
                   <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -328,26 +357,26 @@ export default function AdminBikes() {
             <div className="field"><label className="label">License disc expiry</label><input type="date" value={form.license_disc_expiry} onChange={(e) => setForm({ ...form, license_disc_expiry: e.target.value })} /></div>
           </div>
 
-          {isSuperadmin && (
+          {canManageDocuments && (
             <div className="card mt-3" style={{ background: 'var(--surface-2)', padding: 14 }}>
               <div className="flex-between" style={{ gap: 12, alignItems: 'flex-start', marginBottom: 12 }}>
                 <div>
                   <div style={{ fontWeight: 700 }}>Bike documents</div>
-                  <div className="muted text-sm">Upload PDFs for the RC1 and the license disc while creating the bike.</div>
+                  <div className="muted text-sm">Upload the RC1 and the license disc as PDF or image while creating the bike.</div>
                 </div>
-                <div className="text-xs muted">Superadmin only</div>
+                <div className="text-xs muted">Admin upload enabled</div>
               </div>
               <div className="grid grid-2">
                 <div className="field">
-                  <label className="label">RC1 PDF</label>
-                  <input type="file" accept="application/pdf" onChange={(e) => handleDocumentSelection('rc1', e.target.files?.[0] || null)} />
+                  <label className="label">RC1 document</label>
+                  <input type="file" accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" onChange={(e) => handleDocumentSelection('rc1', e.target.files?.[0] || null)} />
                   <div className="text-xs muted mt-1">{docFiles.rc1 ? docFiles.rc1.name : 'Optional'}</div>
                 </div>
                 <div className="field">
-                  <label className="label">License disc PDF</label>
-                  <input type="file" accept="application/pdf" onChange={(e) => handleDocumentSelection('license_disc', e.target.files?.[0] || null)} />
+                  <label className="label">License disc document</label>
+                  <input type="file" accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" onChange={(e) => handleDocumentSelection('license_disc', e.target.files?.[0] || null)} />
                   <div className="text-xs muted mt-1">
-                    {readingLicenseDisc ? 'Reading license disc…' : docFiles.license_disc ? docFiles.license_disc.name : 'Upload to auto-read the expiry date'}
+                    {readingLicenseDisc ? 'Reading license disc…' : docFiles.license_disc ? docFiles.license_disc.name : 'Upload to auto-read the expiry date when possible'}
                   </div>
                   {form.license_disc_expiry && <div className="text-xs" style={{ marginTop: 6, color: 'var(--primary-light)' }}>Detected expiry: {fmtDate(form.license_disc_expiry)}</div>}
                 </div>

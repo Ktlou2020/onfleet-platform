@@ -5,6 +5,7 @@ const { v4: uuid } = require('uuid');
 const db = require('../db');
 const { authRequired, adminOnly } = require('../middleware/auth');
 const { logAudit, recalcScheduleStatuses } = require('../utils/helpers');
+const { applyCsvMapping, previewImportCsv } = require('../services/csvPreview');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 3 * 1024 * 1024 } });
@@ -23,6 +24,9 @@ function creditedAmount(payment) {
 }
 
 function applyPaymentToSchedule(agreementId, amountZAR) {
+  const agreement = db.prepare('SELECT status FROM agreements WHERE id = ?').get(agreementId);
+  if (!agreement) throw new Error('Agreement not found');
+  if (agreement.status === 'discontinued') throw new Error('This agreement has been discontinued because the bike was stolen');
   const schedule = db.prepare(`SELECT * FROM payment_schedules WHERE agreement_id = ?
     AND status != 'paid' AND status != 'waived' ORDER BY week_number ASC`).all(agreementId);
   let remaining = amountZAR;
@@ -73,6 +77,7 @@ function parseCsv(text) {
 function recordManualPayment({ agreement_id, amount, method, reference, paid_at, notes, recorded_by }) {
   const agreement = db.prepare('SELECT * FROM agreements WHERE id = ?').get(agreement_id);
   if (!agreement) throw new Error('Agreement not found');
+  if (agreement.status === 'discontinued') throw new Error('This agreement has been discontinued because the bike was stolen');
   const ref = reference || `MAN-${uuid().slice(0, 10)}`;
   const info = db.prepare(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, status, paid_at, recorded_by, notes)
     VALUES (?,?,?,?, ?, ?, 'success', ?, ?, ?)`).run(
@@ -94,6 +99,7 @@ router.post('/paystack/init', authRequired, async (req, res) => {
   const { agreement_id, amount } = req.body;
   const ag = db.prepare('SELECT * FROM agreements WHERE id = ? AND user_id = ?').get(agreement_id, req.user.id);
   if (!ag) return res.status(404).json({ error: 'Agreement not found' });
+  if (ag.status === 'discontinued') return res.status(400).json({ error: 'This agreement has been discontinued because the bike was stolen' });
 
   const netAmount = Number(amount);       // what credits the rider's agreement
   const fee = calcPaystackFee(netAmount); // fee added on top
@@ -182,6 +188,15 @@ router.post('/manual', authRequired, adminOnly, (req, res) => {
   }
 });
 
+router.post('/bulk-preview', authRequired, adminOnly, upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'CSV file is required' });
+  try {
+    res.json(previewImportCsv(req.file.buffer, 'payments_bulk'));
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 router.get('/bulk-template', authRequired, adminOnly, (req, res) => {
   const csv = [
     'agreement_no,amount,method,reference,paid_at,notes',
@@ -194,7 +209,8 @@ router.get('/bulk-template', authRequired, adminOnly, (req, res) => {
 
 router.post('/bulk-import', authRequired, adminOnly, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'CSV file is required' });
-  const rows = parseCsv(req.file.buffer.toString('utf8'));
+  const mappedBuffer = req.body?.mappings ? applyCsvMapping(req.file.buffer, 'payments_bulk', JSON.parse(req.body.mappings)) : req.file.buffer;
+  const rows = parseCsv(mappedBuffer.toString('utf8'));
   if (!rows.length) return res.status(400).json({ error: 'CSV file is empty' });
 
   const summary = { imported: 0, failed: 0, errors: [] };
@@ -219,7 +235,7 @@ router.post('/bulk-import', authRequired, adminOnly, upload.single('file'), (req
       summary.errors.push({ row: index + 2, error: error.message });
     }
   }
-  logAudit(req.user.id, 'payment.bulk_import', 'payments', null, summary);
+  logAudit(req.user.id, 'payment.bulk_import', 'payments', null, { ...summary, mappings: req.body?.mappings ? JSON.parse(req.body.mappings) : null });
   res.json(summary);
 });
 

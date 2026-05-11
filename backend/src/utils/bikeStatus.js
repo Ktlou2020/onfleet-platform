@@ -6,6 +6,7 @@ const BIKE_STATUS_OPTIONS = [
   { value: 'sold', label: 'Sold' },
   { value: 'paid_off', label: 'Paid off' },
   { value: 'written_off', label: 'Written off' },
+  { value: 'stolen', label: 'Stolen' },
   { value: 'repairs', label: 'Repairs' },
   { value: 'ready_to_go', label: 'Ready to go' },
   { value: 'stationary', label: 'Stationary' }
@@ -47,7 +48,8 @@ function normalizeBikeStatus(rawStatus, options = {}) {
   if (BIKE_STATUS_VALUES.includes(status.replace(/ /g, '_'))) return status.replace(/ /g, '_');
   if (status.includes('paid off') || status.includes('owned by rider') || status.includes('owned')) return 'paid_off';
   if (status === 'sold' || status.includes('cash sale')) return 'sold';
-  if (status.includes('written off') || status.includes('write off') || status.includes('stolen') || status.includes('retired') || status.includes('scrap')) return 'written_off';
+  if (status.includes('stolen') || status.includes('theft')) return 'stolen';
+  if (status.includes('written off') || status.includes('write off') || status.includes('retired') || status.includes('scrap')) return 'written_off';
   if (status.includes('repair') || status.includes('maintenance') || status.includes('service')) return 'repairs';
   if (status.includes('not available') || status.includes('unavailable')) return 'not_available';
   if (status.includes('ready to go') || status === 'available' || status.includes('ready')) return 'ready_to_go';

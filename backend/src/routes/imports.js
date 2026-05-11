@@ -2,6 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const { authRequired, adminOnly } = require('../middleware/auth');
 const { logAudit } = require('../utils/helpers');
+const { previewImportCsv, applyCsvMapping } = require('../services/csvPreview');
 const {
   importRidersCsv,
   importBikesCsv,
@@ -26,31 +27,49 @@ function ensureFile(req, res) {
   return true;
 }
 
+function getMappedBuffer(req) {
+  if (!req.body?.mappings) return req.file.buffer;
+  const mapping = JSON.parse(req.body.mappings);
+  return applyCsvMapping(req.file.buffer, req.body.import_type || req.path.split('/').pop(), mapping);
+}
+
+router.post('/preview', upload.single('file'), (req, res) => {
+  if (!ensureFile(req, res)) return;
+  const importType = String(req.body.import_type || '').trim();
+  if (!importType) return res.status(400).json({ error: 'import_type is required' });
+  try {
+    const preview = previewImportCsv(req.file.buffer, importType);
+    res.json(preview);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 router.post('/riders', upload.single('file'), (req, res) => {
   if (!ensureFile(req, res)) return;
-  const summary = importRidersCsv(req.file.buffer);
-  logAudit(req.user.id, 'import.riders_csv', 'users', null, summary, req.ip);
+  const summary = importRidersCsv(getMappedBuffer(req));
+  logAudit(req.user.id, 'import.riders_csv', 'users', null, { ...summary, mappings: req.body?.mappings ? JSON.parse(req.body.mappings) : null }, req.ip);
   res.json(summary);
 });
 
 router.post('/bikes', upload.single('file'), (req, res) => {
   if (!ensureFile(req, res)) return;
-  const summary = importBikesCsv(req.file.buffer);
-  logAudit(req.user.id, 'import.bikes_csv', 'bikes', null, summary, req.ip);
+  const summary = importBikesCsv(getMappedBuffer(req));
+  logAudit(req.user.id, 'import.bikes_csv', 'bikes', null, { ...summary, mappings: req.body?.mappings ? JSON.parse(req.body.mappings) : null }, req.ip);
   res.json(summary);
 });
 
 router.post('/agreements', upload.single('file'), (req, res) => {
   if (!ensureFile(req, res)) return;
-  const summary = importAgreementsCsv(req.file.buffer);
-  logAudit(req.user.id, 'import.agreements_csv', 'agreements', null, summary, req.ip);
+  const summary = importAgreementsCsv(getMappedBuffer(req));
+  logAudit(req.user.id, 'import.agreements_csv', 'agreements', null, { ...summary, mappings: req.body?.mappings ? JSON.parse(req.body.mappings) : null }, req.ip);
   res.json(summary);
 });
 
 router.post('/payments', upload.single('file'), (req, res) => {
   if (!ensureFile(req, res)) return;
-  const summary = importPaymentsCsv(req.file.buffer, req.user.id);
-  logAudit(req.user.id, 'import.payments_csv', 'payments', null, summary, req.ip);
+  const summary = importPaymentsCsv(getMappedBuffer(req), req.user.id);
+  logAudit(req.user.id, 'import.payments_csv', 'payments', null, { ...summary, mappings: req.body?.mappings ? JSON.parse(req.body.mappings) : null }, req.ip);
   res.json(summary);
 });
 
@@ -72,8 +91,8 @@ router.post('/legacy-bundle', upload.fields([
 
 router.post('/special-tag-users', upload.single('file'), (req, res) => {
   if (!ensureFile(req, res)) return;
-  const summary = importUserTagsCsv(req.file.buffer, { tag: SPECIAL_AUDIENCE_TAG });
-  logAudit(req.user.id, 'import.special_tag_users_csv', 'users', null, summary, req.ip);
+  const summary = importUserTagsCsv(getMappedBuffer(req), { tag: SPECIAL_AUDIENCE_TAG });
+  logAudit(req.user.id, 'import.special_tag_users_csv', 'users', null, { ...summary, mappings: req.body?.mappings ? JSON.parse(req.body.mappings) : null }, req.ip);
   res.json(summary);
 });
 

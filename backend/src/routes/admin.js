@@ -140,6 +140,11 @@ router.get('/dashboard', (req, res) => {
     revenue_30d: db.prepare(`SELECT COALESCE(SUM(COALESCE(net_amount, amount)),0) s FROM payments WHERE status = 'success' AND paid_at >= datetime('now','-30 days')`).get().s,
     overdue_amount: db.prepare(`SELECT COALESCE(SUM(amount_due - amount_paid),0) s FROM payment_schedules WHERE status = 'overdue'`).get().s,
     overdue_count: db.prepare(`SELECT COUNT(DISTINCT agreement_id) c FROM payment_schedules WHERE status = 'overdue'`).get().c,
+    default_action_count: db.prepare(`SELECT COUNT(*) c
+      FROM agreements a
+      JOIN bikes b ON b.id = a.bike_id
+      WHERE a.status = 'defaulted'
+        AND b.status NOT IN ('stolen','written_off','sold')`).get().c,
     upcoming_services: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE next_service_date IS NOT NULL AND next_service_date <= date('now','+14 days') AND status = 'active'`).get().c,
     expiring_insurance: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE insurance_expiry IS NOT NULL AND insurance_expiry <= date('now','+30 days')`).get().c,
     expiring_license_disc: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE license_disc_expiry IS NOT NULL AND license_disc_expiry <= date('now','+30 days')`).get().c

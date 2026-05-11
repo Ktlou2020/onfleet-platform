@@ -32,6 +32,7 @@ export default function AdminDashboard() {
     pending_applications = 0,
     pending_kyc = 0,
     overdue_count = 0,
+    default_action_count = 0,
     upcoming_services = 0,
     expiring_license_disc = 0,
     expiring_insurance = 0
@@ -40,11 +41,11 @@ export default function AdminDashboard() {
   const actions = useMemo(() => ([
     { icon: '📋', count: pending_applications, label: 'Pending applications', link: '/admin/applications?status=submitted' },
     { icon: '🆔', count: pending_kyc, label: 'Application documents to review', link: '/admin/applications' },
-    { icon: '⚠️', count: overdue_count, label: 'Overdue agreements', link: '/admin/agreements?status=active', danger: true },
+    { icon: '⚠️', count: default_action_count, label: 'Defaulted agreements needing action', link: '/admin/agreements?status=defaulted', danger: true },
     { icon: '🔧', count: upcoming_services, label: 'Bikes due for service (14d)', link: '/admin/bikes?status=active' },
     { icon: '🪪', count: expiring_license_disc, label: 'License discs expiring (30d)', link: '/admin/bikes', danger: true },
     { icon: '🛡️', count: expiring_insurance, label: 'Insurance expiring (30d)', link: '/admin/bikes' }
-  ].filter((item) => matchesSearch(search, item.label, item.count))), [pending_applications, pending_kyc, overdue_count, upcoming_services, expiring_license_disc, expiring_insurance, search]);
+  ].filter((item) => matchesSearch(search, item.label, item.count))), [pending_applications, pending_kyc, default_action_count, upcoming_services, expiring_license_disc, expiring_insurance, search]);
 
   const uploadHeroImage = async () => {
     if (!heroImageFile) return toast.error('Choose a hero image first');

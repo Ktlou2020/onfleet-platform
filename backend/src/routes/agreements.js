@@ -3,7 +3,7 @@ const db = require('../db');
 const { authRequired, adminOnly } = require('../middleware/auth');
 const { logAudit, recalcScheduleStatuses } = require('../utils/helpers');
 const { writeContractSnapshot } = require('../services/contracts');
-const { reinstateDiscontinuedAgreement } = require('../services/agreementLifecycle');
+const { discontinueAgreement, reinstateDiscontinuedAgreement } = require('../services/agreementLifecycle');
 
 const router = express.Router();
 const AGREEMENT_STATUS_VALUES = ['active', 'completed', 'defaulted', 'cancelled', 'paused', 'discontinued'];
@@ -27,6 +27,85 @@ router.get('/mine', authRequired, (req, res) => {
     FROM agreements a JOIN bikes b ON b.id = a.bike_id
     WHERE a.user_id = ? ORDER BY a.created_at DESC`).all(req.user.id);
   res.json({ agreements: ags });
+});
+
+router.get('/', authRequired, adminOnly, (req, res) => {
+  const { status = '', bike_status = '' } = req.query;
+  const where = [];
+  const values = [];
+
+  if (status) {
+    where.push('a.status = ?');
+    values.push(status);
+  }
+  if (bike_status) {
+    where.push('b.status = ?');
+    values.push(bike_status);
+  }
+
+  const sql = `SELECT a.*, u.full_name, u.email, b.make, b.model, b.registration, b.status AS bike_status
+    FROM agreements a
+    JOIN users u ON u.id = a.user_id
+    JOIN bikes b ON b.id = a.bike_id
+    ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+    ORDER BY a.created_at DESC`;
+
+  const ags = db.prepare(sql).all(...values);
+  res.json({ agreements: ags });
+});
+
+router.post('/bulk-discontinue', authRequired, adminOnly, (req, res) => {
+  const agreementIds = Array.from(new Set((Array.isArray(req.body.agreement_ids) ? req.body.agreement_ids : [])
+    .map((value) => Number(value))
+    .filter((value) => Number.isInteger(value) && value > 0)));
+
+  if (!agreementIds.length) {
+    return res.status(400).json({ error: 'Select at least one agreement to discontinue' });
+  }
+
+  const summary = {
+    requested: agreementIds.length,
+    discontinued: [],
+    skipped: [],
+    not_found: []
+  };
+
+  for (const agreementId of agreementIds) {
+    const agreement = db.prepare(`SELECT id, agreement_no, status FROM agreements WHERE id = ?`).get(agreementId);
+    if (!agreement) {
+      summary.not_found.push(agreementId);
+      continue;
+    }
+    if (['completed', 'cancelled', 'discontinued'].includes(agreement.status)) {
+      summary.skipped.push({ id: agreement.id, agreement_no: agreement.agreement_no, status: agreement.status });
+      continue;
+    }
+
+    const result = discontinueAgreement({
+      agreementId: agreement.id,
+      reason: 'bulk_admin_discontinue',
+      actorId: req.user.id,
+      ip: req.ip,
+      auditAction: 'agreement.bulk_discontinued'
+    });
+
+    summary.discontinued.push({
+      id: agreement.id,
+      agreement_no: agreement.agreement_no,
+      previous_status: agreement.status,
+      waived_rows: result.waived_rows
+    });
+  }
+
+  res.json({
+    ok: true,
+    requested: summary.requested,
+    discontinued_count: summary.discontinued.length,
+    skipped_count: summary.skipped.length,
+    not_found_count: summary.not_found.length,
+    waived_schedule_rows: summary.discontinued.reduce((sum, item) => sum + Number(item.waived_rows || 0), 0),
+    details: summary
+  });
 });
 
 router.get('/:id', authRequired, (req, res) => {
@@ -69,18 +148,6 @@ router.get('/:id', authRequired, (req, res) => {
       progress_pct: progressPct
     }
   });
-});
-
-router.get('/', authRequired, adminOnly, (req, res) => {
-  const status = req.query.status;
-  const sql = `SELECT a.*, u.full_name, u.email, b.make, b.model, b.registration
-    FROM agreements a
-    JOIN users u ON u.id = a.user_id
-    JOIN bikes b ON b.id = a.bike_id
-    ${status ? 'WHERE a.status = ?' : ''}
-    ORDER BY a.created_at DESC`;
-  const ags = status ? db.prepare(sql).all(status) : db.prepare(sql).all();
-  res.json({ agreements: ags });
 });
 
 router.post('/:id/sign', authRequired, (req, res) => {

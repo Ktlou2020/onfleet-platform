@@ -120,7 +120,7 @@ export default function AdminAgreementDetail() {
             {agreement.status === 'active' && <button className="btn btn-sm btn-danger" onClick={() => updateStatus('defaulted')} disabled={busyAction === 'defaulted'}>Default</button>}
           </div>
         </div>
-        <div className="progress-bar"><div className="progress-fill" style={{ width: `${summary.progress_pct}%` }} /></div></div>
+        <div className="progress-bar"><div className="progress-fill" style={{ width: `${summary.progress_pct}%` }} /></div>
         <div className="flex-between mt-3 text-sm muted">
           <div>Start {fmtDate(agreement.start_date)}</div>
           <div>{summary.weeks_paid} / {summary.weeks_total} weeks</div>

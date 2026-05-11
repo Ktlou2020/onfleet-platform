@@ -265,7 +265,7 @@ export default function RiderAgreementDetail() {
 
       <div className="card mb-4">
         <h3 className="mb-3">Progress to ownership</h3>
-        <div className="progress-bar"><div className="progress-fill" style={{ width: `${summary.progress_pct}%` }} /></div></div>
+        <div className="progress-bar"><div className="progress-fill" style={{ width: `${summary.progress_pct}%` }} /></div>
         <div className="flex-between mt-3 text-sm">
           <div className="muted">Started {fmtDate(agreement.start_date)}</div>
           <div className="muted">{summary.weeks_paid} of {summary.weeks_total} weeks</div>

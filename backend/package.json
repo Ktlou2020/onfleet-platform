@@ -7,7 +7,10 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "seed": "node src/seed.js",
-    "reset-admin": "node src/reset-admin.js"
+    "reset-admin": "node src/reset-admin.js",
+    "campaign:password-reset-special": "node src/scripts/password-reset-special-audience.js",
+    "bike:update-status": "node src/scripts/update-bike-status.js",
+    "bike:update-statuses-csv": "node src/scripts/update-bike-statuses-from-csv.js"
   },
   "dependencies": {
     "axios": "^1.6.2",

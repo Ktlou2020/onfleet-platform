@@ -248,7 +248,7 @@ export default function AdminApplications() {
 
       {showBulkApprove && (
         <Modal title={`Bulk approve ${selectedApplications.length} applications`} onClose={() => setShowBulkApprove(false)}>
-          <div className="muted text-sm mb-3">Assign one available bike to each selected rider. A bike can only be chosen once in this batch.</div>
+          <div className="muted text-sm mb-3">Assign one ready to go bike to each selected rider. A bike can only be chosen once in this batch.</div>
           <div style={{ display: 'grid', gap: 16, maxHeight: '60vh', overflowY: 'auto', paddingRight: 4 }}>
             {selectedApplications.map((application) => {
               const assignment = bulkAssignments[application.id] || { bike_id: '', weekly_amount: '', total_weeks: 78, start_date: today };
@@ -276,7 +276,7 @@ export default function AdminApplications() {
                           }
                         }));
                       }}>
-                        <option value="">— Select available bike —</option>
+                        <option value="">— Select ready to go bike —</option>
                         {bikes.map((bike) => <option key={bike.id} value={bike.id} disabled={bikeTakenByAnotherSelection(application.id, bike.id)}>{bike.make} {bike.model} · {fmt(bike.rental_weekly)}/week</option>)}
                       </select>
                     </div>

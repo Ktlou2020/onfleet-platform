@@ -24,7 +24,7 @@ export default function AdminDashboard() {
     { icon: '📋', count: pending_applications, label: 'Pending applications', link: '/admin/applications?status=submitted' },
     { icon: '🆔', count: pending_kyc, label: 'Application documents to review', link: '/admin/applications' },
     { icon: '⚠️', count: overdue_count, label: 'Overdue agreements', link: '/admin/agreements?status=active', danger: true },
-    { icon: '🔧', count: upcoming_services, label: 'Bikes due for service (14d)', link: '/admin/bikes?status=allocated' },
+    { icon: '🔧', count: upcoming_services, label: 'Bikes due for service (14d)', link: '/admin/bikes?status=active' },
     { icon: '🪪', count: expiring_license_disc, label: 'License discs expiring (30d)', link: '/admin/bikes', danger: true },
     { icon: '🛡️', count: expiring_insurance, label: 'Insurance expiring (30d)', link: '/admin/bikes' }
   ].filter((item) => matchesSearch(search, item.label, item.count))), [pending_applications, pending_kyc, overdue_count, upcoming_services, expiring_license_disc, expiring_insurance, search]);
@@ -54,9 +54,9 @@ export default function AdminDashboard() {
       </div>
 
       <div className="grid grid-4 mb-4">
-        <Stat label="Bikes available" value={s.bikes_available} icon={<Bike size={16}/>} />
-        <Stat label="Bikes allocated" value={s.bikes_allocated} icon={<Bike size={16}/>} accent="var(--accent)" />
-        <Stat label="In maintenance" value={s.bikes_maintenance} icon={<Wrench size={16}/>} accent="var(--warn)" />
+        <Stat label="Ready to go bikes" value={s.bikes_available} icon={<Bike size={16}/>} />
+        <Stat label="Active bikes" value={s.bikes_allocated} icon={<Bike size={16}/>} accent="var(--accent)" />
+        <Stat label="Bikes in repairs" value={s.bikes_maintenance} icon={<Wrench size={16}/>} accent="var(--warn)" />
         <Stat label="Compliance alerts" value={s.expiring_license_disc} delta={`${s.pending_kyc} docs pending · ${s.expiring_insurance} insurance`} icon={<ShieldCheck size={16}/>} accent="var(--warn)" />
       </div>
 

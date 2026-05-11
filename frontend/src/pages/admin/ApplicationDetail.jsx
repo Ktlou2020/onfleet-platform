@@ -19,7 +19,7 @@ export default function AdminApplicationDetail() {
   const load = () => api.get(`/applications/${id}`).then((response) => setData(response.data));
   useEffect(() => {
     load();
-    api.get('/bikes', { params: { status: 'available' } }).then((response) => setBikes(response.data.bikes));
+    api.get('/bikes', { params: { status: 'ready_to_go' } }).then((response) => setBikes(response.data.bikes));
   }, [id]);
   useEffect(() => { setDocPage(1); }, [data?.documents?.length]);
 
@@ -153,7 +153,7 @@ export default function AdminApplicationDetail() {
               const bike = bikes.find((item) => item.id === Number(e.target.value));
               setApproveForm({ ...approveForm, bike_id: e.target.value, weekly_amount: bike?.rental_weekly || '', total_weeks: bike?.total_weeks || 78 });
             }}>
-              <option value="">— Select available bike —</option>
+              <option value="">— Select ready to go bike —</option>
               {bikes.map((bike) => <option key={bike.id} value={bike.id}>{bike.make} {bike.model} · {bike.registration || 'no reg'} · {fmt(bike.rental_weekly)}/week</option>)}
             </select></div>
           <div className="grid grid-2">

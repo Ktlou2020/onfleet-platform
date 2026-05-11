@@ -20,6 +20,73 @@ function ensureColumn(table, column, definition) {
   }
 }
 
+function ensureBikeStatusSchema() {
+  const schemaRow = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'bikes'`).get();
+  const schemaSql = String(schemaRow?.sql || '');
+  const expectedConstraint = `CHECK(status IN ('active','not_available','sold','paid_off','written_off','repairs','ready_to_go','stationary'))`;
+  if (!schemaSql || schemaSql.includes(expectedConstraint)) return;
+
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    BEGIN TRANSACTION;
+    CREATE TABLE bikes_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      vin TEXT UNIQUE NOT NULL,
+      registration TEXT UNIQUE,
+      make TEXT NOT NULL,
+      model TEXT NOT NULL,
+      year INTEGER,
+      engine_cc INTEGER,
+      color TEXT,
+      condition TEXT NOT NULL DEFAULT 'new' CHECK(condition IN ('new','used')),
+      purchase_price REAL,
+      rental_weekly REAL NOT NULL,
+      total_weeks INTEGER NOT NULL DEFAULT 78,
+      status TEXT NOT NULL DEFAULT 'ready_to_go' CHECK(status IN ('active','not_available','sold','paid_off','written_off','repairs','ready_to_go','stationary')),
+      gps_device_id TEXT,
+      last_known_lat REAL,
+      last_known_lng REAL,
+      last_location_at DATETIME,
+      odometer_km INTEGER DEFAULT 0,
+      next_service_km INTEGER,
+      next_service_date TEXT,
+      insurance_provider TEXT,
+      insurance_policy_no TEXT,
+      insurance_expiry TEXT,
+      license_disc_no TEXT,
+      license_disc_expiry TEXT,
+      image_url TEXT,
+      notes TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    INSERT INTO bikes_new (
+      id, vin, registration, make, model, year, engine_cc, color, condition, purchase_price,
+      rental_weekly, total_weeks, status, gps_device_id, last_known_lat, last_known_lng, last_location_at,
+      odometer_km, next_service_km, next_service_date, insurance_provider, insurance_policy_no,
+      insurance_expiry, license_disc_no, license_disc_expiry, image_url, notes, created_at
+    )
+    SELECT
+      id, vin, registration, make, model, year, engine_cc, color, condition, purchase_price,
+      rental_weekly, total_weeks,
+      CASE status
+        WHEN 'available' THEN 'ready_to_go'
+        WHEN 'allocated' THEN 'active'
+        WHEN 'maintenance' THEN 'repairs'
+        WHEN 'sold' THEN 'paid_off'
+        WHEN 'retired' THEN 'written_off'
+        ELSE status
+      END,
+      gps_device_id, last_known_lat, last_known_lng, last_location_at,
+      odometer_km, next_service_km, next_service_date, insurance_provider, insurance_policy_no,
+      insurance_expiry, license_disc_no, license_disc_expiry, image_url, notes, created_at
+    FROM bikes;
+    DROP TABLE bikes;
+    ALTER TABLE bikes_new RENAME TO bikes;
+    COMMIT;
+    PRAGMA foreign_keys = ON;
+  `);
+}
+
 // ---------- SCHEMA ----------
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
@@ -40,6 +107,7 @@ CREATE TABLE IF NOT EXISTS users (
   emergency_contact_phone TEXT,
   avatar_url TEXT,
   country_of_origin TEXT,
+  user_tags TEXT,
   deleted_at TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -73,7 +141,7 @@ CREATE TABLE IF NOT EXISTS bikes (
   purchase_price REAL,
   rental_weekly REAL NOT NULL,
   total_weeks INTEGER NOT NULL DEFAULT 78,
-  status TEXT NOT NULL DEFAULT 'available' CHECK(status IN ('available','allocated','maintenance','sold','retired')),
+  status TEXT NOT NULL DEFAULT 'ready_to_go' CHECK(status IN ('active','not_available','sold','paid_off','written_off','repairs','ready_to_go','stationary')),
   gps_device_id TEXT,
   last_known_lat REAL,
   last_known_lng REAL,
@@ -281,6 +349,7 @@ CREATE INDEX IF NOT EXISTS idx_password_reset_expires ON password_reset_tokens(e
 // ---------- LIGHTWEIGHT MIGRATIONS FOR EXISTING DEPLOYS ----------
 ensureColumn('users', 'deleted_at', 'TEXT');
 ensureColumn('users', 'country_of_origin', 'TEXT');
+ensureColumn('users', 'user_tags', 'TEXT');
 ensureColumn('applications', 'payout_preference', 'TEXT');
 ensureColumn('applications', 'bank_name', 'TEXT');
 ensureColumn('applications', 'account_holder', 'TEXT');
@@ -299,5 +368,6 @@ ensureColumn('payments', 'fee_amount', 'REAL DEFAULT 0');
 ensureColumn('payments', 'net_amount', 'REAL DEFAULT 0');
 ensureColumn('bikes', 'license_disc_no', 'TEXT');
 ensureColumn('bikes', 'license_disc_expiry', 'TEXT');
+ensureBikeStatusSchema();
 
 module.exports = db;

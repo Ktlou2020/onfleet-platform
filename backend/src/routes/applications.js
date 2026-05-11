@@ -144,7 +144,7 @@ async function approveApplication({ applicationId, bikeId, weeklyAmount, totalWe
   const rider = db.prepare('SELECT * FROM users WHERE id = ?').get(app.user_id);
   const bike = db.prepare('SELECT * FROM bikes WHERE id = ?').get(bikeId);
   if (!bike) throw new Error('Bike not found');
-  if (bike.status !== 'available') throw new Error('Bike not available');
+  if (bike.status !== 'ready_to_go') throw new Error('Bike must be Ready to go before allocation');
 
   const weeks = Number(totalWeeks || bike.total_weeks || 78);
   const weekly = Number(weeklyAmount);
@@ -158,7 +158,7 @@ async function approveApplication({ applicationId, bikeId, weeklyAmount, totalWe
     db.prepare(`UPDATE applications
       SET status = 'approved', reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP, rejection_reason = NULL
       WHERE id = ?`).run(reviewerId, applicationId);
-    db.prepare(`UPDATE bikes SET status = 'allocated' WHERE id = ?`).run(bikeId);
+    db.prepare(`UPDATE bikes SET status = 'active' WHERE id = ?`).run(bikeId);
     const info = db.prepare(`INSERT INTO agreements
       (agreement_no, user_id, bike_id, application_id, weekly_amount, total_weeks, total_amount,
        start_date, end_date, status, created_by)

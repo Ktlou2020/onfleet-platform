@@ -127,8 +127,8 @@ router.post('/:id/status', authRequired, adminOnly, (req, res) => {
   }
   db.prepare('UPDATE agreements SET status = ? WHERE id = ?').run(status, req.params.id);
   const ag = db.prepare('SELECT bike_id FROM agreements WHERE id = ?').get(req.params.id);
-  if (status === 'completed') db.prepare(`UPDATE bikes SET status = 'sold' WHERE id = ?`).run(ag.bike_id);
-  if (status === 'cancelled') db.prepare(`UPDATE bikes SET status = 'available' WHERE id = ?`).run(ag.bike_id);
+  if (status === 'completed') db.prepare(`UPDATE bikes SET status = 'paid_off' WHERE id = ?`).run(ag.bike_id);
+  if (status === 'cancelled') db.prepare(`UPDATE bikes SET status = 'ready_to_go' WHERE id = ?`).run(ag.bike_id);
   logAudit(req.user.id, 'agreement.status', 'agreements', Number(req.params.id), { status });
   res.json({ ok: true });
 });

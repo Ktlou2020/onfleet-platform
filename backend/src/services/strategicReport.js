@@ -88,7 +88,7 @@ function buildInsights(context) {
   insights.push({
     title: 'Fleet productivity',
     priority: maintenanceShare > 20 ? 'high' : 'low',
-    finding: `${maintenanceShare}% of the fleet is in maintenance. ${bestBike ? `${bestBike.make} ${bestBike.model} is currently the strongest ROI bike.` : 'Bike ROI data is limited so far.'}`,
+    finding: `${maintenanceShare}% of the fleet is in repairs. ${bestBike ? `${bestBike.make} ${bestBike.model} is currently the strongest ROI bike.` : 'Bike ROI data is limited so far.'}`,
     action: maintenanceShare > 20
       ? 'Reduce workshop turnaround time and keep a reserve pool of ready bikes to protect revenue.'
       : 'Use ROI rankings to guide the next bike purchases and retirement decisions.'
@@ -117,7 +117,7 @@ function buildInsights(context) {
       title: 'Negative ROI watchlist',
       priority: 'high',
       finding: `${worstBike.make} ${worstBike.model} (${worstBike.bike_code}) is currently below breakeven with ROI ${worstBike.roi_pct}%.`,
-      action: 'Audit downtime, maintenance frequency, and rider payment history before buying more of this bike profile.'
+      action: 'Audit downtime, repair frequency, and rider payment history before buying more of this bike profile.'
     });
   }
 
@@ -130,9 +130,9 @@ function generateStrategicReport() {
   const activeAgreements = scalar(`SELECT COUNT(*) FROM agreements WHERE status = 'active'`);
   const completedAgreements = scalar(`SELECT COUNT(*) FROM agreements WHERE status = 'completed'`);
   const totalBikes = scalar(`SELECT COUNT(*) FROM bikes`);
-  const availableBikes = scalar(`SELECT COUNT(*) FROM bikes WHERE status = 'available'`);
-  const allocatedBikes = scalar(`SELECT COUNT(*) FROM bikes WHERE status = 'allocated'`);
-  const maintenanceBikes = scalar(`SELECT COUNT(*) FROM bikes WHERE status = 'maintenance'`);
+  const availableBikes = scalar(`SELECT COUNT(*) FROM bikes WHERE status = 'ready_to_go'`);
+  const allocatedBikes = scalar(`SELECT COUNT(*) FROM bikes WHERE status = 'active'`);
+  const maintenanceBikes = scalar(`SELECT COUNT(*) FROM bikes WHERE status = 'repairs'`);
   const totalSubmitted = scalar(`SELECT COUNT(*) FROM applications`);
   const submitted = scalar(`SELECT COUNT(*) FROM applications WHERE status = 'submitted'`);
   const underReview = scalar(`SELECT COUNT(*) FROM applications WHERE status = 'under_review'`);

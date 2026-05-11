@@ -78,7 +78,7 @@ export default function AdminStrategyReport() {
           <Stat label="Credited revenue" value={fmt(data.key_metrics.credited_revenue)} icon={<TrendingUp size={16} />} accent="var(--success)" />
           <Stat label="Transaction fees" value={fmt(data.key_metrics.transaction_fees)} icon={<Wallet size={16} />} accent="var(--warn)" />
           <Stat label="Overdue exposure" value={fmt(data.collections.overdue_amount)} icon={<AlertCircle size={16} />} accent="var(--danger)" />
-          <Stat label="Fleet allocated" value={`${data.fleet.allocated} / ${data.fleet.total}`} icon={<Bike size={16} />} accent="var(--accent)" />
+          <Stat label="Fleet active" value={`${data.fleet.allocated} / ${data.fleet.total}`} icon={<Bike size={16} />} accent="var(--accent)" />
         </div>
 
         <div className="grid grid-2 mb-4">

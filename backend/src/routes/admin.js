@@ -46,7 +46,7 @@ function normalizeBulkUserIds(rawIds) {
 
 function selectBulkTargets({ user_ids, role, status }) {
   const ids = normalizeBulkUserIds(user_ids);
-  let sql = `SELECT id, email, full_name, role, status
+  let sql = `SELECT id, email, full_name, role, status, user_tags
     FROM users
     WHERE deleted_at IS NULL AND COALESCE(email, '') != ''`;
   const params = [];
@@ -96,16 +96,16 @@ router.get('/dashboard', (req, res) => {
     admins: db.prepare(`SELECT COUNT(*) c FROM users WHERE role IN ('admin','superadmin') AND deleted_at IS NULL`).get().c,
     active_agreements: db.prepare(`SELECT COUNT(*) c FROM agreements WHERE status = 'active'`).get().c,
     completed_agreements: db.prepare(`SELECT COUNT(*) c FROM agreements WHERE status = 'completed'`).get().c,
-    bikes_available: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE status = 'available'`).get().c,
-    bikes_allocated: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE status = 'allocated'`).get().c,
-    bikes_maintenance: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE status = 'maintenance'`).get().c,
+    bikes_available: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE status = 'ready_to_go'`).get().c,
+    bikes_allocated: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE status = 'active'`).get().c,
+    bikes_maintenance: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE status = 'repairs'`).get().c,
     pending_applications: db.prepare(`SELECT COUNT(*) c FROM applications WHERE status IN ('submitted','under_review')`).get().c,
     pending_kyc: db.prepare(`SELECT COUNT(*) c FROM application_documents WHERE status = 'uploaded'`).get().c,
     revenue_total: db.prepare(`SELECT COALESCE(SUM(COALESCE(net_amount, amount)),0) s FROM payments WHERE status = 'success'`).get().s,
     revenue_30d: db.prepare(`SELECT COALESCE(SUM(COALESCE(net_amount, amount)),0) s FROM payments WHERE status = 'success' AND paid_at >= datetime('now','-30 days')`).get().s,
     overdue_amount: db.prepare(`SELECT COALESCE(SUM(amount_due - amount_paid),0) s FROM payment_schedules WHERE status = 'overdue'`).get().s,
     overdue_count: db.prepare(`SELECT COUNT(DISTINCT agreement_id) c FROM payment_schedules WHERE status = 'overdue'`).get().c,
-    upcoming_services: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE next_service_date IS NOT NULL AND next_service_date <= date('now','+14 days') AND status = 'allocated'`).get().c,
+    upcoming_services: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE next_service_date IS NOT NULL AND next_service_date <= date('now','+14 days') AND status = 'active'`).get().c,
     expiring_insurance: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE insurance_expiry IS NOT NULL AND insurance_expiry <= date('now','+30 days')`).get().c,
     expiring_license_disc: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE license_disc_expiry IS NOT NULL AND license_disc_expiry <= date('now','+30 days')`).get().c
   };
@@ -132,7 +132,7 @@ router.get('/email-provider-status', (req, res) => {
 
 router.get('/users', (req, res) => {
   const role = req.query.role;
-  const sql = `SELECT id, email, full_name, phone, role, status, country_of_origin, avatar_url, created_at
+  const sql = `SELECT id, email, full_name, phone, role, status, country_of_origin, avatar_url, user_tags, created_at
     FROM users
     WHERE deleted_at IS NULL ${role ? 'AND role = ?' : ''}
     ORDER BY created_at DESC`;

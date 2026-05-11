@@ -5,6 +5,7 @@ const fs = require('fs');
 const db = require('../db');
 const { authRequired, adminOnly } = require('../middleware/auth');
 const { logAudit } = require('../utils/helpers');
+const { setBikeStatus } = require('../utils/bikeStatus');
 
 const router = express.Router();
 const bikeUploadDir = path.join(__dirname, '../../uploads/bikes');
@@ -80,7 +81,7 @@ FROM bikes b`;
 
 router.get('/catalog', (req, res) => {
   const bikes = db.prepare(`SELECT id, make, model, year, engine_cc, condition, rental_weekly, total_weeks, image_url
-    FROM bikes WHERE status = 'available' ORDER BY make, model`).all();
+    FROM bikes WHERE status = 'ready_to_go' ORDER BY make, model`).all();
   res.json({ bikes });
 });
 
@@ -125,7 +126,7 @@ router.post('/', authRequired, adminOnly, (req, res) => {
       b.purchase_price || null,
       b.rental_weekly,
       b.total_weeks || 78,
-      b.status || 'available',
+      b.status || 'ready_to_go',
       b.gps_device_id || null,
       b.odometer_km || 0,
       b.insurance_provider || null,
@@ -141,15 +142,34 @@ router.post('/', authRequired, adminOnly, (req, res) => {
 });
 
 router.put('/:id', authRequired, adminOnly, (req, res) => {
-  const allowed = ['registration','make','model','year','engine_cc','color','condition','purchase_price','rental_weekly','total_weeks','status','gps_device_id','odometer_km','next_service_km','next_service_date','insurance_provider','insurance_policy_no','insurance_expiry','license_disc_no','license_disc_expiry','image_url','notes'];
+  const allowed = ['registration','make','model','year','engine_cc','color','condition','purchase_price','rental_weekly','total_weeks','gps_device_id','odometer_km','next_service_km','next_service_date','insurance_provider','insurance_policy_no','insurance_expiry','license_disc_no','license_disc_expiry','image_url','notes'];
   const sets = [];
   const vals = [];
-  for (const key of allowed) if (req.body[key] !== undefined) { sets.push(`${key} = ?`); vals.push(req.body[key]); }
-  if (!sets.length) return res.json({ ok: true });
-  vals.push(req.params.id);
-  db.prepare(`UPDATE bikes SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
-  logAudit(req.user.id, 'bike.update', 'bikes', Number(req.params.id), req.body);
-  res.json({ ok: true });
+  let statusMeta = null;
+
+  if (req.body.status !== undefined) {
+    try {
+      statusMeta = setBikeStatus(req.params.id, req.body.status);
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
+    }
+  }
+
+  for (const key of allowed) {
+    if (req.body[key] !== undefined) {
+      sets.push(`${key} = ?`);
+      vals.push(req.body[key]);
+    }
+  }
+
+  if (sets.length) {
+    vals.push(req.params.id);
+    db.prepare(`UPDATE bikes SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+  }
+
+  if (!sets.length && !statusMeta) return res.json({ ok: true });
+  logAudit(req.user.id, 'bike.update', 'bikes', Number(req.params.id), { ...req.body, ...(statusMeta || {}) });
+  res.json({ ok: true, ...(statusMeta || {}) });
 });
 
 router.post('/:id/image', authRequired, adminOnly, bikeImageUpload.single('image'), (req, res) => {

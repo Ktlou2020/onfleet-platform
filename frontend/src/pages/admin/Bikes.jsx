@@ -5,6 +5,22 @@ import toast from 'react-hot-toast';
 import { Loading, Badge, Modal, Pagination, SearchInput, fmt, fmtDate, matchesSearch, paginateItems } from '../../components/ui';
 import { Plus } from 'lucide-react';
 
+const bikeStatusOptions = [
+  { value: '', label: 'All' },
+  { value: 'active', label: 'Active' },
+  { value: 'not_available', label: 'Not available' },
+  { value: 'sold', label: 'Sold' },
+  { value: 'paid_off', label: 'Paid off' },
+  { value: 'written_off', label: 'Written off' },
+  { value: 'repairs', label: 'Repairs' },
+  { value: 'ready_to_go', label: 'Ready to go' },
+  { value: 'stationary', label: 'Stationary' }
+];
+
+function getBikeStatusLabel(status) {
+  return bikeStatusOptions.find((option) => option.value === status)?.label || status || '—';
+}
+
 function getExpiryMeta(date) {
   if (!date) return null;
   const today = new Date();
@@ -24,6 +40,8 @@ export default function AdminBikes() {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(9);
+  const [savingStatusId, setSavingStatusId] = useState(null);
+  const [statusDrafts, setStatusDrafts] = useState({});
   const [form, setForm] = useState({
     vin: '',
     make: '',
@@ -41,7 +59,12 @@ export default function AdminBikes() {
     license_disc_expiry: ''
   });
 
-  const load = () => api.get('/bikes', { params: filter ? { status: filter } : {} }).then((response) => setBikes(response.data.bikes));
+  const load = () => api.get('/bikes', { params: filter ? { status: filter } : {} }).then((response) => {
+    const nextBikes = response.data.bikes;
+    setBikes(nextBikes);
+    setStatusDrafts(Object.fromEntries(nextBikes.map((bike) => [bike.id, bike.status])));
+  });
+
   useEffect(() => { load(); }, [filter]);
   useEffect(() => { setPage(1); }, [search, filter]);
 
@@ -54,6 +77,7 @@ export default function AdminBikes() {
     bike.year,
     bike.color,
     bike.status,
+    getBikeStatusLabel(bike.status),
     bike.engine_cc,
     bike.odometer_km,
     bike.allocated_rider_name,
@@ -83,13 +107,29 @@ export default function AdminBikes() {
     }
   };
 
+  const saveBikeStatus = async (bike) => {
+    const nextStatus = statusDrafts[bike.id] || bike.status;
+    if (nextStatus === bike.status) return toast('No status change to save');
+    try {
+      setSavingStatusId(bike.id);
+      await api.put(`/bikes/${bike.id}`, { status: nextStatus });
+      setBikes((current) => (current || []).map((item) => item.id === bike.id ? { ...item, status: nextStatus } : item));
+      toast.success(`Bike status updated to ${getBikeStatusLabel(nextStatus)}`);
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not update bike status');
+      setStatusDrafts((current) => ({ ...current, [bike.id]: bike.status }));
+    } finally {
+      setSavingStatusId(null);
+    }
+  };
+
   if (!bikes) return <Loading />;
   return (
     <>
       <div className="flex-between mb-2">
         <div>
           <h1 className="page-title">Bike Fleet</h1>
-          <p className="page-sub">Manage inventory, assigned riders, service history, and license disc compliance.</p>
+          <p className="page-sub">Manage inventory, assigned riders, service history, license disc compliance, and fleet statuses.</p>
         </div>
         <button className="btn" onClick={() => setShowAdd(true)}><Plus size={16} /> Add bike</button>
       </div>
@@ -97,17 +137,19 @@ export default function AdminBikes() {
         <SearchInput value={search} onChange={setSearch} placeholder="Search VIN, rider, registration, disc expiry" style={{ flex: '1 1 320px', maxWidth: 420 }} />
         <div className="muted text-sm">Showing {filtered.length} matching bikes</div>
       </div>
-      <div className="row mb-4">
-        {['', 'available', 'allocated', 'maintenance', 'sold', 'retired'].map((value) => (
-          <button key={value} onClick={() => setFilter(value)} className={`btn btn-sm ${filter === value ? '' : 'btn-secondary'}`}>{value || 'All'}</button>
+      <div className="row mb-4" style={{ flexWrap: 'wrap' }}>
+        {bikeStatusOptions.map((option) => (
+          <button key={option.value || 'all'} onClick={() => setFilter(option.value)} className={`btn btn-sm ${filter === option.value ? '' : 'btn-secondary'}`}>{option.label}</button>
         ))}
       </div>
 
       <div className="grid grid-3">
         {pagination.items.map((bike) => {
           const discMeta = getExpiryMeta(bike.license_disc_expiry);
+          const draftStatus = statusDrafts[bike.id] || bike.status;
+          const changed = draftStatus !== bike.status;
           return (
-            <Link key={bike.id} to={`/admin/bikes/${bike.id}`} className="bike-card" style={{ color: 'var(--text)', display: 'block' }}>
+            <div key={bike.id} className="bike-card" style={{ color: 'var(--text)', display: 'block' }}>
               <div className="img" style={{ height: 180, backgroundImage: bike.image_url ? `url("${bike.image_url}")` : 'none', backgroundSize: 'cover', backgroundPosition: 'center', backgroundColor: '#0a1219', position: 'relative' }}>
                 {bike.allocated_rider_name && (
                   <div style={{ position: 'absolute', left: 12, right: 12, bottom: 12, display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 12, background: 'rgba(8,12,18,0.76)', backdropFilter: 'blur(8px)' }}>
@@ -120,9 +162,9 @@ export default function AdminBikes() {
                 )}
               </div>
               <div className="body" style={{ padding: 16 }}>
-                <div className="flex-between mb-2">
+                <div className="flex-between mb-2" style={{ gap: 12 }}>
                   <h3>{bike.make} {bike.model}</h3>
-                  <Badge status={bike.status} />
+                  <Badge status={bike.status}>{getBikeStatusLabel(bike.status)}</Badge>
                 </div>
                 <div className="text-sm muted mb-3">{bike.year} · {bike.engine_cc}cc · {bike.color}</div>
                 <div className="text-xs muted">VIN: {bike.vin}</div>
@@ -139,8 +181,20 @@ export default function AdminBikes() {
                     <div className="text-xs muted">{bike.allocated_rider_phone || 'No phone'} · {bike.allocated_agreement_no || 'No agreement number'}</div>
                   </div>
                 )}
+                <div className="card mt-3" style={{ background: 'var(--surface-2)', padding: 12 }}>
+                  <div className="text-xs muted" style={{ marginBottom: 8 }}>Quick status update</div>
+                  <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <select value={draftStatus} onChange={(e) => setStatusDrafts((current) => ({ ...current, [bike.id]: e.target.value }))} style={{ flex: '1 1 190px' }}>
+                      {bikeStatusOptions.filter((option) => option.value).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                    <button className={`btn btn-sm ${changed ? '' : 'btn-secondary'}`} onClick={() => saveBikeStatus(bike)} disabled={savingStatusId === bike.id || !changed}>
+                      {savingStatusId === bike.id ? 'Saving…' : 'Save status'}
+                    </button>
+                    <Link to={`/admin/bikes/${bike.id}`} className="btn btn-sm btn-secondary">Open</Link>
+                  </div>
+                </div>
               </div>
-            </Link>
+            </div>
           );
         })}
       </div>

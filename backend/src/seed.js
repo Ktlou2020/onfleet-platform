@@ -71,14 +71,14 @@ const TVS_HLX_125 = 'https://sspark.genspark.ai/cfimages?u1=2heoCv2XZbus%2FP8yo5
 const HERO_ECO_150 = 'https://sspark.genspark.ai/cfimages?u1=WONp4EWQmNpZHr2dInW%2BslCx7BCx2gT1NMsuyZQObTyb2NAZZKDUHyLoMNthkpw6h0%2F9B4UxuC7674lMzihu4%2F%2BR6iyg%2BmEXOe2JJIDaze9bJdH1iNaWM%2FnfxPQyEHRV7396zrSD%2FfZeRaiL4Yp3CibWDjkVX0Jp00Hcm78y7BsHFOiS5t1F2Py%2BPDKGN96P&u2=5x0yW1Qk8c5gGCnB&width=2560';
 
 const bikes = [
-  ['VINHA125001', 'GP-HA-1001', 'Honda', 'Ace 125', 2024, 125, 'Black', 'new', 21500, 850, 78, 'available', HONDA_ACE_125],
-  ['VINTV125002', 'GP-TV-2002', 'TVS', 'HLX 125', 2024, 125, 'Red', 'new', 22000, 850, 78, 'available', TVS_HLX_125],
-  ['VINBJ150003', 'GP-BJ-3003', 'Bajaj', 'Boxer 150', 2024, 150, 'Blue', 'new', 24500, 950, 78, 'available', BAJAJ_BOXER_150],
-  ['VINHE150004', 'GP-HE-4004', 'Hero', 'Eco 150', 2023, 150, 'Silver', 'used', 18000, 750, 65, 'available', HERO_ECO_150],
-  ['VINHA125005', 'GP-HA-5005', 'Honda', 'Ace 125', 2024, 125, 'White', 'new', 21500, 850, 78, 'allocated', HONDA_ACE_125],
-  ['VINBJ150006', 'GP-BJ-6006', 'Bajaj', 'Boxer 150', 2023, 150, 'Black', 'used', 19500, 800, 65, 'allocated', BAJAJ_BOXER_150],
-  ['VINTV125007', 'GP-TV-7007', 'TVS', 'HLX 125', 2024, 125, 'Black', 'new', 22000, 850, 78, 'maintenance', TVS_HLX_125],
-  ['VINHA125008', 'GP-HA-8008', 'Honda', 'Ace 125', 2024, 125, 'Red', 'new', 21500, 850, 78, 'available', HONDA_ACE_125]
+  ['VINHA125001', 'GP-HA-1001', 'Honda', 'Ace 125', 2024, 125, 'Black', 'new', 21500, 850, 78, 'ready_to_go', HONDA_ACE_125],
+  ['VINTV125002', 'GP-TV-2002', 'TVS', 'HLX 125', 2024, 125, 'Red', 'new', 22000, 850, 78, 'ready_to_go', TVS_HLX_125],
+  ['VINBJ150003', 'GP-BJ-3003', 'Bajaj', 'Boxer 150', 2024, 150, 'Blue', 'new', 24500, 950, 78, 'ready_to_go', BAJAJ_BOXER_150],
+  ['VINHE150004', 'GP-HE-4004', 'Hero', 'Eco 150', 2023, 150, 'Silver', 'used', 18000, 750, 65, 'ready_to_go', HERO_ECO_150],
+  ['VINHA125005', 'GP-HA-5005', 'Honda', 'Ace 125', 2024, 125, 'White', 'new', 21500, 850, 78, 'active', HONDA_ACE_125],
+  ['VINBJ150006', 'GP-BJ-6006', 'Bajaj', 'Boxer 150', 2023, 150, 'Black', 'used', 19500, 800, 65, 'active', BAJAJ_BOXER_150],
+  ['VINTV125007', 'GP-TV-7007', 'TVS', 'HLX 125', 2024, 125, 'Black', 'new', 22000, 850, 78, 'repairs', TVS_HLX_125],
+  ['VINHA125008', 'GP-HA-8008', 'Honda', 'Ace 125', 2024, 125, 'Red', 'new', 21500, 850, 78, 'ready_to_go', HONDA_ACE_125]
 ];
 const bikeIds = [];
 const insertBike = db.prepare(`INSERT INTO bikes
@@ -130,7 +130,7 @@ function createActiveAgreementFor(userId, bikeId, weeklyAmount, weeks, startOffs
       generateAgreementNo(), userId, bikeId, applicationInfo.lastInsertRowid, weeklyAmount, weeks, total, start, end, `${riders[userId - 3]?.[1] || 'Rider'} electronic signature`, admin.lastInsertRowid
     );
   buildPaymentSchedule(agreementInfo.lastInsertRowid, weeklyAmount, weeks, start);
-  db.prepare(`UPDATE bikes SET status = 'allocated' WHERE id = ?`).run(bikeId);
+  db.prepare(`UPDATE bikes SET status = 'active' WHERE id = ?`).run(bikeId);
 
   const rider = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
   const bike = db.prepare('SELECT * FROM bikes WHERE id = ?').get(bikeId);

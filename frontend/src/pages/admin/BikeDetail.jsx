@@ -6,6 +6,21 @@ import api from '../../api';
 import toast from 'react-hot-toast';
 import { Loading, Badge, Modal, Pagination, fmt, fmtDate, paginateItems } from '../../components/ui';
 
+const bikeStatusOptions = [
+  { value: 'active', label: 'Active' },
+  { value: 'not_available', label: 'Not available' },
+  { value: 'sold', label: 'Sold' },
+  { value: 'paid_off', label: 'Paid off' },
+  { value: 'written_off', label: 'Written off' },
+  { value: 'repairs', label: 'Repairs' },
+  { value: 'ready_to_go', label: 'Ready to go' },
+  { value: 'stationary', label: 'Stationary' }
+];
+
+function getBikeStatusLabel(status) {
+  return bikeStatusOptions.find((option) => option.value === status)?.label || status || '—';
+}
+
 const bikeIcon = new L.DivIcon({
   html: `<div style="background:var(--primary);width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;border:3px solid white">🏍️</div>`,
   className: '', iconSize: [30, 30], iconAnchor: [15, 15]
@@ -69,7 +84,7 @@ export default function AdminBikeDetail() {
           <h1 className="page-title">{bike.make} {bike.model}</h1>
           <div className="muted">VIN {bike.vin} · {bike.registration || 'no registration yet'}</div>
         </div>
-        <div className="row"><Badge status={bike.status} /><button className="btn btn-sm btn-secondary" onClick={() => setEdit(!edit)}>{edit ? 'Cancel' : 'Edit'}</button><button className="btn btn-sm" onClick={() => setShowService(true)}>+ Log service / repair</button></div>
+        <div className="row"><Badge status={bike.status}>{getBikeStatusLabel(bike.status)}</Badge><button className="btn btn-sm btn-secondary" onClick={() => setEdit(!edit)}>{edit ? 'Cancel' : 'Edit'}</button><button className="btn btn-sm" onClick={() => setShowService(true)}>+ Log service / repair</button></div>
       </div>
 
       {discMeta && (
@@ -108,7 +123,7 @@ export default function AdminBikeDetail() {
           {edit ? (
             <>
               <div className="grid grid-2">
-                <div className="field"><label className="label">Status</label><select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>{['available', 'allocated', 'maintenance', 'sold', 'retired'].map((status) => <option key={status}>{status}</option>)}</select></div>
+                <div className="field"><label className="label">Status</label><select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>{bikeStatusOptions.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}</select></div>
                 <div className="field"><label className="label">Registration</label><input value={form.registration || ''} onChange={(e) => setForm({ ...form, registration: e.target.value })} /></div>
                 <div className="field"><label className="label">Odometer (km)</label><input type="number" value={form.odometer_km || 0} onChange={(e) => setForm({ ...form, odometer_km: Number(e.target.value) })} /></div>
                 <div className="field"><label className="label">Weekly rental</label><input type="number" value={form.rental_weekly} onChange={(e) => setForm({ ...form, rental_weekly: Number(e.target.value) })} /></div>
@@ -127,6 +142,7 @@ export default function AdminBikeDetail() {
               <Row k="Year" v={bike.year} />
               <Row k="Engine" v={bike.engine_cc ? `${bike.engine_cc}cc` : '—'} />
               <Row k="Color" v={bike.color} />
+              <Row k="Status" v={getBikeStatusLabel(bike.status)} />
               <Row k="Condition" v={bike.condition} />
               <Row k="Weekly rental" v={fmt(bike.rental_weekly)} />
               <Row k="Purchase price" v={fmt(bike.purchase_price)} />

@@ -2,6 +2,7 @@ const { v4: uuid } = require('uuid');
 const db = require('../db');
 const africanCountries = require('../constants/africanCountries');
 const { addDays, buildPaymentSchedule, generateAgreementNo } = require('../utils/helpers');
+const { normalizeBikeStatus } = require('../utils/bikeStatus');
 
 function parseCsv(text) {
   const rows = [];
@@ -97,14 +98,8 @@ function extractFirstUrl(value) {
   return match ? match[0] : null;
 }
 
-function mapBikeStatus(value) {
-  const status = normalizeKey(value);
-  if (!status) return 'available';
-  if (status.includes('stolen')) return 'retired';
-  if (status.includes('paid off')) return 'sold';
-  if (status.includes('maintenance')) return 'maintenance';
-  if (status.includes('allocated') || status.includes('active') || status.includes('handover')) return 'allocated';
-  return 'available';
+function mapBikeStatus(value, options = {}) {
+  return normalizeBikeStatus(value, options);
 }
 
 function mapAgreementStatus(value) {
@@ -360,7 +355,7 @@ function upsertBikeFromFleetRow(row) {
     color: normalizeText(row.Colour) || null,
     rental_weekly: parseMoney(row['Payment to be collected']) || 850,
     total_weeks: Math.max(1, parseInteger(row['Number of Months Remaining'], 0) ? parseInteger(row['Number of Months Remaining']) * 4 : 78),
-    status: mapBikeStatus(row.STATUS),
+    status: mapBikeStatus(row.STATUS, { row }),
     notes: [
       normalizeText(row.Driver) ? `Legacy driver: ${normalizeText(row.Driver)}` : null,
       normalizeText(row.Fleet) ? `Fleet: ${normalizeText(row.Fleet)}` : null,
@@ -454,7 +449,7 @@ function upsertAgreementFromFleetRow(row) {
     VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
     .run(agreementNo || generateAgreementNo(), user.id, bike.id, application.id, weeklyAmount, totalWeeks, totalAmount, startDate, endDate, status, `Imported from fleet CSV on ${new Date().toISOString()}`);
   buildPaymentSchedule(info.lastInsertRowid, weeklyAmount, totalWeeks, startDate);
-  db.prepare(`UPDATE bikes SET status = ? WHERE id = ?`).run(status === 'completed' ? 'sold' : 'allocated', bike.id);
+  db.prepare(`UPDATE bikes SET status = ? WHERE id = ?`).run(status === 'completed' ? 'paid_off' : 'active', bike.id);
   return db.prepare(`SELECT * FROM agreements WHERE id = ?`).get(info.lastInsertRowid);
 }
 

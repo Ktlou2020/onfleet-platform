@@ -93,6 +93,7 @@ export default function Landing() {
           <a href="#how" onClick={closeMenu}>How it works</a>
           <a href="#bikes" onClick={closeMenu}>Bikes</a>
           <a href="#why" onClick={closeMenu}>Why us</a>
+          <Link to="/fleet" onClick={closeMenu}>Fleet owners</Link>
           <Link to="/login" onClick={closeMenu}>Sign in</Link>
           <Link to="/signup" className="btn" onClick={closeMenu}>Apply now</Link>
         </nav>
@@ -256,7 +257,10 @@ export default function Landing() {
       <section className="section landing-final-cta">
         <h2>Ready to own your bike?</h2>
         <div className="sub">Join thousands of South African riders earning more, every day.</div>
-        <Link to="/signup" className="btn landing-final-cta-btn">Apply now — it&apos;s free</Link>
+        <div className="hero-cta" style={{ justifyContent: 'center' }}>
+          <Link to="/signup" className="btn landing-final-cta-btn">Apply now — it&apos;s free</Link>
+          <Link to="/fleet" className="btn btn-secondary landing-final-cta-btn">Fleet owner pilot</Link>
+        </div>
       </section>
 
       <footer className="footer landing-footer">

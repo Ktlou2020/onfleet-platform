@@ -230,6 +230,23 @@ CREATE TABLE IF NOT EXISTS app_settings (
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS fleet_owner_pilot_leads (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  company_name TEXT NOT NULL,
+  contact_name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  phone TEXT,
+  city TEXT,
+  fleet_size INTEGER,
+  plan_interest TEXT NOT NULL DEFAULT 'trial' CHECK(plan_interest IN ('trial','small','medium','large','enterprise')),
+  wants_demo INTEGER NOT NULL DEFAULT 1,
+  notes TEXT,
+  status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new','contacted','demo_scheduled','trial_started','converted','archived')),
+  source TEXT NOT NULL DEFAULT 'fleet_owner_pilot_page',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS applications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL,
@@ -416,6 +433,8 @@ CREATE INDEX IF NOT EXISTS idx_apps_user ON applications(user_id);
 CREATE INDEX IF NOT EXISTS idx_appdocs_application ON application_documents(application_id);
 CREATE INDEX IF NOT EXISTS idx_appdocs_user ON application_documents(user_id);
 CREATE INDEX IF NOT EXISTS idx_gps_bike ON gps_pings(bike_id);
+CREATE INDEX IF NOT EXISTS idx_pilot_leads_status ON fleet_owner_pilot_leads(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_pilot_leads_email ON fleet_owner_pilot_leads(email);
 CREATE INDEX IF NOT EXISTS idx_password_reset_user ON password_reset_tokens(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_password_reset_expires ON password_reset_tokens(expires_at);
 `);

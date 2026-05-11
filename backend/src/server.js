@@ -25,6 +25,7 @@ app.use('/api/payments', require('./routes/payments'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/imports', require('./routes/imports'));
 app.use('/api/notifications', require('./routes/notifications'));
+app.use('/api/pilot', require('./routes/pilot'));
 
 // Serve built frontend (production preview)
 const frontendDist = path.join(__dirname, '../../frontend/dist');

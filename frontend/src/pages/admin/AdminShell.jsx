@@ -3,7 +3,7 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth';
 import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
-import { LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell } from 'lucide-react';
+import { LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell, Briefcase } from 'lucide-react';
 
 const navItems = [
   { to: '/admin', label: 'Dashboard', icon: LayoutDashboard },
@@ -14,6 +14,7 @@ const navItems = [
   { to: '/admin/notifications', label: 'Notifications', icon: Bell },
   { to: '/admin/imports', label: 'CSV Imports', icon: UploadCloud },
   { to: '/admin/strategy', label: 'AI Strategy', icon: BrainCircuit },
+  { to: '/admin/pilot', label: 'Fleet-owner pilot', icon: Briefcase },
   { to: '/admin/users', label: 'Users', icon: Users },
   { to: '/admin/audit', label: 'Audit Logs', icon: ClipboardList }
 ];

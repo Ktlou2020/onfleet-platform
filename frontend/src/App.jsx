@@ -6,6 +6,7 @@ import Login from './pages/Login';
 import Signup from './pages/Signup';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
+import FleetOwnerPilot from './pages/FleetOwnerPilot';
 import RiderShell from './pages/rider/RiderShell';
 import RiderDashboard from './pages/rider/Dashboard';
 import RiderAgreements from './pages/rider/Agreements';
@@ -30,6 +31,7 @@ import AdminUsers from './pages/admin/Users';
 import AdminAuditLogs from './pages/admin/AuditLogs';
 import AdminStrategyReport from './pages/admin/StrategyReport';
 import AdminImports from './pages/admin/Imports';
+import AdminPilotLeads from './pages/admin/PilotLeads';
 
 function PrivateRoute({ children, role }) {
   const { user } = useAuth();
@@ -55,6 +57,7 @@ export default function App() {
         <Route path="/signup" element={<Signup />} />
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/reset-password" element={<ResetPassword />} />
+        <Route path="/fleet" element={<FleetOwnerPilot />} />
 
         <Route path="/" element={<PrivateRoute role="rider"><RiderShell /></PrivateRoute>}>
           <Route path="dashboard" element={<RiderDashboard />} />
@@ -80,6 +83,7 @@ export default function App() {
           <Route path="notifications" element={<AdminNotifications />} />
           <Route path="imports" element={<AdminImports />} />
           <Route path="strategy" element={<AdminStrategyReport />} />
+          <Route path="pilot" element={<AdminPilotLeads />} />
           <Route path="users" element={<AdminUsers />} />
           <Route path="kyc" element={<Navigate to="/admin/applications" replace />} />
           <Route path="audit" element={<AdminAuditLogs />} />

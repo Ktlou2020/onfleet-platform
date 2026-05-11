@@ -5,6 +5,7 @@ import L from 'leaflet';
 import api from '../../api';
 import toast from 'react-hot-toast';
 import { Loading, Badge, Modal, Pagination, fmt, fmtDate, paginateItems } from '../../components/ui';
+import { useAuth } from '../../auth';
 
 const bikeStatusOptions = [
   { value: 'active', label: 'Active' },
@@ -39,18 +40,61 @@ function getExpiryMeta(date) {
 }
 
 export default function AdminBikeDetail() {
+  const { user } = useAuth();
   const { id } = useParams();
+  const isSuperadmin = user?.role === 'superadmin';
   const [data, setData] = useState(null);
   const [edit, setEdit] = useState(false);
   const [form, setForm] = useState({});
   const [showService, setShowService] = useState(false);
   const [imageFile, setImageFile] = useState(null);
+  const [rc1File, setRc1File] = useState(null);
+  const [licenseDiscFile, setLicenseDiscFile] = useState(null);
+  const [uploadingDoc, setUploadingDoc] = useState('');
   const [servicePage, setServicePage] = useState(1);
   const [servicePageSize, setServicePageSize] = useState(10);
   const [service, setService] = useState({ service_date: new Date().toISOString().slice(0, 10), service_type: 'monthly', description: '', odometer_km: '', cost: 0, next_service_date: '', next_service_km: '', performed_by: 'OnFleet Workshop', invoice: null });
 
-  const load = () => api.get(`/bikes/${id}`).then((response) => { setData(response.data); setForm(response.data.bike); });
+  const load = () => api.get(`/bikes/${id}`).then((response) => {
+    setData(response.data);
+    setForm(response.data.bike);
+  });
+
   useEffect(() => { load(); }, [id]);
+
+  const uploadBikeDocument = async (documentType, file) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    const { data: result } = await api.post(`/bikes/${id}/documents/${documentType}`, fd, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    });
+    return result;
+  };
+
+  const handleDocumentUpload = async (documentType) => {
+    const file = documentType === 'rc1' ? rc1File : licenseDiscFile;
+    if (!file) return toast.error(`Choose a ${documentType === 'rc1' ? 'RC1' : 'license disc'} PDF first`);
+    try {
+      setUploadingDoc(documentType);
+      const result = await uploadBikeDocument(documentType, file);
+      if (documentType === 'rc1') {
+        toast.success('RC1 uploaded');
+        setRc1File(null);
+      } else if (result.license_disc_expiry) {
+        toast.success(`License disc uploaded · expiry set to ${fmtDate(result.license_disc_expiry)}`);
+        setLicenseDiscFile(null);
+      } else {
+        toast('License disc uploaded, but no expiry could be read automatically.');
+        setLicenseDiscFile(null);
+      }
+      await load();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Document upload failed');
+    } finally {
+      setUploadingDoc('');
+    }
+  };
+
   if (!data) return <Loading />;
   const bike = data.bike;
   const pos = bike.last_known_lat ? [bike.last_known_lat, bike.last_known_lng] : null;
@@ -58,14 +102,30 @@ export default function AdminBikeDetail() {
   const discMeta = getExpiryMeta(bike.license_disc_expiry);
 
   const save = async () => {
-    try { await api.put(`/bikes/${id}`, form); toast.success('Saved'); setEdit(false); load(); } catch (error) { toast.error(error.response?.data?.error || 'Failed'); }
+    try {
+      await api.put(`/bikes/${id}`, form);
+      toast.success('Saved');
+      setEdit(false);
+      load();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Failed');
+    }
   };
+
   const uploadImage = async () => {
     if (!imageFile) return toast.error('Choose an image first');
     const fd = new FormData();
     fd.append('image', imageFile);
-    try { await api.post(`/bikes/${id}/image`, fd, { headers: { 'Content-Type': 'multipart/form-data' } }); toast.success('Bike image updated'); setImageFile(null); load(); } catch (error) { toast.error(error.response?.data?.error || 'Upload failed'); }
+    try {
+      await api.post(`/bikes/${id}/image`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      toast.success('Bike image updated');
+      setImageFile(null);
+      load();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Upload failed');
+    }
   };
+
   const addService = async () => {
     const fd = new FormData();
     Object.entries(service).forEach(([key, value]) => {
@@ -73,7 +133,14 @@ export default function AdminBikeDetail() {
       fd.append(key, value ?? '');
     });
     if (service.invoice) fd.append('invoice', service.invoice);
-    try { await api.post(`/bikes/${id}/service`, fd, { headers: { 'Content-Type': 'multipart/form-data' } }); toast.success('Service event logged'); setShowService(false); load(); } catch (error) { toast.error(error.response?.data?.error || 'Failed'); }
+    try {
+      await api.post(`/bikes/${id}/service`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      toast.success('Service event logged');
+      setShowService(false);
+      load();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Failed');
+    }
   };
 
   return (
@@ -149,9 +216,49 @@ export default function AdminBikeDetail() {
               <Row k="Odometer" v={`${bike.odometer_km || 0} km`} />
               <Row k="Insurance" v={`${bike.insurance_provider || '—'} · expires ${fmtDate(bike.insurance_expiry)}`} />
               <Row k="License disc" v={`${bike.license_disc_no || '—'} · expires ${fmtDate(bike.license_disc_expiry)}`} />
+              <Row k="RC1 file" v={bike.rc1_file_path ? <a href={bike.rc1_file_path} target="_blank" rel="noreferrer">{bike.rc1_original_name || 'Open RC1 PDF'}</a> : '—'} />
+              <Row k="License disc file" v={bike.license_disc_file_path ? <a href={bike.license_disc_file_path} target="_blank" rel="noreferrer">{bike.license_disc_original_name || 'Open license disc PDF'}</a> : '—'} />
               <Row k="Next service" v={`${fmtDate(bike.next_service_date)} or ${bike.next_service_km || '—'} km`} />
             </>
           )}
+
+          <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+            <div className="flex-between" style={{ alignItems: 'flex-start', gap: 12, marginBottom: 12 }}>
+              <div>
+                <div style={{ fontWeight: 700 }}>Bike documents</div>
+                <div className="muted text-sm">Store the RC1 and the license disc PDF under this bike record.</div>
+              </div>
+              {isSuperadmin && <div className="text-xs muted">Superadmin only</div>}
+            </div>
+
+            <div className="grid grid-2">
+              <div className="card" style={{ background: 'var(--surface-2)', padding: 12 }}>
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>RC1</div>
+                <div className="text-sm muted" style={{ marginBottom: 10 }}>{bike.rc1_file_path ? 'PDF available for download' : 'No RC1 uploaded yet'}</div>
+                {bike.rc1_file_path && <a href={bike.rc1_file_path} target="_blank" rel="noreferrer">{bike.rc1_original_name || 'Open RC1 PDF'}</a>}
+                {isSuperadmin && (
+                  <>
+                    <div className="field mt-3"><label className="label">Replace / upload RC1 PDF</label><input type="file" accept="application/pdf" onChange={(e) => setRc1File(e.target.files?.[0] || null)} /></div>
+                    <button className="btn btn-secondary btn-sm" onClick={() => handleDocumentUpload('rc1')} disabled={uploadingDoc === 'rc1'}>{uploadingDoc === 'rc1' ? 'Uploading…' : 'Upload RC1'}</button>
+                  </>
+                )}
+              </div>
+
+              <div className="card" style={{ background: 'var(--surface-2)', padding: 12 }}>
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>License disc</div>
+                <div className="text-sm muted" style={{ marginBottom: 10 }}>{bike.license_disc_file_path ? 'PDF available for download' : 'No license disc uploaded yet'}</div>
+                {bike.license_disc_file_path && <a href={bike.license_disc_file_path} target="_blank" rel="noreferrer">{bike.license_disc_original_name || 'Open license disc PDF'}</a>}
+                {bike.license_disc_expiry && <div className="text-xs" style={{ marginTop: 8, color: 'var(--primary-light)' }}>Current expiry: {fmtDate(bike.license_disc_expiry)}</div>}
+                {isSuperadmin && (
+                  <>
+                    <div className="field mt-3"><label className="label">Replace / upload license disc PDF</label><input type="file" accept="application/pdf" onChange={(e) => setLicenseDiscFile(e.target.files?.[0] || null)} /></div>
+                    <button className="btn btn-secondary btn-sm" onClick={() => handleDocumentUpload('license_disc')} disabled={uploadingDoc === 'license_disc'}>{uploadingDoc === 'license_disc' ? 'Uploading…' : 'Upload license disc'}</button>
+                    <div className="text-xs muted mt-2">The system will read the PDF and update the stored disc expiry automatically when it can detect one.</div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 

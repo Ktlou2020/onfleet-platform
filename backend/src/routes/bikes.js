@@ -43,6 +43,11 @@ const bikeDocumentUpload = multer({
   limits: { fileSize: 15 * 1024 * 1024 }
 });
 
+function superadminOnly(req, res, next) {
+  if (req.user.role !== 'superadmin') return res.status(403).json({ error: 'Superadmin access required' });
+  next();
+}
+
 function getSetting(key) {
   return db.prepare('SELECT setting_value FROM app_settings WHERE setting_key = ?').get(key)?.setting_value || null;
 }
@@ -166,6 +171,18 @@ router.get('/', authRequired, adminOnly, (req, res) => {
   res.json({ bikes });
 });
 
+router.post('/document-insights/license-disc', authRequired, superadminOnly, bikeDocumentUpload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'PDF file is required' });
+  const extracted = await extractLicenseDiscInsights(req.file.path, req.file.mimetype);
+  fs.unlink(req.file.path, () => {});
+  res.json({
+    ok: true,
+    license_disc_no: extracted.license_disc_no || null,
+    license_disc_expiry: extracted.license_disc_expiry || null,
+    extraction_error: extracted.extraction_error || null
+  });
+});
+
 router.get('/:id', authRequired, (req, res) => {
   const bike = db.prepare(`${bikeSelectSql} WHERE b.id = ?`).get(req.params.id);
   if (!bike) return res.status(404).json({ error: 'Not found' });
@@ -254,7 +271,7 @@ router.post('/:id/image', authRequired, adminOnly, bikeImageUpload.single('image
   res.json({ image_url: publicPath });
 });
 
-router.post('/:id/documents/:documentType', authRequired, adminOnly, bikeDocumentUpload.single('file'), async (req, res) => {
+router.post('/:id/documents/:documentType', authRequired, superadminOnly, bikeDocumentUpload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'PDF file is required' });
   const bike = db.prepare('SELECT id FROM bikes WHERE id = ?').get(req.params.id);
   if (!bike) return res.status(404).json({ error: 'Bike not found' });
@@ -292,7 +309,8 @@ router.post('/:id/documents/:documentType', authRequired, adminOnly, bikeDocumen
       license_disc_file_path: publicPath,
       license_disc_original_name: req.file.originalname,
       license_disc_no: extracted.license_disc_no || null,
-      license_disc_expiry: extracted.license_disc_expiry || null
+      license_disc_expiry: extracted.license_disc_expiry || null,
+      extraction_error: extracted.extraction_error || null
     });
   }
 

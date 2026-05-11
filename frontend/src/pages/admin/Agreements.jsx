@@ -62,6 +62,7 @@ export default function AdminAgreements() {
   const [params, setParams] = useSearchParams();
   const agreementStatus = params.get('status') || '';
   const bikeStatus = params.get('bike_status') || '';
+  const excludedBikeStatuses = (params.get('exclude_bike_statuses') || '').split(',').map((value) => value.trim()).filter(Boolean);
   const [list, setList] = useState(null);
   const [showImport, setShowImport] = useState(false);
   const [search, setSearch] = useState('');
@@ -78,12 +79,13 @@ export default function AdminAgreements() {
   const load = () => api.get('/agreements', {
     params: {
       ...(agreementStatus ? { status: agreementStatus } : {}),
-      ...(bikeStatus ? { bike_status: bikeStatus } : {})
+      ...(bikeStatus ? { bike_status: bikeStatus } : {}),
+      ...(excludedBikeStatuses.length ? { exclude_bike_statuses: excludedBikeStatuses.join(',') } : {})
     }
   }).then((response) => setList(response.data.agreements));
 
-  useEffect(() => { load(); }, [agreementStatus, bikeStatus]);
-  useEffect(() => { setPage(1); setSelectedIds([]); }, [search, agreementStatus, bikeStatus]);
+  useEffect(() => { load(); }, [agreementStatus, bikeStatus, excludedBikeStatuses.join(',')]);
+  useEffect(() => { setPage(1); setSelectedIds([]); }, [search, agreementStatus, bikeStatus, excludedBikeStatuses.join(',')]);
 
   const updateFilters = (nextValues) => {
     const next = new URLSearchParams(params);
@@ -231,11 +233,18 @@ export default function AdminAgreements() {
             {BIKE_STATUS_OPTIONS.map((value) => <option key={value || 'all'} value={value}>{labelize(value)}</option>)}
           </select>
         </div>
-        <button className="btn btn-secondary" onClick={() => { setSearch(''); updateFilters({ status: '', bike_status: '' }); }}>Clear filters</button>
+        <button className="btn btn-secondary" onClick={() => { setSearch(''); updateFilters({ status: '', bike_status: '', exclude_bike_statuses: '' }); }}>Clear filters</button>
       </div>
 
       <div className="row mb-3" style={{ flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div className="muted text-sm">Showing {filtered.length} matching agreements</div>
+        <div>
+          <div className="muted text-sm">Showing {filtered.length} matching agreements</div>
+          {!!excludedBikeStatuses.length && (
+            <div className="muted text-xs" style={{ marginTop: 4 }}>
+              Excluding bike statuses: {excludedBikeStatuses.map(labelize).join(', ')}
+            </div>
+          )}
+        </div>
         <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
           <div className="badge badge-muted">{selectedIds.length} selected</div>
           <button className="btn btn-sm btn-danger" onClick={bulkDiscontinue} disabled={!selectedIds.length || bulkBusy}>
@@ -277,7 +286,7 @@ export default function AdminAgreements() {
             ))}
           </tbody>
         </table>
-        {!pagination.items.length && <div className="muted" style={{ padding: 24, textAlign: 'center' }}>{search || agreementStatus || bikeStatus ? 'No agreements match the current filters.' : 'No agreements.'}</div>}
+        {!pagination.items.length && <div className="muted" style={{ padding: 24, textAlign: 'center' }}>{search || agreementStatus || bikeStatus || excludedBikeStatuses.length ? 'No agreements match the current filters.' : 'No agreements.'}</div>}
       </div>
       <Pagination page={pagination.currentPage} pageSize={pagination.pageSize} totalItems={pagination.totalItems} onPageChange={setPage} onPageSizeChange={setPageSize} label="agreements" />
 

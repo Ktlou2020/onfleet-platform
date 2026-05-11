@@ -41,7 +41,7 @@ export default function AdminDashboard() {
   const actions = useMemo(() => ([
     { icon: '📋', count: pending_applications, label: 'Pending applications', link: '/admin/applications?status=submitted' },
     { icon: '🆔', count: pending_kyc, label: 'Application documents to review', link: '/admin/applications' },
-    { icon: '⚠️', count: default_action_count, label: 'Defaulted agreements needing action', link: '/admin/agreements?status=defaulted', danger: true },
+    { icon: '⚠️', count: default_action_count, label: 'Defaulted agreements needing action', link: '/admin/agreements?status=defaulted&exclude_bike_statuses=stolen,written_off,sold', danger: true },
     { icon: '🔧', count: upcoming_services, label: 'Bikes due for service (14d)', link: '/admin/bikes?status=active' },
     { icon: '🪪', count: expiring_license_disc, label: 'License discs expiring (30d)', link: '/admin/bikes', danger: true },
     { icon: '🛡️', count: expiring_insurance, label: 'Insurance expiring (30d)', link: '/admin/bikes' }

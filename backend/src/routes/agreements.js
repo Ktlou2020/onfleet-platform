@@ -30,9 +30,13 @@ router.get('/mine', authRequired, (req, res) => {
 });
 
 router.get('/', authRequired, adminOnly, (req, res) => {
-  const { status = '', bike_status = '' } = req.query;
+  const { status = '', bike_status = '', exclude_bike_statuses = '' } = req.query;
   const where = [];
   const values = [];
+  const excludedBikeStatuses = String(exclude_bike_statuses || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
 
   if (status) {
     where.push('a.status = ?');
@@ -41,6 +45,10 @@ router.get('/', authRequired, adminOnly, (req, res) => {
   if (bike_status) {
     where.push('b.status = ?');
     values.push(bike_status);
+  }
+  if (excludedBikeStatuses.length) {
+    where.push(`b.status NOT IN (${excludedBikeStatuses.map(() => '?').join(',')})`);
+    values.push(...excludedBikeStatuses);
   }
 
   const sql = `SELECT a.*, u.full_name, u.email, b.make, b.model, b.registration, b.status AS bike_status

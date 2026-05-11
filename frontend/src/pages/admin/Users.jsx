@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import api from '../../api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../auth';
-import { Loading, Badge, SearchInput, fmtDate, Modal, Pagination, matchesSearch } from '../../components/ui';
+import { Loading, Badge, SearchInput, fmtDate, Modal, Pagination, matchesSearch, CopyableContactValue, normalizePhoneInput } from '../../components/ui';
 
 const SPECIAL_AUDIENCE_TAG = 'password-reset-batch-2026-05';
 
@@ -353,7 +353,7 @@ export default function AdminUsers() {
                       </div>
                     </div>
                   </td>
-                  <td>{account.phone || '—'}</td>
+                  <td><CopyableContactValue value={account.phone} compact /></td>
                   <td>{account.country_of_origin || '—'}</td>
                   <td>
                     {user?.role === 'superadmin' && account.id !== user.id ? (
@@ -391,7 +391,7 @@ export default function AdminUsers() {
           <div className="grid grid-2">
             <div className="field"><label className="label">Full name</label><input value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} /></div>
             <div className="field"><label className="label">Email</label><input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></div>
-            <div className="field"><label className="label">Phone</label><input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></div>
+            <div className="field"><label className="label">Phone</label><input type="tel" autoComplete="tel" inputMode="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: normalizePhoneInput(e.target.value) })} /></div>
             <div className="field"><label className="label">Password</label><input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></div>
             <div className="field"><label className="label">Role</label><select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}><option value="rider">Rider</option><option value="admin">Admin</option>{user?.role === 'superadmin' && <option value="superadmin">Superadmin</option>}</select></div>
           </div>

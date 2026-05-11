@@ -4,6 +4,8 @@ import { useAuth } from '../auth';
 import api from '../api';
 import toast from 'react-hot-toast';
 import Logo from '../components/Logo';
+import southAfricanCities from '../constants/southAfricanCities';
+import { fmt, normalizePhoneInput } from '../components/ui';
 
 const PLATFORMS = ['Uber Eats', 'Mr D', 'Bolt Food', 'Takealot', 'Checkers Sixty60', 'Other'];
 const PROVINCES = ['Gauteng', 'Western Cape', 'KwaZulu-Natal', 'Eastern Cape', 'Free State', 'Limpopo', 'Mpumalanga', 'North West', 'Northern Cape'];
@@ -13,7 +15,7 @@ export default function Signup() {
     full_name: '', email: '', phone: '', id_number: '', password: '',
     address: '', city: '', province: 'Gauteng', postal_code: '',
     date_of_birth: '', emergency_contact_name: '', emergency_contact_phone: '',
-    preferred_bike_id: '', monthly_income: '', delivery_platforms: [], years_riding: '1',
+    preferred_bike_id: '', delivery_platforms: [], years_riding: '1',
     has_drivers_license: true, payout_preference: 'eft',
     bank_name: '', account_holder: '', account_number: '', branch_code: '', ewallet_number: ''
   });
@@ -36,6 +38,7 @@ export default function Signup() {
   }, []);
 
   const f = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+  const setPhoneField = (k) => (e) => setForm({ ...form, [k]: normalizePhoneInput(e.target.value) });
   const selectedBike = useMemo(() => bikes.find((bike) => String(bike.id) === String(form.preferred_bike_id)), [bikes, form.preferred_bike_id]);
 
   const togglePlatform = (platform) => setForm((current) => ({
@@ -136,10 +139,10 @@ export default function Signup() {
               <div className="field"><label className="label">Full name *</label><input required value={form.full_name} onChange={f('full_name')} placeholder="Thabo Mokoena" /></div>
               <div className="grid grid-2">
                 <div className="field"><label className="label">Email *</label><input type="email" required value={form.email} onChange={f('email')} /></div>
-                <div className="field"><label className="label">Phone (WhatsApp) *</label><input required value={form.phone} onChange={f('phone')} placeholder="+27 82 123 4567" /></div>
+                <div className="field"><label className="label">Phone (WhatsApp) *</label><input type="tel" autoComplete="tel" inputMode="tel" required value={form.phone} onChange={setPhoneField('phone')} placeholder="+27 82 123 4567" /></div>
               </div>
               <div className="grid grid-2">
-                <div className="field"><label className="label">ID Number *</label><input required value={form.id_number} onChange={f('id_number')} maxLength={13} /></div>
+                <div className="field"><label className="label">ID number / Passport / Asylum number *</label><input required value={form.id_number} onChange={f('id_number')} placeholder="Enter your ID, passport, or asylum number" /></div>
                 <div className="field"><label className="label">Date of birth</label><input type="date" value={form.date_of_birth} onChange={f('date_of_birth')} /></div>
               </div>
               <div className="field"><label className="label">Password *</label><input type="password" required minLength={6} value={form.password} onChange={f('password')} /></div>
@@ -150,7 +153,12 @@ export default function Signup() {
             <>
               <div className="field"><label className="label">Street address *</label><input value={form.address} onChange={f('address')} placeholder="123 Main Road" /></div>
               <div className="grid grid-2">
-                <div className="field"><label className="label">City *</label><input value={form.city} onChange={f('city')} placeholder="Johannesburg" /></div>
+                <div className="field"><label className="label">City *</label>
+                  <select value={form.city} onChange={f('city')}>
+                    <option value="">Select city</option>
+                    {southAfricanCities.map((city) => <option key={city} value={city}>{city}</option>)}
+                  </select>
+                </div>
                 <div className="field"><label className="label">Postal code</label><input value={form.postal_code} onChange={f('postal_code')} /></div>
               </div>
               <div className="field"><label className="label">Province *</label>
@@ -161,7 +169,7 @@ export default function Signup() {
               <h3 className="mt-4 mb-2">Emergency contact</h3>
               <div className="grid grid-2">
                 <div className="field"><label className="label">Name</label><input value={form.emergency_contact_name} onChange={f('emergency_contact_name')} /></div>
-                <div className="field"><label className="label">Phone</label><input value={form.emergency_contact_phone} onChange={f('emergency_contact_phone')} /></div>
+                <div className="field"><label className="label">Phone</label><input type="tel" autoComplete="tel" inputMode="tel" value={form.emergency_contact_phone} onChange={setPhoneField('emergency_contact_phone')} placeholder="+27 81 234 5678" /></div>
               </div>
             </>
           )}
@@ -173,17 +181,21 @@ export default function Signup() {
                   <select value={form.preferred_bike_id} onChange={f('preferred_bike_id')}>
                     <option value="">— Select a bike —</option>
                     {bikes.map((bike) => (
-                      <option key={bike.id} value={bike.id}>{bike.make} {bike.model} · {bike.engine_cc}cc · R{bike.rental_weekly}/week</option>
+                      <option key={bike.id} value={bike.id}>{bike.make} {bike.model} · {bike.registration || 'No reg'} · {fmt(bike.rental_weekly)}/week</option>
                     ))}
                   </select>
                 </div>
-                <div className="field"><label className="label">Monthly income (optional)</label><input type="number" value={form.monthly_income} onChange={f('monthly_income')} placeholder="12000" /></div>
+                <div className="card" style={{ background: 'var(--surface-2)', alignSelf: 'end' }}>
+                  <strong>Weekly fee</strong>
+                  <div className="muted text-sm mt-1">Ready-to-go bikes display their weekly rental amount and registration in the list.</div>
+                </div>
               </div>
 
               {selectedBike && (
                 <div className="card mb-3" style={{ background: 'var(--surface-2)' }}>
                   <div className="flex-between"><span className="muted">Selected bike</span><strong>{selectedBike.make} {selectedBike.model}</strong></div>
-                  <div className="flex-between"><span className="muted">Weekly amount</span><strong>R{selectedBike.rental_weekly}</strong></div>
+                  <div className="flex-between"><span className="muted">Registration</span><strong>{selectedBike.registration || 'Pending registration'}</strong></div>
+                  <div className="flex-between"><span className="muted">Weekly amount</span><strong>{fmt(selectedBike.rental_weekly)}</strong></div>
                 </div>
               )}
 
@@ -223,7 +235,7 @@ export default function Signup() {
                   <div className="field"><label className="label">Branch code *</label><input value={form.branch_code} onChange={f('branch_code')} /></div>
                 </div>
               ) : (
-                <div className="field"><label className="label">E-wallet number *</label><input value={form.ewallet_number} onChange={f('ewallet_number')} placeholder="Cellphone number for wallet payouts" /></div>
+                <div className="field"><label className="label">E-wallet number *</label><input type="tel" autoComplete="tel" inputMode="tel" value={form.ewallet_number} onChange={setPhoneField('ewallet_number')} placeholder="Cellphone number for wallet payouts" /></div>
               )}
             </>
           )}
@@ -232,19 +244,19 @@ export default function Signup() {
             <>
               <div className="card mb-3" style={{ background: 'var(--surface-2)' }}>
                 <strong>Required uploads</strong>
-                <div className="muted text-sm mt-1">Upload all KYC documents now: ID document, driver's licence, selfie, and 3 latest payslips. Accepted formats: PDF, JPG, JPEG, PNG.</div>
+                <div className="muted text-sm mt-1">Upload all KYC documents now. ID document, driver's licence, and selfie may be PDF or image files. Payslips must be uploaded as PDF documents only.</div>
               </div>
               <div className="grid grid-2">
-                <UploadField label="ID document *" file={files.id_document} onChange={(file) => setFile('id_document', file)} />
-                <UploadField label="Driver's licence *" file={files.drivers_license} onChange={(file) => setFile('drivers_license', file)} />
-                <UploadField label="Selfie holding ID *" file={files.selfie} onChange={(file) => setFile('selfie', file)} />
+                <UploadField label="ID document *" file={files.id_document} onChange={(file) => setFile('id_document', file)} accept="application/pdf,image/jpeg,image/jpg,image/png" />
+                <UploadField label="Driver's licence *" file={files.drivers_license} onChange={(file) => setFile('drivers_license', file)} accept="application/pdf,image/jpeg,image/jpg,image/png" />
+                <UploadField label="Selfie holding ID *" file={files.selfie} onChange={(file) => setFile('selfie', file)} accept="application/pdf,image/jpeg,image/jpg,image/png" />
                 <div className="card" style={{ background: 'var(--surface-2)' }}>
                   <strong>Auto-decision rule</strong>
                   <div className="muted text-sm mt-2">OnFleet reads the 3 latest payslips, totals the paid amounts, and computes average weekly earnings. Below R1000/week = auto-decline with 2-week retry. R1000/week or more = auto-pre-approval.</div>
                 </div>
-                <UploadField label="Payslip 1 *" file={files.payslip_1} onChange={(file) => setFile('payslip_1', file)} />
-                <UploadField label="Payslip 2 *" file={files.payslip_2} onChange={(file) => setFile('payslip_2', file)} />
-                <UploadField label="Payslip 3 *" file={files.payslip_3} onChange={(file) => setFile('payslip_3', file)} />
+                <UploadField label="Payslip 1 *" file={files.payslip_1} onChange={(file) => setFile('payslip_1', file)} accept="application/pdf" />
+                <UploadField label="Payslip 2 *" file={files.payslip_2} onChange={(file) => setFile('payslip_2', file)} accept="application/pdf" />
+                <UploadField label="Payslip 3 *" file={files.payslip_3} onChange={(file) => setFile('payslip_3', file)} accept="application/pdf" />
               </div>
             </>
           )}
@@ -267,13 +279,13 @@ export default function Signup() {
   );
 }
 
-function UploadField({ label, file, onChange }) {
+function UploadField({ label, file, onChange, accept }) {
   return (
     <label className="card" style={{ background: 'var(--surface-2)', cursor: 'pointer' }}>
       <strong>{label}</strong>
       <div className="muted text-sm mt-2">{file ? file.name : 'Choose file'}</div>
       <div className="mt-3"><span className="btn btn-secondary btn-sm">Select file</span></div>
-      <input hidden type="file" accept="application/pdf,image/jpeg,image/jpg,image/png" onChange={(e) => onChange(e.target.files?.[0] || null)} />
+      <input hidden type="file" accept={accept} onChange={(e) => onChange(e.target.files?.[0] || null)} />
     </label>
   );
 }

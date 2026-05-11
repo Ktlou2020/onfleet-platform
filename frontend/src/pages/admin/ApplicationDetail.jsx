@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import api from '../../api';
 import toast from 'react-hot-toast';
-import { Loading, Badge, Modal, Pagination, fmt, fmtDate, paginateItems } from '../../components/ui';
+import { Loading, Badge, Modal, Pagination, fmt, fmtDate, paginateItems, CopyableContactValue } from '../../components/ui';
 
 export default function AdminApplicationDetail() {
   const { id } = useParams();
@@ -82,8 +82,8 @@ export default function AdminApplicationDetail() {
           </div>
           <Row k="Name" v={application.full_name} />
           <Row k="Email" v={application.email} />
-          <Row k="Phone" v={application.phone} />
-          <Row k="ID Number" v={application.id_number} />
+          <Row k="Phone" v={<CopyableContactValue value={application.phone} />} />
+          <Row k="ID number / Passport / Asylum" v={application.id_number} />
           <Row k="Address" v={[application.address, application.city, application.province].filter(Boolean).join(', ')} />
         </div>
         <div className="card">
@@ -104,7 +104,7 @@ export default function AdminApplicationDetail() {
       <div className="card mt-4">
         <h3 className="mb-3">Payout details</h3>
         {application.payout_preference === 'ewallet' ? (
-          <Row k="E-wallet number" v={application.ewallet_number || '—'} />
+          <Row k="E-wallet number" v={<CopyableContactValue value={application.ewallet_number} />} />
         ) : (
           <>
             <Row k="Bank" v={application.bank_name || '—'} />

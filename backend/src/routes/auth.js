@@ -30,8 +30,14 @@ const signupUpload = multer({
   storage,
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const ok = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'].includes(file.mimetype);
-    cb(ok ? null : new Error('Only PDF, JPG, JPEG, and PNG files are allowed'), ok);
+    const isPayslip = String(file.fieldname || '').startsWith('payslip_');
+    const ok = isPayslip
+      ? file.mimetype === 'application/pdf'
+      : ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'].includes(file.mimetype);
+    const error = isPayslip
+      ? 'Payslips must be uploaded as PDF documents only'
+      : 'Only PDF, JPG, JPEG, and PNG files are allowed';
+    cb(ok ? null : new Error(error), ok);
   }
 });
 
@@ -113,7 +119,7 @@ function createApplication(userId, payload) {
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       userId,
       payload.preferred_bike_id || null,
-      payload.monthly_income || null,
+      null,
       (payload.delivery_platforms || []).join(','),
       payload.has_riding_experience ? 1 : 0,
       payload.years_riding || null,
@@ -244,7 +250,7 @@ router.post('/signup-complete', signupUpload.fields([
     const {
       email, password, full_name, phone, id_number, address, city, province, postal_code,
       date_of_birth, emergency_contact_name, emergency_contact_phone, country_of_origin,
-      preferred_bike_id, monthly_income, years_riding, payout_preference,
+      preferred_bike_id, years_riding, payout_preference,
       bank_name, account_holder, account_number, branch_code, ewallet_number
     } = req.body;
 
@@ -271,7 +277,6 @@ router.post('/signup-complete', signupUpload.fields([
 
     const payload = {
       preferred_bike_id: Number(preferred_bike_id),
-      monthly_income: monthly_income ? Number(monthly_income) : null,
       delivery_platforms: parsePlatforms(req.body.delivery_platforms),
       has_riding_experience: toBool(req.body.has_riding_experience, true),
       years_riding: years_riding ? Number(years_riding) : null,

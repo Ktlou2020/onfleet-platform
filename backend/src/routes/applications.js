@@ -41,7 +41,7 @@ function createApplication(payload, actor, userId) {
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       userId,
       payload.preferred_bike_id || null,
-      payload.monthly_income || null,
+      null,
       (payload.delivery_platforms || []).join(','),
       payload.has_riding_experience ? 1 : 0,
       payload.years_riding || null,
@@ -250,6 +250,11 @@ router.post('/:id/documents', authRequired, upload.single('file'), async (req, r
   }
 
   let insights = { extracted_amount: null, extracted_text: null };
+  if (doc_type === 'payslip' && req.file.mimetype !== 'application/pdf') {
+    fs.unlink(req.file.path, () => {});
+    return res.status(400).json({ error: 'Payslips must be uploaded as PDF documents only' });
+  }
+
   if (doc_type === 'payslip') {
     insights = await extractPayslipInsights(req.file.path, req.file.mimetype);
   }

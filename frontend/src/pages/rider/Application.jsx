@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import api from '../../api';
 import toast from 'react-hot-toast';
-import { Loading, Badge, SearchInput, Pagination, fmt, fmtDate, matchesSearch, paginateItems } from '../../components/ui';
+import { Loading, Badge, SearchInput, Pagination, fmt, fmtDate, matchesSearch, paginateItems, normalizePhoneInput } from '../../components/ui';
 
 const PLATFORMS = ['Uber Eats', 'Mr D', 'Bolt Food', 'Takealot', 'Checkers Sixty60', 'Other'];
 
@@ -124,7 +124,7 @@ export default function RiderApplication() {
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <strong>Document rules</strong>
-            <div className="muted text-sm mt-1">Accepted file types: PDF, JPG, JPEG, PNG. No proof of address required. Upload 3 latest payslips so OnFleet can calculate average weekly earnings.</div>
+            <div className="muted text-sm mt-1">ID documents and licences may be PDF or image files. Payslips must be PDF only. Upload 3 latest payslips so OnFleet can calculate average weekly earnings.</div>
           </div>
           <div className="badge badge-info">Minimum R1000/week</div>
         </div>
@@ -166,7 +166,7 @@ export default function RiderApplication() {
               <select value={form.preferred_bike_id} onChange={(e) => setForm({ ...form, preferred_bike_id: e.target.value })} required>
                 <option value="">— Select a bike —</option>
                 {bikes.map((bike) => (
-                  <option key={bike.id} value={bike.id}>{bike.make} {bike.model} · {bike.engine_cc}cc · {fmt(bike.rental_weekly)}/week</option>
+                  <option key={bike.id} value={bike.id}>{bike.make} {bike.model} · {bike.registration || 'No reg'} · {fmt(bike.rental_weekly)}/week</option>
                 ))}
               </select>
             </div>
@@ -213,7 +213,7 @@ export default function RiderApplication() {
               <div className="field"><label className="label">Branch code</label><input value={form.branch_code} onChange={(e) => setForm({ ...form, branch_code: e.target.value })} /></div>
             </div>
           ) : (
-            <div className="field"><label className="label">E-wallet number</label><input value={form.ewallet_number} onChange={(e) => setForm({ ...form, ewallet_number: e.target.value })} placeholder="Cellphone number for wallet payouts" /></div>
+            <div className="field"><label className="label">E-wallet number</label><input type="tel" autoComplete="tel" inputMode="tel" value={form.ewallet_number} onChange={(e) => setForm({ ...form, ewallet_number: normalizePhoneInput(e.target.value) })} placeholder="Cellphone number for wallet payouts" /></div>
           )}
 
           <button className="btn" disabled={submitting}>{submitting ? 'Submitting…' : 'Create application'}</button>
@@ -239,10 +239,10 @@ export default function RiderApplication() {
           <div className="card mb-4">
             <h3 className="mb-3">Upload application documents</h3>
             <div className="grid grid-2">
-              <UploadCard title="ID document" sub="South African ID / passport" onPick={(file) => uploadDocument('id_document', file)} busy={uploading === 'id_document'} />
-              <UploadCard title="Driver's licence" sub="Front / single PDF" onPick={(file) => uploadDocument('drivers_license', file)} busy={uploading === 'drivers_license'} />
+              <UploadCard title="ID document" sub="South African ID, passport, or asylum document" accept="application/pdf,image/jpeg,image/jpg,image/png" onPick={(file) => uploadDocument('id_document', file)} busy={uploading === 'id_document'} />
+              <UploadCard title="Driver's licence" sub="Front / single PDF or image" accept="application/pdf,image/jpeg,image/jpg,image/png" onPick={(file) => uploadDocument('drivers_license', file)} busy={uploading === 'drivers_license'} />
               {[1, 2, 3].map((slot) => (
-                <UploadCard key={slot} title={`Payslip ${slot}`} sub="Latest payslip, PDF or image" onPick={(file) => uploadDocument('payslip', file)} busy={uploading === 'payslip'} />
+                <UploadCard key={slot} title={`Payslip ${slot}`} sub="Latest payslip, PDF only" accept="application/pdf" onPick={(file) => uploadDocument('payslip', file)} busy={uploading === 'payslip'} />
               ))}
             </div>
           </div>
@@ -275,13 +275,13 @@ export default function RiderApplication() {
   );
 }
 
-function UploadCard({ title, sub, onPick, busy }) {
+function UploadCard({ title, sub, onPick, busy, accept }) {
   return (
     <label className="card" style={{ background: 'var(--surface-2)', cursor: 'pointer' }}>
       <strong>{title}</strong>
       <div className="muted text-sm mt-1">{sub}</div>
       <div className="mt-3"><span className="btn btn-secondary btn-sm">{busy ? 'Uploading…' : 'Choose file'}</span></div>
-      <input type="file" hidden accept="application/pdf,image/jpeg,image/jpg,image/png" onChange={(e) => e.target.files?.[0] && onPick(e.target.files[0])} />
+      <input type="file" hidden accept={accept} onChange={(e) => e.target.files?.[0] && onPick(e.target.files[0])} />
     </label>
   );
 }

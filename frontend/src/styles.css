@@ -255,6 +255,39 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 .landing-filter-reset {
   min-height: 42px;
 }
+.copyable-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.copyable-value.compact {
+  gap: 6px;
+}
+.copyable-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+}
+.copyable-link:hover {
+  color: var(--primary-light);
+}
+.copyable-btn {
+  padding: 4px 8px;
+  min-height: 28px;
+}
+.branding-hero-preview {
+  min-height: 220px;
+  border-radius: 14px;
+  border: 1px dashed var(--border);
+  background: #0a1219 center/cover no-repeat;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 16px;
+}
 .bike-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
 .bike-card {
   background: var(--surface); border: 1px solid var(--border); border-radius: 16px; overflow: hidden;

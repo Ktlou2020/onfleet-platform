@@ -22,6 +22,7 @@ export default function Landing() {
   const [bikeFilters, setBikeFilters] = useState(EMPTY_FILTERS);
   const [bikesLoading, setBikesLoading] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [heroImageUrl, setHeroImageUrl] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -36,11 +37,13 @@ export default function Landing() {
           models: Array.isArray(r.data?.filters?.models) ? r.data.filters.models : [],
           conditions: Array.isArray(r.data?.filters?.conditions) ? r.data.filters.conditions : []
         });
+        setHeroImageUrl(r.data?.hero_image_url || '');
       })
       .catch(() => {
         if (cancelled) return;
         setBikes([]);
         setCatalogFilters({ makes: [], models: [], conditions: [] });
+        setHeroImageUrl('');
       })
       .finally(() => {
         if (!cancelled) setBikesLoading(false);
@@ -125,7 +128,7 @@ export default function Landing() {
           </div>
         </div>
         <div className="hero-visual-wrap">
-          <div className="hero-art" />
+          <div className="hero-art" style={heroImageUrl ? { backgroundImage: `url("${heroImageUrl}")` } : undefined} />
           <div className="hero-floating-card">
             <div className="badge badge-info">Popular rider plan</div>
             <strong>Own your bike after 78 weekly payments</strong>

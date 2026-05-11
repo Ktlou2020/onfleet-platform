@@ -4,7 +4,7 @@ import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import L from 'leaflet';
 import api from '../../api';
 import toast from 'react-hot-toast';
-import { Loading, Badge, Modal, Pagination, fmt, fmtDate, paginateItems } from '../../components/ui';
+import { Loading, Badge, Modal, Pagination, fmt, fmtDate, paginateItems, CopyableContactValue } from '../../components/ui';
 import { useAuth } from '../../auth';
 
 const bikeStatusOptions = [
@@ -53,6 +53,7 @@ export default function AdminBikeDetail() {
   const [uploadingDoc, setUploadingDoc] = useState('');
   const [servicePage, setServicePage] = useState(1);
   const [servicePageSize, setServicePageSize] = useState(10);
+  const [deletingServiceId, setDeletingServiceId] = useState(null);
   const [service, setService] = useState({ service_date: new Date().toISOString().slice(0, 10), service_type: 'monthly', description: '', odometer_km: '', cost: 0, next_service_date: '', next_service_km: '', performed_by: 'OnFleet Workshop', invoice: null });
 
   const load = () => api.get(`/bikes/${id}`).then((response) => {
@@ -143,6 +144,20 @@ export default function AdminBikeDetail() {
     }
   };
 
+  const deleteService = async (serviceRow) => {
+    if (!window.confirm(`Delete the ${serviceRow.service_type} record from ${fmtDate(serviceRow.service_date)}?`)) return;
+    try {
+      setDeletingServiceId(serviceRow.id);
+      await api.delete(`/bikes/${id}/service/${serviceRow.id}`);
+      toast.success('Service history entry deleted');
+      await load();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not delete service history entry');
+    } finally {
+      setDeletingServiceId(null);
+    }
+  };
+
   return (
     <>
       <Link to="/admin/bikes" className="muted text-sm">← Back to fleet</Link>
@@ -178,7 +193,8 @@ export default function AdminBikeDetail() {
                 <div>
                   <div className="text-xs muted">Allocated rider</div>
                   <div style={{ fontWeight: 700 }}>{bike.allocated_rider_name}</div>
-                  <div className="text-xs muted">{bike.allocated_rider_phone || 'No phone'} · {bike.allocated_agreement_no || 'No agreement number'}</div>
+                  <CopyableContactValue value={bike.allocated_rider_phone} compact />
+                  <div className="text-xs muted mt-1">{bike.allocated_agreement_no || 'No agreement number'}</div>
                 </div>
               </div>
             )}
@@ -192,6 +208,7 @@ export default function AdminBikeDetail() {
               <div className="grid grid-2">
                 <div className="field"><label className="label">Status</label><select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>{bikeStatusOptions.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}</select></div>
                 <div className="field"><label className="label">Registration</label><input value={form.registration || ''} onChange={(e) => setForm({ ...form, registration: e.target.value })} /></div>
+                <div className="field"><label className="label">Condition</label><select value={form.condition || 'new'} onChange={(e) => setForm({ ...form, condition: e.target.value })}><option value="new">New</option><option value="used">Used</option></select></div>
                 <div className="field"><label className="label">Odometer (km)</label><input type="number" value={form.odometer_km || 0} onChange={(e) => setForm({ ...form, odometer_km: Number(e.target.value) })} /></div>
                 <div className="field"><label className="label">Weekly rental</label><input type="number" value={form.rental_weekly} onChange={(e) => setForm({ ...form, rental_weekly: Number(e.target.value) })} /></div>
                 <div className="field"><label className="label">Insurance provider</label><input value={form.insurance_provider || ''} onChange={(e) => setForm({ ...form, insurance_provider: e.target.value })} /></div>
@@ -269,7 +286,7 @@ export default function AdminBikeDetail() {
             <div className="avatar" style={{ width: 72, height: 72, backgroundImage: bike.allocated_rider_avatar_url ? `url(${bike.allocated_rider_avatar_url})` : 'none', backgroundSize: 'cover', backgroundPosition: 'center', fontSize: 28 }}>{bike.allocated_rider_avatar_url ? '' : bike.allocated_rider_name?.[0]}</div>
             <div>
               <div style={{ fontSize: 20, fontWeight: 700 }}>{bike.allocated_rider_name}</div>
-              <div className="muted">{bike.allocated_rider_phone || 'No phone saved'}</div>
+              <CopyableContactValue value={bike.allocated_rider_phone} />
               <div className="text-xs muted">Agreement {bike.allocated_agreement_no || '—'}</div>
             </div>
           </div>
@@ -282,9 +299,12 @@ export default function AdminBikeDetail() {
           {pos ? <div style={{ height: 320, borderRadius: 8, overflow: 'hidden' }}><MapContainer center={pos} zoom={13} style={{ height: '100%' }}><TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" /><Marker position={pos} icon={bikeIcon}><Popup>{bike.make} {bike.model}</Popup></Marker></MapContainer></div> : <div className="muted">No GPS data yet.</div>}
         </div>
         <div className="card">
-          <h3 className="mb-3">Service & repair history</h3>
+          <div className="flex-between mb-3" style={{ gap: 12, flexWrap: 'wrap' }}>
+            <h3 style={{ marginBottom: 0 }}>Service & repair history</h3>
+            <div className="muted text-sm">Admins can remove incorrect or duplicate entries.</div>
+          </div>
           <table className="table">
-            <thead><tr><th>Date</th><th>Type</th><th>Cost</th><th>Invoice</th></tr></thead>
+            <thead><tr><th>Date</th><th>Type</th><th>Cost</th><th>Invoice</th><th></th></tr></thead>
             <tbody>
               {servicePagination.items.map((serviceRow) => (
                 <tr key={serviceRow.id}>
@@ -292,6 +312,7 @@ export default function AdminBikeDetail() {
                   <td>{serviceRow.service_type}</td>
                   <td>{fmt(serviceRow.cost)}</td>
                   <td>{serviceRow.invoice_file_path ? <a href={serviceRow.invoice_file_path} target="_blank" rel="noreferrer">{serviceRow.invoice_original_name || 'Open'}</a> : '—'}</td>
+                  <td><button className="btn btn-sm btn-danger" onClick={() => deleteService(serviceRow)} disabled={deletingServiceId === serviceRow.id}>{deletingServiceId === serviceRow.id ? 'Deleting…' : 'Delete'}</button></td>
                 </tr>
               ))}
             </tbody>

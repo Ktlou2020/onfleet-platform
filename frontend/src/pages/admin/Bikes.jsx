@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../api';
 import toast from 'react-hot-toast';
-import { Loading, Badge, Modal, Pagination, SearchInput, fmt, fmtDate, matchesSearch, paginateItems } from '../../components/ui';
+import { Loading, Badge, Modal, Pagination, SearchInput, fmt, fmtDate, matchesSearch, paginateItems, CopyableContactValue } from '../../components/ui';
 import { Plus } from 'lucide-react';
 import { useAuth } from '../../auth';
 
@@ -284,7 +284,8 @@ export default function AdminBikes() {
                   <div className="card mt-3" style={{ background: 'var(--surface-2)', padding: 12 }}>
                     <div className="text-xs muted">Allocated to</div>
                     <div style={{ fontWeight: 700 }}>{bike.allocated_rider_name}</div>
-                    <div className="text-xs muted">{bike.allocated_rider_phone || 'No phone'} · {bike.allocated_agreement_no || 'No agreement number'}</div>
+                    <div className="mt-1"><CopyableContactValue value={bike.allocated_rider_phone} compact /></div>
+                    <div className="text-xs muted mt-1">{bike.allocated_agreement_no || 'No agreement number'}</div>
                   </div>
                 )}
                 <div className="card mt-3" style={{ background: 'var(--surface-2)', padding: 12 }}>

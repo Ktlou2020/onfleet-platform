@@ -2,6 +2,7 @@ function splitCsvLine(line = '') {
   const values = [];
   let current = '';
   let inQuotes = false;
+
   for (let i = 0; i < line.length; i += 1) {
     const ch = line[i];
     if (ch === '"') {
@@ -18,22 +19,22 @@ function splitCsvLine(line = '') {
       current += ch;
     }
   }
+
   values.push(current);
   return values;
 }
 
 function escapeCsvCell(value) {
   const text = String(value ?? '');
-  if (/[",
-]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+  if (/[",\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
   return text;
 }
 
 function parseCsvBuffer(buffer) {
-  const text = buffer.toString('utf8').replace(/^﻿/, '');
-  const lines = text.split(/?
-/).filter((line) => line.trim());
+  const text = buffer.toString('utf8').replace(/^\uFEFF/, '');
+  const lines = text.split(/\r?\n/).filter((line) => line.trim());
   if (!lines.length) return { headers: [], rows: [] };
+
   const headers = splitCsvLine(lines.shift()).map((header) => header.trim());
   const rows = lines.map((line) => {
     const values = splitCsvLine(line);
@@ -43,6 +44,7 @@ function parseCsvBuffer(buffer) {
     });
     return row;
   });
+
   return { headers, rows };
 }
 
@@ -144,25 +146,30 @@ function getImportConfig(importType) {
 function buildSuggestedMapping(headers, expectedFields) {
   const byNormalized = new Map(headers.map((header) => [normalizeHeader(header), header]));
   const mapping = {};
+
   for (const field of expectedFields) {
     const candidates = [field.key, ...(field.aliases || [])];
     const match = candidates.map(normalizeHeader).find((candidate) => byNormalized.has(candidate));
     if (match) mapping[field.key] = byNormalized.get(match);
   }
+
   return mapping;
 }
 
 function validateMapping(expectedFields, mapping = {}) {
   const duplicates = [];
   const sourceUsage = {};
+
   for (const [target, source] of Object.entries(mapping)) {
     if (!source) continue;
     sourceUsage[source] = sourceUsage[source] || [];
     sourceUsage[source].push(target);
   }
+
   Object.entries(sourceUsage).forEach(([source, targets]) => {
     if (targets.length > 1) duplicates.push({ source, targets });
   });
+
   const missingRequired = expectedFields.filter((field) => field.required && !mapping[field.key]);
   return { missingRequired, duplicates };
 }
@@ -170,6 +177,7 @@ function validateMapping(expectedFields, mapping = {}) {
 function previewImportCsv(buffer, importType) {
   const config = getImportConfig(importType);
   if (!config) throw new Error('Unsupported import type');
+
   const { headers, rows } = parseCsvBuffer(buffer);
   const suggested_mapping = buildSuggestedMapping(headers, config.expected_fields);
   const validation = validateMapping(config.expected_fields, suggested_mapping);
@@ -181,6 +189,7 @@ function previewImportCsv(buffer, importType) {
     });
     return next;
   });
+
   return {
     import_type: importType,
     title: config.title,
@@ -200,11 +209,13 @@ function previewImportCsv(buffer, importType) {
 function applyCsvMapping(buffer, importType, mappingInput = {}) {
   const config = getImportConfig(importType);
   if (!config) throw new Error('Unsupported import type');
+
   const { rows } = parseCsvBuffer(buffer);
   const mapping = {};
   config.expected_fields.forEach((field) => {
     mapping[field.key] = mappingInput[field.key] || '';
   });
+
   const validation = validateMapping(config.expected_fields, mapping);
   if (validation.missingRequired.length) {
     throw new Error(`Missing required mapping: ${validation.missingRequired.map((field) => field.label || field.key).join(', ')}`);
@@ -212,11 +223,13 @@ function applyCsvMapping(buffer, importType, mappingInput = {}) {
   if (validation.duplicates.length) {
     throw new Error(`Each CSV column can only be mapped once. Duplicates: ${validation.duplicates.map((item) => `${item.source} → ${item.targets.join(', ')}`).join(' · ')}`);
   }
+
   const headers = config.expected_fields.map((field) => field.key);
   const csv = [
     headers.join(','),
     ...rows.map((row) => headers.map((header) => escapeCsvCell(mapping[header] ? row[mapping[header]] || '' : '')).join(','))
   ].join('\n');
+
   return Buffer.from(csv, 'utf8');
 }
 

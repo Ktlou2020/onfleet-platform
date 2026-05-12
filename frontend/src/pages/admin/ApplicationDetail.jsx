@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import api from '../../api';
 import toast from 'react-hot-toast';
@@ -28,6 +28,7 @@ export default function AdminApplicationDetail() {
   const [savingEdit, setSavingEdit] = useState(false);
   const [uploadingDoc, setUploadingDoc] = useState(false);
   const [savingDocId, setSavingDocId] = useState(null);
+  const [loadError, setLoadError] = useState('');
   const [docAmountEdits, setDocAmountEdits] = useState({});
   const [editForm, setEditForm] = useState({
     full_name: '',
@@ -52,16 +53,28 @@ export default function AdminApplicationDetail() {
   const [uploadForm, setUploadForm] = useState({ doc_type: 'payslip', file: null });
 
   const load = async () => {
-    const [applicationResponse, bikesResponse] = await Promise.all([
-      api.get(`/applications/${id}`),
-      api.get('/bikes')
-    ]);
-    setData(applicationResponse.data);
-    setBikes(bikesResponse.data.bikes || []);
+    setLoadError('');
+    try {
+      const applicationResponse = await api.get(`/applications/${id}`);
+      setData(applicationResponse.data);
+    } catch (error) {
+      const message = error.response?.data?.error || 'Could not load application detail';
+      setLoadError(message);
+      toast.error(message);
+      return;
+    }
+
+    try {
+      const bikesResponse = await api.get('/bikes');
+      setBikes(bikesResponse.data.bikes || []);
+    } catch (error) {
+      setBikes([]);
+      toast.error(error.response?.data?.error || 'Could not load bikes for allocation');
+    }
   };
 
   useEffect(() => {
-    load().catch(() => toast.error('Could not load application detail'));
+    load();
   }, [id]);
 
   useEffect(() => { setDocPage(1); }, [data?.documents?.length]);
@@ -96,6 +109,25 @@ export default function AdminApplicationDetail() {
     for (const doc of (data?.documents || [])) next[doc.id] = doc.extracted_amount ?? '';
     setDocAmountEdits(next);
   }, [data?.documents]);
+
+  const uploadAccept = uploadForm.doc_type === 'payslip'
+    ? 'application/pdf'
+    : 'application/pdf,image/jpeg,image/jpg,image/png,image/webp';
+
+  if (loadError && !data) {
+    return (
+      <>
+        <Link to="/admin/applications" className="muted text-sm">← Back</Link>
+        <div className="card mt-4">
+          <h3>Could not load application</h3>
+          <div className="muted mt-2">{loadError}</div>
+          <div className="row mt-4">
+            <button className="btn" onClick={load}>Retry</button>
+          </div>
+        </div>
+      </>
+    );
+  }
 
   if (!data) return <Loading />;
   const application = data.application;
@@ -181,10 +213,6 @@ export default function AdminApplicationDetail() {
       ? current.delivery_platforms.filter((item) => item !== platform)
       : [...current.delivery_platforms, platform]
   }));
-
-  const uploadAccept = useMemo(() => uploadForm.doc_type === 'payslip'
-    ? 'application/pdf'
-    : 'application/pdf,image/jpeg,image/jpg,image/png,image/webp', [uploadForm.doc_type]);
 
   return (
     <>

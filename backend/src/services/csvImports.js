@@ -520,8 +520,8 @@ function insertImportedPayment(row, recordedBy) {
   if (exists) return { skipped: true, reference };
   const paidAt = parseDateFlexible(row['Date Created'] || row.paid_at) || new Date().toISOString().slice(0, 10);
   const info = db.prepare(`INSERT INTO payments
-    (agreement_id, user_id, amount, currency, method, reference, status, paid_at, recorded_by, notes)
-    VALUES (?,?,?,?,?,?, 'success', ?, ?, ?)`)
+    (agreement_id, user_id, amount, currency, method, reference, status, paid_at, recorded_by, notes, fee_amount, net_amount)
+    VALUES (?,?,?,?,?,?, 'success', ?, ?, ?, ?, ?)`)
     .run(
       agreement.id,
       agreement.user_id,
@@ -531,7 +531,9 @@ function insertImportedPayment(row, recordedBy) {
       reference,
       paidAt,
       recordedBy,
-      normalizeText(row.notes) || `Imported from collections CSV for registration ${registration}`
+      normalizeText(row.notes) || `Imported from collections CSV for registration ${registration}`,
+      0,
+      amount
     );
 
   const schedules = db.prepare(`SELECT * FROM payment_schedules WHERE agreement_id = ? ORDER BY week_number`).all(agreement.id);

@@ -91,8 +91,8 @@ function recordManualPayment({ agreement_id, amount, method, reference, paid_at,
   if (!agreement) throw new Error('Agreement not found');
   if (agreement.status === 'discontinued') throw new Error('This agreement has been discontinued because the bike was stolen');
   const ref = reference || `MAN-${uuid().slice(0, 10)}`;
-  const info = db.prepare(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, status, paid_at, recorded_by, notes)
-    VALUES (?,?,?,?, ?, ?, 'success', ?, ?, ?)`).run(
+  const info = db.prepare(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, status, paid_at, recorded_by, notes, fee_amount, net_amount)
+    VALUES (?,?,?,?, ?, ?, 'success', ?, ?, ?, ?, ?)`).run(
       agreement_id,
       agreement.user_id,
       Number(amount),
@@ -101,7 +101,9 @@ function recordManualPayment({ agreement_id, amount, method, reference, paid_at,
       ref,
       paid_at || new Date().toISOString(),
       recorded_by || null,
-      notes || null
+      notes || null,
+      0,
+      Number(amount)
     );
   applyPaymentToSchedule(agreement_id, Number(amount));
   return { id: info.lastInsertRowid, reference: ref };

@@ -136,8 +136,8 @@ router.get('/dashboard', (req, res) => {
     bikes_maintenance: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE status = 'repairs'`).get().c,
     pending_applications: db.prepare(`SELECT COUNT(*) c FROM applications WHERE status IN ('submitted','under_review')`).get().c,
     pending_kyc: db.prepare(`SELECT COUNT(*) c FROM application_documents WHERE status = 'uploaded'`).get().c,
-    revenue_total: db.prepare(`SELECT COALESCE(SUM(COALESCE(net_amount, amount)),0) s FROM payments WHERE status = 'success'`).get().s,
-    revenue_30d: db.prepare(`SELECT COALESCE(SUM(COALESCE(net_amount, amount)),0) s FROM payments WHERE status = 'success' AND paid_at >= datetime('now','-30 days')`).get().s,
+    revenue_total: db.prepare(`SELECT COALESCE(SUM(COALESCE(NULLIF(net_amount,0), amount)),0) s FROM payments WHERE status = 'success'`).get().s,
+    revenue_30d: db.prepare(`SELECT COALESCE(SUM(COALESCE(NULLIF(net_amount,0), amount)),0) s FROM payments WHERE status = 'success' AND paid_at >= datetime('now','-30 days')`).get().s,
     overdue_amount: db.prepare(`SELECT COALESCE(SUM(amount_due - amount_paid),0) s FROM payment_schedules WHERE status = 'overdue'`).get().s,
     overdue_count: db.prepare(`SELECT COUNT(DISTINCT agreement_id) c FROM payment_schedules WHERE status = 'overdue'`).get().c,
     default_action_count: db.prepare(`SELECT COUNT(*) c
@@ -149,7 +149,7 @@ router.get('/dashboard', (req, res) => {
     expiring_insurance: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE insurance_expiry IS NOT NULL AND insurance_expiry <= date('now','+30 days')`).get().c,
     expiring_license_disc: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE license_disc_expiry IS NOT NULL AND license_disc_expiry <= date('now','+30 days')`).get().c
   };
-  const weekly = db.prepare(`SELECT strftime('%Y-%W', paid_at) week, COALESCE(SUM(COALESCE(net_amount, amount)),0) total
+  const weekly = db.prepare(`SELECT strftime('%Y-%W', paid_at) week, COALESCE(SUM(COALESCE(NULLIF(net_amount,0), amount)),0) total
     FROM payments WHERE status = 'success' AND paid_at >= datetime('now','-90 days')
     GROUP BY week ORDER BY week`).all();
   res.json({ stats, weekly_revenue: weekly });

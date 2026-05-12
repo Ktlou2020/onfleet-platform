@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { AlertTriangle, Bike, Briefcase, CheckCircle2, Clock3, CreditCard, LogOut, ShieldCheck, Users, Wrench } from 'lucide-react';
+import { AlertTriangle, Bike, Briefcase, CheckCircle2, Clock3, CreditCard, FileText, LayoutDashboard, LogOut, ShieldCheck, Users, Wrench } from 'lucide-react';
 import Logo from '../components/Logo';
 import api from '../api';
 import { useAuth } from '../auth';
@@ -22,13 +22,13 @@ const ROLE_TABS = {
 };
 
 const tabOptions = [
-  { key: 'overview', label: 'Overview' },
-  { key: 'fleet', label: 'Fleet' },
-  { key: 'agreements', label: 'Agreements' },
-  { key: 'maintenance', label: 'Maintenance' },
-  { key: 'collections', label: 'Collections' },
-  { key: 'billing', label: 'Billing' },
-  { key: 'team', label: 'Team' }
+  { key: 'overview', label: 'Overview', icon: LayoutDashboard },
+  { key: 'fleet', label: 'Fleet', icon: Bike },
+  { key: 'agreements', label: 'Agreements', icon: FileText },
+  { key: 'maintenance', label: 'Maintenance', icon: Wrench },
+  { key: 'collections', label: 'Collections', icon: AlertTriangle },
+  { key: 'billing', label: 'Billing', icon: CreditCard },
+  { key: 'team', label: 'Team', icon: Users }
 ];
 
 const defaultMemberForm = {
@@ -70,6 +70,7 @@ export default function FleetOwnerPortal() {
   const nav = useNavigate();
   const [tab, setTab] = useState('overview');
   const [search, setSearch] = useState('');
+  const [navSearch, setNavSearch] = useState('');
   const [fleetStatus, setFleetStatus] = useState('all');
   const [agreementStatus, setAgreementStatus] = useState('all');
   const [portal, setPortal] = useState(emptyPortal);
@@ -119,6 +120,18 @@ export default function FleetOwnerPortal() {
   const riderOptions = useMemo(() => portal.rider_options.filter((rider) => !Number(rider.has_open_agreement)), [portal.rider_options]);
   const organization = portal.organization || {};
   const summary = portal.summary || {};
+  const allowedNavItems = tabOptions.filter((option) => allowedTabs.includes(option.key));
+  const filteredNavItems = navSearch
+    ? allowedNavItems.filter((option) => matchesSearch(navSearch, option.label, option.key))
+    : [];
+
+  const goToFirstNavMatch = (event) => {
+    if (event.key === 'Enter' && filteredNavItems[0]) {
+      event.preventDefault();
+      setTab(filteredNavItems[0].key);
+      setNavSearch('');
+    }
+  };
 
   const refreshPortal = async () => {
     await loadPortal({ silent: true });
@@ -292,54 +305,80 @@ export default function FleetOwnerPortal() {
   if (loading) return <Loading />;
 
   return (
-    <div className="fleet-portal-page">
-      <header className="fleet-portal-header">
-        <div className="fleet-portal-brand"><Logo /><Badge status="active">Fleet portal</Badge></div>
-        <div className="fleet-portal-header-actions">
-          <div className="muted text-sm">{organization.name || user?.organization_name || 'Company workspace'} · {normalizeRoleLabel(user?.role)}</div>
-          <button className="btn btn-secondary btn-sm" onClick={refreshPortal}>Refresh</button>
-          <button className="btn btn-secondary btn-sm" onClick={() => { logout(); nav('/fleet/login'); }}><LogOut size={14} /> Sign out</button>
+    <div className="app-shell fleet-portal-shell-app">
+      <aside className="sidebar">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 8px 24px' }}>
+          <Logo />
+          <span className="badge badge-info" style={{ fontSize: 9 }}>FLEET</span>
         </div>
-      </header>
 
-      <div className="fleet-portal-shell">
-        <aside className="fleet-portal-sidebar card">
-          <div className="fleet-portal-company-card">
-            <div className="badge badge-info">{organization.plan_key || user?.organization_plan_key || 'trial'}</div>
-            <h3 className="mt-3">{organization.name || user?.organization_name || 'Company workspace'}</h3>
-            <div className="muted text-sm mt-2">{organization.city || 'South Africa'} · Status {organization.status || user?.organization_status || 'trialing'}</div>
-            <div className="fleet-portal-callout mt-4">
-              Trial ends {organization.trial_ends_at ? fmtDate(organization.trial_ends_at) : '—'}
+        <div className="card" style={{ padding: 14, marginBottom: 18, background: 'linear-gradient(180deg, rgba(30,136,209,0.15), rgba(30,136,209,0.05))' }}>
+          <div className="badge badge-info">{organization.plan_key || user?.organization_plan_key || 'trial'}</div>
+          <div className="mt-3" style={{ fontWeight: 700 }}>{organization.name || user?.organization_name || 'Company workspace'}</div>
+          <div className="text-xs muted mt-1">{organization.city || 'South Africa'} · {normalizeRoleLabel(user?.role)}</div>
+          <div className="text-xs muted mt-2">Live sync {portal.live_updated_at ? fmtDateTime(portal.live_updated_at) : '—'}</div>
+        </div>
+
+        <nav>
+          {tabOptions.map((option) => {
+            const Icon = option.icon;
+            const enabled = allowedTabs.includes(option.key);
+            return (
+              <button
+                key={option.key}
+                type="button"
+                className={tab === option.key ? 'active' : ''}
+                disabled={!enabled}
+                onClick={() => enabled && setTab(option.key)}
+                title={enabled ? option.label : `${option.label} locked for ${normalizeRoleLabel(user?.role)}`}
+              >
+                <Icon size={16} />
+                <span style={{ flex: 1, textAlign: 'left' }}>{option.label}</span>
+                {!enabled ? <span className="text-xs muted">Locked</span> : null}
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="user-mini">
+          <div className="avatar">{user?.full_name?.[0]}</div>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div className="text-sm" style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user?.full_name}</div>
+            <div className="text-xs muted">{user?.email}</div>
+          </div>
+          <button onClick={() => { logout(); nav('/fleet/login'); }} title="Sign out" style={{ background: 'transparent', color: 'var(--muted)', padding: 8, border: 'none' }}><LogOut size={16} /></button>
+        </div>
+      </aside>
+
+      <div className="main">
+        <div className="topbar" style={{ gap: 16 }}>
+          <div className="text-sm muted">Fleet management console · OnFleet Africa</div>
+          <div style={{ position: 'relative', width: 'min(520px, 100%)', marginLeft: 'auto' }}>
+            <SearchInput value={navSearch} onChange={setNavSearch} placeholder="Search fleet tabs and press Enter" inputProps={{ onKeyDown: goToFirstNavMatch }} style={{ width: '100%' }} />
+            {!!navSearch && (
+              <div className="card" style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: '100%', zIndex: 20, padding: 12 }}>
+                {filteredNavItems.length ? filteredNavItems.map((item) => {
+                  const Icon = item.icon;
+                  return <button key={item.key} className="btn btn-secondary btn-sm" style={{ width: '100%', justifyContent: 'flex-start', marginBottom: 8 }} onClick={() => { setTab(item.key); setNavSearch(''); }}><Icon size={14} /> {item.label}</button>;
+                }) : <div className="muted text-sm">No fleet tabs match your search.</div>}
+              </div>
+            )}
+          </div>
+          <div className="text-xs muted">Logged in as <strong>{organization.name || user?.organization_name || 'Fleet owner'}</strong></div>
+        </div>
+
+        <div className="content">
+          <div className="flex-between mb-4" style={{ gap: 16, flexWrap: 'wrap' }}>
+            <div>
+              <h1 className="page-title">{tabOptions.find((option) => option.key === tab)?.label || 'Fleet portal'}</h1>
+              <p className="page-sub" style={{ marginBottom: 0 }}>Manage only your company fleet with the same fast operational flow used in the admin console, while keeping organization-level permissions and scoping.</p>
+            </div>
+            <div className="row" style={{ flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              <div className="muted text-sm">Trial ends {organization.trial_ends_at ? fmtDate(organization.trial_ends_at) : '—'}</div>
+              <button className="btn btn-secondary btn-sm" onClick={refreshPortal}>Refresh</button>
             </div>
           </div>
 
-          <div className="fleet-portal-nav mt-4">
-            {tabOptions.map((option) => {
-              const enabled = allowedTabs.includes(option.key);
-              return (
-                <button
-                  key={option.key}
-                  type="button"
-                  className={`fleet-portal-nav-btn ${tab === option.key ? 'active' : ''}`}
-                  disabled={!enabled}
-                  onClick={() => enabled && setTab(option.key)}
-                >
-                  <span>{option.label}</span>
-                  {!enabled ? <span className="muted text-xs">Locked</span> : null}
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="fleet-portal-callout mt-4">
-            <strong>Live sync:</strong> {portal.live_updated_at ? fmtDateTime(portal.live_updated_at) : '—'}
-          </div>
-          <div className="fleet-portal-callout mt-4">
-            <strong>Role access:</strong> {normalizeRoleLabel(user?.role)}. Operations controls are limited to company admin and operations lead accounts.
-          </div>
-        </aside>
-
-        <main className="fleet-portal-main">
           <div className="grid grid-4 mb-4">
             <Stat label="Active bikes" value={summary.active_bikes || 0} delta={`${summary.ready_bikes || 0} ready to deploy`} icon={<Bike size={16} />} />
             <Stat label="Collections risk" value={summary.defaulted_agreements || 0} delta="Defaulted agreements" icon={<AlertTriangle size={16} />} accent="var(--danger)" />
@@ -655,7 +694,7 @@ export default function FleetOwnerPortal() {
               </div>
             </div>
           )}
-        </main>
+        </div>
       </div>
 
       {activeModal === 'allocation' && (

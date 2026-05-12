@@ -7,6 +7,19 @@ import { Briefcase, CalendarCheck2, Rocket, Trophy } from 'lucide-react';
 
 const statusOptions = ['all', 'new', 'contacted', 'demo_scheduled', 'trial_started', 'converted', 'archived'];
 
+function formatLeadStatus(value) {
+  const labels = {
+    all: 'All statuses',
+    new: 'New',
+    contacted: 'Contacted',
+    demo_scheduled: 'Onboarding call scheduled',
+    trial_started: 'Account setup in progress',
+    converted: 'Converted',
+    archived: 'Archived'
+  };
+  return labels[value] || String(value || '').replace(/_/g, ' ');
+}
+
 export default function AdminPilotLeads() {
   const [loading, setLoading] = useState(true);
   const [leads, setLeads] = useState([]);
@@ -31,7 +44,7 @@ export default function AdminPilotLeads() {
       setLeads(Array.isArray(data?.leads) ? data.leads : []);
       setStats(data?.stats || { total: 0, new: 0, demos: 0, trials: 0, converted: 0 });
     } catch (error) {
-      toast.error(error.response?.data?.error || 'Could not load pilot leads');
+      toast.error(error.response?.data?.error || 'Could not load fleet-owner leads');
     } finally {
       setLoading(false);
     }
@@ -82,7 +95,7 @@ export default function AdminPilotLeads() {
       const { data } = await api.patch(`/pilot/leads/${selectedLead.id}`, editor);
       const updatedLead = data?.lead;
       setLeads((prev) => prev.map((lead) => lead.id === updatedLead.id ? updatedLead : lead));
-      toast.success('Pilot lead updated');
+      toast.success('Fleet-owner lead updated');
       load(status, search);
     } catch (error) {
       toast.error(error.response?.data?.error || 'Could not update lead');
@@ -93,13 +106,13 @@ export default function AdminPilotLeads() {
 
   return (
     <div>
-      <div className="page-title">Fleet-owner pilot</div>
-      <div className="page-sub">Capture pilot interest from fleet owners, route demos, and move strong operators into trial or conversion.</div>
+      <div className="page-title">Fleet-owner leads</div>
+      <div className="page-sub">Capture fleet-owner interest, route onboarding conversations, and move strong operators into active accounts.</div>
 
       <div className="grid grid-4 mb-4">
-        <Stat label="Pilot leads" value={stats.total || 0} icon={<Briefcase size={16} />} />
+        <Stat label="Fleet-owner leads" value={stats.total || 0} icon={<Briefcase size={16} />} />
         <Stat label="New" value={stats.new || 0} icon={<Rocket size={16} />} />
-        <Stat label="Demos scheduled" value={stats.demos || 0} icon={<CalendarCheck2 size={16} />} />
+        <Stat label="Onboarding calls" value={stats.demos || 0} icon={<CalendarCheck2 size={16} />} />
         <Stat label="Converted" value={stats.converted || 0} icon={<Trophy size={16} />} />
       </div>
 
@@ -107,7 +120,7 @@ export default function AdminPilotLeads() {
         <div className="row" style={{ flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <h3 style={{ marginBottom: 4 }}>Pipeline</h3>
-            <div className="muted text-sm">New lead → contacted → demo scheduled → trial started → converted</div>
+            <div className="muted text-sm">New lead → contacted → onboarding call → account setup → converted</div>
           </div>
           <button className="btn btn-secondary btn-sm" onClick={() => load(status, search)} disabled={loading}>Refresh</button>
         </div>
@@ -115,7 +128,7 @@ export default function AdminPilotLeads() {
           <div style={{ minWidth: 180 }}>
             <label className="label">Status</label>
             <select value={status} onChange={(e) => { setStatus(e.target.value); load(e.target.value, search); }}>
-              {statusOptions.map((value) => <option key={value} value={value}>{value === 'all' ? 'All statuses' : value.replace(/_/g, ' ')}</option>)}
+              {statusOptions.map((value) => <option key={value} value={value}>{formatLeadStatus(value)}</option>)}
             </select>
           </div>
           <div style={{ flex: 1, minWidth: 260 }}>
@@ -126,7 +139,7 @@ export default function AdminPilotLeads() {
       </div>
 
       {loading ? <Loading /> : !filtered.length ? (
-        <EmptyState title="No pilot leads yet" sub="Once a fleet owner submits the public pilot form, the lead will show up here for follow-up." />
+        <EmptyState title="No fleet-owner leads yet" sub="Once a fleet owner submits the public contact form, the lead will show up here for follow-up." />
       ) : (
         <div className="pilot-admin-layout">
           <div className="card" style={{ overflowX: 'auto' }}>
@@ -149,7 +162,7 @@ export default function AdminPilotLeads() {
                     </td>
                     <td><Badge status="active">{String(lead.plan_interest || 'trial').replace(/_/g, ' ')}</Badge></td>
                     <td>{lead.fleet_size || '—'}</td>
-                    <td><Badge status={lead.status}>{String(lead.status || 'new').replace(/_/g, ' ')}</Badge></td>
+                    <td><Badge status={lead.status}>{formatLeadStatus(lead.status || 'new')}</Badge></td>
                     <td>{fmtDateTime(lead.created_at)}</td>
                   </tr>
                 ))}
@@ -161,7 +174,7 @@ export default function AdminPilotLeads() {
               totalItems={pagination.totalItems}
               onPageChange={setPage}
               onPageSizeChange={setPageSize}
-              label="pilot leads"
+              label="fleet-owner leads"
             />
           </div>
 
@@ -173,7 +186,7 @@ export default function AdminPilotLeads() {
                     <h3>{selectedLead.company_name}</h3>
                     <div className="muted text-sm">{selectedLead.contact_name}</div>
                   </div>
-                  <Badge status={selectedLead.status}>{String(selectedLead.status).replace(/_/g, ' ')}</Badge>
+                  <Badge status={selectedLead.status}>{formatLeadStatus(selectedLead.status)}</Badge>
                 </div>
                 <div className="grid grid-2 mt-4">
                   <div>
@@ -197,7 +210,7 @@ export default function AdminPilotLeads() {
                     <div>{String(selectedLead.plan_interest || 'trial').replace(/_/g, ' ')}</div>
                   </div>
                   <div>
-                    <div className="label">Demo requested</div>
+                    <div className="label">Onboarding call requested</div>
                     <div>{selectedLead.wants_demo ? 'Yes' : 'No'}</div>
                   </div>
                 </div>
@@ -205,13 +218,13 @@ export default function AdminPilotLeads() {
                 <div className="field mt-4">
                   <label className="label">Lead status</label>
                   <select value={editor.status} onChange={(e) => setEditor((prev) => ({ ...prev, status: e.target.value }))}>
-                    {statusOptions.filter((value) => value !== 'all').map((value) => <option key={value} value={value}>{value.replace(/_/g, ' ')}</option>)}
+                    {statusOptions.filter((value) => value !== 'all').map((value) => <option key={value} value={value}>{formatLeadStatus(value)}</option>)}
                   </select>
                 </div>
 
                 <div className="field">
                   <label className="label">Internal notes</label>
-                  <textarea rows="8" value={editor.notes} onChange={(e) => setEditor((prev) => ({ ...prev, notes: e.target.value }))} placeholder="Demo timing, objections, rollout notes, billing blockers" />
+                  <textarea rows="8" value={editor.notes} onChange={(e) => setEditor((prev) => ({ ...prev, notes: e.target.value }))} placeholder="Onboarding timing, objections, rollout notes, billing blockers" />
                 </div>
 
                 <div className="muted text-xs mb-3">Submitted {fmtDateTime(selectedLead.created_at)} · Updated {fmtDateTime(selectedLead.updated_at || selectedLead.created_at)}</div>

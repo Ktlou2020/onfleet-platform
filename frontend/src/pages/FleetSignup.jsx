@@ -49,8 +49,8 @@ export default function FleetSignup() {
       <div className="auth-hero">
         <Logo size="lg" />
         <div>
-          <div className="auth-tagline">Create your company account.<br /><span>Launch your fleet trial.</span></div>
-          <p className="muted" style={{ maxWidth: 430 }}>Start a fleet-owner workspace for your company with a 14-day trial, company profile, and role-based access for your team.</p>
+          <div className="auth-tagline">Create your company account.<br /><span>Launch your fleet workspace.</span></div>
+          <p className="muted" style={{ maxWidth: 430 }}>Start a fleet-owner workspace for your company with company profile setup, role-based access for your team, and flexible plan onboarding.</p>
           <div className="feat-list">
             <div className="feat"><div className="ico"><Briefcase size={16} /></div><div><strong>Company account</strong><div className="muted text-sm">A dedicated workspace tied to your organization</div></div></div>
             <div className="feat"><div className="ico"><Users size={16} /></div><div><strong>Role-based team access</strong><div className="muted text-sm">Admins, ops, billing, and viewers can be added later</div></div></div>
@@ -99,7 +99,7 @@ export default function FleetSignup() {
         <div className="card mt-6" style={{ background: 'var(--surface-2)' }}>
           <div className="text-sm"><strong>Access control starts immediately.</strong> Your first user will be provisioned with the selected fleet-owner role.</div>
           <div className="muted text-sm mt-2">Most companies should start with <strong>Company admin</strong> for the first user.</div>
-          <div className="mt-3"><Link to="/fleet" className="btn btn-secondary btn-sm"><ShieldCheck size={14} /> Back to pilot overview</Link></div>
+          <div className="mt-3"><Link to="/fleet" className="btn btn-secondary btn-sm"><ShieldCheck size={14} /> Back to fleet overview</Link></div>
         </div>
       </div>
     </div>

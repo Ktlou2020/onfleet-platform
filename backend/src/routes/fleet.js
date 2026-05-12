@@ -2,7 +2,9 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const db = require('../db');
 const { authRequired, fleetOwnerOnly, companyRoleAllowed } = require('../middleware/auth');
-const { logAudit, generateAgreementNo, buildPaymentSchedule, addDays } = require('../utils/helpers');
+const { logAudit, generateAgreementNo, buildPaymentSchedule, addDays, recalcScheduleStatuses } = require('../utils/helpers');
+const { setBikeStatus } = require('../utils/bikeStatus');
+const { discontinueAgreementForStolenBike, discontinueAgreement, reinstateDiscontinuedAgreement } = require('../services/agreementLifecycle');
 
 const router = express.Router();
 const FLEET_ROLE_VALUES = ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'];
@@ -266,6 +268,125 @@ function buildSummary(bikes, agreements, members, recentServices) {
     due_this_week: dueThisWeek,
     recent_service_logs: recentServices.length
   };
+}
+
+function getFleetPayments(org) {
+  const scope = getBikeScope(org, 'b');
+  return db.prepare(`SELECT p.*, u.full_name, u.email, a.agreement_no,
+      b.registration AS bike_registration, b.make, b.model, b.status AS bike_status,
+      a.status AS agreement_status
+    FROM payments p
+    JOIN agreements a ON a.id = p.agreement_id
+    JOIN bikes b ON b.id = a.bike_id
+    JOIN users u ON u.id = p.user_id
+    WHERE ${scope.clause}
+    ORDER BY COALESCE(p.paid_at, p.created_at) DESC, p.id DESC
+    LIMIT 500`).all(...scope.params);
+}
+
+function getScopedPayment(org, paymentId) {
+  const scope = getBikeScope(org, 'b');
+  return db.prepare(`SELECT p.*, a.agreement_no, a.status AS agreement_status,
+      b.id AS bike_id, b.registration AS bike_registration, b.status AS bike_status,
+      u.full_name, u.email
+    FROM payments p
+    JOIN agreements a ON a.id = p.agreement_id
+    JOIN bikes b ON b.id = a.bike_id
+    JOIN users u ON u.id = p.user_id
+    WHERE p.id = ? AND ${scope.clause}`).get(paymentId, ...scope.params);
+}
+
+function creditedAmount(payment) {
+  return Number(payment?.net_amount || payment?.amount || 0);
+}
+
+function applyPaymentToSchedule(agreementId, amountZAR) {
+  const agreement = db.prepare('SELECT status FROM agreements WHERE id = ?').get(agreementId);
+  if (!agreement) throw new Error('Agreement not found');
+  if (agreement.status === 'discontinued') throw new Error('This agreement has been discontinued');
+  const schedule = db.prepare(`SELECT * FROM payment_schedules WHERE agreement_id = ?
+    AND status != 'paid' AND status != 'waived' ORDER BY week_number ASC`).all(agreementId);
+  let remaining = amountZAR;
+  const upd = db.prepare(`UPDATE payment_schedules SET amount_paid = ?, status = ?, paid_at = ? WHERE id = ?`);
+  for (const row of schedule) {
+    if (remaining <= 0) break;
+    const owe = +(row.amount_due - row.amount_paid).toFixed(2);
+    const apply = Math.min(remaining, owe);
+    const newPaid = +(row.amount_paid + apply).toFixed(2);
+    const status = newPaid >= row.amount_due ? 'paid' : 'partial';
+    const paidAt = status === 'paid' ? new Date().toISOString() : row.paid_at;
+    upd.run(newPaid, status, paidAt, row.id);
+    remaining = +(remaining - apply).toFixed(2);
+  }
+  recalcScheduleStatuses(agreementId);
+  return remaining;
+}
+
+function recordFleetManualPayment({ agreement_id, amount, method, reference, paid_at, notes, recorded_by }) {
+  const agreement = db.prepare('SELECT * FROM agreements WHERE id = ?').get(agreement_id);
+  if (!agreement) throw new Error('Agreement not found');
+  if (agreement.status === 'discontinued') throw new Error('This agreement has been discontinued');
+  const ref = reference || `FLEET-MAN-${Date.now()}`;
+  const info = db.prepare(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, status, paid_at, recorded_by, notes, fee_amount, net_amount)
+    VALUES (?,?,?,?, ?, ?, 'success', ?, ?, ?, ?, ?)`).run(
+      agreement_id,
+      agreement.user_id,
+      Number(amount),
+      'ZAR',
+      method || 'eft',
+      ref,
+      paid_at || new Date().toISOString(),
+      recorded_by || null,
+      notes || null,
+      0,
+      Number(amount)
+    );
+  applyPaymentToSchedule(agreement_id, Number(amount));
+  return { id: info.lastInsertRowid, reference: ref };
+}
+
+function rebuildScheduleAllocations(agreementId) {
+  const today = todayIso();
+  const schedules = db.prepare(`SELECT * FROM payment_schedules WHERE agreement_id = ? ORDER BY week_number ASC`).all(agreementId);
+  if (!schedules.length) return;
+
+  const reset = db.prepare(`UPDATE payment_schedules SET amount_paid = ?, paid_at = ?, status = ? WHERE id = ?`);
+  for (const schedule of schedules) {
+    if (schedule.status === 'waived') {
+      reset.run(0, null, 'waived', schedule.id);
+    } else {
+      reset.run(0, null, schedule.due_date < today ? 'overdue' : 'pending', schedule.id);
+    }
+  }
+
+  const payments = db.prepare(`SELECT * FROM payments WHERE agreement_id = ? AND status = 'success' ORDER BY COALESCE(paid_at, created_at) ASC, id ASC`).all(agreementId);
+  const applicable = db.prepare(`SELECT * FROM payment_schedules WHERE agreement_id = ? AND status != 'waived' ORDER BY week_number ASC`).all(agreementId);
+  const updateApplied = db.prepare(`UPDATE payment_schedules SET amount_paid = ?, paid_at = ?, status = ? WHERE id = ?`);
+
+  for (const payment of payments) {
+    let remaining = creditedAmount(payment);
+    for (const schedule of applicable) {
+      if (remaining <= 0) break;
+      const owed = +(Number(schedule.amount_due) - Number(schedule.amount_paid || 0)).toFixed(2);
+      if (owed <= 0) continue;
+      const applied = Math.min(remaining, owed);
+      schedule.amount_paid = +(Number(schedule.amount_paid || 0) + applied).toFixed(2);
+      schedule.paid_at = schedule.paid_at || payment.paid_at || payment.created_at || null;
+      schedule.status = schedule.amount_paid >= Number(schedule.amount_due) ? 'paid' : 'partial';
+      updateApplied.run(schedule.amount_paid, schedule.paid_at, schedule.status, schedule.id);
+      remaining = +(remaining - applied).toFixed(2);
+    }
+  }
+
+  for (const schedule of applicable) {
+    let status = schedule.status;
+    if (Number(schedule.amount_paid || 0) >= Number(schedule.amount_due || 0)) status = 'paid';
+    else if (Number(schedule.amount_paid || 0) > 0 && schedule.due_date < today) status = 'overdue';
+    else if (Number(schedule.amount_paid || 0) > 0) status = 'partial';
+    else if (schedule.due_date < today) status = 'overdue';
+    else status = 'pending';
+    updateApplied.run(schedule.amount_paid || 0, schedule.paid_at || null, status, schedule.id);
+  }
 }
 
 function getPortalData(org) {
@@ -614,42 +735,349 @@ router.post('/maintenance/log', companyRoleAllowed(['fleet_owner_admin', 'fleet_
           performedBy
         );
 
-      const bikeSets = [];
-      const bikeVals = [];
-      if (Number.isFinite(odometerKm)) {
-        bikeSets.push('odometer_km = ?');
-        bikeVals.push(odometerKm);
+        const bikeSets = [];
+        const bikeVals = [];
+        if (Number.isFinite(odometerKm)) {
+          bikeSets.push('odometer_km = ?');
+          bikeVals.push(odometerKm);
+        }
+        if (nextServiceDate !== null) {
+          bikeSets.push('next_service_date = ?');
+          bikeVals.push(nextServiceDate);
+        }
+        if (Number.isFinite(nextServiceKm)) {
+          bikeSets.push('next_service_km = ?');
+          bikeVals.push(nextServiceKm);
+        }
+        if (bikeStatusAfterService) {
+          bikeSets.push('status = ?');
+          bikeVals.push(bikeStatusAfterService);
+        }
+        if (bikeSets.length) {
+          bikeVals.push(bikeId);
+          db.prepare(`UPDATE bikes SET ${bikeSets.join(', ')} WHERE id = ?`).run(...bikeVals);
+        }
+        return insert.lastInsertRowid;
+      })();
+
+      logAudit(req.user.id, 'fleet_owner.maintenance_log', 'service_records', info, {
+        organization_id: organization.id,
+        bike_id: bikeId,
+        service_type: serviceType,
+        service_date: serviceDate,
+        bike_status_after_service: bikeStatusAfterService || null
+      }, req.ip);
+
+      res.status(201).json({ ok: true, service_id: info });
+    } catch (error) {
+      res.status(error.status || 500).json({ error: error.message || 'Could not log maintenance' });
+    }
+  });
+
+router.get('/bikes', (req, res) => {
+  try {
+    const organization = getOrganizationOrThrow(req.user.organization_id);
+    const status = String(req.query.status || '').trim();
+    const fleet = String(req.query.fleet || '').trim();
+    let bikes = getFleetBikes(organization);
+    if (status) bikes = bikes.filter((bike) => bike.status === status);
+    if (fleet) bikes = bikes.filter((bike) => String(bike.fleet || '').trim() === fleet);
+    res.json({ bikes });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not load bikes' });
+  }
+});
+
+router.post('/bikes', companyRoleAllowed(['fleet_owner_admin', 'fleet_owner_ops']), (req, res) => {
+  try {
+    const organization = getOrganizationOrThrow(req.user.organization_id);
+    const vin = String(req.body.vin || '').trim();
+    const make = String(req.body.make || '').trim();
+    const model = String(req.body.model || '').trim();
+    const rentalWeekly = toPositiveNumber(req.body.rental_weekly);
+    if (!vin || !make || !model || !rentalWeekly) {
+      return res.status(400).json({ error: 'VIN, make, model, and weekly rental are required' });
+    }
+
+    const info = db.prepare(`INSERT INTO bikes
+      (vin, registration, make, model, fleet, organization_id, year, engine_cc, color, condition, purchase_price,
+       rental_weekly, total_weeks, status, gps_device_id, odometer_km, insurance_provider,
+       insurance_policy_no, insurance_expiry, license_disc_no, license_disc_expiry, image_url, notes)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+        vin,
+        String(req.body.registration || '').trim() || null,
+        make,
+        model,
+        String(req.body.fleet || '').trim() || organization.name || organization.slug || null,
+        organization.id,
+        toInt(req.body.year) || null,
+        toInt(req.body.engine_cc) || null,
+        String(req.body.color || '').trim() || null,
+        String(req.body.condition || 'new').trim() || 'new',
+        req.body.purchase_price === '' || req.body.purchase_price === undefined ? null : Number(req.body.purchase_price),
+        rentalWeekly,
+        toInt(req.body.total_weeks) || 78,
+        String(req.body.status || 'ready_to_go').trim() || 'ready_to_go',
+        String(req.body.gps_device_id || '').trim() || null,
+        toInt(req.body.odometer_km) || 0,
+        String(req.body.insurance_provider || '').trim() || null,
+        String(req.body.insurance_policy_no || '').trim() || null,
+        String(req.body.insurance_expiry || '').trim() || null,
+        String(req.body.license_disc_no || '').trim() || null,
+        String(req.body.license_disc_expiry || '').trim() || null,
+        String(req.body.image_url || '').trim() || null,
+        String(req.body.notes || '').trim() || null
+      );
+
+    logAudit(req.user.id, 'fleet_owner.bike_create', 'bikes', info.lastInsertRowid, { organization_id: organization.id }, req.ip);
+    const bike = getScopedBike(organization, info.lastInsertRowid);
+    res.status(201).json({ ok: true, bike });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not create bike' });
+  }
+});
+
+router.put('/bikes/:id', companyRoleAllowed(['fleet_owner_admin', 'fleet_owner_ops']), (req, res) => {
+  try {
+    const organization = getOrganizationOrThrow(req.user.organization_id);
+    const bikeId = toInt(req.params.id);
+    if (!bikeId) return res.status(400).json({ error: 'Invalid bike id' });
+    const bike = getScopedBike(organization, bikeId);
+    if (!bike) return res.status(404).json({ error: 'Bike not found in your fleet' });
+
+    const allowed = ['registration', 'make', 'model', 'fleet', 'year', 'engine_cc', 'color', 'condition', 'purchase_price', 'rental_weekly', 'total_weeks', 'gps_device_id', 'odometer_km', 'next_service_km', 'next_service_date', 'insurance_provider', 'insurance_policy_no', 'insurance_expiry', 'license_disc_no', 'license_disc_expiry', 'image_url', 'notes'];
+    const sets = [];
+    const vals = [];
+    let statusMeta = null;
+
+    if (req.body.status !== undefined) {
+      statusMeta = setBikeStatus(bikeId, req.body.status);
+      if (statusMeta?.next_status === 'stolen') {
+        const discontinued = discontinueAgreementForStolenBike({ bikeId, actorId: req.user.id, ip: req.ip });
+        statusMeta.discontinued_agreement_id = discontinued.agreement?.id || null;
+        statusMeta.discontinued_agreement_no = discontinued.agreement?.agreement_no || null;
+        statusMeta.waived_schedule_rows = discontinued.waived_rows || 0;
       }
-      if (nextServiceDate !== null) {
-        bikeSets.push('next_service_date = ?');
-        bikeVals.push(nextServiceDate);
+    }
+
+    for (const key of allowed) {
+      if (req.body[key] !== undefined) {
+        sets.push(`${key} = ?`);
+        vals.push(req.body[key] === '' ? null : req.body[key]);
       }
-      if (Number.isFinite(nextServiceKm)) {
-        bikeSets.push('next_service_km = ?');
-        bikeVals.push(nextServiceKm);
-      }
-      if (bikeStatusAfterService) {
-        bikeSets.push('status = ?');
-        bikeVals.push(bikeStatusAfterService);
-      }
-      if (bikeSets.length) {
-        bikeVals.push(bikeId);
-        db.prepare(`UPDATE bikes SET ${bikeSets.join(', ')} WHERE id = ?`).run(...bikeVals);
-      }
-      return insert.lastInsertRowid;
+    }
+
+    if (sets.length) {
+      vals.push(bikeId);
+      db.prepare(`UPDATE bikes SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+    }
+
+    logAudit(req.user.id, 'fleet_owner.bike_update', 'bikes', bikeId, { ...req.body, ...(statusMeta || {}) }, req.ip);
+    res.json({ ok: true, bike: getScopedBike(organization, bikeId), ...(statusMeta || {}) });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not update bike' });
+  }
+});
+
+router.get('/agreements', (req, res) => {
+  try {
+    const organization = getOrganizationOrThrow(req.user.organization_id);
+    const status = String(req.query.status || '').trim();
+    const bikeStatus = String(req.query.bike_status || '').trim();
+    const excludedBikeStatuses = String(req.query.exclude_bike_statuses || '').split(',').map((value) => value.trim()).filter(Boolean);
+    let agreements = getFleetAgreements(organization);
+    if (status) agreements = agreements.filter((agreement) => agreement.status === status);
+    if (bikeStatus) agreements = agreements.filter((agreement) => agreement.bike_status === bikeStatus);
+    if (excludedBikeStatuses.length) agreements = agreements.filter((agreement) => !excludedBikeStatuses.includes(agreement.bike_status));
+    res.json({ agreements });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not load agreements' });
+  }
+});
+
+router.post('/agreements', companyRoleAllowed(['fleet_owner_admin', 'fleet_owner_ops']), (req, res) => {
+  try {
+    const organization = getOrganizationOrThrow(req.user.organization_id);
+    const bikeId = toInt(req.body.bike_id);
+    const riderId = toInt(req.body.rider_id);
+    const startDate = String(req.body.start_date || todayIso()).slice(0, 10);
+
+    if (!bikeId || !riderId) {
+      return res.status(400).json({ error: 'Bike and rider are required' });
+    }
+
+    const bike = getScopedBike(organization, bikeId);
+    if (!bike) return res.status(404).json({ error: 'Bike not found in your fleet' });
+    if (bike.status !== 'ready_to_go') return res.status(400).json({ error: 'Bike must be ready to go before allocation' });
+
+    const rider = getScopedRider(organization, riderId);
+    if (!rider) return res.status(404).json({ error: 'Rider not available for your fleet' });
+
+    const riderHasOpenAgreement = db.prepare(`SELECT id FROM agreements WHERE user_id = ? AND status IN ('active', 'paused', 'defaulted') LIMIT 1`).get(riderId);
+    if (riderHasOpenAgreement) return res.status(400).json({ error: 'Rider already has an open agreement' });
+
+    const bikeHasOpenAgreement = db.prepare(`SELECT id FROM agreements WHERE bike_id = ? AND status IN ('active', 'paused', 'defaulted') LIMIT 1`).get(bikeId);
+    if (bikeHasOpenAgreement) return res.status(400).json({ error: 'Bike already has an open agreement' });
+
+    const weeklyAmount = toPositiveNumber(req.body.weekly_amount) || toPositiveNumber(bike.rental_weekly);
+    const totalWeeks = toInt(req.body.total_weeks) || toInt(bike.total_weeks) || 78;
+    if (!weeklyAmount) return res.status(400).json({ error: 'Weekly amount must be greater than zero' });
+
+    const totalAmount = +(weeklyAmount * totalWeeks).toFixed(2);
+    const endDate = addDays(startDate, totalWeeks * 7);
+    const agreementNo = generateAgreementNo();
+    const note = String(req.body.notes || '').trim() || null;
+
+    const matchingApplication = db.prepare(`SELECT ap.id
+      FROM applications ap
+      LEFT JOIN bikes b ON b.id = ap.preferred_bike_id
+      WHERE ap.user_id = ?
+        AND ap.status IN ('approved', 'submitted', 'under_review')
+        AND (ap.preferred_bike_id = ? OR ap.preferred_bike_id IS NULL OR b.organization_id = ?)
+      ORDER BY CASE WHEN ap.preferred_bike_id = ? THEN 0 ELSE 1 END, ap.submitted_at DESC, ap.id DESC
+      LIMIT 1`).get(riderId, bikeId, organization.id, bikeId);
+
+    const created = db.transaction(() => {
+      const info = db.prepare(`INSERT INTO agreements
+        (agreement_no, user_id, bike_id, application_id, weekly_amount, total_weeks, total_amount, start_date, end_date, status, notes, created_by)
+        VALUES (?,?,?,?,?,?,?,?,?, 'active', ?, ?)`).run(
+          agreementNo,
+          riderId,
+          bikeId,
+          matchingApplication?.id || null,
+          weeklyAmount,
+          totalWeeks,
+          totalAmount,
+          startDate,
+          endDate,
+          note,
+          req.user.id
+        );
+      buildPaymentSchedule(info.lastInsertRowid, weeklyAmount, totalWeeks, startDate);
+      db.prepare(`UPDATE bikes SET status = 'active' WHERE id = ?`).run(bikeId);
+      return info.lastInsertRowid;
     })();
 
-    logAudit(req.user.id, 'fleet_owner.maintenance_log', 'service_records', info, {
+    logAudit(req.user.id, 'fleet_owner.agreement_create', 'agreements', created, {
       organization_id: organization.id,
       bike_id: bikeId,
-      service_type: serviceType,
-      service_date: serviceDate,
-      bike_status_after_service: bikeStatusAfterService || null
+      rider_id: riderId,
+      weekly_amount: weeklyAmount,
+      total_weeks: totalWeeks,
+      start_date: startDate
     }, req.ip);
 
-    res.status(201).json({ ok: true, service_id: info });
+    const agreement = getScopedAgreement(organization, created);
+    res.status(201).json({ ok: true, agreement });
   } catch (error) {
-    res.status(error.status || 500).json({ error: error.message || 'Could not log maintenance' });
+    res.status(error.status || 500).json({ error: error.message || 'Could not create agreement' });
+  }
+});
+
+router.post('/agreements/:id/status', companyRoleAllowed(['fleet_owner_admin', 'fleet_owner_ops']), (req, res) => {
+  try {
+    const organization = getOrganizationOrThrow(req.user.organization_id);
+    const agreementId = toInt(req.params.id);
+    const nextStatus = String(req.body.status || '').trim();
+    if (!agreementId || !nextStatus) return res.status(400).json({ error: 'Agreement and status are required' });
+
+    const agreement = getScopedAgreement(organization, agreementId);
+    if (!agreement) return res.status(404).json({ error: 'Agreement not found in your fleet' });
+
+    if (nextStatus === 'discontinued') {
+      const result = discontinueAgreement({ agreementId, reason: 'fleet_owner_manual_discontinue', actorId: req.user.id, ip: req.ip, auditAction: 'fleet_owner.agreement_discontinued' });
+      return res.json({ ok: true, waived_rows: result.waived_rows });
+    }
+
+    if (!['active', 'completed', 'defaulted', 'cancelled', 'paused'].includes(nextStatus)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+
+    db.prepare('UPDATE agreements SET status = ? WHERE id = ?').run(nextStatus, agreementId);
+    if (nextStatus === 'completed') db.prepare(`UPDATE bikes SET status = 'paid_off' WHERE id = ?`).run(agreement.bike_id);
+    if (nextStatus === 'cancelled') db.prepare(`UPDATE bikes SET status = 'ready_to_go' WHERE id = ?`).run(agreement.bike_id);
+    if (nextStatus === 'active') db.prepare(`UPDATE bikes SET status = 'active' WHERE id = ? AND status <> 'active'`).run(agreement.bike_id);
+
+    logAudit(req.user.id, 'fleet_owner.agreement_status', 'agreements', agreementId, { previous_status: agreement.status, next_status: nextStatus }, req.ip);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not update agreement status' });
+  }
+});
+
+router.post('/agreements/:id/reinstate', companyRoleAllowed(['fleet_owner_admin', 'fleet_owner_ops']), (req, res) => {
+  try {
+    const organization = getOrganizationOrThrow(req.user.organization_id);
+    const agreementId = toInt(req.params.id);
+    if (!agreementId) return res.status(400).json({ error: 'Invalid agreement id' });
+    const agreement = getScopedAgreement(organization, agreementId);
+    if (!agreement) return res.status(404).json({ error: 'Agreement not found in your fleet' });
+    const result = reinstateDiscontinuedAgreement({ agreementId, actorId: req.user.id, ip: req.ip });
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'Could not reinstate agreement' });
+  }
+});
+
+router.get('/payments', companyRoleAllowed(['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing']), (req, res) => {
+  try {
+    const organization = getOrganizationOrThrow(req.user.organization_id);
+    res.json({ payments: getFleetPayments(organization) });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not load payments' });
+  }
+});
+
+router.post('/payments/manual', companyRoleAllowed(['fleet_owner_admin', 'fleet_owner_billing']), (req, res) => {
+  try {
+    const organization = getOrganizationOrThrow(req.user.organization_id);
+    const agreementId = toInt(req.body.agreement_id);
+    const amount = toPositiveNumber(req.body.amount);
+    if (!agreementId || !amount) return res.status(400).json({ error: 'Agreement and amount are required' });
+    const agreement = getScopedAgreement(organization, agreementId);
+    if (!agreement) return res.status(404).json({ error: 'Agreement not found in your fleet' });
+    const result = recordFleetManualPayment({ ...req.body, agreement_id: agreementId, amount, recorded_by: req.user.id });
+    logAudit(req.user.id, 'fleet_owner.payment_manual', 'payments', result.id, { amount, method: req.body.method, agreement_id: agreementId }, req.ip);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'Could not record payment' });
+  }
+});
+
+router.post('/payments/bulk-delete', companyRoleAllowed(['fleet_owner_admin', 'fleet_owner_billing']), (req, res) => {
+  try {
+    const organization = getOrganizationOrThrow(req.user.organization_id);
+    const paymentIds = Array.from(new Set((Array.isArray(req.body.payment_ids) ? req.body.payment_ids : [])
+      .map((value) => Number(value))
+      .filter((value) => Number.isInteger(value) && value > 0)));
+    if (!paymentIds.length) return res.status(400).json({ error: 'Select at least one payment to delete' });
+
+    const deleted = [];
+    const notFound = [];
+    const agreementIds = new Set();
+    for (const paymentId of paymentIds) {
+      const payment = getScopedPayment(organization, paymentId);
+      if (!payment) {
+        notFound.push(paymentId);
+        continue;
+      }
+      db.prepare('DELETE FROM payments WHERE id = ?').run(payment.id);
+      agreementIds.add(payment.agreement_id);
+      deleted.push(payment);
+    }
+
+    for (const agreementId of agreementIds) rebuildScheduleAllocations(agreementId);
+
+    logAudit(req.user.id, 'fleet_owner.payment_bulk_delete', 'payments', null, {
+      requested: paymentIds.length,
+      deleted_count: deleted.length,
+      not_found_count: notFound.length,
+      payment_ids: deleted.map((payment) => payment.id)
+    }, req.ip);
+
+    res.json({ ok: true, requested: paymentIds.length, deleted_count: deleted.length, not_found_count: notFound.length, not_found: notFound });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not delete payments' });
   }
 });
 

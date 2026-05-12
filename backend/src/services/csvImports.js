@@ -362,6 +362,7 @@ function upsertBikeFromFleetRow(row) {
     registration,
     make: normalizeText(row.Make) || 'Unknown',
     model: normalizeText(row.Model) || 'Unknown',
+    fleet: normalizeText(row.Fleet) || null,
     year: parseInteger(row['Year Model']),
     color: normalizeText(row.Colour) || null,
     rental_weekly: parseMoney(row['Payment to be collected']) || 850,
@@ -382,6 +383,7 @@ function upsertBikeFromFleetRow(row) {
       registration = COALESCE(?, registration),
       make = ?,
       model = ?,
+      fleet = COALESCE(NULLIF(?, ''), fleet),
       year = COALESCE(?, year),
       color = COALESCE(?, color),
       rental_weekly = COALESCE(?, rental_weekly),
@@ -392,6 +394,7 @@ function upsertBikeFromFleetRow(row) {
       payload.registration,
       payload.make,
       payload.model,
+      payload.fleet,
       payload.year,
       payload.color,
       payload.rental_weekly,
@@ -404,9 +407,9 @@ function upsertBikeFromFleetRow(row) {
   }
 
   const info = db.prepare(`INSERT INTO bikes
-    (vin, registration, make, model, year, color, rental_weekly, total_weeks, status, condition, notes)
-    VALUES (?,?,?,?,?,?,?,?,?, 'used', ?)`)
-    .run(payload.vin, payload.registration, payload.make, payload.model, payload.year, payload.color, payload.rental_weekly, payload.total_weeks, payload.status, payload.notes);
+    (vin, registration, make, model, fleet, year, color, rental_weekly, total_weeks, status, condition, notes)
+    VALUES (?,?,?,?,?,?,?,?,?,?, 'used', ?)`)
+    .run(payload.vin, payload.registration, payload.make, payload.model, payload.fleet, payload.year, payload.color, payload.rental_weekly, payload.total_weeks, payload.status, payload.notes);
   return db.prepare(`SELECT * FROM bikes WHERE id = ?`).get(info.lastInsertRowid);
 }
 

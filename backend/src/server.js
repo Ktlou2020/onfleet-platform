@@ -8,11 +8,47 @@ const fs = require('fs');
 const { ensureSuperadminFromEnv } = require('./services/bootstrapSuperadmin');
 
 const app = express();
+const uploadRoots = [
+  path.join(__dirname, '../uploads'),
+  path.join(__dirname, '../../uploads')
+];
+
+function resolveUploadPath(relativePath) {
+  const normalized = path.normalize(relativePath).replace(/^([/\\])+/, '');
+  if (!normalized || normalized.startsWith('..') || path.isAbsolute(normalized)) return null;
+  for (const root of uploadRoots) {
+    const absolutePath = path.join(root, normalized);
+    if (absolutePath.startsWith(root) && fs.existsSync(absolutePath) && fs.statSync(absolutePath).isFile()) {
+      return absolutePath;
+    }
+  }
+  return null;
+}
+
+function sendMissingUpload(res, relativePath) {
+  return res.status(404).format({
+    'application/json': () => res.json({ error: 'Uploaded file not found', path: `/uploads/${relativePath}` }),
+    'text/html': () => res.send(`<h1>Uploaded file not found</h1><p>The file <code>/uploads/${relativePath}</code> is missing or no longer available on this server.</p>`),
+    default: () => res.type('text/plain').send(`Uploaded file not found: /uploads/${relativePath}`)
+  });
+}
+
 app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: false, crossOriginEmbedderPolicy: false }));
 app.use(cors({ origin: '*', credentials: true }));
 app.use(morgan('dev'));
 app.use(express.json({ limit: '5mb' }));
-app.use('/uploads', express.static(path.join(__dirname, '../../uploads')));
+app.get(/^\/uploads\/(.+)$/, (req, res) => {
+  const relativePath = String(req.params[0] || '');
+  const absolutePath = resolveUploadPath(relativePath);
+  if (!absolutePath) return sendMissingUpload(res, relativePath);
+  return res.sendFile(absolutePath);
+});
+app.head(/^\/uploads\/(.+)$/, (req, res) => {
+  const relativePath = String(req.params[0] || '');
+  const absolutePath = resolveUploadPath(relativePath);
+  if (!absolutePath) return sendMissingUpload(res, relativePath);
+  return res.sendFile(absolutePath);
+});
 
 app.get('/api/health', (req, res) => res.json({ ok: true, service: 'onfleet-api', time: new Date().toISOString() }));
 

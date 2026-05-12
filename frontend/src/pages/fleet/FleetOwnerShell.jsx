@@ -4,20 +4,21 @@ import { LayoutDashboard, Bike, FileText, CreditCard, LogOut } from 'lucide-reac
 import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
 import { useAuth } from '../../auth';
+import { FLEET_NAV_ITEMS, canAccessFleetRoute, getFleetRoleLabel } from './access';
 
-const navItems = [
-  { key: 'dashboard', to: '/fleet/app', label: 'Dashboard', icon: LayoutDashboard, roles: ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'] },
-  { key: 'bikes', to: '/fleet/app/bikes', label: 'Bikes Fleet', icon: Bike, roles: ['fleet_owner_admin', 'fleet_owner_ops'] },
-  { key: 'agreements', to: '/fleet/app/agreements', label: 'Agreements', icon: FileText, roles: ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing'] },
-  { key: 'payments', to: '/fleet/app/payments', label: 'Payments', icon: CreditCard, roles: ['fleet_owner_admin', 'fleet_owner_billing'] }
-];
+const navIconMap = {
+  dashboard: LayoutDashboard,
+  bikes: Bike,
+  agreements: FileText,
+  payments: CreditCard
+};
 
 export default function FleetOwnerShell() {
   const { user, logout } = useAuth();
   const nav = useNavigate();
   const [search, setSearch] = useState('');
 
-  const allowedNav = useMemo(() => navItems.filter((item) => item.roles.includes(user?.role)), [user?.role]);
+  const allowedNav = useMemo(() => FLEET_NAV_ITEMS.filter((item) => canAccessFleetRoute(user?.role, item.key)), [user?.role]);
   const filteredNav = useMemo(() => allowedNav.filter((item) => matchesSearch(search, item.label, item.to)), [allowedNav, search]);
 
   const goToFirstMatch = (event) => {
@@ -37,7 +38,7 @@ export default function FleetOwnerShell() {
         </div>
         <nav>
           {allowedNav.map((item) => {
-            const Icon = item.icon;
+            const Icon = navIconMap[item.key] || LayoutDashboard;
             return <NavLink key={item.to} to={item.to} end={item.to === '/fleet/app'}><Icon size={16} /> {item.label}</NavLink>;
           })}
         </nav>
@@ -45,7 +46,7 @@ export default function FleetOwnerShell() {
           <div className="avatar">{user?.full_name?.[0]}</div>
           <div style={{ minWidth: 0, flex: 1 }}>
             <div className="text-sm" style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user?.full_name}</div>
-            <div className="text-xs muted">{String(user?.role || '').replace(/_/g, ' ')}</div>
+            <div className="text-xs muted">{getFleetRoleLabel(user?.role)}</div>
           </div>
           <button onClick={() => { logout(); nav('/fleet/login'); }} title="Log out" style={{ background: 'transparent', color: 'var(--muted)', padding: 8, border: 'none' }}><LogOut size={16} /></button>
         </div>
@@ -58,7 +59,7 @@ export default function FleetOwnerShell() {
             {!!search && (
               <div className="card" style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: '100%', zIndex: 20, padding: 12 }}>
                 {filteredNav.length ? filteredNav.map((item) => {
-                  const Icon = item.icon;
+                  const Icon = navIconMap[item.key] || LayoutDashboard;
                   return <button key={item.to} className="btn btn-secondary btn-sm" style={{ width: '100%', justifyContent: 'flex-start', marginBottom: 8 }} onClick={() => { nav(item.to); setSearch(''); }}><Icon size={14} /> {item.label}</button>;
                 }) : <div className="muted text-sm">No fleet tabs match your search.</div>}
               </div>

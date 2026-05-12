@@ -11,6 +11,36 @@ const FLEET_ROLE_VALUES = ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_
 const MEMBER_STATUSES = ['active', 'suspended'];
 const OPEN_AGREEMENT_STATUSES = ['active', 'paused', 'defaulted'];
 const SERVICEABLE_BIKE_STATUSES = ['active', 'ready_to_go', 'repairs', 'not_available', 'stationary'];
+const FLEET_RESOURCE_ACCESS = {
+  dashboard: {
+    view: ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'],
+    manage: []
+  },
+  bikes: {
+    view: ['fleet_owner_admin', 'fleet_owner_ops'],
+    manage: ['fleet_owner_admin', 'fleet_owner_ops']
+  },
+  agreements: {
+    view: ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing'],
+    manage: ['fleet_owner_admin', 'fleet_owner_ops']
+  },
+  payments: {
+    view: ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing'],
+    manage: ['fleet_owner_admin', 'fleet_owner_billing']
+  },
+  team: {
+    view: ['fleet_owner_admin'],
+    manage: ['fleet_owner_admin']
+  }
+};
+
+function canViewFleetResource(role, resourceKey) {
+  return (FLEET_RESOURCE_ACCESS[resourceKey]?.view || []).includes(role);
+}
+
+function canManageFleetResource(role, resourceKey) {
+  return (FLEET_RESOURCE_ACCESS[resourceKey]?.manage || []).includes(role);
+}
 
 router.use(authRequired, fleetOwnerOnly);
 
@@ -389,7 +419,26 @@ function rebuildScheduleAllocations(agreementId) {
   }
 }
 
-function getPortalData(org) {
+function sanitizePortalDataForRole(role, portalData) {
+  const canViewBikes = canViewFleetResource(role, 'bikes');
+  const canViewAgreements = canViewFleetResource(role, 'agreements');
+  const canViewPayments = canViewFleetResource(role, 'payments');
+  const canViewTeam = canViewFleetResource(role, 'team');
+  const canManageAgreements = canManageFleetResource(role, 'agreements');
+
+  return {
+    ...portalData,
+    members: canViewTeam ? portalData.members : [],
+    bikes: canViewBikes ? portalData.bikes : [],
+    agreements: canViewAgreements ? portalData.agreements : [],
+    recent_services: canViewBikes ? portalData.recent_services : [],
+    upcoming_services: canViewBikes ? portalData.upcoming_services : [],
+    rider_options: canManageAgreements ? portalData.rider_options : [],
+    collections_queue: (canViewAgreements || canViewPayments) ? portalData.collections_queue : []
+  };
+}
+
+function getPortalData(org, role) {
   const members = getFleetMembers(org.id);
   const bikes = getFleetBikes(org);
   const agreements = getFleetAgreements(org);
@@ -409,7 +458,7 @@ function getPortalData(org) {
       status: bike.status
     }));
 
-  return {
+  return sanitizePortalDataForRole(role, {
     organization: org,
     members,
     bikes,
@@ -420,26 +469,26 @@ function getPortalData(org) {
     collections_queue: buildCollectionsQueue(agreements),
     summary: buildSummary(bikes, agreements, members, recentServices),
     live_updated_at: new Date().toISOString()
-  };
+  });
 }
 
-router.get('/account', (req, res) => {
+router.get('/account', companyRoleAllowed(FLEET_RESOURCE_ACCESS.dashboard.view), (req, res) => {
   const organization = getOrganization(req.user.organization_id);
   if (!organization) return res.status(404).json({ error: 'Organization not found' });
-  const members = getFleetMembers(req.user.organization_id);
+  const members = canViewFleetResource(req.user.role, 'team') ? getFleetMembers(req.user.organization_id) : [];
   res.json({ organization, members });
 });
 
-router.get('/portal-data', (req, res) => {
+router.get('/portal-data', companyRoleAllowed(FLEET_RESOURCE_ACCESS.dashboard.view), (req, res) => {
   try {
     const organization = getOrganizationOrThrow(req.user.organization_id);
-    res.json(getPortalData(organization));
+    res.json(getPortalData(organization, req.user.role));
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Could not load fleet portal data' });
   }
 });
 
-router.post('/team-members', companyRoleAllowed(['fleet_owner_admin']), (req, res) => {
+router.post('/team-members', companyRoleAllowed(FLEET_RESOURCE_ACCESS.team.manage), (req, res) => {
   const full_name = String(req.body.full_name || '').trim();
   const email = String(req.body.email || '').trim().toLowerCase();
   const password = String(req.body.password || '');
@@ -486,7 +535,7 @@ router.post('/team-members', companyRoleAllowed(['fleet_owner_admin']), (req, re
   res.status(201).json({ ok: true, member });
 });
 
-router.patch('/team-members/:id', companyRoleAllowed(['fleet_owner_admin']), (req, res) => {
+router.patch('/team-members/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.team.manage), (req, res) => {
   const memberId = Number(req.params.id);
   if (!Number.isInteger(memberId) || memberId <= 0) return res.status(400).json({ error: 'Invalid team member id' });
 
@@ -515,7 +564,7 @@ router.patch('/team-members/:id', companyRoleAllowed(['fleet_owner_admin']), (re
   res.json({ ok: true, member: updated });
 });
 
-router.post('/allocations', companyRoleAllowed(['fleet_owner_admin', 'fleet_owner_ops']), (req, res) => {
+router.post('/allocations', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.manage), (req, res) => {
   try {
     const organization = getOrganizationOrThrow(req.user.organization_id);
     const bikeId = toInt(req.body.bike_id);
@@ -594,7 +643,7 @@ router.post('/allocations', companyRoleAllowed(['fleet_owner_admin', 'fleet_owne
   }
 });
 
-router.post('/reassignments', companyRoleAllowed(['fleet_owner_admin', 'fleet_owner_ops']), (req, res) => {
+router.post('/reassignments', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.manage), (req, res) => {
   try {
     const organization = getOrganizationOrThrow(req.user.organization_id);
     const agreementId = toInt(req.body.agreement_id);
@@ -650,7 +699,7 @@ router.post('/reassignments', companyRoleAllowed(['fleet_owner_admin', 'fleet_ow
   }
 });
 
-router.post('/maintenance/schedule', companyRoleAllowed(['fleet_owner_admin', 'fleet_owner_ops']), (req, res) => {
+router.post('/maintenance/schedule', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.manage), (req, res) => {
   try {
     const organization = getOrganizationOrThrow(req.user.organization_id);
     const bikeId = toInt(req.body.bike_id);
@@ -686,7 +735,7 @@ router.post('/maintenance/schedule', companyRoleAllowed(['fleet_owner_admin', 'f
   }
 });
 
-router.post('/maintenance/log', companyRoleAllowed(['fleet_owner_admin', 'fleet_owner_ops']), (req, res) => {
+router.post('/maintenance/log', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.manage), (req, res) => {
   try {
     const organization = getOrganizationOrThrow(req.user.organization_id);
     const bikeId = toInt(req.body.bike_id);
@@ -774,7 +823,7 @@ router.post('/maintenance/log', companyRoleAllowed(['fleet_owner_admin', 'fleet_
     }
   });
 
-router.get('/bikes', (req, res) => {
+router.get('/bikes', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.view), (req, res) => {
   try {
     const organization = getOrganizationOrThrow(req.user.organization_id);
     const status = String(req.query.status || '').trim();
@@ -788,7 +837,7 @@ router.get('/bikes', (req, res) => {
   }
 });
 
-router.post('/bikes', companyRoleAllowed(['fleet_owner_admin', 'fleet_owner_ops']), (req, res) => {
+router.post('/bikes', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.manage), (req, res) => {
   try {
     const organization = getOrganizationOrThrow(req.user.organization_id);
     const vin = String(req.body.vin || '').trim();
@@ -837,7 +886,7 @@ router.post('/bikes', companyRoleAllowed(['fleet_owner_admin', 'fleet_owner_ops'
   }
 });
 
-router.put('/bikes/:id', companyRoleAllowed(['fleet_owner_admin', 'fleet_owner_ops']), (req, res) => {
+router.put('/bikes/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.manage), (req, res) => {
   try {
     const organization = getOrganizationOrThrow(req.user.organization_id);
     const bikeId = toInt(req.params.id);
@@ -879,7 +928,7 @@ router.put('/bikes/:id', companyRoleAllowed(['fleet_owner_admin', 'fleet_owner_o
   }
 });
 
-router.get('/agreements', (req, res) => {
+router.get('/agreements', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.view), (req, res) => {
   try {
     const organization = getOrganizationOrThrow(req.user.organization_id);
     const status = String(req.query.status || '').trim();
@@ -895,7 +944,7 @@ router.get('/agreements', (req, res) => {
   }
 });
 
-router.post('/agreements', companyRoleAllowed(['fleet_owner_admin', 'fleet_owner_ops']), (req, res) => {
+router.post('/agreements', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.manage), (req, res) => {
   try {
     const organization = getOrganizationOrThrow(req.user.organization_id);
     const bikeId = toInt(req.body.bike_id);
@@ -974,7 +1023,7 @@ router.post('/agreements', companyRoleAllowed(['fleet_owner_admin', 'fleet_owner
   }
 });
 
-router.post('/agreements/:id/status', companyRoleAllowed(['fleet_owner_admin', 'fleet_owner_ops']), (req, res) => {
+router.post('/agreements/:id/status', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.manage), (req, res) => {
   try {
     const organization = getOrganizationOrThrow(req.user.organization_id);
     const agreementId = toInt(req.params.id);
@@ -1005,7 +1054,7 @@ router.post('/agreements/:id/status', companyRoleAllowed(['fleet_owner_admin', '
   }
 });
 
-router.post('/agreements/:id/reinstate', companyRoleAllowed(['fleet_owner_admin', 'fleet_owner_ops']), (req, res) => {
+router.post('/agreements/:id/reinstate', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.manage), (req, res) => {
   try {
     const organization = getOrganizationOrThrow(req.user.organization_id);
     const agreementId = toInt(req.params.id);
@@ -1019,7 +1068,7 @@ router.post('/agreements/:id/reinstate', companyRoleAllowed(['fleet_owner_admin'
   }
 });
 
-router.get('/payments', companyRoleAllowed(['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing']), (req, res) => {
+router.get('/payments', companyRoleAllowed(FLEET_RESOURCE_ACCESS.payments.view), (req, res) => {
   try {
     const organization = getOrganizationOrThrow(req.user.organization_id);
     res.json({ payments: getFleetPayments(organization) });
@@ -1028,7 +1077,7 @@ router.get('/payments', companyRoleAllowed(['fleet_owner_admin', 'fleet_owner_op
   }
 });
 
-router.post('/payments/manual', companyRoleAllowed(['fleet_owner_admin', 'fleet_owner_billing']), (req, res) => {
+router.post('/payments/manual', companyRoleAllowed(FLEET_RESOURCE_ACCESS.payments.manage), (req, res) => {
   try {
     const organization = getOrganizationOrThrow(req.user.organization_id);
     const agreementId = toInt(req.body.agreement_id);
@@ -1044,7 +1093,7 @@ router.post('/payments/manual', companyRoleAllowed(['fleet_owner_admin', 'fleet_
   }
 });
 
-router.post('/payments/bulk-delete', companyRoleAllowed(['fleet_owner_admin', 'fleet_owner_billing']), (req, res) => {
+router.post('/payments/bulk-delete', companyRoleAllowed(FLEET_RESOURCE_ACCESS.payments.manage), (req, res) => {
   try {
     const organization = getOrganizationOrThrow(req.user.organization_id);
     const paymentIds = Array.from(new Set((Array.isArray(req.body.payment_ids) ? req.body.payment_ids : [])

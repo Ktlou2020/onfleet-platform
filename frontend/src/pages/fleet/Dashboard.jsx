@@ -3,7 +3,9 @@ import { Link } from 'react-router-dom';
 import { AlertTriangle, Bike, CheckCircle2, Clock3, CreditCard, FileText, Wrench } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../api';
+import { useAuth } from '../../auth';
 import { Badge, EmptyState, Loading, Stat, fmt, fmtDate, fmtDateTime } from '../../components/ui';
+import { canAccessFleetRoute } from './access';
 
 const emptyPortal = {
   organization: null,
@@ -19,6 +21,7 @@ const emptyPortal = {
 };
 
 export default function FleetDashboard() {
+  const { user } = useAuth();
   const [portal, setPortal] = useState(emptyPortal);
   const [loading, setLoading] = useState(true);
 
@@ -39,6 +42,9 @@ export default function FleetDashboard() {
   const organization = portal.organization || {};
   const summary = portal.summary || {};
   const quickQueues = useMemo(() => portal.collections_queue.slice(0, 4), [portal.collections_queue]);
+  const canOpenBikes = canAccessFleetRoute(user?.role, 'bikes');
+  const canOpenAgreements = canAccessFleetRoute(user?.role, 'agreements');
+  const canOpenPayments = canAccessFleetRoute(user?.role, 'payments');
 
   if (loading) return <Loading />;
 
@@ -81,9 +87,9 @@ export default function FleetDashboard() {
             <div className="fleet-demo-list-item"><Wrench size={16} /> {summary.bikes_in_repairs || 0} bikes currently in repairs</div>
           </div>
           <div className="row mt-3" style={{ flexWrap: 'wrap', gap: 8 }}>
-            <Link className="btn btn-sm" to="/fleet/app/bikes">Open bikes</Link>
-            <Link className="btn btn-sm btn-secondary" to="/fleet/app/agreements">Open agreements</Link>
-            <Link className="btn btn-sm btn-secondary" to="/fleet/app/payments">Open payments</Link>
+            {canOpenBikes && <Link className="btn btn-sm" to="/fleet/app/bikes">Open bikes</Link>}
+            {canOpenAgreements && <Link className="btn btn-sm btn-secondary" to="/fleet/app/agreements">Open agreements</Link>}
+            {canOpenPayments && <Link className="btn btn-sm btn-secondary" to="/fleet/app/payments">Open payments</Link>}
           </div>
         </div>
 

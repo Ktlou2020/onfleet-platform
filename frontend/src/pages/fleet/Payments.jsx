@@ -3,6 +3,7 @@ import toast from 'react-hot-toast';
 import api from '../../api';
 import { useAuth } from '../../auth';
 import { Badge, EmptyState, Loading, Modal, Pagination, SearchInput, fmt, fmtDateTime, matchesSearch, paginateItems } from '../../components/ui';
+import { canManageFleetSection } from './access';
 
 const METHOD_OPTIONS = ['eft', 'cash', 'card', 'other'];
 const creditedAmount = (payment) => Number(payment?.net_amount || payment?.amount || 0);
@@ -11,7 +12,7 @@ const grossAmount = (payment) => Number(payment?.amount || 0);
 
 export default function FleetOwnerPayments() {
   const { user } = useAuth();
-  const canManage = ['fleet_owner_admin', 'fleet_owner_billing'].includes(user?.role);
+  const canManage = canManageFleetSection(user?.role, 'payments');
   const [payments, setPayments] = useState(null);
   const [agreements, setAgreements] = useState([]);
   const [search, setSearch] = useState('');
@@ -119,16 +120,16 @@ export default function FleetOwnerPayments() {
 
       <div className="row mb-4" style={{ flexWrap: 'wrap', justifyContent: 'space-between' }}>
         <SearchInput value={search} onChange={setSearch} placeholder="Search rider, agreement, reference, method" style={{ flex: '1 1 320px', maxWidth: 440 }} />
-        <div className="muted text-sm">{selectedIds.length} selected · Showing {filtered.length} matching payments</div>
+        <div className="muted text-sm">{canManage ? `${selectedIds.length} selected · ` : ''}Showing {filtered.length} matching payments</div>
       </div>
 
       <div className="card" style={{ padding: 0 }}>
         <table className="table">
-          <thead><tr><th style={{ width: 44 }}><input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} aria-label="Select all visible payments" /></th><th>Date</th><th>Rider</th><th>Agreement</th><th>Bike</th><th>Method</th><th>Reference</th><th>Status</th><th>Rental</th><th>Fee</th><th>Gross</th></tr></thead>
+          <thead><tr>{canManage ? <th style={{ width: 44 }}><input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} aria-label="Select all visible payments" /></th> : null}<th>Date</th><th>Rider</th><th>Agreement</th><th>Bike</th><th>Method</th><th>Reference</th><th>Status</th><th>Rental</th><th>Fee</th><th>Gross</th></tr></thead>
           <tbody>
             {pagination.items.map((payment) => (
               <tr key={payment.id}>
-                <td><input type="checkbox" checked={selectedIds.includes(payment.id)} onChange={() => toggleSelected(payment.id)} aria-label={`Select payment ${payment.reference || payment.id}`} /></td>
+                {canManage ? <td><input type="checkbox" checked={selectedIds.includes(payment.id)} onChange={() => toggleSelected(payment.id)} aria-label={`Select payment ${payment.reference || payment.id}`} /></td> : null}
                 <td>{fmtDateTime(payment.paid_at || payment.created_at)}</td>
                 <td>{payment.full_name}<div className="text-xs muted">{payment.email}</div></td>
                 <td>{payment.agreement_no}<div className="text-xs muted">{payment.agreement_status}</div></td>

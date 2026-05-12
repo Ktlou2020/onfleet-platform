@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import api from '../../api';
 import { useAuth } from '../../auth';
 import { Badge, EmptyState, Loading, Modal, Pagination, SearchInput, fmt, fmtDate, matchesSearch, paginateItems } from '../../components/ui';
+import { canManageFleetSection } from './access';
 
 const bikeStatusOptions = [
   { value: '', label: 'All' },
@@ -59,7 +60,7 @@ function buildInitialForm() {
 
 export default function FleetOwnerBikes() {
   const { user } = useAuth();
-  const canManage = ['fleet_owner_admin', 'fleet_owner_ops'].includes(user?.role);
+  const canManage = canManageFleetSection(user?.role, 'bikes');
   const [bikes, setBikes] = useState(null);
   const [filter, setFilter] = useState('');
   const [search, setSearch] = useState('');

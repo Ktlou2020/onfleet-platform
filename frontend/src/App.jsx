@@ -40,6 +40,7 @@ import AdminAuditLogs from './pages/admin/AuditLogs';
 import AdminStrategyReport from './pages/admin/StrategyReport';
 import AdminImports from './pages/admin/Imports';
 import AdminPilotLeads from './pages/admin/PilotLeads';
+import { canViewFleetSection, getDefaultFleetRoute, isAdminPortalRole } from './pages/fleet/access';
 
 function PrivateRoute({ children, role }) {
   const { user } = useAuth();
@@ -50,11 +51,20 @@ function PrivateRoute({ children, role }) {
   return children;
 }
 
+function FleetRouteGate({ section, children }) {
+  const { user } = useAuth();
+  if (!user) return <Navigate to="/fleet/login" replace />;
+  if (!canViewFleetSection(user.role, section)) {
+    return <Navigate to={getDefaultFleetRoute(user.role)} replace />;
+  }
+  return children;
+}
+
 function HomeRoute() {
   const { user } = useAuth();
   if (!user) return <Landing />;
-  if (['admin', 'superadmin'].includes(user.role)) return <Navigate to="/admin" replace />;
-  if (String(user.role || '').startsWith('fleet_owner_')) return <Navigate to="/fleet/app" replace />;
+  if (isAdminPortalRole(user.role)) return <Navigate to="/admin" replace />;
+  if (String(user.role || '').startsWith('fleet_owner_')) return <Navigate to={getDefaultFleetRoute(user.role)} replace />;
   return <Navigate to="/dashboard" replace />;
 }
 
@@ -72,10 +82,10 @@ export default function App() {
         <Route path="/fleet/signup" element={<FleetSignup />} />
         <Route path="/fleet/workspace" element={<FleetOwnerWorkspace />} />
         <Route path="/fleet/app" element={<PrivateRoute role="fleet_owner"><FleetOwnerShell /></PrivateRoute>}>
-          <Route index element={<FleetDashboard />} />
-          <Route path="bikes" element={<FleetOwnerBikes />} />
-          <Route path="agreements" element={<FleetOwnerAgreements />} />
-          <Route path="payments" element={<FleetOwnerPayments />} />
+          <Route index element={<FleetRouteGate section="dashboard"><FleetDashboard /></FleetRouteGate>} />
+          <Route path="bikes" element={<FleetRouteGate section="bikes"><FleetOwnerBikes /></FleetRouteGate>} />
+          <Route path="agreements" element={<FleetRouteGate section="agreements"><FleetOwnerAgreements /></FleetRouteGate>} />
+          <Route path="payments" element={<FleetRouteGate section="payments"><FleetOwnerPayments /></FleetRouteGate>} />
         </Route>
 
         <Route path="/" element={<PrivateRoute role="rider"><RiderShell /></PrivateRoute>}>

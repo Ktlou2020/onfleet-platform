@@ -174,7 +174,7 @@ export default function AdminBikeDetail() {
       <div className="flex-between mt-2 mb-4">
         <div>
           <h1 className="page-title">{bike.make} {bike.model}</h1>
-          <div className="muted">VIN {bike.vin} · {bike.registration || 'no registration yet'}</div>
+          <div className="muted">VIN {bike.vin} · {bike.registration || 'no registration yet'}{bike.fleet ? ` · Fleet ${bike.fleet}` : ''}</div>
         </div>
         <div className="row"><Badge status={bike.status}>{getBikeStatusLabel(bike.status)}</Badge><button className="btn btn-sm btn-secondary" onClick={() => setEdit(!edit)}>{edit ? 'Cancel' : 'Edit'}</button><button className="btn btn-sm" onClick={() => setShowService(true)}>+ Log service / repair</button></div>
       </div>
@@ -225,6 +225,7 @@ export default function AdminBikeDetail() {
               <div className="grid grid-2">
                 <div className="field"><label className="label">Status</label><select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>{bikeStatusOptions.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}</select></div>
                 <div className="field"><label className="label">Registration</label><input value={form.registration || ''} onChange={(e) => setForm({ ...form, registration: e.target.value })} /></div>
+                <div className="field"><label className="label">Fleet</label><input value={form.fleet || ''} onChange={(e) => setForm({ ...form, fleet: e.target.value })} placeholder="e.g. Uber JHB, Bolt CPT" /></div>
                 <div className="field"><label className="label">Condition</label><select value={form.condition || 'new'} onChange={(e) => setForm({ ...form, condition: e.target.value })}><option value="new">New</option><option value="used">Used</option></select></div>
                 <div className="field"><label className="label">Odometer (km)</label><input type="number" value={form.odometer_km || 0} onChange={(e) => setForm({ ...form, odometer_km: Number(e.target.value) })} /></div>
                 <div className="field"><label className="label">Weekly rental</label><input type="number" value={form.rental_weekly} onChange={(e) => setForm({ ...form, rental_weekly: Number(e.target.value) })} /></div>
@@ -244,6 +245,7 @@ export default function AdminBikeDetail() {
               <Row k="Engine" v={bike.engine_cc ? `${bike.engine_cc}cc` : '—'} />
               <Row k="Color" v={bike.color} />
               <Row k="Status" v={getBikeStatusLabel(bike.status)} />
+              <Row k="Fleet" v={bike.fleet} />
               <Row k="Condition" v={bike.condition} />
               <Row k="Weekly rental" v={fmt(bike.rental_weekly)} />
               <Row k="Purchase price" v={fmt(bike.purchase_price)} />

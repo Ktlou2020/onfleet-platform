@@ -35,6 +35,7 @@ function ensureBikeStatusSchema() {
       registration TEXT UNIQUE,
       make TEXT NOT NULL,
       model TEXT NOT NULL,
+      fleet TEXT,
       year INTEGER,
       engine_cc INTEGER,
       color TEXT,
@@ -270,6 +271,7 @@ CREATE TABLE IF NOT EXISTS bikes (
   registration TEXT UNIQUE,
   make TEXT NOT NULL,
   model TEXT NOT NULL,
+  fleet TEXT,
   year INTEGER,
   engine_cc INTEGER,
   color TEXT,
@@ -539,6 +541,7 @@ ensureColumn('service_records', 'invoice_file_path', 'TEXT');
 ensureColumn('service_records', 'invoice_original_name', 'TEXT');
 ensureColumn('payments', 'fee_amount', 'REAL DEFAULT 0');
 ensureColumn('payments', 'net_amount', 'REAL DEFAULT 0');
+ensureColumn('bikes', 'fleet', 'TEXT');
 ensureColumn('bikes', 'license_disc_no', 'TEXT');
 ensureColumn('bikes', 'license_disc_expiry', 'TEXT');
 ensureColumn('bikes', 'rc1_file_path', 'TEXT');

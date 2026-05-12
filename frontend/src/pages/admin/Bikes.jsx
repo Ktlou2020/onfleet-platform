@@ -49,6 +49,7 @@ function buildInitialForm() {
     rental_weekly: '850',
     total_weeks: 78,
     registration: '',
+    fleet: '',
     image_url: '',
     license_disc_no: '',
     license_disc_expiry: ''
@@ -86,6 +87,7 @@ export default function AdminBikes() {
   const [filter, setFilter] = useState('');
   const [showAdd, setShowAdd] = useState(false);
   const [search, setSearch] = useState('');
+  const [fleetFilter, setFleetFilter] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(9);
   const [savingStatusId, setSavingStatusId] = useState(null);
@@ -102,12 +104,15 @@ export default function AdminBikes() {
   });
 
   useEffect(() => { load(); }, [filter]);
-  useEffect(() => { setPage(1); }, [search, filter]);
+  useEffect(() => { setPage(1); }, [search, filter, fleetFilter]);
+
+  const fleetOptions = useMemo(() => Array.from(new Set((bikes || []).map((bike) => String(bike.fleet || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b)), [bikes]);
 
   const filtered = useMemo(() => sortNewestFirst((bikes || []).filter((bike) => matchesSearch(
     search,
     bike.vin,
     bike.registration,
+    bike.fleet,
     bike.make,
     bike.model,
     bike.year,
@@ -129,7 +134,7 @@ export default function AdminBikes() {
     bike.license_disc_expiry,
     bike.rc1_original_name,
     bike.license_disc_original_name
-  )), ['created_at', 'id']), [bikes, search]);
+  ) && (!fleetFilter || String(bike.fleet || '').trim() === fleetFilter)), ['created_at', 'id']), [bikes, search, fleetFilter]);
 
   const pagination = useMemo(() => paginateItems(filtered, page, pageSize), [filtered, page, pageSize]);
 
@@ -271,13 +276,19 @@ export default function AdminBikes() {
       <div className="flex-between mb-2">
         <div>
           <h1 className="page-title">Bike Fleet</h1>
-          <p className="page-sub">Manage inventory, assigned riders, service history, license disc compliance, and fleet statuses.</p>
+          <p className="page-sub">Manage inventory, assigned riders, service history, license disc compliance, and fleet assignments.</p>
         </div>
         <button className="btn" onClick={openAddModal}><Plus size={16} /> Add bike</button>
       </div>
       <div className="row mb-3" style={{ flexWrap: 'wrap', justifyContent: 'space-between' }}>
-        <SearchInput value={search} onChange={setSearch} placeholder="Search VIN, rider, registration, disc expiry" style={{ flex: '1 1 320px', maxWidth: 420 }} />
-        <div className="muted text-sm">Showing {filtered.length} matching bikes</div>
+        <SearchInput value={search} onChange={setSearch} placeholder="Search VIN, rider, registration, fleet, disc expiry" style={{ flex: '1 1 320px', maxWidth: 420 }} />
+        <div className="row" style={{ gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <select value={fleetFilter} onChange={(e) => setFleetFilter(e.target.value)} style={{ minWidth: 180 }}>
+            <option value="">All fleets</option>
+            {fleetOptions.map((fleetName) => <option key={fleetName} value={fleetName}>{fleetName}</option>)}
+          </select>
+          <div className="muted text-sm">Showing {filtered.length} matching bikes</div>
+        </div>
       </div>
       <div className="row mb-4" style={{ flexWrap: 'wrap' }}>
         {bikeStatusOptions.map((option) => (
@@ -311,6 +322,7 @@ export default function AdminBikes() {
                 <div className="text-sm muted mb-3">{bike.year} · {bike.engine_cc}cc · {bike.color}</div>
                 <div className="text-xs muted">VIN: {bike.vin}</div>
                 <div className="text-xs muted">REG: {bike.registration || '—'}</div>
+                <div className="text-xs muted">Fleet: {bike.fleet || '—'}</div>
                 <div className="flex-between mt-3 mb-1"><span className="muted text-sm">Weekly</span><strong style={{ color: 'var(--primary-light)' }}>{fmt(bike.rental_weekly)}</strong></div>
                 <div className="flex-between"><span className="muted text-sm">Odometer</span><span>{bike.odometer_km || 0} km</span></div>
                 {bike.next_service_date && <div className="flex-between"><span className="muted text-sm">Next service</span><span className="text-xs">{fmtDate(bike.next_service_date)}</span></div>}
@@ -346,6 +358,7 @@ export default function AdminBikes() {
             <div className="field"><label className="label">Registration</label><input value={form.registration} onChange={(e) => setForm({ ...form, registration: e.target.value })} /></div>
             <div className="field"><label className="label">Make *</label><input value={form.make} onChange={(e) => setForm({ ...form, make: e.target.value })} /></div>
             <div className="field"><label className="label">Model *</label><input value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} /></div>
+            <div className="field"><label className="label">Fleet</label><input value={form.fleet} onChange={(e) => setForm({ ...form, fleet: e.target.value })} placeholder="e.g. Uber JHB, Bolt CPT" /></div>
             <div className="field"><label className="label">Year</label><input type="number" value={form.year} onChange={(e) => setForm({ ...form, year: e.target.value })} /></div>
             <div className="field"><label className="label">Engine cc</label><input type="number" value={form.engine_cc} onChange={(e) => setForm({ ...form, engine_cc: e.target.value })} /></div>
             <div className="field"><label className="label">Condition</label><select value={form.condition} onChange={(e) => setForm({ ...form, condition: e.target.value })}><option value="new">New</option><option value="used">Used</option></select></div>

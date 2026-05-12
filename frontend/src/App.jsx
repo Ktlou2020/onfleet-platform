@@ -10,7 +10,11 @@ import FleetOwnerPilot from './pages/FleetOwnerPilot';
 import FleetOwnerWorkspace from './pages/FleetOwnerWorkspace';
 import FleetLogin from './pages/FleetLogin';
 import FleetSignup from './pages/FleetSignup';
-import FleetOwnerPortal from './pages/FleetOwnerPortal';
+import FleetOwnerShell from './pages/fleet/FleetOwnerShell';
+import FleetDashboard from './pages/fleet/Dashboard';
+import FleetOwnerBikes from './pages/fleet/Bikes';
+import FleetOwnerAgreements from './pages/fleet/Agreements';
+import FleetOwnerPayments from './pages/fleet/Payments';
 import RiderShell from './pages/rider/RiderShell';
 import RiderDashboard from './pages/rider/Dashboard';
 import RiderAgreements from './pages/rider/Agreements';
@@ -67,7 +71,12 @@ export default function App() {
         <Route path="/fleet/login" element={<FleetLogin />} />
         <Route path="/fleet/signup" element={<FleetSignup />} />
         <Route path="/fleet/workspace" element={<FleetOwnerWorkspace />} />
-        <Route path="/fleet/app" element={<PrivateRoute role="fleet_owner"><FleetOwnerPortal /></PrivateRoute>} />
+        <Route path="/fleet/app" element={<PrivateRoute role="fleet_owner"><FleetOwnerShell /></PrivateRoute>}>
+          <Route index element={<FleetDashboard />} />
+          <Route path="bikes" element={<FleetOwnerBikes />} />
+          <Route path="agreements" element={<FleetOwnerAgreements />} />
+          <Route path="payments" element={<FleetOwnerPayments />} />
+        </Route>
 
         <Route path="/" element={<PrivateRoute role="rider"><RiderShell /></PrivateRoute>}>
           <Route path="dashboard" element={<RiderDashboard />} />

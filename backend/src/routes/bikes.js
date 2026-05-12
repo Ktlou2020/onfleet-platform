@@ -271,15 +271,16 @@ router.get('/:id', authRequired, (req, res) => {
 router.post('/', authRequired, adminOnly, (req, res) => {
   const b = req.body;
   const info = db.prepare(`INSERT INTO bikes
-    (vin, registration, make, model, fleet, year, engine_cc, color, condition, purchase_price,
+    (vin, registration, make, model, fleet, organization_id, year, engine_cc, color, condition, purchase_price,
      rental_weekly, total_weeks, status, gps_device_id, odometer_km, insurance_provider,
      insurance_policy_no, insurance_expiry, license_disc_no, license_disc_expiry, image_url, notes)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       b.vin,
       b.registration || null,
       b.make,
       b.model,
       b.fleet || null,
+      b.organization_id || null,
       b.year || null,
       b.engine_cc || null,
       b.color || null,
@@ -303,7 +304,7 @@ router.post('/', authRequired, adminOnly, (req, res) => {
 });
 
 router.put('/:id', authRequired, adminOnly, (req, res) => {
-  const allowed = ['registration', 'make', 'model', 'fleet', 'year', 'engine_cc', 'color', 'condition', 'purchase_price', 'rental_weekly', 'total_weeks', 'gps_device_id', 'odometer_km', 'next_service_km', 'next_service_date', 'insurance_provider', 'insurance_policy_no', 'insurance_expiry', 'license_disc_no', 'license_disc_expiry', 'image_url', 'notes'];
+  const allowed = ['registration', 'make', 'model', 'fleet', 'organization_id', 'year', 'engine_cc', 'color', 'condition', 'purchase_price', 'rental_weekly', 'total_weeks', 'gps_device_id', 'odometer_km', 'next_service_km', 'next_service_date', 'insurance_provider', 'insurance_policy_no', 'insurance_expiry', 'license_disc_no', 'license_disc_expiry', 'image_url', 'notes'];
   const sets = [];
   const vals = [];
   let statusMeta = null;
@@ -325,7 +326,7 @@ router.put('/:id', authRequired, adminOnly, (req, res) => {
   for (const key of allowed) {
     if (req.body[key] !== undefined) {
       sets.push(`${key} = ?`);
-      vals.push(key === 'fleet' ? (req.body[key] || null) : req.body[key]);
+      vals.push(['fleet', 'organization_id'].includes(key) ? (req.body[key] || null) : req.body[key]);
     }
   }
 

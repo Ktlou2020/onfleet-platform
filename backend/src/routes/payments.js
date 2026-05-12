@@ -107,6 +107,50 @@ function recordManualPayment({ agreement_id, amount, method, reference, paid_at,
   return { id: info.lastInsertRowid, reference: ref };
 }
 
+function rebuildScheduleAllocations(agreementId) {
+  const today = new Date().toISOString().slice(0, 10);
+  const schedules = db.prepare(`SELECT * FROM payment_schedules WHERE agreement_id = ? ORDER BY week_number ASC`).all(agreementId);
+  if (!schedules.length) return;
+
+  const reset = db.prepare(`UPDATE payment_schedules SET amount_paid = ?, paid_at = ?, status = ? WHERE id = ?`);
+  for (const schedule of schedules) {
+    if (schedule.status === 'waived') {
+      reset.run(0, null, 'waived', schedule.id);
+    } else {
+      reset.run(0, null, schedule.due_date < today ? 'overdue' : 'pending', schedule.id);
+    }
+  }
+
+  const payments = db.prepare(`SELECT * FROM payments WHERE agreement_id = ? AND status = 'success' ORDER BY COALESCE(paid_at, created_at) ASC, id ASC`).all(agreementId);
+  const applicable = db.prepare(`SELECT * FROM payment_schedules WHERE agreement_id = ? AND status != 'waived' ORDER BY week_number ASC`).all(agreementId);
+  const updateApplied = db.prepare(`UPDATE payment_schedules SET amount_paid = ?, paid_at = ?, status = ? WHERE id = ?`);
+
+  for (const payment of payments) {
+    let remaining = creditedAmount(payment);
+    for (const schedule of applicable) {
+      if (remaining <= 0) break;
+      const owed = +(Number(schedule.amount_due) - Number(schedule.amount_paid || 0)).toFixed(2);
+      if (owed <= 0) continue;
+      const applied = Math.min(remaining, owed);
+      schedule.amount_paid = +(Number(schedule.amount_paid || 0) + applied).toFixed(2);
+      schedule.paid_at = schedule.paid_at || payment.paid_at || payment.created_at || null;
+      schedule.status = schedule.amount_paid >= Number(schedule.amount_due) ? 'paid' : 'partial';
+      updateApplied.run(schedule.amount_paid, schedule.paid_at, schedule.status, schedule.id);
+      remaining = +(remaining - applied).toFixed(2);
+    }
+  }
+
+  for (const schedule of applicable) {
+    let status = schedule.status;
+    if (Number(schedule.amount_paid || 0) >= Number(schedule.amount_due || 0)) status = 'paid';
+    else if (Number(schedule.amount_paid || 0) > 0 && schedule.due_date < today) status = 'overdue';
+    else if (Number(schedule.amount_paid || 0) > 0) status = 'partial';
+    else if (schedule.due_date < today) status = 'overdue';
+    else status = 'pending';
+    updateApplied.run(schedule.amount_paid || 0, schedule.paid_at || null, status, schedule.id);
+  }
+}
+
 router.post('/paystack/init', authRequired, async (req, res) => {
   const { agreement_id, amount } = req.body;
   const ag = db.prepare('SELECT * FROM agreements WHERE id = ? AND user_id = ?').get(agreement_id, req.user.id);
@@ -270,6 +314,56 @@ router.get('/all', authRequired, adminOnly, (req, res) => {
     FROM payments p JOIN users u ON u.id = p.user_id JOIN agreements a ON a.id = p.agreement_id
     ORDER BY p.created_at DESC LIMIT 500`).all();
   res.json({ payments });
+});
+
+router.post('/bulk-delete', authRequired, adminOnly, (req, res) => {
+  const paymentIds = Array.from(new Set((Array.isArray(req.body.payment_ids) ? req.body.payment_ids : [])
+    .map((value) => Number(value))
+    .filter((value) => Number.isInteger(value) && value > 0)));
+
+  if (!paymentIds.length) return res.status(400).json({ error: 'Select at least one payment to delete' });
+
+  const deleted = [];
+  const notFound = [];
+  const agreementIds = new Set();
+  const removePayment = db.prepare('DELETE FROM payments WHERE id = ?');
+
+  for (const paymentId of paymentIds) {
+    const payment = db.prepare('SELECT id, agreement_id, reference, amount, net_amount, status FROM payments WHERE id = ?').get(paymentId);
+    if (!payment) {
+      notFound.push(paymentId);
+      continue;
+    }
+    removePayment.run(payment.id);
+    agreementIds.add(payment.agreement_id);
+    deleted.push(payment);
+  }
+
+  for (const agreementId of agreementIds) rebuildScheduleAllocations(agreementId);
+
+  logAudit(req.user.id, 'payment.bulk_delete', 'payments', null, {
+    requested: paymentIds.length,
+    deleted_count: deleted.length,
+    not_found_count: notFound.length,
+    payment_ids: deleted.map((payment) => payment.id),
+    references: deleted.map((payment) => payment.reference)
+  }, req.ip);
+
+  res.json({
+    ok: true,
+    requested: paymentIds.length,
+    deleted_count: deleted.length,
+    not_found_count: notFound.length,
+    deleted: deleted.map((payment) => ({
+      id: payment.id,
+      agreement_id: payment.agreement_id,
+      reference: payment.reference,
+      amount: payment.amount,
+      net_amount: payment.net_amount,
+      status: payment.status
+    })),
+    not_found: notFound
+  });
 });
 
 module.exports = router;

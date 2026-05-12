@@ -38,11 +38,19 @@ export function AuthProvider({ children }) {
     return data.user;
   };
 
+  const signupFleet = async (payload) => {
+    const { data } = await api.post('/auth/fleet/signup', payload);
+    localStorage.setItem('of_token', data.token);
+    localStorage.setItem('of_user', JSON.stringify(data.user));
+    setUser(data.user);
+    return data.user;
+  };
+
   const logout = () => {
     localStorage.removeItem('of_token');
     localStorage.removeItem('of_user');
     setUser(null);
   };
 
-  return <AuthCtx.Provider value={{ user, login, signup, logout, loading }}>{children}</AuthCtx.Provider>;
+  return <AuthCtx.Provider value={{ user, login, signup, signupFleet, logout, loading }}>{children}</AuthCtx.Provider>;
 }

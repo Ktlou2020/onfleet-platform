@@ -454,28 +454,51 @@ function upsertAgreementFromFleetRow(row) {
 }
 
 function resolveAgreementForPayment(row) {
-  if (normalizeText(row.agreement_no)) {
-    const direct = db.prepare(`SELECT * FROM agreements WHERE agreement_no = ?`).get(normalizeText(row.agreement_no));
-    if (direct) return direct;
-  }
-  const bikeKey = normalizeText(row.Bike || row['Vehicle Reg'] || row['Bike Registration']);
-  const riderName = normalizeText(row.Driver);
-  if (!bikeKey) return null;
-  const bike = db.prepare(`SELECT * FROM bikes WHERE registration = ? OR vin = ?`).get(bikeKey, bikeKey);
+  const registration = normalizeText(row.registration || row.Bike || row['Vehicle Reg'] || row['Bike Registration']);
+  const riderName = normalizeText(row.rider_name || row.Driver || row.Rider || row['Full Name']);
+  if (!registration) return null;
+
+  const bike = db.prepare(`SELECT * FROM bikes WHERE UPPER(COALESCE(registration, '')) = UPPER(?)`).get(registration);
   if (!bike) return null;
+
   if (riderName) {
     const user = findUser({ fullName: riderName });
     if (user) {
-      const exact = db.prepare(`SELECT * FROM agreements WHERE bike_id = ? AND user_id = ? ORDER BY id DESC LIMIT 1`).get(bike.id, user.id);
+      const exact = db.prepare(`SELECT * FROM agreements WHERE bike_id = ? AND user_id = ? ORDER BY
+        CASE status
+          WHEN 'active' THEN 0
+          WHEN 'defaulted' THEN 1
+          WHEN 'paused' THEN 2
+          WHEN 'completed' THEN 3
+          WHEN 'cancelled' THEN 4
+          WHEN 'discontinued' THEN 5
+          ELSE 6
+        END,
+        id DESC
+        LIMIT 1`).get(bike.id, user.id);
       if (exact) return exact;
     }
   }
-  return db.prepare(`SELECT * FROM agreements WHERE bike_id = ? ORDER BY id DESC LIMIT 1`).get(bike.id);
+
+  return db.prepare(`SELECT * FROM agreements WHERE bike_id = ? ORDER BY
+    CASE status
+      WHEN 'active' THEN 0
+      WHEN 'defaulted' THEN 1
+      WHEN 'paused' THEN 2
+      WHEN 'completed' THEN 3
+      WHEN 'cancelled' THEN 4
+      WHEN 'discontinued' THEN 5
+      ELSE 6
+    END,
+    id DESC
+    LIMIT 1`).get(bike.id);
 }
 
 function insertImportedPayment(row, recordedBy) {
+  const registration = normalizeText(row.registration || row.Bike || row['Vehicle Reg'] || row['Bike Registration']);
+  if (!registration) throw new Error('Bike registration is required');
   const agreement = resolveAgreementForPayment(row);
-  if (!agreement) throw new Error('Agreement not found');
+  if (!agreement) throw new Error(`Agreement not found for registration ${registration}`);
   const amount = parseMoney(row['Amount Collected'] || row.amount);
   if (!amount) throw new Error('Amount missing');
   const reference = normalizeText(row.reference || row['Bike and Date']) || `LEG-PAY-${uuid().slice(0, 8)}`;
@@ -494,7 +517,7 @@ function insertImportedPayment(row, recordedBy) {
       reference,
       paidAt,
       recordedBy,
-      'Imported from legacy collections CSV'
+      normalizeText(row.notes) || `Imported from collections CSV for registration ${registration}`
     );
 
   const schedules = db.prepare(`SELECT * FROM payment_schedules WHERE agreement_id = ? ORDER BY week_number`).all(agreement.id);
@@ -647,5 +670,6 @@ module.exports = {
   importAgreementsCsv,
   importPaymentsCsv,
   importLegacyBundle,
-  importUserTagsCsv
+  importUserTagsCsv,
+  resolveAgreementForPayment
 };

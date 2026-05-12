@@ -164,7 +164,7 @@ export default function AdminImports() {
     {
       key: 'payments',
       title: 'Import payments',
-      sub: 'Use the collections export. Match the columns before import so agreement number, amount, and dates land correctly.',
+      sub: 'Use the collections export. Check and map the columns before import so bike registration, amount, rider, and dates land correctly. Payments are matched by bike registration, not contract number.',
       endpoint: '/imports/payments',
       importType: 'payments'
     },

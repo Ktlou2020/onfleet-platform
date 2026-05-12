@@ -6,6 +6,7 @@ const db = require('../db');
 const { authRequired, adminOnly } = require('../middleware/auth');
 const { logAudit, recalcScheduleStatuses } = require('../utils/helpers');
 const { applyCsvMapping, previewImportCsv } = require('../services/csvPreview');
+const { resolveAgreementForPayment } = require('../services/csvImports');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 3 * 1024 * 1024 } });
@@ -199,8 +200,8 @@ router.post('/bulk-preview', authRequired, adminOnly, upload.single('file'), (re
 
 router.get('/bulk-template', authRequired, adminOnly, (req, res) => {
   const csv = [
-    'agreement_no,amount,method,reference,paid_at,notes',
-    'OF-2026-123456,850,eft,BANKREF001,2026-05-06T08:00:00Z,Imported bank statement batch'
+    'registration,amount,method,reference,paid_at,rider_name,notes',
+    'JHB 452 GP,850,eft,BANKREF001,2026-05-06T08:00:00Z,Sipho Dlamini,Imported bank statement batch'
   ].join('\n');
   res.setHeader('Content-Type', 'text/csv');
   res.setHeader('Content-Disposition', 'attachment; filename="onfleet-payments-template.csv"');
@@ -216,17 +217,17 @@ router.post('/bulk-import', authRequired, adminOnly, upload.single('file'), (req
   const summary = { imported: 0, failed: 0, errors: [] };
   for (const [index, row] of rows.entries()) {
     try {
-      const agreement = row.agreement_id
-        ? db.prepare('SELECT * FROM agreements WHERE id = ?').get(Number(row.agreement_id))
-        : db.prepare('SELECT * FROM agreements WHERE agreement_no = ?').get(row.agreement_no);
-      if (!agreement) throw new Error('Agreement not found');
+      const registration = String(row.registration || '').trim();
+      if (!registration) throw new Error('Bike registration is required');
+      const agreement = resolveAgreementForPayment(row);
+      if (!agreement) throw new Error(`Agreement not found for registration ${registration}`);
       recordManualPayment({
         agreement_id: agreement.id,
         amount: Number(row.amount),
         method: row.method || 'eft',
         reference: row.reference || `CSV-${uuid().slice(0, 8)}`,
         paid_at: row.paid_at || new Date().toISOString(),
-        notes: row.notes || 'Bulk CSV import',
+        notes: row.notes || `Bulk CSV import for registration ${registration}`,
         recorded_by: req.user.id
       });
       summary.imported += 1;

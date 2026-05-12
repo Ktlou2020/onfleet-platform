@@ -121,13 +121,13 @@ const IMPORT_CONFIGS = {
   payments: {
     title: 'Payments CSV',
     expected_fields: [
-      { key: 'agreement_no', label: 'Agreement number', required: true, aliases: ['Agreement No', 'agreement number'] },
-      { key: 'agreement_id', label: 'Agreement ID', required: false, aliases: ['Agreement Id'] },
+      { key: 'registration', label: 'Bike registration', required: true, aliases: ['Vehicle Reg', 'Bike Registration', 'Registration', 'Bike', 'bike_registration'] },
       { key: 'amount', label: 'Amount', required: true, aliases: ['Amount Collected'] },
       { key: 'method', label: 'Payment method', required: false, aliases: ['Method'] },
-      { key: 'reference', label: 'Reference', required: false, aliases: ['Bike and Date'] },
-      { key: 'paid_at', label: 'Paid at', required: false, aliases: ['Date Created', 'Paid At'] },
-      { key: 'notes', label: 'Notes', required: false, aliases: ['Comment'] }
+      { key: 'reference', label: 'Reference', required: false, aliases: ['Bike and Date', 'Reference'] },
+      { key: 'paid_at', label: 'Paid at', required: false, aliases: ['Date Created', 'Paid At', 'Payment Date'] },
+      { key: 'rider_name', label: 'Rider name', required: false, aliases: ['Driver', 'Rider', 'Full Name'] },
+      { key: 'notes', label: 'Notes', required: false, aliases: ['Comment', 'Notes'] }
     ]
   },
   special_tag_users: {

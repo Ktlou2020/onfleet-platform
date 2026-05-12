@@ -215,7 +215,7 @@ export default function AdminAgreements() {
         </div>
         <div className="row" style={{ flexWrap: 'wrap' }}>
           <button className="btn btn-secondary" onClick={downloadTemplate}>Download CSV template</button>
-          <button className="btn" onClick={() => setShowImport(true)}>Bulk-load payments</button>
+          <button className="btn" onClick={() => setShowImport(true)}>Bulk-load payments by registration</button>
         </div>
       </div>
 
@@ -293,7 +293,7 @@ export default function AdminAgreements() {
       {showImport && (
         <Modal title="Bulk-load payments from CSV" onClose={closeImport}>
           <div className="field"><label className="label">CSV file</label><input type="file" accept=".csv,text/csv" onChange={(e) => { setFile(e.target.files?.[0] || null); setPreview(null); setMapping({}); }} /></div>
-          <div className="muted text-sm mb-3">Preview the column mapping before importing. Required fields: agreement number and amount.</div>
+          <div className="muted text-sm mb-3">Preview and map the columns before importing. Required fields: bike registration and amount. Payments will be allocated to the latest matching agreement for that registration.</div>
           <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
             <button className="btn btn-secondary" onClick={previewCsv} disabled={previewing}>{previewing ? 'Previewing…' : 'Preview CSV'}</button>
             <button className="btn" onClick={importCsv} disabled={importing || !preview}>{importing ? 'Importing…' : 'Import CSV'}</button>

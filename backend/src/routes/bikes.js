@@ -166,6 +166,10 @@ function listCatalogValues(column, whereClauses = [], params = []) {
   return db.prepare(sql).all(...params).map((row) => row.value);
 }
 
+function adminVisibleBikeClause(alias = 'b') {
+  return `${alias}.organization_id IS NULL`;
+}
+
 router.get('/catalog', (req, res) => {
   const make = String(req.query.make || '').trim();
   const model = String(req.query.model || '').trim();
@@ -223,7 +227,7 @@ router.get('/catalog', (req, res) => {
 router.get('/', authRequired, adminOnly, (req, res) => {
   const status = String(req.query.status || '').trim();
   const fleet = String(req.query.fleet || '').trim();
-  const clauses = [];
+  const clauses = [adminVisibleBikeClause('b')];
   const params = [];
 
   if (status) {
@@ -253,10 +257,11 @@ router.post('/document-insights/license-disc', authRequired, adminOnly, bikeDocu
 });
 
 router.get('/:id', authRequired, (req, res) => {
-  const bike = db.prepare(`${bikeSelectSql} WHERE b.id = ?`).get(req.params.id);
+  const isAdminPortalUser = ['admin', 'superadmin'].includes(req.user.role);
+  const bike = db.prepare(`${bikeSelectSql} WHERE b.id = ?${isAdminPortalUser ? ` AND ${adminVisibleBikeClause('b')}` : ''}`).get(req.params.id);
   if (!bike) return res.status(404).json({ error: 'Not found' });
 
-  if (!['admin', 'superadmin'].includes(req.user.role)) {
+  if (!isAdminPortalUser) {
     const owns = db.prepare(`SELECT 1 FROM agreements WHERE bike_id = ? AND user_id = ? AND status = 'active'`).get(req.params.id, req.user.id);
     if (!owns) return res.status(403).json({ error: 'Forbidden' });
   }
@@ -264,7 +269,7 @@ router.get('/:id', authRequired, (req, res) => {
   const services = db.prepare(`SELECT * FROM service_records WHERE bike_id = ? ORDER BY service_date DESC LIMIT 50`).all(req.params.id);
   const lastPings = db.prepare(`SELECT lat, lng, speed_kmh, recorded_at FROM gps_pings WHERE bike_id = ? ORDER BY recorded_at DESC LIMIT 50`).all(req.params.id);
   const payload = { bike, services, gps_history: lastPings };
-  if (['admin', 'superadmin'].includes(req.user.role)) payload.roi = computeBikeRoi(req.params.id);
+  if (isAdminPortalUser) payload.roi = computeBikeRoi(req.params.id);
   res.json(payload);
 });
 

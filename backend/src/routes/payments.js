@@ -24,6 +24,10 @@ function creditedAmount(payment) {
   return Number(payment?.net_amount || payment?.amount || 0);
 }
 
+function adminVisibleAgreementClause(aAlias = 'a', bAlias = 'b', uAlias = 'u') {
+  return `${bAlias}.organization_id IS NULL AND ${uAlias}.organization_id IS NULL`;
+}
+
 function applyPaymentToSchedule(agreementId, amountZAR) {
   const agreement = db.prepare('SELECT status FROM agreements WHERE id = ?').get(agreementId);
   if (!agreement) throw new Error('Agreement not found');
@@ -238,6 +242,12 @@ router.post('/paystack/webhook', express.json(), (req, res) => {
 
 router.post('/manual', authRequired, adminOnly, (req, res) => {
   try {
+    const visibleAgreement = db.prepare(`SELECT a.id
+      FROM agreements a
+      JOIN bikes b ON b.id = a.bike_id
+      JOIN users u ON u.id = a.user_id
+      WHERE a.id = ? AND ${adminVisibleAgreementClause('a', 'b', 'u')}`).get(req.body.agreement_id);
+    if (!visibleAgreement) return res.status(404).json({ error: 'Agreement not found' });
     const result = recordManualPayment({ ...req.body, recorded_by: req.user.id });
     logAudit(req.user.id, 'payment.manual', 'payments', result.id, { amount: req.body.amount, method: req.body.method });
     res.json(result);
@@ -304,16 +314,25 @@ router.post('/bulk-import', authRequired, adminOnly, upload.single('file'), (req
 });
 
 router.get('/agreement/:id', authRequired, (req, res) => {
-  const ag = db.prepare('SELECT user_id FROM agreements WHERE id = ?').get(req.params.id);
+  const isAdminPortalUser = ['admin', 'superadmin'].includes(req.user.role);
+  const ag = db.prepare(`SELECT a.user_id
+    FROM agreements a
+    JOIN bikes b ON b.id = a.bike_id
+    JOIN users u ON u.id = a.user_id
+    WHERE a.id = ?${isAdminPortalUser ? ` AND ${adminVisibleAgreementClause('a', 'b', 'u')}` : ''}`).get(req.params.id);
   if (!ag) return res.status(404).json({ error: 'Not found' });
-  if (ag.user_id !== req.user.id && !['admin', 'superadmin'].includes(req.user.role)) return res.status(403).json({ error: 'Forbidden' });
+  if (ag.user_id !== req.user.id && !isAdminPortalUser) return res.status(403).json({ error: 'Forbidden' });
   const payments = db.prepare(`SELECT * FROM payments WHERE agreement_id = ? ORDER BY created_at DESC`).all(req.params.id);
   res.json({ payments });
 });
 
 router.get('/all', authRequired, adminOnly, (req, res) => {
   const payments = db.prepare(`SELECT p.*, u.full_name, u.email, a.agreement_no
-    FROM payments p JOIN users u ON u.id = p.user_id JOIN agreements a ON a.id = p.agreement_id
+    FROM payments p
+    JOIN users u ON u.id = p.user_id
+    JOIN agreements a ON a.id = p.agreement_id
+    JOIN bikes b ON b.id = a.bike_id
+    WHERE ${adminVisibleAgreementClause('a', 'b', 'u')}
     ORDER BY p.created_at DESC LIMIT 500`).all();
   res.json({ payments });
 });

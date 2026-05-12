@@ -119,6 +119,14 @@ function fleetOrgScope(alias = 'b', orgAlias = 'o') {
   return `(${alias}.organization_id = ${orgAlias}.id OR (${alias}.organization_id IS NULL AND LOWER(TRIM(COALESCE(${alias}.fleet, ''))) IN (LOWER(TRIM(COALESCE(${orgAlias}.name, ''))), LOWER(TRIM(COALESCE(${orgAlias}.slug, ''))))))`;
 }
 
+function superadminPortalAgreementScope(aAlias = 'a', bAlias = 'b', uAlias = 'u') {
+  return `${bAlias}.organization_id IS NULL AND ${uAlias}.organization_id IS NULL`;
+}
+
+function superadminPortalApplicationScope(aAlias = 'a', uAlias = 'u', bAlias = 'b') {
+  return `${uAlias}.organization_id IS NULL AND (${bAlias}.id IS NULL OR ${bAlias}.organization_id IS NULL)`;
+}
+
 function listFleetOwnerOrganizations() {
   const scope = fleetOrgScope('b', 'o');
   const rows = db.prepare(`SELECT
@@ -267,31 +275,76 @@ router.post('/branding/hero-image', superadminOnly, heroImageUpload.single('imag
 });
 
 router.get('/dashboard', (req, res) => {
+  const agreementScope = superadminPortalAgreementScope('a', 'b', 'u');
+  const applicationScope = superadminPortalApplicationScope('a', 'u', 'b');
   const stats = {
-    riders: db.prepare(`SELECT COUNT(*) c FROM users WHERE role = 'rider' AND deleted_at IS NULL`).get().c,
+    riders: db.prepare(`SELECT COUNT(*) c FROM users WHERE role = 'rider' AND deleted_at IS NULL AND organization_id IS NULL`).get().c,
     admins: db.prepare(`SELECT COUNT(*) c FROM users WHERE role IN ('admin','superadmin') AND deleted_at IS NULL`).get().c,
-    active_agreements: db.prepare(`SELECT COUNT(*) c FROM agreements WHERE status = 'active'`).get().c,
-    completed_agreements: db.prepare(`SELECT COUNT(*) c FROM agreements WHERE status = 'completed'`).get().c,
-    bikes_available: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE status = 'ready_to_go'`).get().c,
-    bikes_allocated: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE status = 'active'`).get().c,
-    bikes_maintenance: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE status = 'repairs'`).get().c,
-    pending_applications: db.prepare(`SELECT COUNT(*) c FROM applications WHERE status IN ('submitted','under_review')`).get().c,
-    pending_kyc: db.prepare(`SELECT COUNT(*) c FROM application_documents WHERE status = 'uploaded'`).get().c,
-    revenue_total: db.prepare(`SELECT COALESCE(SUM(COALESCE(NULLIF(net_amount,0), amount)),0) s FROM payments WHERE status = 'success'`).get().s,
-    revenue_30d: db.prepare(`SELECT COALESCE(SUM(COALESCE(NULLIF(net_amount,0), amount)),0) s FROM payments WHERE status = 'success' AND paid_at >= datetime('now','-30 days')`).get().s,
-    overdue_amount: db.prepare(`SELECT COALESCE(SUM(amount_due - amount_paid),0) s FROM payment_schedules WHERE status = 'overdue'`).get().s,
-    overdue_count: db.prepare(`SELECT COUNT(DISTINCT agreement_id) c FROM payment_schedules WHERE status = 'overdue'`).get().c,
+    active_agreements: db.prepare(`SELECT COUNT(*) c
+      FROM agreements a
+      JOIN bikes b ON b.id = a.bike_id
+      JOIN users u ON u.id = a.user_id
+      WHERE a.status = 'active' AND ${agreementScope}`).get().c,
+    completed_agreements: db.prepare(`SELECT COUNT(*) c
+      FROM agreements a
+      JOIN bikes b ON b.id = a.bike_id
+      JOIN users u ON u.id = a.user_id
+      WHERE a.status = 'completed' AND ${agreementScope}`).get().c,
+    bikes_available: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE status = 'ready_to_go' AND organization_id IS NULL`).get().c,
+    bikes_allocated: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE status = 'active' AND organization_id IS NULL`).get().c,
+    bikes_maintenance: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE status = 'repairs' AND organization_id IS NULL`).get().c,
+    pending_applications: db.prepare(`SELECT COUNT(*) c
+      FROM applications a
+      JOIN users u ON u.id = a.user_id
+      LEFT JOIN bikes b ON b.id = a.preferred_bike_id
+      WHERE a.status IN ('submitted','under_review') AND ${applicationScope}`).get().c,
+    pending_kyc: db.prepare(`SELECT COUNT(*) c
+      FROM application_documents d
+      JOIN applications a ON a.id = d.application_id
+      JOIN users u ON u.id = a.user_id
+      LEFT JOIN bikes b ON b.id = a.preferred_bike_id
+      WHERE d.status = 'uploaded' AND ${applicationScope}`).get().c,
+    revenue_total: db.prepare(`SELECT COALESCE(SUM(COALESCE(NULLIF(p.net_amount,0), p.amount)),0) s
+      FROM payments p
+      JOIN agreements a ON a.id = p.agreement_id
+      JOIN bikes b ON b.id = a.bike_id
+      JOIN users u ON u.id = a.user_id
+      WHERE p.status = 'success' AND ${agreementScope}`).get().s,
+    revenue_30d: db.prepare(`SELECT COALESCE(SUM(COALESCE(NULLIF(p.net_amount,0), p.amount)),0) s
+      FROM payments p
+      JOIN agreements a ON a.id = p.agreement_id
+      JOIN bikes b ON b.id = a.bike_id
+      JOIN users u ON u.id = a.user_id
+      WHERE p.status = 'success' AND COALESCE(p.paid_at, p.created_at) >= datetime('now','-30 days') AND ${agreementScope}`).get().s,
+    overdue_amount: db.prepare(`SELECT COALESCE(SUM(ps.amount_due - ps.amount_paid),0) s
+      FROM payment_schedules ps
+      JOIN agreements a ON a.id = ps.agreement_id
+      JOIN bikes b ON b.id = a.bike_id
+      JOIN users u ON u.id = a.user_id
+      WHERE ps.status = 'overdue' AND ${agreementScope}`).get().s,
+    overdue_count: db.prepare(`SELECT COUNT(DISTINCT ps.agreement_id) c
+      FROM payment_schedules ps
+      JOIN agreements a ON a.id = ps.agreement_id
+      JOIN bikes b ON b.id = a.bike_id
+      JOIN users u ON u.id = a.user_id
+      WHERE ps.status = 'overdue' AND ${agreementScope}`).get().c,
     default_action_count: db.prepare(`SELECT COUNT(*) c
       FROM agreements a
       JOIN bikes b ON b.id = a.bike_id
+      JOIN users u ON u.id = a.user_id
       WHERE a.status = 'defaulted'
-        AND b.status NOT IN ('stolen','written_off','sold')`).get().c,
-    upcoming_services: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE next_service_date IS NOT NULL AND next_service_date <= date('now','+14 days') AND status = 'active'`).get().c,
-    expiring_insurance: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE insurance_expiry IS NOT NULL AND insurance_expiry <= date('now','+30 days')`).get().c,
-    expiring_license_disc: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE license_disc_expiry IS NOT NULL AND license_disc_expiry <= date('now','+30 days')`).get().c
+        AND b.status NOT IN ('stolen','written_off','sold')
+        AND ${agreementScope}`).get().c,
+    upcoming_services: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE next_service_date IS NOT NULL AND next_service_date <= date('now','+14 days') AND status = 'active' AND organization_id IS NULL`).get().c,
+    expiring_insurance: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE insurance_expiry IS NOT NULL AND insurance_expiry <= date('now','+30 days') AND organization_id IS NULL`).get().c,
+    expiring_license_disc: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE license_disc_expiry IS NOT NULL AND license_disc_expiry <= date('now','+30 days') AND organization_id IS NULL`).get().c
   };
-  const weekly = db.prepare(`SELECT strftime('%Y-%W', paid_at) week, COALESCE(SUM(COALESCE(NULLIF(net_amount,0), amount)),0) total
-    FROM payments WHERE status = 'success' AND paid_at >= datetime('now','-90 days')
+  const weekly = db.prepare(`SELECT strftime('%Y-%W', COALESCE(p.paid_at, p.created_at)) week, COALESCE(SUM(COALESCE(NULLIF(p.net_amount,0), p.amount)),0) total
+    FROM payments p
+    JOIN agreements a ON a.id = p.agreement_id
+    JOIN bikes b ON b.id = a.bike_id
+    JOIN users u ON u.id = a.user_id
+    WHERE p.status = 'success' AND COALESCE(p.paid_at, p.created_at) >= datetime('now','-90 days') AND ${agreementScope}
     GROUP BY week ORDER BY week`).all();
   res.json({ stats, weekly_revenue: weekly });
 });

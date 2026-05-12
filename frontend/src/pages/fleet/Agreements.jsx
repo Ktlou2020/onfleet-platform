@@ -31,6 +31,9 @@ export default function FleetOwnerAgreements() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(12);
   const [actionBusy, setActionBusy] = useState('');
+  const [editingRemainingId, setEditingRemainingId] = useState(null);
+  const [savingRemainingId, setSavingRemainingId] = useState(null);
+  const [remainingDrafts, setRemainingDrafts] = useState({});
   const [showCreate, setShowCreate] = useState(false);
   const [showReassign, setShowReassign] = useState(false);
   const [createForm, setCreateForm] = useState({ bike_id: '', rider_id: '', start_date: todayIso(), weekly_amount: '', total_weeks: '', notes: '' });
@@ -38,7 +41,9 @@ export default function FleetOwnerAgreements() {
 
   const load = async () => {
     const { data } = await api.get('/fleet/portal-data');
-    setPortal({ ...emptyPortal, ...data });
+    const nextPortal = { ...emptyPortal, ...data };
+    setPortal(nextPortal);
+    setRemainingDrafts(Object.fromEntries((nextPortal.agreements || []).map((agreement) => [agreement.id, String(Number(agreement.remaining_balance || 0).toFixed(2))])));
   };
 
   useEffect(() => { load().catch(() => toast.error('Could not load agreements')); }, []);
@@ -132,6 +137,27 @@ export default function FleetOwnerAgreements() {
     }
   };
 
+  const openRemainingEditor = (agreement) => {
+    setEditingRemainingId(agreement.id);
+    setRemainingDrafts((current) => ({ ...current, [agreement.id]: String(Number(agreement.remaining_balance || 0).toFixed(2)) }));
+  };
+
+  const saveRemainingBalance = async (agreement) => {
+    const amount = Number(remainingDrafts[agreement.id]);
+    if (!Number.isFinite(amount) || amount < 0) return toast.error('Remaining balance must be zero or greater');
+    try {
+      setSavingRemainingId(agreement.id);
+      await api.patch(`/fleet/agreements/${agreement.id}/remaining-balance`, { remaining_balance: amount });
+      toast.success('Remaining balance updated');
+      setEditingRemainingId(null);
+      await load();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not update remaining balance');
+    } finally {
+      setSavingRemainingId(null);
+    }
+  };
+
   if (!portal.agreements) return <Loading />;
 
   return (
@@ -182,6 +208,8 @@ export default function FleetOwnerAgreements() {
           <tbody>
             {pagination.items.map((agreement) => {
               const busy = actionBusy.startsWith(`${agreement.id}-`);
+              const canEditRemaining = canManage && ['active', 'paused', 'defaulted'].includes(agreement.status);
+              const isEditingRemaining = editingRemainingId === agreement.id;
               return (
                 <tr key={agreement.id}>
                   <td><strong>{agreement.agreement_no}</strong></td>
@@ -190,7 +218,31 @@ export default function FleetOwnerAgreements() {
                   <td><Badge status={agreement.bike_status}>{labelize(agreement.bike_status)}</Badge></td>
                   <td>{fmt(agreement.weekly_amount)}</td>
                   <td>{fmt(agreement.overdue_balance)}</td>
-                  <td>{fmt(agreement.remaining_balance)}</td>
+                  <td>
+                    {isEditingRemaining ? (
+                      <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={remainingDrafts[agreement.id] ?? ''}
+                          onChange={(e) => setRemainingDrafts((current) => ({ ...current, [agreement.id]: e.target.value }))}
+                          style={{ width: 120 }}
+                        />
+                        <button className="btn btn-sm" disabled={savingRemainingId === agreement.id} onClick={() => saveRemainingBalance(agreement)}>{savingRemainingId === agreement.id ? 'Saving…' : 'Save'}</button>
+                        <button className="btn btn-sm btn-secondary" disabled={savingRemainingId === agreement.id} onClick={() => setEditingRemainingId(null)}>Cancel</button>
+                      </div>
+                    ) : (
+                      <>
+                        {canEditRemaining ? (
+                          <button className="btn btn-sm btn-secondary" onClick={() => openRemainingEditor(agreement)}>{fmt(agreement.remaining_balance)}</button>
+                        ) : (
+                          fmt(agreement.remaining_balance)
+                        )}
+                        {canEditRemaining && <div className="text-xs muted mt-1">Click to edit</div>}
+                      </>
+                    )}
+                  </td>
                   <td><Badge status={agreement.status}>{labelize(agreement.status)}</Badge></td>
                   <td>{fmtDate(agreement.start_date)}</td>
                   <td>

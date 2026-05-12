@@ -873,6 +873,58 @@ function rebuildScheduleAllocations(agreementId) {
   }
 }
 
+function updateAgreementRemainingBalance(agreementId, remainingBalance) {
+  const targetRemaining = Number(remainingBalance);
+  if (!Number.isFinite(targetRemaining) || targetRemaining < 0) throw new Error('Remaining balance must be zero or greater');
+
+  const agreement = db.prepare('SELECT id, status, total_amount FROM agreements WHERE id = ?').get(agreementId);
+  if (!agreement) throw new Error('Agreement not found');
+  if (!['active', 'paused', 'defaulted'].includes(agreement.status)) {
+    throw new Error('Only active, paused, or defaulted agreements can be updated');
+  }
+
+  const paidTotal = Number(db.prepare(`SELECT COALESCE(SUM(COALESCE(NULLIF(net_amount, 0), amount)), 0) AS total
+    FROM payments WHERE agreement_id = ? AND status = 'success'`).get(agreementId).total || 0);
+  const schedules = db.prepare(`SELECT id, amount_due, amount_paid, status
+    FROM payment_schedules WHERE agreement_id = ? ORDER BY week_number ASC`).all(agreementId);
+  if (!schedules.length) throw new Error('Payment schedule not found');
+
+  const openSchedules = schedules.filter((row) => row.status !== 'waived' && Number(row.amount_due || 0) > Number(row.amount_paid || 0));
+  if (!openSchedules.length && targetRemaining > 0) {
+    throw new Error('No unpaid schedule rows remain for this agreement');
+  }
+
+  const currentOutstanding = openSchedules.reduce((sum, row) => sum + Math.max(Number(row.amount_due || 0) - Number(row.amount_paid || 0), 0), 0);
+  const targetTotalAmount = +(paidTotal + targetRemaining).toFixed(2);
+
+  db.transaction(() => {
+    if (openSchedules.length) {
+      let remainingToAllocate = +targetRemaining.toFixed(2);
+      openSchedules.forEach((row, index) => {
+        const currentOutstandingRow = Math.max(Number(row.amount_due || 0) - Number(row.amount_paid || 0), 0);
+        const isLast = index === openSchedules.length - 1;
+        const nextOutstanding = isLast
+          ? remainingToAllocate
+          : +(currentOutstanding > 0 ? (targetRemaining * currentOutstandingRow / currentOutstanding) : (targetRemaining / openSchedules.length)).toFixed(2);
+        const safeOutstanding = Math.max(nextOutstanding, 0);
+        const nextAmountDue = +(Number(row.amount_paid || 0) + safeOutstanding).toFixed(2);
+        db.prepare('UPDATE payment_schedules SET amount_due = ? WHERE id = ?').run(nextAmountDue, row.id);
+        remainingToAllocate = +(remainingToAllocate - safeOutstanding).toFixed(2);
+      });
+    }
+    db.prepare('UPDATE agreements SET total_amount = ? WHERE id = ?').run(targetTotalAmount, agreementId);
+  })();
+
+  rebuildScheduleAllocations(agreementId);
+
+  return {
+    agreement_id: agreementId,
+    total_amount: targetTotalAmount,
+    paid_total: +paidTotal.toFixed(2),
+    remaining_balance: +targetRemaining.toFixed(2)
+  };
+}
+
 function sanitizePortalDataForRole(role, portalData) {
   const canViewBikes = canViewFleetResource(role, 'bikes');
   const canViewAgreements = canViewFleetResource(role, 'agreements');
@@ -1696,6 +1748,27 @@ router.post('/agreements', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.m
     res.status(201).json({ ok: true, agreement });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Could not create agreement' });
+  }
+});
+
+router.patch('/agreements/:id/remaining-balance', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.manage), (req, res) => {
+  try {
+    const organization = getOrganizationOrThrow(req.user.organization_id);
+    const agreementId = toInt(req.params.id);
+    if (!agreementId) return res.status(400).json({ error: 'Invalid agreement id' });
+
+    const agreement = getScopedAgreement(organization, agreementId);
+    if (!agreement) return res.status(404).json({ error: 'Agreement not found in your fleet' });
+
+    const remainingBalance = req.body.remaining_balance;
+    const result = updateAgreementRemainingBalance(agreementId, remainingBalance);
+    logAudit(req.user.id, 'fleet_owner.agreement_remaining_balance', 'agreements', agreementId, {
+      remaining_balance: result.remaining_balance,
+      total_amount: result.total_amount
+    }, req.ip);
+    res.json({ ok: true, ...result, agreement: getScopedAgreement(organization, agreementId) });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'Could not update remaining balance' });
   }
 });
 

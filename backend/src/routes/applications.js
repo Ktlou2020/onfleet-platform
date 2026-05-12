@@ -128,13 +128,18 @@ function hydrateDocuments(applicationId) {
     FROM application_documents WHERE application_id = ? ORDER BY uploaded_at DESC`).all(applicationId);
 }
 
-function getApplicationWithRelations(applicationId) {
+function adminVisibleApplicationClause(aAlias = 'a', uAlias = 'u', bAlias = 'b') {
+  return `${uAlias}.organization_id IS NULL AND (${bAlias}.id IS NULL OR ${bAlias}.organization_id IS NULL)`;
+}
+
+function getApplicationWithRelations(applicationId, options = {}) {
+  const scopeClause = options.adminVisible ? ` AND ${adminVisibleApplicationClause('a', 'u', 'b')}` : '';
   return db.prepare(`SELECT a.*, u.full_name, u.email, u.phone, u.id_number, u.address, u.city, u.province, u.avatar_url,
       b.make, b.model, b.registration, b.image_url
     FROM applications a
     JOIN users u ON u.id = a.user_id
     LEFT JOIN bikes b ON b.id = a.preferred_bike_id
-    WHERE a.id = ?`).get(applicationId);
+    WHERE a.id = ?${scopeClause}`).get(applicationId);
 }
 
 async function approveApplication({ applicationId, bikeId, weeklyAmount, totalWeeks, startDate, reviewerId }) {
@@ -302,16 +307,21 @@ router.get('/mine', authRequired, (req, res) => {
 
 router.get('/', authRequired, adminOnly, (req, res) => {
   const status = req.query.status;
-  const where = status ? 'WHERE a.status = ?' : '';
+  const where = [`${adminVisibleApplicationClause('a', 'u', 'b')}`];
+  const values = [];
+  if (status) {
+    where.push('a.status = ?');
+    values.push(status);
+  }
   const sql = `SELECT a.*, u.full_name, u.email, u.phone, u.avatar_url, b.make, b.model, b.registration, b.image_url,
       (SELECT COUNT(*) FROM application_documents d WHERE d.application_id = a.id) AS document_count,
       (SELECT COUNT(*) FROM application_documents d WHERE d.application_id = a.id AND d.doc_type = 'payslip') AS payslip_count
     FROM applications a
     JOIN users u ON u.id = a.user_id
     LEFT JOIN bikes b ON b.id = a.preferred_bike_id
-    ${where}
+    WHERE ${where.join(' AND ')}
     ORDER BY a.submitted_at DESC`;
-  const apps = status ? db.prepare(sql).all(status) : db.prepare(sql).all();
+  const apps = db.prepare(sql).all(...values);
   res.json({ applications: apps });
 });
 
@@ -370,7 +380,7 @@ router.patch('/:id/admin-update', authRequired, adminOnly, (req, res) => {
     return res.status(400).json({ error: 'Invalid application id' });
   }
 
-  const current = getApplicationWithRelations(applicationId);
+  const current = getApplicationWithRelations(applicationId, { adminVisible: true });
   if (!current) return res.status(404).json({ error: 'Application not found' });
 
   const userUpdates = [];
@@ -477,7 +487,11 @@ router.patch('/:id/documents/:docId', authRequired, adminOnly, async (req, res) 
     return res.status(400).json({ error: 'Invalid application document id' });
   }
 
-  const app = db.prepare('SELECT id, status, auto_decision FROM applications WHERE id = ?').get(applicationId);
+  const app = db.prepare(`SELECT a.id, a.status, a.auto_decision
+    FROM applications a
+    JOIN users u ON u.id = a.user_id
+    LEFT JOIN bikes b ON b.id = a.preferred_bike_id
+    WHERE a.id = ? AND ${adminVisibleApplicationClause('a', 'u', 'b')}`).get(applicationId);
   if (!app) return res.status(404).json({ error: 'Application not found' });
 
   const existing = db.prepare('SELECT * FROM application_documents WHERE id = ? AND application_id = ?').get(documentId, applicationId);
@@ -524,9 +538,10 @@ router.patch('/:id/documents/:docId', authRequired, adminOnly, async (req, res) 
 });
 
 router.get('/:id', authRequired, (req, res) => {
-  const app = getApplicationWithRelations(req.params.id);
+  const isAdminPortalUser = ['admin', 'superadmin'].includes(req.user.role);
+  const app = getApplicationWithRelations(req.params.id, { adminVisible: isAdminPortalUser });
   if (!app) return res.status(404).json({ error: 'Not found' });
-  if (app.user_id !== req.user.id && !['admin', 'superadmin'].includes(req.user.role)) {
+  if (app.user_id !== req.user.id && !isAdminPortalUser) {
     return res.status(403).json({ error: 'Forbidden' });
   }
 
@@ -538,6 +553,8 @@ router.get('/:id', authRequired, (req, res) => {
 
 router.post('/:id/approve', authRequired, adminOnly, async (req, res) => {
   try {
+    const visible = getApplicationWithRelations(req.params.id, { adminVisible: true });
+    if (!visible) return res.status(404).json({ error: 'Application not found' });
     const result = await approveApplication({
       applicationId: req.params.id,
       bikeId: req.body.bike_id,
@@ -554,6 +571,8 @@ router.post('/:id/approve', authRequired, adminOnly, async (req, res) => {
 
 router.post('/:id/reject', authRequired, adminOnly, async (req, res) => {
   try {
+    const visible = getApplicationWithRelations(req.params.id, { adminVisible: true });
+    if (!visible) return res.status(404).json({ error: 'Application not found' });
     const result = await rejectApplication({ applicationId: req.params.id, reviewerId: req.user.id, reason: req.body.reason });
     res.json(result);
   } catch (error) {

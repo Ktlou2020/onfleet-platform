@@ -8,7 +8,12 @@ const { discontinueAgreement, reinstateDiscontinuedAgreement } = require('../ser
 const router = express.Router();
 const AGREEMENT_STATUS_VALUES = ['active', 'completed', 'defaulted', 'cancelled', 'paused', 'discontinued'];
 
-function getAgreementBundle(agreementId) {
+function adminVisibleAgreementClause(aAlias = 'a', bAlias = 'b', uAlias = 'u') {
+  return `${bAlias}.organization_id IS NULL AND ${uAlias}.organization_id IS NULL`;
+}
+
+function getAgreementBundle(agreementId, options = {}) {
+  const scopeClause = options.adminVisible ? ` AND ${adminVisibleAgreementClause('a', 'b', 'u')}` : '';
   const ag = db.prepare(`SELECT a.*, b.make, b.model, b.registration, b.image_url, b.vin,
       b.last_known_lat, b.last_known_lng, b.last_location_at, b.next_service_date,
       b.next_service_km, b.odometer_km, b.status AS bike_status,
@@ -16,7 +21,7 @@ function getAgreementBundle(agreementId) {
     FROM agreements a
     JOIN bikes b ON b.id = a.bike_id
     JOIN users u ON u.id = a.user_id
-    WHERE a.id = ?`).get(agreementId);
+    WHERE a.id = ?${scopeClause}`).get(agreementId);
   if (!ag) return null;
   const application = ag.application_id ? db.prepare('SELECT * FROM applications WHERE id = ?').get(ag.application_id) : null;
   return { agreement: ag, application };
@@ -31,7 +36,7 @@ router.get('/mine', authRequired, (req, res) => {
 
 router.get('/', authRequired, adminOnly, (req, res) => {
   const { status = '', bike_status = '', exclude_bike_statuses = '' } = req.query;
-  const where = [];
+  const where = [adminVisibleAgreementClause('a', 'b', 'u')];
   const values = [];
   const excludedBikeStatuses = String(exclude_bike_statuses || '')
     .split(',')
@@ -79,7 +84,11 @@ router.post('/bulk-discontinue', authRequired, adminOnly, (req, res) => {
   };
 
   for (const agreementId of agreementIds) {
-    const agreement = db.prepare(`SELECT id, agreement_no, status FROM agreements WHERE id = ?`).get(agreementId);
+    const agreement = db.prepare(`SELECT a.id, a.agreement_no, a.status
+      FROM agreements a
+      JOIN bikes b ON b.id = a.bike_id
+      JOIN users u ON u.id = a.user_id
+      WHERE a.id = ? AND ${adminVisibleAgreementClause('a', 'b', 'u')}`).get(agreementId);
     if (!agreement) {
       summary.not_found.push(agreementId);
       continue;
@@ -117,10 +126,11 @@ router.post('/bulk-discontinue', authRequired, adminOnly, (req, res) => {
 });
 
 router.get('/:id', authRequired, (req, res) => {
-  const bundle = getAgreementBundle(req.params.id);
+  const isAdminPortalUser = ['admin', 'superadmin'].includes(req.user.role);
+  const bundle = getAgreementBundle(req.params.id, { adminVisible: isAdminPortalUser });
   if (!bundle) return res.status(404).json({ error: 'Not found' });
   const ag = bundle.agreement;
-  if (ag.user_id !== req.user.id && !['admin', 'superadmin'].includes(req.user.role)) {
+  if (ag.user_id !== req.user.id && !isAdminPortalUser) {
     return res.status(403).json({ error: 'Forbidden' });
   }
 
@@ -203,7 +213,11 @@ router.post('/:id/status', authRequired, adminOnly, (req, res) => {
   if (!AGREEMENT_STATUS_VALUES.includes(status)) {
     return res.status(400).json({ error: 'Invalid status' });
   }
-  const agreement = db.prepare('SELECT * FROM agreements WHERE id = ?').get(req.params.id);
+  const agreement = db.prepare(`SELECT a.*
+    FROM agreements a
+    JOIN bikes b ON b.id = a.bike_id
+    JOIN users u ON u.id = a.user_id
+    WHERE a.id = ? AND ${adminVisibleAgreementClause('a', 'b', 'u')}`).get(req.params.id);
   if (!agreement) return res.status(404).json({ error: 'Agreement not found' });
   db.prepare('UPDATE agreements SET status = ? WHERE id = ?').run(status, req.params.id);
   if (status === 'completed') db.prepare(`UPDATE bikes SET status = 'paid_off' WHERE id = ?`).run(agreement.bike_id);
@@ -214,6 +228,12 @@ router.post('/:id/status', authRequired, adminOnly, (req, res) => {
 
 router.post('/:id/reinstate', authRequired, adminOnly, (req, res) => {
   try {
+    const agreement = db.prepare(`SELECT a.id
+      FROM agreements a
+      JOIN bikes b ON b.id = a.bike_id
+      JOIN users u ON u.id = a.user_id
+      WHERE a.id = ? AND ${adminVisibleAgreementClause('a', 'b', 'u')}`).get(req.params.id);
+    if (!agreement) return res.status(404).json({ error: 'Agreement not found' });
     const result = reinstateDiscontinuedAgreement({ agreementId: Number(req.params.id), actorId: req.user.id, ip: req.ip });
     res.json({ ok: true, ...result });
   } catch (error) {

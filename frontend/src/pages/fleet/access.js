@@ -24,6 +24,10 @@ export const FLEET_RESOURCE_ACCESS = {
   payments: {
     view: ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing'],
     manage: ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing']
+  },
+  riders: {
+    view: ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing'],
+    manage: ['fleet_owner_admin', 'fleet_owner_ops']
   }
 };
 
@@ -31,7 +35,8 @@ export const FLEET_NAV_ITEMS = [
   { key: 'dashboard', to: '/fleet/app', label: 'Dashboard' },
   { key: 'bikes', to: '/fleet/app/bikes', label: 'Bikes Fleet' },
   { key: 'agreements', to: '/fleet/app/agreements', label: 'Agreements' },
-  { key: 'payments', to: '/fleet/app/payments', label: 'Payments' }
+  { key: 'payments', to: '/fleet/app/payments', label: 'Payments' },
+  { key: 'riders', to: '/fleet/app/riders', label: 'Riders' }
 ];
 
 export function isAdminPortalRole(role) {

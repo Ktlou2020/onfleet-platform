@@ -15,6 +15,7 @@ import FleetDashboard from './pages/fleet/Dashboard';
 import FleetOwnerBikes from './pages/fleet/Bikes';
 import FleetOwnerAgreements from './pages/fleet/Agreements';
 import FleetOwnerPayments from './pages/fleet/Payments';
+import FleetOwnerRiders from './pages/fleet/Riders';
 import RiderShell from './pages/rider/RiderShell';
 import RiderDashboard from './pages/rider/Dashboard';
 import RiderAgreements from './pages/rider/Agreements';
@@ -41,6 +42,7 @@ import AdminStrategyReport from './pages/admin/StrategyReport';
 import AdminImports from './pages/admin/Imports';
 import AdminFleetDashboard from './pages/admin/FleetDashboard';
 import AdminFleetOwners from './pages/admin/FleetOwners';
+import FleetRiderApply from './pages/FleetRiderApply';
 import { canViewFleetSection, getDefaultFleetRoute, isAdminPortalRole } from './pages/fleet/access';
 
 function PrivateRoute({ children, role }) {
@@ -82,11 +84,13 @@ export default function App() {
         <Route path="/fleet/login" element={<FleetLogin />} />
         <Route path="/fleet/signup" element={<FleetSignup />} />
         <Route path="/fleet/workspace" element={<FleetOwnerWorkspace />} />
+        <Route path="/fleet/rider-apply/:slug" element={<FleetRiderApply />} />
         <Route path="/fleet/app" element={<PrivateRoute role="fleet_owner"><FleetOwnerShell /></PrivateRoute>}>
           <Route index element={<FleetRouteGate section="dashboard"><FleetDashboard /></FleetRouteGate>} />
           <Route path="bikes" element={<FleetRouteGate section="bikes"><FleetOwnerBikes /></FleetRouteGate>} />
           <Route path="agreements" element={<FleetRouteGate section="agreements"><FleetOwnerAgreements /></FleetRouteGate>} />
           <Route path="payments" element={<FleetRouteGate section="payments"><FleetOwnerPayments /></FleetRouteGate>} />
+          <Route path="riders" element={<FleetRouteGate section="riders"><FleetOwnerRiders /></FleetRouteGate>} />
         </Route>
 
         <Route path="/" element={<PrivateRoute role="rider"><RiderShell /></PrivateRoute>}>

@@ -1,10 +1,15 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const db = require('../db');
 const { authRequired, fleetOwnerOnly, companyRoleAllowed } = require('../middleware/auth');
 const { logAudit, generateAgreementNo, buildPaymentSchedule, addDays, recalcScheduleStatuses } = require('../utils/helpers');
 const { setBikeStatus } = require('../utils/bikeStatus');
 const { discontinueAgreementForStolenBike, discontinueAgreement, reinstateDiscontinuedAgreement } = require('../services/agreementLifecycle');
+const { extractPayslipInsights } = require('../services/documentInsights');
 
 const router = express.Router();
 const FLEET_ROLE_VALUES = ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'];
@@ -28,6 +33,10 @@ const FLEET_RESOURCE_ACCESS = {
     view: ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing'],
     manage: ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing']
   },
+  riders: {
+    view: ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing'],
+    manage: ['fleet_owner_admin', 'fleet_owner_ops']
+  },
   team: {
     view: ['fleet_owner_admin'],
     manage: ['fleet_owner_admin']
@@ -41,6 +50,316 @@ function canViewFleetResource(role, resourceKey) {
 function canManageFleetResource(role, resourceKey) {
   return (FLEET_RESOURCE_ACCESS[resourceKey]?.manage || []).includes(role);
 }
+
+const applicationUploadDir = path.join(__dirname, '../../uploads/applications');
+fs.mkdirSync(applicationUploadDir, { recursive: true });
+
+const riderApplicationUpload = multer({
+  storage: multer.diskStorage({
+    destination: applicationUploadDir,
+    filename: (req, file, cb) => cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 9)}${path.extname(file.originalname).toLowerCase()}`)
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ok = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/pjpeg', 'image/png', 'image/webp'].includes(file.mimetype);
+    cb(ok ? null : new Error('Only PDF, JPG, JPEG, PNG, and WEBP files are allowed'), ok);
+  }
+});
+
+function parsePlatforms(value) {
+  if (Array.isArray(value)) return value.filter(Boolean);
+  try {
+    const parsed = JSON.parse(String(value || '[]'));
+    return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+  } catch {
+    return String(value || '').split(',').map((item) => item.trim()).filter(Boolean);
+  }
+}
+
+function boolish(value, fallback = false) {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'boolean') return value;
+  return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());
+}
+
+function requiredFile(req, field) {
+  return req.files?.[field]?.[0] || null;
+}
+
+function publicApplicationPath(file) {
+  return `/uploads/applications/${file.filename}`;
+}
+
+function getFleetCatalogBikes(org) {
+  const scope = getBikeScope(org, 'b');
+  return db.prepare(`SELECT b.id, b.make, b.model, b.year, b.engine_cc, b.condition, b.rental_weekly, b.total_weeks, b.image_url, b.status, b.registration
+    FROM bikes b
+    WHERE b.status = 'ready_to_go' AND ${scope.clause}
+    ORDER BY b.make, b.model, b.year DESC, b.id DESC`).all(...scope.params);
+}
+
+function getFleetApplicationDocuments(applicationId) {
+  return db.prepare(`SELECT id, doc_type, file_path, original_name, mime_type, extracted_amount, status, uploaded_at
+    FROM application_documents WHERE application_id = ? ORDER BY uploaded_at DESC, id DESC`).all(applicationId);
+}
+
+function getScopedFleetApplication(org, applicationId) {
+  const scope = getBikeScope(org, 'pb');
+  return db.prepare(`SELECT a.*, u.full_name, u.email, u.phone, u.id_number, u.date_of_birth, u.address, u.city, u.province, u.postal_code,
+      u.emergency_contact_name, u.emergency_contact_phone, u.avatar_url,
+      b.make, b.model, b.registration, b.image_url
+    FROM applications a
+    JOIN users u ON u.id = a.user_id
+    LEFT JOIN bikes b ON b.id = a.preferred_bike_id
+    LEFT JOIN bikes pb ON pb.id = a.preferred_bike_id
+    WHERE a.id = ? AND u.deleted_at IS NULL AND (
+      u.organization_id = ?
+      OR (a.preferred_bike_id IS NOT NULL AND ${scope.clause})
+    )`).get(applicationId, org.id, ...scope.params);
+}
+
+function listFleetRiderApplications(org) {
+  const scope = getBikeScope(org, 'pb');
+  return db.prepare(`SELECT a.id, a.user_id, a.preferred_bike_id, a.delivery_platforms, a.years_riding, a.has_drivers_license,
+      a.payout_preference, a.total_paid_last_3, a.average_weekly_earnings, a.auto_decision, a.retry_after_date,
+      a.status, a.submitted_at, a.reviewed_at,
+      u.full_name, u.email, u.phone, u.city, u.province, u.avatar_url,
+      b.make, b.model, b.registration,
+      (SELECT COUNT(*) FROM application_documents d WHERE d.application_id = a.id) AS document_count,
+      (SELECT COUNT(*) FROM application_documents d WHERE d.application_id = a.id AND d.doc_type = 'payslip') AS payslip_count
+    FROM applications a
+    JOIN users u ON u.id = a.user_id
+    LEFT JOIN bikes b ON b.id = a.preferred_bike_id
+    LEFT JOIN bikes pb ON pb.id = a.preferred_bike_id
+    WHERE u.role = 'rider' AND u.deleted_at IS NULL AND (
+      u.organization_id = ?
+      OR (a.preferred_bike_id IS NOT NULL AND ${scope.clause})
+    )
+    ORDER BY a.submitted_at DESC, a.id DESC`).all(org.id, ...scope.params);
+}
+
+function getFleetPayslipSummary(applicationId) {
+  const payslips = db.prepare(`SELECT extracted_amount FROM application_documents
+    WHERE application_id = ? AND doc_type = 'payslip' AND extracted_amount IS NOT NULL
+    ORDER BY uploaded_at DESC LIMIT 3`).all(applicationId);
+  const total = payslips.reduce((sum, row) => sum + Number(row.extracted_amount || 0), 0);
+  return {
+    payslip_count: payslips.length,
+    total: +total.toFixed(2),
+    average: payslips.length ? +(total / payslips.length).toFixed(2) : 0
+  };
+}
+
+function refreshFleetApplicationFinancials(applicationId) {
+  const summary = getFleetPayslipSummary(applicationId);
+  db.prepare(`UPDATE applications SET total_paid_last_3 = ?, average_weekly_earnings = ? WHERE id = ?`)
+    .run(summary.total, summary.average, applicationId);
+  return summary;
+}
+
+function recalcFleetApplicationDecision(applicationId) {
+  const summary = refreshFleetApplicationFinancials(applicationId);
+  if (summary.payslip_count < 3) return { ...summary, decision: 'insufficient_documents' };
+  if (summary.average < 1000) {
+    const retryAfter = addDays(todayIso(), 14);
+    db.prepare(`UPDATE applications
+      SET status = 'rejected', auto_decision = 'auto_declined', rejection_reason = ?, retry_after_date = ?, reviewed_at = CURRENT_TIMESTAMP
+      WHERE id = ?`).run(
+        `Average weekly earnings of R${summary.average.toFixed(2)} are below the R1000 minimum. Please reapply after ${retryAfter}.`,
+        retryAfter,
+        applicationId
+      );
+    return { ...summary, decision: 'auto_declined', retry_after_date: retryAfter };
+  }
+  db.prepare(`UPDATE applications
+    SET status = 'under_review', auto_decision = 'pre_approved', rejection_reason = NULL, retry_after_date = NULL
+    WHERE id = ?`).run(applicationId);
+  return { ...summary, decision: 'pre_approved' };
+}
+
+function insertFleetApplication(payload, actorId, userId) {
+  const info = db.prepare(`INSERT INTO applications
+    (user_id, preferred_bike_id, monthly_income, delivery_platforms, has_riding_experience,
+     years_riding, has_drivers_license, references_json, payout_preference, bank_name,
+     account_holder, account_number, branch_code, ewallet_number, total_paid_last_3,
+     average_weekly_earnings, auto_decision, status)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      userId,
+      payload.preferred_bike_id || null,
+      null,
+      (payload.delivery_platforms || []).join(','),
+      payload.has_riding_experience ? 1 : 0,
+      payload.years_riding || null,
+      payload.has_drivers_license ? 1 : 0,
+      JSON.stringify([]),
+      payload.payout_preference || null,
+      payload.bank_name || null,
+      payload.account_holder || null,
+      payload.account_number || null,
+      payload.branch_code || null,
+      payload.ewallet_number || null,
+      Number(payload.total_paid_last_3 || 0),
+      Number(payload.average_weekly_earnings || 0),
+      payload.auto_decision || null,
+      payload.status || 'submitted'
+    );
+  logAudit(actorId || userId, actorId ? 'fleet_owner.rider_application_create' : 'fleet_public.rider_application_create', 'applications', info.lastInsertRowid);
+  return info.lastInsertRowid;
+}
+
+function upsertFleetKycDocument(userId, docType, file) {
+  const publicPath = publicApplicationPath(file);
+  const existing = db.prepare(`SELECT id FROM kyc_documents WHERE user_id = ? AND doc_type = ?`).get(userId, docType);
+  if (existing) {
+    db.prepare(`UPDATE kyc_documents SET file_path = ?, original_name = ?, uploaded_at = CURRENT_TIMESTAMP WHERE id = ?`)
+      .run(publicPath, file.originalname, existing.id);
+  } else {
+    db.prepare(`INSERT INTO kyc_documents (user_id, doc_type, file_path, original_name, status)
+      VALUES (?,?,?,?, 'approved')`).run(userId, docType, publicPath, file.originalname);
+  }
+  return publicPath;
+}
+
+async function insertFleetApplicationDocument({ applicationId, userId, docType, file, uploadedBy }) {
+  let storedDocType = docType;
+  let insights = { extracted_amount: null, extracted_text: null };
+  if (docType === 'payslip') {
+    if (file.mimetype !== 'application/pdf') throw new Error('Payslips must be uploaded as PDF documents only');
+    insights = await extractPayslipInsights(path.join(applicationUploadDir, file.filename), file.mimetype);
+  }
+  if (docType === 'selfie') {
+    storedDocType = 'other';
+    const avatarUrl = publicApplicationPath(file);
+    db.prepare(`UPDATE users SET avatar_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(avatarUrl, userId);
+    upsertFleetKycDocument(userId, 'selfie', file);
+  }
+  if (docType === 'id_document' || docType === 'drivers_license') {
+    upsertFleetKycDocument(userId, docType, file);
+  }
+  const info = db.prepare(`INSERT INTO application_documents
+    (application_id, user_id, doc_type, file_path, original_name, mime_type, extracted_amount, extracted_text, uploaded_by)
+    VALUES (?,?,?,?,?,?,?,?,?)`).run(
+      applicationId,
+      userId,
+      storedDocType,
+      publicApplicationPath(file),
+      file.originalname,
+      file.mimetype,
+      insights.extracted_amount || null,
+      insights.extracted_text || null,
+      uploadedBy || null
+    );
+  return { id: info.lastInsertRowid, ...insights, storedDocType };
+}
+
+function buildFleetRiderPayload(body, preferredBikeId) {
+  return {
+    preferred_bike_id: preferredBikeId,
+    delivery_platforms: parsePlatforms(body.delivery_platforms),
+    has_riding_experience: boolish(body.has_riding_experience, true),
+    years_riding: body.years_riding === '' || body.years_riding === undefined ? null : Number(body.years_riding),
+    has_drivers_license: boolish(body.has_drivers_license, true),
+    payout_preference: String(body.payout_preference || 'eft').trim(),
+    bank_name: String(body.bank_name || '').trim() || null,
+    account_holder: String(body.account_holder || '').trim() || null,
+    account_number: String(body.account_number || '').trim() || null,
+    branch_code: String(body.branch_code || '').trim() || null,
+    ewallet_number: String(body.ewallet_number || '').trim() || null
+  };
+}
+
+function createFleetRiderUser({ email, full_name, phone, id_number, address, city, province, postal_code, date_of_birth, emergency_contact_name, emergency_contact_phone, organizationId }) {
+  const generatedPassword = crypto.randomBytes(16).toString('hex');
+  const passwordHash = bcrypt.hashSync(generatedPassword, 10);
+  const info = db.prepare(`INSERT INTO users
+    (email, password_hash, full_name, phone, id_number, address, city, province, postal_code,
+     date_of_birth, emergency_contact_name, emergency_contact_phone, role, organization_id, status)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'rider', ?, 'active')`).run(
+      email,
+      passwordHash,
+      full_name,
+      phone || null,
+      id_number || null,
+      address || null,
+      city || null,
+      province || null,
+      postal_code || null,
+      date_of_birth || null,
+      emergency_contact_name || null,
+      emergency_contact_phone || null,
+      organizationId
+    );
+  return info.lastInsertRowid;
+}
+
+router.get('/public/:slug/context', (req, res) => {
+  const slug = String(req.params.slug || '').trim().toLowerCase();
+  const organization = db.prepare(`SELECT id, name, slug, city, status FROM organizations WHERE LOWER(slug) = ?`).get(slug);
+  if (!organization) return res.status(404).json({ error: 'Fleet owner link not found' });
+  res.json({ organization, bikes: getFleetCatalogBikes(organization) });
+});
+
+router.post('/public/:slug/rider-application', riderApplicationUpload.fields([
+  { name: 'id_document', maxCount: 1 },
+  { name: 'drivers_license', maxCount: 1 },
+  { name: 'selfie', maxCount: 1 },
+  { name: 'payslip_1', maxCount: 1 },
+  { name: 'payslip_2', maxCount: 1 },
+  { name: 'payslip_3', maxCount: 1 }
+]), async (req, res) => {
+  try {
+    const slug = String(req.params.slug || '').trim().toLowerCase();
+    const organization = db.prepare(`SELECT * FROM organizations WHERE LOWER(slug) = ?`).get(slug);
+    if (!organization) return res.status(404).json({ error: 'Fleet owner link not found' });
+
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const full_name = String(req.body.full_name || '').trim();
+    const phone = String(req.body.phone || '').trim();
+    const id_number = String(req.body.id_number || '').trim();
+    const preferredBikeId = toInt(req.body.preferred_bike_id);
+    if (!email || !full_name || !phone || !id_number) return res.status(400).json({ error: 'Please complete all required personal details' });
+    if (!preferredBikeId) return res.status(400).json({ error: 'Please choose a preferred bike' });
+    if (db.prepare('SELECT id FROM users WHERE email = ? AND deleted_at IS NULL').get(email)) return res.status(409).json({ error: 'Email already registered' });
+
+    const bike = getScopedBike(organization, preferredBikeId);
+    if (!bike || bike.status !== 'ready_to_go') return res.status(400).json({ error: 'Selected bike is not available for this fleet owner' });
+    for (const field of ['id_document', 'drivers_license', 'selfie', 'payslip_1', 'payslip_2', 'payslip_3']) {
+      if (!requiredFile(req, field)) return res.status(400).json({ error: `Missing required file: ${field.replace(/_/g, ' ')}` });
+    }
+
+    const payload = buildFleetRiderPayload(req.body, preferredBikeId);
+    if (payload.payout_preference === 'eft' && (!payload.bank_name || !payload.account_holder || !payload.account_number || !payload.branch_code)) {
+      return res.status(400).json({ error: 'Please provide all EFT banking details' });
+    }
+    if (payload.payout_preference === 'ewallet' && !payload.ewallet_number) {
+      return res.status(400).json({ error: 'Please provide an e-wallet number' });
+    }
+
+    const userId = createFleetRiderUser({
+      email,
+      full_name,
+      phone,
+      id_number,
+      address: String(req.body.address || '').trim(),
+      city: String(req.body.city || '').trim(),
+      province: String(req.body.province || '').trim(),
+      postal_code: String(req.body.postal_code || '').trim(),
+      date_of_birth: String(req.body.date_of_birth || '').trim(),
+      emergency_contact_name: String(req.body.emergency_contact_name || '').trim(),
+      emergency_contact_phone: String(req.body.emergency_contact_phone || '').trim(),
+      organizationId: organization.id
+    });
+    const applicationId = insertFleetApplication(payload, null, userId);
+    for (const field of ['id_document', 'drivers_license', 'selfie', 'payslip_1', 'payslip_2', 'payslip_3']) {
+      const docType = field.startsWith('payslip') ? 'payslip' : field;
+      await insertFleetApplicationDocument({ applicationId, userId, docType, file: requiredFile(req, field), uploadedBy: userId });
+    }
+    const decision = recalcFleetApplicationDecision(applicationId);
+    res.status(201).json({ ok: true, application_id: applicationId, decision });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'Could not submit rider application' });
+  }
+});
 
 router.use(authRequired, fleetOwnerOnly);
 
@@ -485,6 +804,195 @@ router.get('/portal-data', companyRoleAllowed(FLEET_RESOURCE_ACCESS.dashboard.vi
     res.json(getPortalData(organization, req.user.role));
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Could not load fleet portal data' });
+  }
+});
+
+router.get('/riders/share-link', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.view), (req, res) => {
+  const organization = getOrganization(req.user.organization_id);
+  if (!organization) return res.status(404).json({ error: 'Organization not found' });
+  res.json({ slug: organization.slug, path: `/fleet/rider-apply/${organization.slug}` });
+});
+
+router.get('/riders', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.view), (req, res) => {
+  try {
+    const organization = getOrganizationOrThrow(req.user.organization_id);
+    res.json({ riders: listFleetRiderApplications(organization) });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not load riders' });
+  }
+});
+
+router.get('/riders/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.view), (req, res) => {
+  try {
+    const organization = getOrganizationOrThrow(req.user.organization_id);
+    const application = getScopedFleetApplication(organization, Number(req.params.id));
+    if (!application) return res.status(404).json({ error: 'Rider application not found' });
+    res.json({ application, documents: getFleetApplicationDocuments(application.id) });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not load rider details' });
+  }
+});
+
+router.post('/riders', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), riderApplicationUpload.fields([
+  { name: 'id_document', maxCount: 1 },
+  { name: 'drivers_license', maxCount: 1 },
+  { name: 'selfie', maxCount: 1 },
+  { name: 'payslip_1', maxCount: 1 },
+  { name: 'payslip_2', maxCount: 1 },
+  { name: 'payslip_3', maxCount: 1 }
+]), async (req, res) => {
+  try {
+    const organization = getOrganizationOrThrow(req.user.organization_id);
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const full_name = String(req.body.full_name || '').trim();
+    const phone = String(req.body.phone || '').trim();
+    const id_number = String(req.body.id_number || '').trim();
+    const preferredBikeId = toInt(req.body.preferred_bike_id);
+    if (!email || !email.includes('@') || !full_name || !phone || !id_number) {
+      return res.status(400).json({ error: 'Full name, email, phone, and ID number are required' });
+    }
+    if (!preferredBikeId) return res.status(400).json({ error: 'Preferred bike is required' });
+    if (db.prepare('SELECT id FROM users WHERE email = ? AND deleted_at IS NULL').get(email)) {
+      return res.status(409).json({ error: 'Email already registered' });
+    }
+    const bike = getScopedBike(organization, preferredBikeId);
+    if (!bike || bike.status !== 'ready_to_go') return res.status(400).json({ error: 'Selected bike is not available for your fleet' });
+    for (const field of ['id_document', 'drivers_license', 'selfie', 'payslip_1', 'payslip_2', 'payslip_3']) {
+      if (!requiredFile(req, field)) return res.status(400).json({ error: `Missing required file: ${field.replace(/_/g, ' ')}` });
+    }
+    const payload = buildFleetRiderPayload(req.body, preferredBikeId);
+    if (payload.payout_preference === 'eft' && (!payload.bank_name || !payload.account_holder || !payload.account_number || !payload.branch_code)) {
+      return res.status(400).json({ error: 'Please provide all EFT banking details' });
+    }
+    if (payload.payout_preference === 'ewallet' && !payload.ewallet_number) {
+      return res.status(400).json({ error: 'Please provide an e-wallet number' });
+    }
+    const userId = createFleetRiderUser({
+      email,
+      full_name,
+      phone,
+      id_number,
+      address: String(req.body.address || '').trim(),
+      city: String(req.body.city || '').trim(),
+      province: String(req.body.province || '').trim(),
+      postal_code: String(req.body.postal_code || '').trim(),
+      date_of_birth: String(req.body.date_of_birth || '').trim(),
+      emergency_contact_name: String(req.body.emergency_contact_name || '').trim(),
+      emergency_contact_phone: String(req.body.emergency_contact_phone || '').trim(),
+      organizationId: organization.id
+    });
+    const applicationId = insertFleetApplication(payload, req.user.id, userId);
+    for (const field of ['id_document', 'drivers_license', 'selfie', 'payslip_1', 'payslip_2', 'payslip_3']) {
+      const docType = field.startsWith('payslip') ? 'payslip' : field;
+      await insertFleetApplicationDocument({ applicationId, userId, docType, file: requiredFile(req, field), uploadedBy: req.user.id });
+    }
+    const decision = recalcFleetApplicationDecision(applicationId);
+    res.status(201).json({ ok: true, application: getScopedFleetApplication(organization, applicationId), decision });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'Could not create rider' });
+  }
+});
+
+router.patch('/riders/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), (req, res) => {
+  try {
+    const organization = getOrganizationOrThrow(req.user.organization_id);
+    const applicationId = Number(req.params.id);
+    const current = getScopedFleetApplication(organization, applicationId);
+    if (!current) return res.status(404).json({ error: 'Rider application not found' });
+
+    const userUpdates = [];
+    const userValues = [];
+    const appUpdates = [];
+    const appValues = [];
+
+    if (req.body.full_name !== undefined) {
+      const fullName = String(req.body.full_name || '').trim();
+      if (!fullName) return res.status(400).json({ error: 'Full name is required' });
+      userUpdates.push('full_name = ?');
+      userValues.push(fullName);
+    }
+    if (req.body.email !== undefined) {
+      const email = String(req.body.email || '').trim().toLowerCase();
+      if (!email || !email.includes('@')) return res.status(400).json({ error: 'Valid email required' });
+      const conflict = db.prepare('SELECT id FROM users WHERE email = ? AND id != ? AND deleted_at IS NULL').get(email, current.user_id);
+      if (conflict) return res.status(409).json({ error: 'Email already exists for another user' });
+      userUpdates.push('email = ?');
+      userValues.push(email);
+    }
+    for (const field of ['phone', 'id_number', 'date_of_birth', 'address', 'city', 'province', 'postal_code', 'emergency_contact_name', 'emergency_contact_phone']) {
+      if (req.body[field] !== undefined) {
+        userUpdates.push(`${field} = ?`);
+        userValues.push(String(req.body[field] || '').trim() || null);
+      }
+    }
+    if (req.body.preferred_bike_id !== undefined) {
+      const bikeId = req.body.preferred_bike_id ? Number(req.body.preferred_bike_id) : null;
+      if (bikeId !== null) {
+        const bike = getScopedBike(organization, bikeId);
+        if (!bike) return res.status(404).json({ error: 'Preferred bike not found in your fleet' });
+      }
+      appUpdates.push('preferred_bike_id = ?');
+      appValues.push(bikeId);
+    }
+    if (req.body.delivery_platforms !== undefined) {
+      appUpdates.push('delivery_platforms = ?');
+      appValues.push(parsePlatforms(req.body.delivery_platforms).join(','));
+    }
+    if (req.body.has_riding_experience !== undefined) {
+      appUpdates.push('has_riding_experience = ?');
+      appValues.push(boolish(req.body.has_riding_experience) ? 1 : 0);
+    }
+    if (req.body.years_riding !== undefined) {
+      const years = req.body.years_riding === '' || req.body.years_riding === null ? null : Number(req.body.years_riding);
+      if (years !== null && (!Number.isFinite(years) || years < 0)) return res.status(400).json({ error: 'Years riding must be zero or greater' });
+      appUpdates.push('years_riding = ?');
+      appValues.push(years);
+    }
+    if (req.body.has_drivers_license !== undefined) {
+      appUpdates.push('has_drivers_license = ?');
+      appValues.push(boolish(req.body.has_drivers_license) ? 1 : 0);
+    }
+    if (req.body.payout_preference !== undefined) {
+      const payout = String(req.body.payout_preference || '').trim();
+      if (!['eft', 'ewallet'].includes(payout)) return res.status(400).json({ error: 'Invalid payout preference' });
+      appUpdates.push('payout_preference = ?');
+      appValues.push(payout);
+    }
+    for (const field of ['bank_name', 'account_holder', 'account_number', 'branch_code', 'ewallet_number']) {
+      if (req.body[field] !== undefined) {
+        appUpdates.push(`${field} = ?`);
+        appValues.push(String(req.body[field] || '').trim() || null);
+      }
+    }
+    if (!userUpdates.length && !appUpdates.length) return res.json({ ok: true, application: current });
+    db.transaction(() => {
+      if (userUpdates.length) db.prepare(`UPDATE users SET ${userUpdates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...userValues, current.user_id);
+      if (appUpdates.length) db.prepare(`UPDATE applications SET ${appUpdates.join(', ')}, reviewed_at = COALESCE(reviewed_at, CURRENT_TIMESTAMP) WHERE id = ?`).run(...appValues, applicationId);
+    })();
+    logAudit(req.user.id, 'fleet_owner.rider_update', 'applications', applicationId, { user_fields_updated: userUpdates.length, application_fields_updated: appUpdates.length }, req.ip);
+    res.json({ ok: true, application: getScopedFleetApplication(organization, applicationId) });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not update rider' });
+  }
+});
+
+router.post('/riders/:id/documents', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), riderApplicationUpload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const organization = getOrganizationOrThrow(req.user.organization_id);
+    const applicationId = Number(req.params.id);
+    const application = getScopedFleetApplication(organization, applicationId);
+    if (!application) return res.status(404).json({ error: 'Rider application not found' });
+    const docType = String(req.body.doc_type || '').trim();
+    if (!['id_document', 'drivers_license', 'payslip', 'selfie', 'other'].includes(docType)) {
+      return res.status(400).json({ error: 'Invalid document type' });
+    }
+    const result = await insertFleetApplicationDocument({ applicationId, userId: application.user_id, docType, file: req.file, uploadedBy: req.user.id });
+    const decision = docType === 'payslip' ? recalcFleetApplicationDecision(applicationId) : null;
+    logAudit(req.user.id, 'fleet_owner.rider_document_upload', 'application_documents', result.id, { application_id: applicationId, doc_type: docType }, req.ip);
+    res.status(201).json({ ok: true, decision, documents: getFleetApplicationDocuments(applicationId) });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'Could not upload rider document' });
   }
 });
 

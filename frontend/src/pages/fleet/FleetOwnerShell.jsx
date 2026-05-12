@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Bike, FileText, CreditCard, LogOut } from 'lucide-react';
+import { LayoutDashboard, Bike, FileText, CreditCard, LogOut, Users } from 'lucide-react';
 import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
 import { useAuth } from '../../auth';
@@ -10,7 +10,8 @@ const navIconMap = {
   dashboard: LayoutDashboard,
   bikes: Bike,
   agreements: FileText,
-  payments: CreditCard
+  payments: CreditCard,
+  riders: Users
 };
 
 export default function FleetOwnerShell() {

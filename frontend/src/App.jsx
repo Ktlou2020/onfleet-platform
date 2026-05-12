@@ -8,6 +8,9 @@ import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
 import FleetOwnerPilot from './pages/FleetOwnerPilot';
 import FleetOwnerWorkspace from './pages/FleetOwnerWorkspace';
+import FleetLogin from './pages/FleetLogin';
+import FleetSignup from './pages/FleetSignup';
+import FleetOwnerPortal from './pages/FleetOwnerPortal';
 import RiderShell from './pages/rider/RiderShell';
 import RiderDashboard from './pages/rider/Dashboard';
 import RiderAgreements from './pages/rider/Agreements';
@@ -36,9 +39,10 @@ import AdminPilotLeads from './pages/admin/PilotLeads';
 
 function PrivateRoute({ children, role }) {
   const { user } = useAuth();
-  if (!user) return <Navigate to="/login" replace />;
-  if (role === 'rider' && user.role !== 'rider') return <Navigate to="/admin" replace />;
-  if (role === 'admin' && !['admin', 'superadmin'].includes(user.role)) return <Navigate to="/dashboard" replace />;
+  if (!user) return <Navigate to={role === 'fleet_owner' ? '/fleet/login' : '/login'} replace />;
+  if (role === 'rider' && user.role !== 'rider') return <Navigate to={String(user.role || '').startsWith('fleet_owner_') ? '/fleet/app' : '/admin'} replace />;
+  if (role === 'admin' && !['admin', 'superadmin'].includes(user.role)) return <Navigate to={String(user.role || '').startsWith('fleet_owner_') ? '/fleet/app' : '/dashboard'} replace />;
+  if (role === 'fleet_owner' && !String(user.role || '').startsWith('fleet_owner_')) return <Navigate to={['admin', 'superadmin'].includes(user.role) ? '/admin' : '/dashboard'} replace />;
   return children;
 }
 
@@ -46,6 +50,7 @@ function HomeRoute() {
   const { user } = useAuth();
   if (!user) return <Landing />;
   if (['admin', 'superadmin'].includes(user.role)) return <Navigate to="/admin" replace />;
+  if (String(user.role || '').startsWith('fleet_owner_')) return <Navigate to="/fleet/app" replace />;
   return <Navigate to="/dashboard" replace />;
 }
 
@@ -59,7 +64,10 @@ export default function App() {
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/reset-password" element={<ResetPassword />} />
         <Route path="/fleet" element={<FleetOwnerPilot />} />
+        <Route path="/fleet/login" element={<FleetLogin />} />
+        <Route path="/fleet/signup" element={<FleetSignup />} />
         <Route path="/fleet/workspace" element={<FleetOwnerWorkspace />} />
+        <Route path="/fleet/app" element={<PrivateRoute role="fleet_owner"><FleetOwnerPortal /></PrivateRoute>} />
 
         <Route path="/" element={<PrivateRoute role="rider"><RiderShell /></PrivateRoute>}>
           <Route path="dashboard" element={<RiderDashboard />} />

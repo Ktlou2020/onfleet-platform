@@ -815,3 +815,83 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
     grid-template-columns: 1fr;
   }
 }
+
+/* Fleet owner authenticated portal */
+.fleet-portal-page {
+  min-height: 100vh;
+  background:
+    radial-gradient(ellipse at top right, rgba(30,136,209,0.16), transparent 38%),
+    linear-gradient(180deg, #000000 0%, #07131d 100%);
+}
+.fleet-portal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 22px 8% 0;
+  flex-wrap: wrap;
+}
+.fleet-portal-brand,
+.fleet-portal-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.fleet-portal-shell {
+  padding: 28px 8% 56px;
+  display: grid;
+  grid-template-columns: minmax(250px, 300px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+.fleet-portal-sidebar,
+.fleet-portal-main {
+  min-width: 0;
+}
+.fleet-portal-company-card {
+  display: grid;
+  gap: 4px;
+}
+.fleet-portal-nav {
+  display: grid;
+  gap: 8px;
+}
+.fleet-portal-nav-btn {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  text-align: left;
+}
+.fleet-portal-nav-btn.active {
+  border-color: rgba(79,168,224,0.45);
+  background: rgba(79,168,224,0.12);
+}
+.fleet-portal-nav-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.fleet-portal-callout {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(79,168,224,0.08);
+  border: 1px solid rgba(79,168,224,0.16);
+  color: var(--muted);
+}
+
+@media(max-width: 900px) {
+  .fleet-portal-header {
+    padding: 18px 16px 0;
+  }
+  .fleet-portal-shell {
+    padding: 18px 16px 36px;
+    grid-template-columns: 1fr;
+  }
+}

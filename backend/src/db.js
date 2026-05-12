@@ -148,15 +148,89 @@ function ensureAgreementStatusSchema() {
   `);
 }
 
+function ensureUserRoleSchema() {
+  const schemaRow = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'`).get();
+  const schemaSql = String(schemaRow?.sql || '');
+  const expectedConstraint = `CHECK(role IN ('rider','admin','superadmin','fleet_owner_admin','fleet_owner_ops','fleet_owner_billing','fleet_owner_viewer'))`;
+  if (schemaSql && schemaSql.includes(expectedConstraint) && schemaSql.includes('organization_id')) return;
+
+  const organizationSelect = tableHasColumn('users', 'organization_id') ? 'organization_id' : 'NULL';
+
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    BEGIN TRANSACTION;
+    CREATE TABLE users_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT UNIQUE NOT NULL,
+      phone TEXT,
+      password_hash TEXT NOT NULL,
+      full_name TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'rider' CHECK(role IN ('rider','admin','superadmin','fleet_owner_admin','fleet_owner_ops','fleet_owner_billing','fleet_owner_viewer')),
+      organization_id INTEGER,
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','suspended')),
+      id_number TEXT,
+      date_of_birth TEXT,
+      address TEXT,
+      city TEXT,
+      province TEXT,
+      postal_code TEXT,
+      emergency_contact_name TEXT,
+      emergency_contact_phone TEXT,
+      avatar_url TEXT,
+      country_of_origin TEXT,
+      user_tags TEXT,
+      deleted_at TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(organization_id) REFERENCES organizations(id)
+    );
+    INSERT INTO users_new (
+      id, email, phone, password_hash, full_name, role, organization_id, status, id_number, date_of_birth,
+      address, city, province, postal_code, emergency_contact_name, emergency_contact_phone,
+      avatar_url, country_of_origin, user_tags, deleted_at, created_at, updated_at
+    )
+    SELECT
+      id, email, phone, password_hash, full_name, role, ${organizationSelect}, status, id_number, date_of_birth,
+      address, city, province, postal_code, emergency_contact_name, emergency_contact_phone,
+      avatar_url, country_of_origin, user_tags, deleted_at, created_at, updated_at
+    FROM users;
+    DROP TABLE users;
+    ALTER TABLE users_new RENAME TO users;
+    COMMIT;
+    PRAGMA foreign_keys = ON;
+  `);
+}
+
 // ---------- SCHEMA ----------
 db.exec(`
+CREATE TABLE IF NOT EXISTS organizations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  slug TEXT UNIQUE NOT NULL,
+  contact_email TEXT,
+  contact_phone TEXT,
+  city TEXT,
+  fleet_size INTEGER DEFAULT 0,
+  plan_key TEXT NOT NULL DEFAULT 'trial' CHECK(plan_key IN ('trial','small','medium','large','enterprise')),
+  status TEXT NOT NULL DEFAULT 'trialing' CHECK(status IN ('trialing','active','past_due','suspended','cancelled')),
+  trial_started_at DATETIME,
+  trial_ends_at DATETIME,
+  paystack_customer_code TEXT,
+  paystack_subscription_code TEXT,
+  max_bikes INTEGER DEFAULT 10,
+  max_admin_users INTEGER DEFAULT 2,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   email TEXT UNIQUE NOT NULL,
   phone TEXT,
   password_hash TEXT NOT NULL,
   full_name TEXT NOT NULL,
-  role TEXT NOT NULL DEFAULT 'rider' CHECK(role IN ('rider','admin','superadmin')),
+  role TEXT NOT NULL DEFAULT 'rider' CHECK(role IN ('rider','admin','superadmin','fleet_owner_admin','fleet_owner_ops','fleet_owner_billing','fleet_owner_viewer')),
+  organization_id INTEGER,
   status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','suspended')),
   id_number TEXT,
   date_of_birth TEXT,
@@ -171,7 +245,8 @@ CREATE TABLE IF NOT EXISTS users (
   user_tags TEXT,
   deleted_at TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(organization_id) REFERENCES organizations(id)
 );
 
 CREATE TABLE IF NOT EXISTS kyc_documents (
@@ -426,6 +501,8 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
   FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+CREATE INDEX IF NOT EXISTS idx_org_slug ON organizations(slug);
+CREATE INDEX IF NOT EXISTS idx_users_org ON users(organization_id, role);
 CREATE INDEX IF NOT EXISTS idx_payments_agreement ON payments(agreement_id);
 CREATE INDEX IF NOT EXISTS idx_schedule_agreement ON payment_schedules(agreement_id);
 CREATE INDEX IF NOT EXISTS idx_kyc_user ON kyc_documents(user_id);
@@ -470,5 +547,6 @@ ensureColumn('bikes', 'license_disc_file_path', 'TEXT');
 ensureColumn('bikes', 'license_disc_original_name', 'TEXT');
 ensureBikeStatusSchema();
 ensureAgreementStatusSchema();
+ensureUserRoleSchema();
 
 module.exports = db;

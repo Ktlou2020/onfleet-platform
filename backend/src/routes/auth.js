@@ -14,6 +14,14 @@ const { sendNotification } = require('../services/notifier');
 
 const router = express.Router();
 const uploadDir = path.join(__dirname, '../../uploads/applications');
+const FLEET_ROLE_VALUES = ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'];
+const FLEET_PLAN_ENTITLEMENTS = {
+  trial: { max_bikes: 10, max_admin_users: 2 },
+  small: { max_bikes: 20, max_admin_users: 3 },
+  medium: { max_bikes: 60, max_admin_users: 5 },
+  large: { max_bikes: 100, max_admin_users: 10 },
+  enterprise: { max_bikes: 250, max_admin_users: 25 }
+};
 const profileUploadDir = path.join(__dirname, '../../uploads/profiles');
 fs.mkdirSync(uploadDir, { recursive: true });
 fs.mkdirSync(profileUploadDir, { recursive: true });
@@ -105,6 +113,28 @@ function hashResetToken(token) {
 function buildResetUrl(token) {
   const base = readEnv('FRONTEND_URL', 'http://localhost:5173').replace(/\/$/, '');
   return `${base}/reset-password?token=${encodeURIComponent(token)}`;
+}
+
+function slugifyCompanyName(value) {
+  const base = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || `fleet-${Date.now()}`;
+  let slug = base;
+  let counter = 2;
+  while (db.prepare('SELECT id FROM organizations WHERE slug = ?').get(slug)) {
+    slug = `${base}-${counter++}`;
+  }
+  return slug;
+}
+
+function getFleetEntitlements(planKey = 'trial') {
+  return FLEET_PLAN_ENTITLEMENTS[planKey] || FLEET_PLAN_ENTITLEMENTS.trial;
+}
+
+function getSafeUser(userId) {
+  return db.prepare(`SELECT u.id, u.email, u.full_name, u.role, u.organization_id,
+    o.name organization_name, o.slug organization_slug, o.status organization_status, o.plan_key organization_plan_key
+    FROM users u
+    LEFT JOIN organizations o ON o.id = u.organization_id
+    WHERE u.id = ? AND u.deleted_at IS NULL`).get(userId);
 }
 
 function getRequiredFile(req, field) {
@@ -342,6 +372,76 @@ router.post('/signup-complete', signupUpload.fields([
   }
 });
 
+router.post('/fleet/signup',
+  body('company_name').notEmpty(),
+  body('full_name').notEmpty(),
+  body('email').isEmail(),
+  body('password').isLength({ min: 6 }),
+  (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    const company_name = String(req.body.company_name || '').trim();
+    const full_name = String(req.body.full_name || '').trim();
+    const email = normalizeEmail(req.body.email);
+    const password = String(req.body.password || '');
+    const phone = String(req.body.phone || '').trim();
+    const city = String(req.body.city || '').trim();
+    const fleet_size = Math.max(0, Number(req.body.fleet_size || 0) || 0);
+    const requestedPlan = String(req.body.plan_interest || 'trial').trim().toLowerCase();
+    const requestedRole = String(req.body.role || 'fleet_owner_admin').trim();
+    const planKey = Object.keys(FLEET_PLAN_ENTITLEMENTS).includes(requestedPlan) ? requestedPlan : 'trial';
+
+    if (!company_name || !full_name) return res.status(400).json({ error: 'Company name and full name are required' });
+    if (db.prepare('SELECT id FROM users WHERE email = ? AND deleted_at IS NULL').get(email)) {
+      return res.status(409).json({ error: 'Email already registered' });
+    }
+    if (!FLEET_ROLE_VALUES.includes(requestedRole)) {
+      return res.status(400).json({ error: 'Invalid fleet-owner role' });
+    }
+
+    const entitlements = getFleetEntitlements(planKey);
+    const hash = bcrypt.hashSync(password, 10);
+    const now = new Date();
+    const trialEnds = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+
+    const created = db.transaction(() => {
+      const orgInfo = db.prepare(`INSERT INTO organizations
+        (name, slug, contact_email, contact_phone, city, fleet_size, plan_key, status, trial_started_at, trial_ends_at, max_bikes, max_admin_users)
+        VALUES (?,?,?,?,?,?,?,'trialing',?,?,?,?)`).run(
+          company_name,
+          slugifyCompanyName(company_name),
+          email,
+          phone || null,
+          city || null,
+          fleet_size,
+          planKey,
+          now.toISOString(),
+          trialEnds.toISOString(),
+          entitlements.max_bikes,
+          entitlements.max_admin_users
+        );
+
+        const userInfo = db.prepare(`INSERT INTO users
+          (email, password_hash, full_name, phone, city, role, organization_id, status)
+          VALUES (?,?,?,?,?,?,?, 'active')`).run(
+            email,
+            hash,
+            full_name,
+            phone || null,
+            city || null,
+            requestedRole,
+            orgInfo.lastInsertRowid
+          );
+
+        return { organizationId: orgInfo.lastInsertRowid, userId: userInfo.lastInsertRowid };
+    })();
+
+    const user = getSafeUser(created.userId);
+    logAudit(user.id, 'fleet_owner.signup', 'organizations', created.organizationId, { company_name, role: requestedRole, plan: planKey }, req.ip);
+    res.json({ token: signToken(user), user });
+  });
+
 router.post('/login',
   body('email').isEmail(),
   body('password').notEmpty(),
@@ -354,7 +454,7 @@ router.post('/login',
     if (!bcrypt.compareSync(password, user.password_hash)) return res.status(401).json({ error: 'Invalid credentials' });
 
     logAudit(user.id, 'user.login', 'users', user.id, {}, req.ip);
-    const safe = { id: user.id, email: user.email, full_name: user.full_name, role: user.role };
+    const safe = getSafeUser(user.id) || { id: user.id, email: user.email, full_name: user.full_name, role: user.role, organization_id: user.organization_id || null };
     res.json({ token: signToken(safe), user: safe });
   });
 
@@ -413,10 +513,16 @@ router.post('/reset-password',
   });
 
 router.get('/me', authRequired, (req, res) => {
-  const u = db.prepare(`SELECT id, email, full_name, phone, role, status, id_number, date_of_birth,
-                        address, city, province, postal_code, emergency_contact_name,
-                        emergency_contact_phone, avatar_url, country_of_origin, created_at
-                        FROM users WHERE id = ? AND deleted_at IS NULL`).get(req.user.id);
+  const u = db.prepare(`SELECT u.id, u.email, u.full_name, u.phone, u.role, u.status, u.organization_id,
+                        u.id_number, u.date_of_birth, u.address, u.city, u.province, u.postal_code,
+                        u.emergency_contact_name, u.emergency_contact_phone, u.avatar_url,
+                        u.country_of_origin, u.created_at,
+                        o.name organization_name, o.slug organization_slug, o.status organization_status,
+                        o.plan_key organization_plan_key, o.trial_started_at organization_trial_started_at,
+                        o.trial_ends_at organization_trial_ends_at
+                        FROM users u
+                        LEFT JOIN organizations o ON o.id = u.organization_id
+                        WHERE u.id = ? AND u.deleted_at IS NULL`).get(req.user.id);
   res.json({ user: u });
 });
 

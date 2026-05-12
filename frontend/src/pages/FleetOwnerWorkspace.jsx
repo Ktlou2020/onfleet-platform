@@ -80,7 +80,8 @@ export default function FleetOwnerWorkspace() {
           <Link to="/fleet">Pilot page</Link>
           <a href="#demo-workspace">Workspace</a>
           <a href="#demo-billing">Billing</a>
-          <Link to="/fleet#pilot-form" className="btn btn-secondary">Request live access</Link>
+          <Link to="/fleet/login">Fleet sign in</Link>
+          <Link to="/fleet/signup" className="btn btn-secondary">Create company account</Link>
         </nav>
       </header>
 

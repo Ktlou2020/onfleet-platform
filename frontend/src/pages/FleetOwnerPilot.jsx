@@ -105,8 +105,8 @@ export default function FleetOwnerPilot() {
           <a href="#features">Features</a>
           <Link to="/fleet/workspace">Test workspace</Link>
           <a href="#pilot-form">Join pilot</a>
-          <Link to="/login">Sign in</Link>
-          <Link to="/" className="btn btn-secondary">Rider site</Link>
+          <Link to="/fleet/login">Fleet sign in</Link>
+          <Link to="/fleet/signup" className="btn btn-secondary">Create company account</Link>
         </nav>
       </header>
 
@@ -116,9 +116,9 @@ export default function FleetOwnerPilot() {
           <h1>Let fleet owners run operations on <span>OnFleet</span>.</h1>
           <p>Launch a live pilot for operators who want to manage bikes, agreements, payments, maintenance, and collections in one admin workspace — with a 14-day trial and Paystack billing ready for go-live.</p>
           <div className="hero-cta">
-            <Link to="/fleet/workspace" className="btn hero-cta-btn">Test workspace</Link>
-            <a href="#pilot-form" className="btn btn-secondary hero-cta-btn">Join the pilot</a>
-            <a href="#plans" className="btn btn-secondary hero-cta-btn">View plans</a>
+            <Link to="/fleet/app" className="btn hero-cta-btn">Open fleet portal</Link>
+            <Link to="/fleet/workspace" className="btn btn-secondary hero-cta-btn">Test workspace</Link>
+            <Link to="/fleet/signup" className="btn btn-secondary hero-cta-btn">Create company account</Link>
           </div>
           <div className="hero-trust-list">
             <div className="hero-trust-item"><Clock3 size={16} /> 14-day live trial</div>

@@ -33,6 +33,52 @@ function sendMissingUpload(res, relativePath) {
   });
 }
 
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function getShareMeta(req) {
+  const origin = `${req.protocol}://${req.get('host')}`;
+  const url = `${origin}${req.originalUrl || req.path || '/'}`;
+  const pathName = String(req.path || '/');
+
+  const defaults = {
+    title: 'OnFleet Africa — Rent to Own. Ride. Earn. Own.',
+    description: 'OnFleet Africa — Rent-to-own delivery bikes for South African riders. No deposit. Free monthly servicing. Own in 18 months.',
+    image: `${origin}/logo.png`,
+    url
+  };
+
+  if (pathName === '/fleet' || pathName === '/fleet/') {
+    return {
+      title: 'OnFleet Africa Fleet Owner Platform — Launch and manage your fleet',
+      description: 'The OnFleet fleet-owner platform is live. Create a company account, manage bikes and agreements, capture payments, and run daily fleet operations from one workspace.',
+      image: `${origin}/logo.png`,
+      url
+    };
+  }
+
+  return defaults;
+}
+
+function injectShareMeta(template, meta) {
+  return String(template || '')
+    .replace(/<title>.*?<\/title>/i, `<title>${escapeHtml(meta.title)}</title>`)
+    .replace(/<meta name="description" content="[^"]*"\s*\/>/i, `<meta name="description" content="${escapeHtml(meta.description)}" />`)
+    .replace(/<meta property="og:title" content="[^"]*"\s*\/>/i, `<meta property="og:title" content="${escapeHtml(meta.title)}" />`)
+    .replace(/<meta property="og:description" content="[^"]*"\s*\/>/i, `<meta property="og:description" content="${escapeHtml(meta.description)}" />`)
+    .replace(/<meta property="og:image" content="[^"]*"\s*\/>/i, `<meta property="og:image" content="${escapeHtml(meta.image)}" />`)
+    .replace(/<meta property="og:url" content="[^"]*"\s*\/>/i, `<meta property="og:url" content="${escapeHtml(meta.url)}" />`)
+    .replace(/<meta name="twitter:title" content="[^"]*"\s*\/>/i, `<meta name="twitter:title" content="${escapeHtml(meta.title)}" />`)
+    .replace(/<meta name="twitter:description" content="[^"]*"\s*\/>/i, `<meta name="twitter:description" content="${escapeHtml(meta.description)}" />`)
+    .replace(/<meta name="twitter:image" content="[^"]*"\s*\/>/i, `<meta name="twitter:image" content="${escapeHtml(meta.image)}" />`);
+}
+
 app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: false, crossOriginEmbedderPolicy: false }));
 app.use(cors({ origin: '*', credentials: true }));
 app.use(morgan('dev'));
@@ -66,10 +112,15 @@ app.use('/api/fleet', require('./routes/fleet'));
 
 // Serve built frontend (production preview)
 const frontendDist = path.join(__dirname, '../../frontend/dist');
+const frontendIndexPath = path.join(frontendDist, 'index.html');
 if (fs.existsSync(frontendDist)) {
   app.use(express.static(frontendDist));
-  app.get(/^\/(?!api|uploads).*/, (req, res) => {
-    res.sendFile(path.join(frontendDist, 'index.html'));
+  app.get(/^\/(?!api|uploads).*/, (req, res, next) => {
+    fs.readFile(frontendIndexPath, 'utf8', (error, html) => {
+      if (error) return next(error);
+      const meta = getShareMeta(req);
+      res.type('html').send(injectShareMeta(html, meta));
+    });
   });
 }
 

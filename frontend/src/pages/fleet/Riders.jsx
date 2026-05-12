@@ -16,6 +16,18 @@ const DOC_TYPE_OPTIONS = [
   { value: 'other', label: 'Other' }
 ];
 
+function buildDecisionForm(application, bikes = []) {
+  const preferredBikeId = application?.preferred_bike_id ? String(application.preferred_bike_id) : '';
+  const selectedBike = bikes.find((bike) => String(bike.id) === preferredBikeId) || bikes[0] || null;
+  return {
+    bike_id: selectedBike ? String(selectedBike.id) : preferredBikeId,
+    weekly_amount: selectedBike?.rental_weekly ? String(selectedBike.rental_weekly) : '',
+    total_weeks: selectedBike?.total_weeks ? String(selectedBike.total_weeks) : '78',
+    start_date: new Date().toISOString().slice(0, 10),
+    reason: ''
+  };
+}
+
 function buildInitialForm() {
   return {
     full_name: '',
@@ -71,6 +83,8 @@ export default function FleetOwnerRiders() {
   const [files, setFiles] = useState(buildInitialFiles());
   const [detail, setDetail] = useState(null);
   const [uploadForm, setUploadForm] = useState({ doc_type: 'payslip', file: null });
+  const [decisionForm, setDecisionForm] = useState(() => buildDecisionForm(null, []));
+  const [decisionBusy, setDecisionBusy] = useState(false);
 
   const load = async ({ silent = false } = {}) => {
     if (!silent) setLoading(true);
@@ -137,6 +151,7 @@ export default function FleetOwnerRiders() {
     setFiles(buildInitialFiles());
     setDetail(null);
     setUploadForm({ doc_type: 'payslip', file: null });
+    setDecisionForm(buildDecisionForm(null, bikes));
   };
 
   const openCreate = () => {
@@ -177,6 +192,7 @@ export default function FleetOwnerRiders() {
         ewallet_number: data.application.ewallet_number || ''
       });
       setFiles(buildInitialFiles());
+      setDecisionForm(buildDecisionForm(data.application, bikes));
       setMode('edit');
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (error) {
@@ -277,6 +293,69 @@ export default function FleetOwnerRiders() {
     }
   };
 
+  const chooseDecisionBike = (bikeId) => {
+    const bike = bikes.find((item) => String(item.id) === String(bikeId));
+    setDecisionForm((current) => ({
+      ...current,
+      bike_id: String(bikeId || ''),
+      weekly_amount: bike?.rental_weekly ? String(bike.rental_weekly) : current.weekly_amount,
+      total_weeks: bike?.total_weeks ? String(bike.total_weeks) : current.total_weeks
+    }));
+  };
+
+  const reloadDetail = async (applicationId, preserveReason = '') => {
+    const { data } = await api.get(`/fleet/riders/${applicationId}`);
+    setDetail(data);
+    setDecisionForm((current) => ({
+      ...buildDecisionForm(data.application, bikes),
+      reason: preserveReason || ''
+    }));
+  };
+
+  const submitApproval = async () => {
+    if (!detail?.application?.id) return;
+    if (!decisionForm.bike_id) return toast.error('Select a bike to allocate');
+    if (!decisionForm.weekly_amount || Number(decisionForm.weekly_amount) <= 0) return toast.error('Weekly amount must be greater than zero');
+    if (!decisionForm.total_weeks || Number(decisionForm.total_weeks) <= 0) return toast.error('Total weeks must be greater than zero');
+    if (!decisionForm.start_date) return toast.error('Start date is required');
+
+    setDecisionBusy(true);
+    try {
+      await api.post(`/fleet/riders/${detail.application.id}/approve`, {
+        bike_id: Number(decisionForm.bike_id),
+        weekly_amount: Number(decisionForm.weekly_amount),
+        total_weeks: Number(decisionForm.total_weeks),
+        start_date: decisionForm.start_date
+      });
+      toast.success('Application approved and bike allocated');
+      await reloadDetail(detail.application.id);
+      await load({ silent: true });
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not approve application');
+    } finally {
+      setDecisionBusy(false);
+    }
+  };
+
+  const submitRejection = async () => {
+    if (!detail?.application?.id) return;
+    const reason = String(decisionForm.reason || '').trim();
+    if (!reason) return toast.error('Decline reason is required');
+    if (!window.confirm('Decline this rider application?')) return;
+
+    setDecisionBusy(true);
+    try {
+      await api.post(`/fleet/riders/${detail.application.id}/reject`, { reason });
+      toast.success('Application declined');
+      await reloadDetail(detail.application.id, reason);
+      await load({ silent: true });
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not decline application');
+    } finally {
+      setDecisionBusy(false);
+    }
+  };
+
   const copyShareLink = async () => {
     if (!shareUrl) return;
     try {
@@ -372,6 +451,40 @@ export default function FleetOwnerRiders() {
           ) : (
             <div className="field"><label className="label">E-wallet number</label><input value={form.ewallet_number} onChange={setPhone('ewallet_number')} /></div>
           )}
+
+          {mode === 'edit' && detail && canManage && ['submitted', 'under_review'].includes(detail.application?.status) ? (
+            <>
+              <h3 className="mt-4 mb-3">Application decision</h3>
+              <div className="card mb-3" style={{ background: 'var(--surface-2)' }}>
+                <div className="grid grid-2">
+                  <div className="field"><label className="label">Allocate bike</label><select value={decisionForm.bike_id} onChange={(event) => chooseDecisionBike(event.target.value)}><option value="">— Select a bike —</option>{bikes.map((bike) => <option key={bike.id} value={bike.id}>{bike.make} {bike.model} · {bike.registration || 'No reg'} · {fmt(bike.rental_weekly)}/week</option>)}</select></div>
+                  <div className="field"><label className="label">Start date</label><input type="date" value={decisionForm.start_date} onChange={(event) => setDecisionForm((current) => ({ ...current, start_date: event.target.value }))} /></div>
+                  <div className="field"><label className="label">Weekly amount</label><input type="number" min="1" value={decisionForm.weekly_amount} onChange={(event) => setDecisionForm((current) => ({ ...current, weekly_amount: event.target.value }))} /></div>
+                  <div className="field"><label className="label">Total weeks</label><input type="number" min="1" value={decisionForm.total_weeks} onChange={(event) => setDecisionForm((current) => ({ ...current, total_weeks: event.target.value }))} /></div>
+                </div>
+                <div className="mt-2 muted text-sm">Contract value: {fmt((Number(decisionForm.weekly_amount || 0) * Number(decisionForm.total_weeks || 0)) || 0)}</div>
+                <div className="field mt-3"><label className="label">Decline reason</label><textarea rows="3" value={decisionForm.reason} onChange={(event) => setDecisionForm((current) => ({ ...current, reason: event.target.value }))} placeholder="Explain why this application is being declined" /></div>
+                <div className="row mt-3" style={{ justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
+                  <button className="btn btn-danger" disabled={decisionBusy} onClick={submitRejection}>{decisionBusy ? 'Working…' : 'Decline application'}</button>
+                  <button className="btn" disabled={decisionBusy} onClick={submitApproval}>{decisionBusy ? 'Working…' : 'Approve and allocate bike'}</button>
+                </div>
+              </div>
+            </>
+          ) : null}
+
+          {mode === 'edit' && detail?.agreement ? (
+            <div className="card mt-4 mb-3" style={{ background: 'var(--surface-2)' }}>
+              <strong>Agreement created</strong>
+              <div className="muted text-sm mt-1">{detail.agreement.agreement_no} · {detail.agreement.status} · starts {fmtDate(detail.agreement.start_date)}</div>
+            </div>
+          ) : null}
+
+          {mode === 'edit' && detail?.application?.status === 'rejected' && detail?.application?.rejection_reason ? (
+            <div className="card mt-4 mb-3" style={{ background: 'var(--surface-2)' }}>
+              <strong>Decline reason</strong>
+              <div className="muted text-sm mt-1">{detail.application.rejection_reason}</div>
+            </div>
+          ) : null}
 
           {mode === 'create' ? (
             <>

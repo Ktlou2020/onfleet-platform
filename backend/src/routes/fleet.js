@@ -10,6 +10,8 @@ const { logAudit, generateAgreementNo, buildPaymentSchedule, addDays, recalcSche
 const { setBikeStatus } = require('../utils/bikeStatus');
 const { discontinueAgreementForStolenBike, discontinueAgreement, reinstateDiscontinuedAgreement } = require('../services/agreementLifecycle');
 const { extractPayslipInsights } = require('../services/documentInsights');
+const { sendNotification } = require('../services/notifier');
+const { writeContractSnapshot } = require('../services/contracts');
 
 const router = express.Router();
 const FLEET_ROLE_VALUES = ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'];
@@ -101,6 +103,139 @@ function getFleetCatalogBikes(org) {
 function getFleetApplicationDocuments(applicationId) {
   return db.prepare(`SELECT id, doc_type, file_path, original_name, mime_type, extracted_amount, status, uploaded_at
     FROM application_documents WHERE application_id = ? ORDER BY uploaded_at DESC, id DESC`).all(applicationId);
+}
+
+function getFleetApplicationAgreement(applicationId) {
+  return db.prepare(`SELECT id, agreement_no, contract_file_path, signed_contract_path, signed_at, status, bike_id, user_id, start_date, end_date, weekly_amount, total_weeks, total_amount
+    FROM agreements WHERE application_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`).get(applicationId);
+}
+
+async function approveFleetApplication({ organization, applicationId, bikeId, weeklyAmount, totalWeeks, startDate, reviewerId }) {
+  const application = getScopedFleetApplication(organization, Number(applicationId));
+  if (!application) throw new Error('Application not found');
+  if (!['submitted', 'under_review'].includes(application.status)) {
+    throw new Error('Only submitted or under review applications can be approved');
+  }
+
+  const selectedBikeId = toInt(bikeId) || toInt(application.preferred_bike_id);
+  if (!selectedBikeId) throw new Error('bike_id is required');
+
+  const rider = db.prepare(`SELECT * FROM users WHERE id = ? AND deleted_at IS NULL`).get(application.user_id);
+  if (!rider) throw new Error('Rider not found');
+
+  const bike = getScopedBike(organization, selectedBikeId);
+  if (!bike) throw new Error('Bike not found');
+  if (bike.status !== 'ready_to_go') throw new Error('Bike must be Ready to go before allocation');
+
+  const riderHasOpenAgreement = db.prepare(`SELECT id FROM agreements WHERE user_id = ? AND status IN ('active', 'paused', 'defaulted') LIMIT 1`).get(application.user_id);
+  if (riderHasOpenAgreement) throw new Error('Rider already has an open agreement');
+
+  const bikeHasOpenAgreement = db.prepare(`SELECT id FROM agreements WHERE bike_id = ? AND status IN ('active', 'paused', 'defaulted') LIMIT 1`).get(selectedBikeId);
+  if (bikeHasOpenAgreement) throw new Error('Bike already has an open agreement');
+
+  const weekly = Number(weeklyAmount || bike.rental_weekly);
+  const weeks = Number(totalWeeks || bike.total_weeks || 78);
+  const start = String(startDate || todayIso()).slice(0, 10);
+  if (!weekly || weekly <= 0) throw new Error('Weekly amount must be greater than zero');
+  if (!weeks || weeks <= 0) throw new Error('Total weeks must be greater than zero');
+
+  const total = +(weekly * weeks).toFixed(2);
+  const endDate = addDays(start, weeks * 7);
+  const agreementNo = generateAgreementNo();
+
+  const agreementId = db.transaction(() => {
+    db.prepare(`UPDATE applications
+      SET status = 'approved',
+          reviewed_by = ?,
+          reviewed_at = CURRENT_TIMESTAMP,
+          rejection_reason = NULL,
+          preferred_bike_id = ?
+      WHERE id = ?`).run(reviewerId, selectedBikeId, application.id);
+
+    db.prepare(`UPDATE bikes SET status = 'active' WHERE id = ?`).run(selectedBikeId);
+
+    const info = db.prepare(`INSERT INTO agreements
+      (agreement_no, user_id, bike_id, application_id, weekly_amount, total_weeks, total_amount, start_date, end_date, status, created_by)
+      VALUES (?,?,?,?,?,?,?,?,?, 'active', ?)`).run(
+        agreementNo,
+        application.user_id,
+        selectedBikeId,
+        application.id,
+        weekly,
+        weeks,
+        total,
+        start,
+        endDate,
+        reviewerId
+      );
+
+    buildPaymentSchedule(info.lastInsertRowid, weekly, weeks, start);
+    return info.lastInsertRowid;
+  })();
+
+  const agreement = db.prepare('SELECT * FROM agreements WHERE id = ?').get(agreementId);
+  const refreshedApplication = db.prepare('SELECT * FROM applications WHERE id = ?').get(application.id);
+  const contractPath = writeContractSnapshot({ agreement, rider, bike, application: refreshedApplication, kind: 'unsigned' });
+  db.prepare(`UPDATE agreements SET contract_file_path = ?, contract_pdf_path = ? WHERE id = ?`).run(contractPath, contractPath, agreementId);
+  db.prepare(`INSERT INTO application_documents
+    (application_id, user_id, doc_type, file_path, original_name, mime_type, status, uploaded_by)
+    VALUES (?,?,?,?,?,?,?,?)`).run(
+      application.id,
+      application.user_id,
+      'unsigned_contract',
+      contractPath,
+      `${agreementNo}-contract.html`,
+      'text/html',
+      'verified',
+      reviewerId
+    );
+
+  await sendNotification({
+    userId: application.user_id,
+    channel: 'email',
+    type: 'application_approved',
+    title: 'OnFleet application approved',
+    message: `Hi ${rider.full_name.split(' ')[0]}, your application has been approved. Your bike has been allocated and your agreement ${agreementNo} is now ready for review and signature on the platform.`
+  });
+
+  logAudit(reviewerId, 'fleet_owner.rider_application_approve', 'applications', Number(application.id), {
+    organization_id: organization.id,
+    agreement_id: agreementId,
+    bike_id: selectedBikeId,
+    weekly_amount: weekly,
+    total_weeks: weeks,
+    start_date: start
+  }, null);
+
+  return { ok: true, agreement_id: agreementId, agreement_no: agreementNo, contract_file_path: contractPath, bike_id: Number(selectedBikeId) };
+}
+
+async function rejectFleetApplication({ organization, applicationId, reviewerId, reason }) {
+  const application = getScopedFleetApplication(organization, Number(applicationId));
+  if (!application) throw new Error('Application not found');
+  if (!['submitted', 'under_review'].includes(application.status)) {
+    throw new Error('Only submitted or under review applications can be declined');
+  }
+
+  const cleanReason = String(reason || '').trim() || null;
+  db.prepare(`UPDATE applications
+    SET status = 'rejected', rejection_reason = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP
+    WHERE id = ?`).run(cleanReason, reviewerId, application.id);
+
+  await sendNotification({
+    userId: application.user_id,
+    channel: 'email',
+    type: 'application_rejected',
+    title: 'OnFleet application update',
+    message: `Hi ${application.full_name.split(' ')[0]}, your application has been declined. ${cleanReason || 'Please contact your fleet owner for more information.'}`
+  });
+
+  logAudit(reviewerId, 'fleet_owner.rider_application_reject', 'applications', Number(application.id), {
+    organization_id: organization.id,
+    reason: cleanReason
+  }, null);
+
+  return { ok: true };
 }
 
 function getScopedFleetApplication(org, applicationId) {
@@ -827,7 +962,7 @@ router.get('/riders/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.view),
     const organization = getOrganizationOrThrow(req.user.organization_id);
     const application = getScopedFleetApplication(organization, Number(req.params.id));
     if (!application) return res.status(404).json({ error: 'Rider application not found' });
-    res.json({ application, documents: getFleetApplicationDocuments(application.id) });
+    res.json({ application, documents: getFleetApplicationDocuments(application.id), agreement: getFleetApplicationAgreement(application.id) });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Could not load rider details' });
   }
@@ -993,6 +1128,39 @@ router.post('/riders/:id/documents', companyRoleAllowed(FLEET_RESOURCE_ACCESS.ri
     res.status(201).json({ ok: true, decision, documents: getFleetApplicationDocuments(applicationId) });
   } catch (error) {
     res.status(400).json({ error: error.message || 'Could not upload rider document' });
+  }
+});
+
+router.post('/riders/:id/approve', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), async (req, res) => {
+  try {
+    const organization = getOrganizationOrThrow(req.user.organization_id);
+    const result = await approveFleetApplication({
+      organization,
+      applicationId: req.params.id,
+      bikeId: req.body.bike_id,
+      weeklyAmount: req.body.weekly_amount,
+      totalWeeks: req.body.total_weeks,
+      startDate: req.body.start_date,
+      reviewerId: req.user.id
+    });
+    res.json(result);
+  } catch (error) {
+    res.status(error.message === 'Application not found' || error.message === 'Bike not found' ? 404 : 400).json({ error: error.message || 'Could not approve application' });
+  }
+});
+
+router.post('/riders/:id/reject', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), async (req, res) => {
+  try {
+    const organization = getOrganizationOrThrow(req.user.organization_id);
+    const result = await rejectFleetApplication({
+      organization,
+      applicationId: req.params.id,
+      reviewerId: req.user.id,
+      reason: req.body.reason
+    });
+    res.json(result);
+  } catch (error) {
+    res.status(error.message == 'Application not found' ? 404 : 400).json({ error: error.message || 'Could not decline application' });
   }
 });
 

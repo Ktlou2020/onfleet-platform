@@ -149,8 +149,8 @@ function runDailyReminders() {
   const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const due = db.prepare(`
     SELECT s.*, a.user_id, a.agreement_no, u.full_name FROM payment_schedules s
-    JOIN agreements a ON a.id = s.agreement_id
-    JOIN users u ON u.id = a.user_id
+    JOIN agreements a ON a.id = s.agreement_id AND a.status = 'active'
+    JOIN users u ON u.id = a.user_id AND u.status = 'active'
     WHERE s.due_date = ? AND s.status IN ('pending','partial')`).all(tomorrow);
 
   for (const d of due) {
@@ -163,8 +163,8 @@ function runDailyReminders() {
   const today = new Date().toISOString().slice(0, 10);
   const overdue = db.prepare(`
     SELECT s.*, a.user_id, a.agreement_no, u.full_name FROM payment_schedules s
-    JOIN agreements a ON a.id = s.agreement_id
-    JOIN users u ON u.id = a.user_id
+    JOIN agreements a ON a.id = s.agreement_id AND a.status = 'active'
+    JOIN users u ON u.id = a.user_id AND u.status = 'active'
     WHERE s.due_date < ? AND s.status = 'overdue'`).all(today);
 
   for (const d of overdue) {

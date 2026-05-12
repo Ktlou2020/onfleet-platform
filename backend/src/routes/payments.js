@@ -75,6 +75,17 @@ function parseCsv(text) {
   return rows;
 }
 
+function sanitizeReferencePart(value) {
+  return String(value || '').trim().replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+}
+
+function buildBulkPaymentReference(row, fallbackPrefix = 'CSV') {
+  const baseReference = sanitizeReferencePart(row.reference) || `${fallbackPrefix}-${uuid().slice(0, 8)}`;
+  const registration = sanitizeReferencePart(row.registration);
+  const paidAtToken = sanitizeReferencePart(String(row.paid_at || '').slice(0, 10).replace(/[^0-9]/g, ''));
+  return [baseReference, registration, paidAtToken].filter(Boolean).join('-');
+}
+
 function recordManualPayment({ agreement_id, amount, method, reference, paid_at, notes, recorded_by }) {
   const agreement = db.prepare('SELECT * FROM agreements WHERE id = ?').get(agreement_id);
   if (!agreement) throw new Error('Agreement not found');
@@ -214,18 +225,24 @@ router.post('/bulk-import', authRequired, adminOnly, upload.single('file'), (req
   const rows = parseCsv(mappedBuffer.toString('utf8'));
   if (!rows.length) return res.status(400).json({ error: 'CSV file is empty' });
 
-  const summary = { imported: 0, failed: 0, errors: [] };
+  const summary = { imported: 0, skipped: 0, failed: 0, errors: [] };
   for (const [index, row] of rows.entries()) {
     try {
       const registration = String(row.registration || '').trim();
       if (!registration) throw new Error('Bike registration is required');
       const agreement = resolveAgreementForPayment(row);
       if (!agreement) throw new Error(`Agreement not found for registration ${registration}`);
+      const reference = buildBulkPaymentReference(row);
+      const exists = db.prepare('SELECT id FROM payments WHERE reference = ?').get(reference);
+      if (exists) {
+        summary.skipped += 1;
+        continue;
+      }
       recordManualPayment({
         agreement_id: agreement.id,
         amount: Number(row.amount),
         method: row.method || 'eft',
-        reference: row.reference || `CSV-${uuid().slice(0, 8)}`,
+        reference,
         paid_at: row.paid_at || new Date().toISOString(),
         notes: row.notes || `Bulk CSV import for registration ${registration}`,
         recorded_by: req.user.id

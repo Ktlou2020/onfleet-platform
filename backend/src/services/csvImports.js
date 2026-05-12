@@ -91,6 +91,17 @@ function parseDateFlexible(value, fallback = null) {
   return parsed.toISOString().slice(0, 10);
 }
 
+function sanitizeReferencePart(value) {
+  return normalizeText(value).replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+}
+
+function buildImportedPaymentReference(row, fallbackPrefix = 'LEG-PAY') {
+  const baseReference = sanitizeReferencePart(row.reference || row['Bike and Date']) || `${fallbackPrefix}-${uuid().slice(0, 8)}`;
+  const registration = sanitizeReferencePart(row.registration || row.Bike || row['Vehicle Reg'] || row['Bike Registration']);
+  const paidAtToken = sanitizeReferencePart((parseDateFlexible(row['Date Created'] || row.paid_at) || '').replace(/[^0-9]/g, ''));
+  return [baseReference, registration, paidAtToken].filter(Boolean).join('-');
+}
+
 function extractFirstUrl(value) {
   const raw = normalizeText(value);
   if (!raw) return null;
@@ -501,7 +512,7 @@ function insertImportedPayment(row, recordedBy) {
   if (!agreement) throw new Error(`Agreement not found for registration ${registration}`);
   const amount = parseMoney(row['Amount Collected'] || row.amount);
   if (!amount) throw new Error('Amount missing');
-  const reference = normalizeText(row.reference || row['Bike and Date']) || `LEG-PAY-${uuid().slice(0, 8)}`;
+  const reference = buildImportedPaymentReference(row);
   const exists = db.prepare(`SELECT id FROM payments WHERE reference = ?`).get(reference);
   if (exists) return { skipped: true, reference };
   const paidAt = parseDateFlexible(row['Date Created'] || row.paid_at) || new Date().toISOString().slice(0, 10);

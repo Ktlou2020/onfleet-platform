@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../api';
 import { Loading, Badge, SearchInput, Pagination, fmt, fmtDateTime, matchesSearch, paginateItems } from '../../components/ui';
+import { sortNewestFirst } from '../../utils/sortNewestFirst';
 
 const creditedAmount = (payment) => Number(payment?.net_amount || payment?.amount || 0);
 const feeAmount = (payment) => Number(payment?.fee_amount || 0);
@@ -17,7 +18,7 @@ export default function AdminPayments() {
   useEffect(() => { setPage(1); }, [search]);
 
   const payments = list || [];
-  const filtered = useMemo(() => payments.filter((payment) => matchesSearch(
+  const filtered = useMemo(() => sortNewestFirst(payments.filter((payment) => matchesSearch(
     search,
     payment.full_name,
     payment.email,
@@ -28,7 +29,7 @@ export default function AdminPayments() {
     payment.amount,
     payment.net_amount,
     payment.fee_amount
-  )), [payments, search]);
+  )), ['paid_at', 'created_at', 'id']), [payments, search]);
 
   const pagination = useMemo(() => paginateItems(filtered, page, pageSize), [filtered, page, pageSize]);
   const totalCredited = useMemo(() => payments.filter((p) => p.status === 'success').reduce((sum, p) => sum + creditedAmount(p), 0), [payments]);

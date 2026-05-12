@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../../api';
 import { Badge, EmptyState, Loading, Pagination, SearchInput, Stat, fmtDateTime, matchesSearch } from '../../components/ui';
+import { sortNewestFirst } from '../../utils/sortNewestFirst';
 import { Briefcase, CalendarCheck2, Rocket, Trophy } from 'lucide-react';
 
 const statusOptions = ['all', 'new', 'contacted', 'demo_scheduled', 'trial_started', 'converted', 'archived'];
@@ -39,7 +40,7 @@ export default function AdminPilotLeads() {
   useEffect(() => { load(); }, []);
   useEffect(() => { setPage(1); }, [status, search]);
 
-  const filtered = useMemo(() => (leads || []).filter((lead) => matchesSearch(
+  const filtered = useMemo(() => sortNewestFirst((leads || []).filter((lead) => matchesSearch(
     search,
     lead.company_name,
     lead.contact_name,
@@ -51,7 +52,7 @@ export default function AdminPilotLeads() {
     lead.status,
     lead.source,
     lead.fleet_size
-  )), [leads, search]);
+  )), ['created_at', 'id']), [leads, search]);
 
   const pagination = useMemo(() => {
     const totalItems = filtered.length;

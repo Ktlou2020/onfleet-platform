@@ -3,6 +3,7 @@ import api from '../../api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../auth';
 import { Loading, Badge, SearchInput, fmtDate, Modal, Pagination, matchesSearch, CopyableContactValue, normalizePhoneInput } from '../../components/ui';
+import { sortNewestFirst } from '../../utils/sortNewestFirst';
 
 const SPECIAL_AUDIENCE_TAG = 'password-reset-batch-2026-05';
 
@@ -77,7 +78,7 @@ export default function AdminUsers() {
 
   const filtered = useMemo(() => {
     const normalizedTag = tagFilter.trim().toLowerCase();
-    return (users || []).filter((account) => {
+    return sortNewestFirst((users || []).filter((account) => {
       if (filter && account.role !== filter) return false;
       const tags = tagList(account.user_tags);
       if (normalizedTag && !tags.some((tag) => tag.toLowerCase().includes(normalizedTag))) return false;
@@ -92,7 +93,7 @@ export default function AdminUsers() {
         account.id,
         account.user_tags
       );
-    });
+    }), ['created_at', 'id']);
   }, [users, filter, search, tagFilter]);
 
   const pagination = useMemo(() => {

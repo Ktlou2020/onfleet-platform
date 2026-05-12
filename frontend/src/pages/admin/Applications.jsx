@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import api from '../../api';
 import toast from 'react-hot-toast';
 import { Loading, Badge, Modal, Pagination, SearchInput, fmt, fmtDate, matchesSearch, paginateItems } from '../../components/ui';
+import { sortNewestFirst } from '../../utils/sortNewestFirst';
 
 const today = new Date().toISOString().slice(0, 10);
 const canReview = (application) => ['submitted', 'under_review'].includes(application.status);
@@ -47,7 +48,7 @@ export default function AdminApplications() {
     }
   };
 
-  const filtered = (list || []).filter((application) => matchesSearch(
+  const filtered = useMemo(() => sortNewestFirst((list || []).filter((application) => matchesSearch(
     search,
     application.full_name,
     application.email,
@@ -59,7 +60,7 @@ export default function AdminApplications() {
     application.auto_decision,
     application.average_weekly_earnings,
     application.id
-  ));
+  )), ['submitted_at', 'created_at', 'id']), [list, search]);
 
   const pagination = useMemo(() => paginateItems(filtered, page, pageSize), [filtered, page, pageSize]);
   const pagedApplications = pagination.items;

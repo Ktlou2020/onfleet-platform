@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import api from '../../api';
 import toast from 'react-hot-toast';
 import { Loading, Badge, SearchInput, fmt, fmtDate, Modal, Pagination, matchesSearch, paginateItems } from '../../components/ui';
+import { sortNewestFirst } from '../../utils/sortNewestFirst';
 
 const AGREEMENT_STATUS_OPTIONS = ['', 'active', 'completed', 'defaulted', 'cancelled', 'paused', 'discontinued'];
 const BIKE_STATUS_OPTIONS = ['', 'active', 'not_available', 'sold', 'paid_off', 'written_off', 'stolen', 'repairs', 'ready_to_go', 'stationary'];
@@ -157,7 +158,7 @@ export default function AdminAgreements() {
     }
   };
 
-  const filtered = (list || []).filter((agreement) => matchesSearch(
+  const filtered = useMemo(() => sortNewestFirst((list || []).filter((agreement) => matchesSearch(
     search,
     agreement.agreement_no,
     agreement.full_name,
@@ -169,7 +170,7 @@ export default function AdminAgreements() {
     agreement.bike_status,
     agreement.weekly_amount,
     agreement.total_amount
-  ));
+  )), ['created_at', 'id']), [list, search]);
 
   const pagination = useMemo(() => paginateItems(filtered, page, pageSize), [filtered, page, pageSize]);
   const visibleIds = pagination.items.map((agreement) => agreement.id);

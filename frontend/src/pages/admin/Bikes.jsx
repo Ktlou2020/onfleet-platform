@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import api from '../../api';
 import toast from 'react-hot-toast';
 import { Loading, Badge, Modal, Pagination, SearchInput, fmt, fmtDate, matchesSearch, paginateItems, CopyableContactValue } from '../../components/ui';
+import { sortNewestFirst } from '../../utils/sortNewestFirst';
 import { Plus } from 'lucide-react';
 import { useAuth } from '../../auth';
 
@@ -103,7 +104,7 @@ export default function AdminBikes() {
   useEffect(() => { load(); }, [filter]);
   useEffect(() => { setPage(1); }, [search, filter]);
 
-  const filtered = (bikes || []).filter((bike) => matchesSearch(
+  const filtered = useMemo(() => sortNewestFirst((bikes || []).filter((bike) => matchesSearch(
     search,
     bike.vin,
     bike.registration,
@@ -128,7 +129,7 @@ export default function AdminBikes() {
     bike.license_disc_expiry,
     bike.rc1_original_name,
     bike.license_disc_original_name
-  ));
+  )), ['created_at', 'id']), [bikes, search]);
 
   const pagination = useMemo(() => paginateItems(filtered, page, pageSize), [filtered, page, pageSize]);
 

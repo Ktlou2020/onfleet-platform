@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import api from '../../api';
 import { Loading, SearchInput, Pagination, fmtDateTime, matchesSearch, paginateItems } from '../../components/ui';
+import { sortNewestFirst } from '../../utils/sortNewestFirst';
 
 export default function AdminAuditLogs() {
   const [logs, setLogs] = useState(null);
@@ -11,7 +12,7 @@ export default function AdminAuditLogs() {
   useEffect(() => { api.get('/admin/audit-logs').then((r) => setLogs(r.data.logs)); }, []);
   useEffect(() => { setPage(1); }, [search]);
 
-  const filtered = (logs || []).filter((log) => matchesSearch(
+  const filtered = useMemo(() => sortNewestFirst((logs || []).filter((log) => matchesSearch(
     search,
     log.full_name,
     log.actor_id,
@@ -20,7 +21,7 @@ export default function AdminAuditLogs() {
     log.entity_id,
     log.metadata,
     log.ip
-  ));
+  )), ['created_at', 'id']), [logs, search]);
 
   const pagination = useMemo(() => paginateItems(filtered, page, pageSize), [filtered, page, pageSize]);
 

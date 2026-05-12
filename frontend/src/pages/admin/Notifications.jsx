@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import api from '../../api';
 import toast from 'react-hot-toast';
 import { Badge, EmptyState, Loading, Pagination, SearchInput, fmtDateTime, Stat, matchesSearch, paginateItems } from '../../components/ui';
+import { sortNewestFirst } from '../../utils/sortNewestFirst';
 import { Bell, Mail, MessageSquare, Smartphone, RefreshCw } from 'lucide-react';
 
 const channelIcon = {
@@ -59,7 +60,7 @@ export default function AdminNotifications() {
   useEffect(() => { load(); }, []);
   useEffect(() => { setPage(1); }, [search]);
 
-  const filtered = (list || []).filter((item) => matchesSearch(
+  const filtered = useMemo(() => sortNewestFirst((list || []).filter((item) => matchesSearch(
     search,
     item.full_name,
     item.email,
@@ -69,7 +70,7 @@ export default function AdminNotifications() {
     item.title,
     item.message,
     item.status
-  ));
+  )), ['sent_at', 'created_at', 'id']), [list, search]);
 
   const pagination = useMemo(() => paginateItems(filtered, page, pageSize), [filtered, page, pageSize]);
 

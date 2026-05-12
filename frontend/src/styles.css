@@ -117,13 +117,17 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   padding: 20px 14px; display: flex; flex-direction: column; flex-shrink: 0;
 }
 .sidebar .brand-logo { padding: 0 8px 24px; }
-.sidebar nav a {
+.sidebar nav a,
+.sidebar nav button {
   display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px;
   color: var(--muted); font-weight: 500; font-size: 14px; margin-bottom: 2px;
-  transition: all 0.15s;
+  transition: all 0.15s; width: 100%; text-align: left; background: transparent; border: none;
 }
-.sidebar nav a.active { background: rgba(30,136,209,0.12); color: var(--primary-light); border-left: 3px solid var(--primary); padding-left: 9px; }
-.sidebar nav a:hover { color: var(--text); background: var(--surface-2); }
+.sidebar nav a.active,
+.sidebar nav button.active { background: rgba(30,136,209,0.12); color: var(--primary-light); border-left: 3px solid var(--primary); padding-left: 9px; }
+.sidebar nav a:hover,
+.sidebar nav button:hover:not(:disabled) { color: var(--text); background: var(--surface-2); }
+.sidebar nav button:disabled { opacity: 0.5; cursor: not-allowed; }
 .sidebar .user-mini {
   margin-top: auto; padding: 12px; border-top: 1px solid var(--border); display: flex; gap: 10px; align-items: center;
 }

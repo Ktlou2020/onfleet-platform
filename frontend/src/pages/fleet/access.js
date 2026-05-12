@@ -23,7 +23,7 @@ export const FLEET_RESOURCE_ACCESS = {
   },
   payments: {
     view: ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing'],
-    manage: ['fleet_owner_admin', 'fleet_owner_billing']
+    manage: ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing']
   }
 };
 

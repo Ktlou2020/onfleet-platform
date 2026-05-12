@@ -3,7 +3,7 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth';
 import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
-import { LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell, Briefcase } from 'lucide-react';
+import { LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell, Briefcase, ShieldCheck } from 'lucide-react';
 
 const navItems = [
   { to: '/admin', label: 'Dashboard', icon: LayoutDashboard },
@@ -14,7 +14,8 @@ const navItems = [
   { to: '/admin/notifications', label: 'Notifications', icon: Bell },
   { to: '/admin/imports', label: 'CSV Imports', icon: UploadCloud },
   { to: '/admin/strategy', label: 'AI Strategy', icon: BrainCircuit },
-  { to: '/admin/pilot', label: 'Fleet-owner leads', icon: Briefcase },
+  { to: '/admin/fleet-dashboard', label: 'Fleet owner dashboard', icon: Briefcase },
+  { to: '/admin/fleet-owners', label: 'Manage fleet owners', icon: ShieldCheck, superadminOnly: true },
   { to: '/admin/users', label: 'Users', icon: Users },
   { to: '/admin/audit', label: 'Audit Logs', icon: ClipboardList }
 ];
@@ -24,7 +25,8 @@ export default function AdminShell() {
   const nav = useNavigate();
   const [search, setSearch] = useState('');
 
-  const filteredNav = useMemo(() => navItems.filter((item) => matchesSearch(search, item.label, item.to)), [search]);
+  const allowedNav = useMemo(() => navItems.filter((item) => !item.superadminOnly || user?.role === 'superadmin'), [user?.role]);
+  const filteredNav = useMemo(() => allowedNav.filter((item) => matchesSearch(search, item.label, item.to)), [allowedNav, search]);
 
   const goToFirstMatch = (event) => {
     if (event.key === 'Enter' && filteredNav[0]) {
@@ -42,7 +44,7 @@ export default function AdminShell() {
           <span className="badge badge-info" style={{ fontSize: 9 }}>ADMIN</span>
         </div>
         <nav>
-          {navItems.map((item) => {
+          {allowedNav.map((item) => {
             const Icon = item.icon;
             return <NavLink key={item.to} to={item.to} end={item.to === '/admin'}><Icon size={16} /> {item.label}</NavLink>;
           })}

@@ -12,6 +12,8 @@ const { sendNotification, detectEmailProvider } = require('../services/notifier'
 
 const router = express.Router();
 const brandingUploadDir = path.join(__dirname, '../../uploads/branding');
+const FLEET_OWNER_ROLE_VALUES = ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'];
+const FLEET_OWNER_ROLE_SQL = FLEET_OWNER_ROLE_VALUES.map(() => '?').join(',');
 fs.mkdirSync(brandingUploadDir, { recursive: true });
 const heroImageUpload = multer({
   storage: multer.diskStorage({
@@ -113,6 +115,145 @@ function setSetting(key, value) {
     ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value, updated_at = CURRENT_TIMESTAMP`).run(key, value || null);
 }
 
+function fleetOrgScope(alias = 'b', orgAlias = 'o') {
+  return `(${alias}.organization_id = ${orgAlias}.id OR (${alias}.organization_id IS NULL AND LOWER(TRIM(COALESCE(${alias}.fleet, ''))) IN (LOWER(TRIM(COALESCE(${orgAlias}.name, ''))), LOWER(TRIM(COALESCE(${orgAlias}.slug, ''))))))`;
+}
+
+function listFleetOwnerOrganizations() {
+  const scope = fleetOrgScope('b', 'o');
+  const rows = db.prepare(`SELECT
+      o.id,
+      o.name,
+      o.slug,
+      o.contact_email,
+      o.contact_phone,
+      o.city,
+      o.fleet_size,
+      o.plan_key,
+      o.status,
+      o.trial_started_at,
+      o.trial_ends_at,
+      o.max_bikes,
+      o.max_admin_users,
+      o.created_at,
+      o.updated_at,
+      COALESCE((SELECT COUNT(*) FROM users u WHERE u.organization_id = o.id AND u.deleted_at IS NULL AND u.role IN (${FLEET_OWNER_ROLE_SQL})), 0) AS member_count,
+      COALESCE((SELECT COUNT(*) FROM users u WHERE u.organization_id = o.id AND u.deleted_at IS NULL AND u.status = 'active' AND u.role IN (${FLEET_OWNER_ROLE_SQL})), 0) AS active_member_count,
+      COALESCE((SELECT COUNT(*) FROM bikes b WHERE ${scope}), 0) AS bike_count,
+      COALESCE((SELECT COUNT(*) FROM bikes b WHERE ${scope} AND b.status = 'active'), 0) AS active_bikes,
+      COALESCE((SELECT COUNT(*) FROM bikes b WHERE ${scope} AND b.status = 'ready_to_go'), 0) AS ready_bikes,
+      COALESCE((SELECT COUNT(*)
+        FROM agreements a
+        JOIN bikes b ON b.id = a.bike_id
+        WHERE ${scope}
+          AND a.status IN ('active', 'paused', 'defaulted')), 0) AS open_agreements,
+      COALESCE((SELECT SUM(CASE WHEN ps.amount_due > COALESCE(ps.amount_paid, 0) THEN ps.amount_due - COALESCE(ps.amount_paid, 0) ELSE 0 END)
+        FROM payment_schedules ps
+        JOIN agreements a ON a.id = ps.agreement_id
+        JOIN bikes b ON b.id = a.bike_id
+        WHERE ${scope}
+          AND ps.status = 'overdue'), 0) AS overdue_amount,
+      COALESCE((SELECT SUM(COALESCE(NULLIF(p.net_amount, 0), p.amount))
+        FROM payments p
+        JOIN agreements a ON a.id = p.agreement_id
+        JOIN bikes b ON b.id = a.bike_id
+        WHERE ${scope}
+          AND p.status = 'success'
+          AND COALESCE(p.paid_at, p.created_at) >= datetime('now', '-30 days')), 0) AS revenue_30d,
+      COALESCE((SELECT SUM(COALESCE(NULLIF(p.net_amount, 0), p.amount))
+        FROM payments p
+        JOIN agreements a ON a.id = p.agreement_id
+        JOIN bikes b ON b.id = a.bike_id
+        WHERE ${scope}
+          AND p.status = 'success'), 0) AS revenue_total,
+      (SELECT MAX(COALESCE(p.paid_at, p.created_at))
+        FROM payments p
+        JOIN agreements a ON a.id = p.agreement_id
+        JOIN bikes b ON b.id = a.bike_id
+        WHERE ${scope}
+          AND p.status = 'success') AS last_payment_at
+    FROM organizations o
+    ORDER BY CASE
+      WHEN o.status = 'past_due' THEN 0
+      WHEN o.status = 'trialing' THEN 1
+      WHEN o.status = 'active' THEN 2
+      WHEN o.status = 'suspended' THEN 3
+      ELSE 4
+    END,
+    o.created_at DESC`).all(...FLEET_OWNER_ROLE_VALUES, ...FLEET_OWNER_ROLE_VALUES);
+
+  return rows.map((row) => ({
+    ...row,
+    member_count: Number(row.member_count || 0),
+    active_member_count: Number(row.active_member_count || 0),
+    bike_count: Number(row.bike_count || 0),
+    active_bikes: Number(row.active_bikes || 0),
+    ready_bikes: Number(row.ready_bikes || 0),
+    open_agreements: Number(row.open_agreements || 0),
+    overdue_amount: Number(row.overdue_amount || 0),
+    revenue_30d: Number(row.revenue_30d || 0),
+    revenue_total: Number(row.revenue_total || 0),
+    payer_status: Number(row.revenue_30d || 0) > 0 ? 'payer' : 'non_payer'
+  }));
+}
+
+function listFleetOwnerUsers() {
+  const rows = db.prepare(`SELECT
+      u.id,
+      u.email,
+      u.full_name,
+      u.phone,
+      u.city,
+      u.role,
+      u.status,
+      u.created_at,
+      u.updated_at,
+      o.id AS organization_id,
+      o.name AS organization_name,
+      o.slug AS organization_slug,
+      o.status AS organization_status,
+      o.plan_key,
+      o.contact_email,
+      o.contact_phone,
+      o.fleet_size,
+      o.max_bikes,
+      o.max_admin_users,
+      COALESCE((SELECT COUNT(*) FROM users u2 WHERE u2.organization_id = o.id AND u2.deleted_at IS NULL AND u2.role IN (${FLEET_OWNER_ROLE_SQL})), 0) AS organization_member_count,
+      COALESCE((SELECT COUNT(*) FROM bikes b WHERE ${fleetOrgScope('b', 'o')}), 0) AS organization_bike_count,
+      COALESCE((SELECT SUM(COALESCE(NULLIF(p.net_amount, 0), p.amount))
+        FROM payments p
+        JOIN agreements a ON a.id = p.agreement_id
+        JOIN bikes b ON b.id = a.bike_id
+        WHERE ${fleetOrgScope('b', 'o')}
+          AND p.status = 'success'
+          AND COALESCE(p.paid_at, p.created_at) >= datetime('now', '-30 days')), 0) AS organization_revenue_30d,
+      (SELECT MAX(COALESCE(p.paid_at, p.created_at))
+        FROM payments p
+        JOIN agreements a ON a.id = p.agreement_id
+        JOIN bikes b ON b.id = a.bike_id
+        WHERE ${fleetOrgScope('b', 'o')}
+          AND p.status = 'success') AS organization_last_payment_at
+    FROM users u
+    JOIN organizations o ON o.id = u.organization_id
+    WHERE u.deleted_at IS NULL AND u.role IN (${FLEET_OWNER_ROLE_SQL})
+    ORDER BY o.name ASC,
+      CASE
+        WHEN u.role = 'fleet_owner_admin' THEN 0
+        WHEN u.role = 'fleet_owner_ops' THEN 1
+        WHEN u.role = 'fleet_owner_billing' THEN 2
+        ELSE 3
+      END,
+      u.created_at ASC`).all(...FLEET_OWNER_ROLE_VALUES, ...FLEET_OWNER_ROLE_VALUES);
+
+  return rows.map((row) => ({
+    ...row,
+    organization_member_count: Number(row.organization_member_count || 0),
+    organization_bike_count: Number(row.organization_bike_count || 0),
+    organization_revenue_30d: Number(row.organization_revenue_30d || 0),
+    organization_payer_status: Number(row.organization_revenue_30d || 0) > 0 ? 'payer' : 'non_payer'
+  }));
+}
+
 router.get('/branding', superadminOnly, (req, res) => {
   res.json({ hero_image_url: getSetting('landing_hero_image_url') });
 });
@@ -153,6 +294,99 @@ router.get('/dashboard', (req, res) => {
     FROM payments WHERE status = 'success' AND paid_at >= datetime('now','-90 days')
     GROUP BY week ORDER BY week`).all();
   res.json({ stats, weekly_revenue: weekly });
+});
+
+router.get('/fleet-owners/dashboard', (req, res) => {
+  const organizations = listFleetOwnerOrganizations();
+  const summary = {
+    organizations: organizations.length,
+    trialing: organizations.filter((org) => org.status === 'trialing').length,
+    active: organizations.filter((org) => org.status === 'active').length,
+    past_due: organizations.filter((org) => org.status === 'past_due').length,
+    suspended: organizations.filter((org) => org.status === 'suspended').length,
+    payers_30d: organizations.filter((org) => org.payer_status === 'payer').length,
+    non_payers_30d: organizations.filter((org) => org.payer_status === 'non_payer').length,
+    bikes: organizations.reduce((sum, org) => sum + Number(org.bike_count || 0), 0),
+    active_bikes: organizations.reduce((sum, org) => sum + Number(org.active_bikes || 0), 0),
+    open_agreements: organizations.reduce((sum, org) => sum + Number(org.open_agreements || 0), 0),
+    overdue_amount: organizations.reduce((sum, org) => sum + Number(org.overdue_amount || 0), 0),
+    revenue_30d: organizations.reduce((sum, org) => sum + Number(org.revenue_30d || 0), 0),
+    revenue_total: organizations.reduce((sum, org) => sum + Number(org.revenue_total || 0), 0),
+    fleet_owner_users: organizations.reduce((sum, org) => sum + Number(org.member_count || 0), 0)
+  };
+
+  res.json({ summary, organizations });
+});
+
+router.get('/fleet-owners', superadminOnly, (req, res) => {
+  res.json({
+    roles: FLEET_OWNER_ROLE_VALUES,
+    organizations: listFleetOwnerOrganizations(),
+    users: listFleetOwnerUsers()
+  });
+});
+
+router.post('/fleet-owners/:id/status', superadminOnly, (req, res) => {
+  const userId = Number(req.params.id);
+  const status = String(req.body.status || '').trim();
+  if (!Number.isInteger(userId) || userId <= 0) return res.status(400).json({ error: 'Invalid fleet owner id' });
+  if (!['active', 'suspended'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+
+  const target = db.prepare(`SELECT id, email, full_name, role, status, organization_id FROM users WHERE id = ? AND deleted_at IS NULL`).get(userId);
+  if (!target || !FLEET_OWNER_ROLE_VALUES.includes(target.role)) return res.status(404).json({ error: 'Fleet owner not found' });
+
+  db.prepare(`UPDATE users SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(status, userId);
+  logAudit(req.user.id, 'fleet_owner.user_status', 'users', userId, {
+    email: target.email,
+    from: target.status,
+    to: status,
+    organization_id: target.organization_id
+  }, req.ip);
+  res.json({ ok: true });
+});
+
+router.post('/fleet-owners/:id/role', superadminOnly, (req, res) => {
+  const userId = Number(req.params.id);
+  const role = String(req.body.role || '').trim();
+  if (!Number.isInteger(userId) || userId <= 0) return res.status(400).json({ error: 'Invalid fleet owner id' });
+  if (!FLEET_OWNER_ROLE_VALUES.includes(role)) return res.status(400).json({ error: 'Invalid fleet owner role' });
+
+  const target = db.prepare(`SELECT id, email, full_name, role, organization_id FROM users WHERE id = ? AND deleted_at IS NULL`).get(userId);
+  if (!target || !FLEET_OWNER_ROLE_VALUES.includes(target.role)) return res.status(404).json({ error: 'Fleet owner not found' });
+
+  db.prepare(`UPDATE users SET role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(role, userId);
+  logAudit(req.user.id, 'fleet_owner.user_role', 'users', userId, {
+    email: target.email,
+    from: target.role,
+    to: role,
+    organization_id: target.organization_id
+  }, req.ip);
+  res.json({ ok: true });
+});
+
+router.post('/fleet-owners/:id/send-password-reset', superadminOnly, async (req, res) => {
+  const userId = Number(req.params.id);
+  if (!Number.isInteger(userId) || userId <= 0) return res.status(400).json({ error: 'Invalid fleet owner id' });
+
+  const target = db.prepare(`SELECT id, email, full_name, role, status, organization_id FROM users WHERE id = ? AND deleted_at IS NULL`).get(userId);
+  if (!target || !FLEET_OWNER_ROLE_VALUES.includes(target.role)) return res.status(404).json({ error: 'Fleet owner not found' });
+  if (target.status !== 'active') return res.status(400).json({ error: 'Only active fleet owners can receive password reset links' });
+
+  const resetUrl = issuePasswordResetToken(target.id, req);
+  await sendNotification({
+    userId: target.id,
+    channel: 'email',
+    type: 'password_reset',
+    title: 'Reset your OnFleet password',
+    message: buildBulkResetMessage(target, resetUrl, req.user.full_name || req.user.email || 'OnFleet', req.body.message)
+  });
+
+  logAudit(req.user.id, 'fleet_owner.password_reset', 'users', userId, {
+    email: target.email,
+    organization_id: target.organization_id
+  }, req.ip);
+
+  res.json({ ok: true });
 });
 
 router.get('/strategy-report', (req, res) => {

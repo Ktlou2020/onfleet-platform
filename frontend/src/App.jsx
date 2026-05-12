@@ -39,7 +39,8 @@ import AdminUsers from './pages/admin/Users';
 import AdminAuditLogs from './pages/admin/AuditLogs';
 import AdminStrategyReport from './pages/admin/StrategyReport';
 import AdminImports from './pages/admin/Imports';
-import AdminPilotLeads from './pages/admin/PilotLeads';
+import AdminFleetDashboard from './pages/admin/FleetDashboard';
+import AdminFleetOwners from './pages/admin/FleetOwners';
 import { canViewFleetSection, getDefaultFleetRoute, isAdminPortalRole } from './pages/fleet/access';
 
 function PrivateRoute({ children, role }) {
@@ -112,7 +113,9 @@ export default function App() {
           <Route path="notifications" element={<AdminNotifications />} />
           <Route path="imports" element={<AdminImports />} />
           <Route path="strategy" element={<AdminStrategyReport />} />
-          <Route path="pilot" element={<AdminPilotLeads />} />
+          <Route path="fleet-dashboard" element={<AdminFleetDashboard />} />
+          <Route path="fleet-owners" element={<AdminFleetOwners />} />
+          <Route path="pilot" element={<Navigate to="/admin/fleet-dashboard" replace />} />
           <Route path="users" element={<AdminUsers />} />
           <Route path="kyc" element={<Navigate to="/admin/applications" replace />} />
           <Route path="audit" element={<AdminAuditLogs />} />

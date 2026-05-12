@@ -293,7 +293,7 @@ export default function FleetOwnerWorkspace() {
                 <div className="fleet-demo-list-item"><CheckCircle2 size={16} /> Agreements can be bulk discontinued on the admin agreements screen.</div>
                 <div className="fleet-demo-list-item"><CheckCircle2 size={16} /> When a bike is marked stolen, the linked contract is automatically discontinued.</div>
               </div>
-              <Link to="/fleet#get-started" className="btn btn-block mt-4">Request onboarding support <ArrowRight size={16} /></Link>
+              <Link to="/fleet#launch" className="btn btn-block mt-4">Create company account <ArrowRight size={16} /></Link>
             </div>
           </div>
         ) : null}

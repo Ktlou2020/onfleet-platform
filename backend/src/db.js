@@ -28,7 +28,9 @@ function ensureBikeStatusSchema() {
   const schemaRow = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'bikes'`).get();
   const schemaSql = String(schemaRow?.sql || '');
   const expectedConstraint = `CHECK(status IN ('active','not_available','sold','paid_off','written_off','stolen','repairs','ready_to_go','stationary'))`;
-  if (!schemaSql || schemaSql.includes(expectedConstraint)) return;
+  if (schemaSql && schemaSql.includes(expectedConstraint) && schemaSql.includes('organization_id')) return;
+
+  const organizationIdSelect = selectColumnOrDefault('bikes', 'organization_id');
 
   db.exec(`
     PRAGMA foreign_keys = OFF;
@@ -40,6 +42,7 @@ function ensureBikeStatusSchema() {
       make TEXT NOT NULL,
       model TEXT NOT NULL,
       fleet TEXT,
+      organization_id INTEGER,
       year INTEGER,
       engine_cc INTEGER,
       color TEXT,
@@ -66,17 +69,18 @@ function ensureBikeStatusSchema() {
       license_disc_original_name TEXT,
       image_url TEXT,
       notes TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(organization_id) REFERENCES organizations(id)
     );
     INSERT INTO bikes_new (
-      id, vin, registration, make, model, year, engine_cc, color, condition, purchase_price,
+      id, vin, registration, make, model, fleet, organization_id, year, engine_cc, color, condition, purchase_price,
       rental_weekly, total_weeks, status, gps_device_id, last_known_lat, last_known_lng, last_location_at,
       odometer_km, next_service_km, next_service_date, insurance_provider, insurance_policy_no,
       insurance_expiry, license_disc_no, license_disc_expiry, rc1_file_path, rc1_original_name,
       license_disc_file_path, license_disc_original_name, image_url, notes, created_at
     )
     SELECT
-      id, vin, registration, make, model, year, engine_cc, color, condition, purchase_price,
+      id, vin, registration, make, model, fleet, ${organizationIdSelect}, year, engine_cc, color, condition, purchase_price,
       rental_weekly, total_weeks,
       CASE status
         WHEN 'available' THEN 'ready_to_go'
@@ -97,6 +101,23 @@ function ensureBikeStatusSchema() {
     PRAGMA foreign_keys = ON;
   `);
 }
+
+function backfillBikeOrganizations() {
+  if (!tableHasColumn('bikes', 'organization_id')) return;
+  db.exec(`
+    UPDATE bikes
+    SET organization_id = (
+      SELECT o.id
+      FROM organizations o
+      WHERE LOWER(TRIM(COALESCE(bikes.fleet, ''))) IN (LOWER(TRIM(o.name)), LOWER(TRIM(o.slug)))
+      ORDER BY o.id ASC
+      LIMIT 1
+    )
+    WHERE organization_id IS NULL
+      AND COALESCE(TRIM(fleet), '') <> '';
+  `);
+}
+
 
 
 function ensureAgreementStatusSchema() {
@@ -292,6 +313,7 @@ CREATE TABLE IF NOT EXISTS bikes (
   make TEXT NOT NULL,
   model TEXT NOT NULL,
   fleet TEXT,
+  organization_id INTEGER,
   year INTEGER,
   engine_cc INTEGER,
   color TEXT,
@@ -318,7 +340,8 @@ CREATE TABLE IF NOT EXISTS bikes (
   license_disc_original_name TEXT,
   image_url TEXT,
   notes TEXT,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(organization_id) REFERENCES organizations(id)
 );
 
 CREATE TABLE IF NOT EXISTS app_settings (
@@ -561,6 +584,7 @@ ensureColumn('service_records', 'invoice_original_name', 'TEXT');
 ensureColumn('payments', 'fee_amount', 'REAL DEFAULT 0');
 ensureColumn('payments', 'net_amount', 'REAL DEFAULT 0');
 ensureColumn('bikes', 'fleet', 'TEXT');
+ensureColumn('bikes', 'organization_id', 'INTEGER REFERENCES organizations(id)');
 ensureColumn('bikes', 'license_disc_no', 'TEXT');
 ensureColumn('bikes', 'license_disc_expiry', 'TEXT');
 ensureColumn('bikes', 'rc1_file_path', 'TEXT');
@@ -573,6 +597,11 @@ ensureUserRoleSchema();
 
 if (tableHasColumn('users', 'organization_id')) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_users_org ON users(organization_id, role);`);
+}
+
+if (tableHasColumn('bikes', 'organization_id')) {
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_bikes_org_status ON bikes(organization_id, status);`);
+  backfillBikeOrganizations();
 }
 
 module.exports = db;

@@ -12,9 +12,19 @@ api.interceptors.response.use(
   (r) => r,
   (err) => {
     if (err.response?.status === 401) {
+      let redirectTo = '/login';
+      try {
+        const storedUser = JSON.parse(localStorage.getItem('of_user') || 'null');
+        if (location.pathname.startsWith('/fleet') || String(storedUser?.role || '').startsWith('fleet_owner_')) {
+          redirectTo = '/fleet/login';
+        }
+      } catch (_) {
+        if (location.pathname.startsWith('/fleet')) redirectTo = '/fleet/login';
+      }
+
       localStorage.removeItem('of_token');
       localStorage.removeItem('of_user');
-      if (!location.pathname.startsWith('/login')) location.href = '/login';
+      if (!location.pathname.startsWith(redirectTo)) location.href = redirectTo;
     }
     return Promise.reject(err);
   }

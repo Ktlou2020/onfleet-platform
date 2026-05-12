@@ -259,7 +259,7 @@ export default function Landing() {
         <div className="sub">Join thousands of South African riders earning more, every day.</div>
         <div className="hero-cta" style={{ justifyContent: 'center' }}>
           <Link to="/signup" className="btn landing-final-cta-btn">Apply now — it&apos;s free</Link>
-          <Link to="/fleet" className="btn btn-secondary landing-final-cta-btn">Fleet owner pilot</Link>
+          <Link to="/fleet" className="btn btn-secondary landing-final-cta-btn">Fleet owners</Link>
         </div>
       </section>
 

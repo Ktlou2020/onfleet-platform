@@ -59,7 +59,7 @@ export default function FleetLogin() {
         <div className="card mt-6" style={{ background: 'var(--surface-2)' }}>
           <div className="text-sm"><strong>Billing reminder.</strong> Fleet-owner access depends on your company trial or subscription status.</div>
           <div className="muted text-sm mt-2">If your plan is suspended, contact the organization admin or settle billing to restore access.</div>
-          <div className="mt-3"><Link to="/fleet" className="btn btn-secondary btn-sm"><ShieldCheck size={14} /> View pilot plans</Link></div>
+          <div className="mt-3"><Link to="/fleet" className="btn btn-secondary btn-sm"><ShieldCheck size={14} /> View fleet plans</Link></div>
         </div>
       </div>
     </div>

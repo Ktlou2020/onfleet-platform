@@ -13,7 +13,7 @@ const plans = [
     price: 'Free',
     cap: 'Up to 10 bikes',
     summary: 'Best for validating the workflow with a live mini-fleet before going paid.',
-    cta: 'Start pilot',
+    cta: 'Start trial',
     highlight: true,
     features: ['2 admin users', 'Bike and agreement tracking', 'Payments dashboard', 'Collections visibility']
   },
@@ -87,10 +87,10 @@ export default function FleetOwnerPilot() {
         fleet_size: form.fleet_size ? Number(form.fleet_size) : null,
         source: 'fleet_owner_pilot_page'
       });
-      toast.success('Pilot request submitted. We will contact you shortly.');
+      toast.success('Request submitted. We will contact you shortly.');
       setForm(defaultForm);
     } catch (error) {
-      toast.error(error.response?.data?.error || 'Could not submit pilot request');
+      toast.error(error.response?.data?.error || 'Could not submit request');
     } finally {
       setSubmitting(false);
     }
@@ -103,8 +103,8 @@ export default function FleetOwnerPilot() {
         <nav className="landing-nav fleet-pilot-nav-inline">
           <a href="#plans">Plans</a>
           <a href="#features">Features</a>
-          <Link to="/fleet/workspace">Test workspace</Link>
-          <a href="#pilot-form">Join pilot</a>
+          <Link to="/fleet/workspace">Preview workspace</Link>
+          <a href="#get-started">Get started</a>
           <Link to="/fleet/login">Fleet sign in</Link>
           <Link to="/fleet/signup" className="btn btn-secondary">Create company account</Link>
         </nav>
@@ -112,12 +112,12 @@ export default function FleetOwnerPilot() {
 
       <section className="fleet-pilot-hero">
         <div className="fleet-pilot-copy">
-          <div className="hero-pill"><Briefcase size={14} /> Fleet-owner pilot</div>
+          <div className="hero-pill"><Briefcase size={14} /> Fleet-owner platform</div>
           <h1>Let fleet owners run operations on <span>OnFleet</span>.</h1>
-          <p>Launch a live pilot for operators who want to manage bikes, agreements, payments, maintenance, and collections in one admin workspace — with a 14-day trial and Paystack billing ready for go-live.</p>
+          <p>Launch a fleet workspace for operators who want to manage bikes, agreements, payments, maintenance, and collections in one admin experience — with a 14-day trial and Paystack billing ready for go-live.</p>
           <div className="hero-cta">
             <Link to="/fleet/app" className="btn hero-cta-btn">Open fleet portal</Link>
-            <Link to="/fleet/workspace" className="btn btn-secondary hero-cta-btn">Test workspace</Link>
+            <Link to="/fleet/workspace" className="btn btn-secondary hero-cta-btn">Preview workspace</Link>
             <Link to="/fleet/signup" className="btn btn-secondary hero-cta-btn">Create company account</Link>
           </div>
           <div className="hero-trust-list">
@@ -127,15 +127,15 @@ export default function FleetOwnerPilot() {
           </div>
         </div>
         <div className="fleet-pilot-hero-card card">
-          <div className="badge badge-success">Pilot scope</div>
-          <h3 className="mt-3">What testers will validate</h3>
+          <div className="badge badge-success">Production ready</div>
+          <h3 className="mt-3">What teams can manage</h3>
           <div className="fleet-pilot-checks mt-4">
             {[
               'Daily bike, rider, and agreement operations',
               'Collections workflows and default handling',
               'Bulk imports, filters, and contract actions',
-              'A live demo workspace fleet owners can click through now',
-              'Plan-fit feedback before full commercial rollout'
+              'A guided workspace preview for stakeholder reviews',
+              'Role-based access and billing controls for live operations'
             ].map((item) => (
               <div className="fleet-pilot-check" key={item}><CheckCircle2 size={16} /> {item}</div>
             ))}
@@ -145,7 +145,7 @@ export default function FleetOwnerPilot() {
 
       <section id="plans" className="section fleet-pilot-section">
         <div className="section-head">
-          <h2>Fleet plans for the pilot</h2>
+          <h2>Fleet plans</h2>
           <div className="sub">Start with the trial, then move operators onto the right fleet size once they are active and billing through Paystack.</div>
         </div>
         <div className="fleet-plan-grid">
@@ -178,15 +178,15 @@ export default function FleetOwnerPilot() {
 
       <section id="features" className="section fleet-pilot-section fleet-pilot-features">
         <div className="section-head">
-          <h2>What the pilot includes</h2>
-          <div className="sub">A lean commercial pilot focused on proving daily usage, billing discipline, and operator value.</div>
+          <h2>What the platform includes</h2>
+          <div className="sub">A commercial workspace focused on daily operations, billing discipline, and operator visibility.</div>
         </div>
         <div className="grid grid-4">
           {[
             { icon: <Bike />, title: 'Fleet operations', text: 'Manage bike statuses, allocations, service dates, and compliance documents from one place.' },
             { icon: <Users />, title: 'Agreement control', text: 'Track rider contracts, outstanding balances, defaults, discontinuations, and reinstatements.' },
             { icon: <BarChart3 />, title: 'Collections visibility', text: 'Spot overdue and defaulted agreements fast and route ops teams to the right follow-up.' },
-            { icon: <Layers3 />, title: 'Plan-based rollout', text: 'Pilot entitlements map naturally to Small, Medium, Large, and Enterprise commercial tiers.' }
+            { icon: <Layers3 />, title: 'Plan-based rollout', text: 'Plan entitlements map naturally to Small, Medium, Large, and Enterprise commercial tiers.' }
           ].map((item) => (
             <div className="card landing-benefit-card" key={item.title}>
               <div style={{ color: 'var(--primary-light)', marginBottom: 10 }}>{item.icon}</div>
@@ -197,11 +197,11 @@ export default function FleetOwnerPilot() {
         </div>
       </section>
 
-      <section id="pilot-form" className="section fleet-pilot-section">
+      <section id="get-started" className="section fleet-pilot-section">
         <div className="fleet-pilot-form-wrap">
           <div className="card fleet-pilot-form-card">
-            <div className="page-title" style={{ marginBottom: 8 }}>Request pilot access</div>
-            <div className="page-sub" style={{ marginBottom: 18 }}>Tell us about the operator and we will onboard them onto the pilot flow.</div>
+            <div className="page-title" style={{ marginBottom: 8 }}>Request onboarding support</div>
+            <div className="page-sub" style={{ marginBottom: 18 }}>Tell us about the operator and we will help you launch the right fleet setup.</div>
             <form onSubmit={handleSubmit} className="grid grid-2">
               <div className="field">
                 <label className="label">Company name</label>
@@ -237,7 +237,7 @@ export default function FleetOwnerPilot() {
                 <label className="label">Support needed</label>
                 <label className="fleet-pilot-checkbox">
                   <input type="checkbox" checked={form.wants_demo} onChange={(e) => update('wants_demo', e.target.checked)} />
-                  <span>Schedule a demo and onboarding call</span>
+                  <span>Schedule an onboarding call</span>
                 </label>
               </div>
               <div className="field" style={{ gridColumn: '1 / -1' }}>
@@ -245,8 +245,8 @@ export default function FleetOwnerPilot() {
                 <textarea rows="4" value={form.notes} onChange={(e) => update('notes', e.target.value)} placeholder="Current tools, rollout timing, or any specific needs" />
               </div>
               <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-                <button className="btn" type="submit" disabled={submitting}>{submitting ? 'Submitting…' : 'Submit pilot request'}</button>
-                <span className="muted text-sm">You will receive a pilot follow-up for trial onboarding and billing setup.</span>
+                <button className="btn" type="submit" disabled={submitting}>{submitting ? 'Submitting…' : 'Submit request'}</button>
+                <span className="muted text-sm">You will receive a follow-up for onboarding and billing setup.</span>
               </div>
             </form>
           </div>

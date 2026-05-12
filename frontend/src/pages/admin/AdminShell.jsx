@@ -14,7 +14,7 @@ const navItems = [
   { to: '/admin/notifications', label: 'Notifications', icon: Bell },
   { to: '/admin/imports', label: 'CSV Imports', icon: UploadCloud },
   { to: '/admin/strategy', label: 'AI Strategy', icon: BrainCircuit },
-  { to: '/admin/pilot', label: 'Fleet-owner pilot', icon: Briefcase },
+  { to: '/admin/pilot', label: 'Fleet-owner leads', icon: Briefcase },
   { to: '/admin/users', label: 'Users', icon: Users },
   { to: '/admin/audit', label: 'Audit Logs', icon: ClipboardList }
 ];

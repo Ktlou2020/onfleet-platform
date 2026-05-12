@@ -150,7 +150,7 @@ export default function FleetOwnerPortal() {
         <div className="fleet-portal-brand"><Logo /><Badge status="active">Fleet portal</Badge></div>
         <div className="fleet-portal-header-actions">
           <div className="muted text-sm">{account.organization?.name || user?.organization_name || 'Company workspace'} · {ROLE_LABELS[user?.role] || user?.role}</div>
-          <Link to="/fleet/workspace" className="btn btn-secondary btn-sm">View public demo</Link>
+          <Link to="/fleet/workspace" className="btn btn-secondary btn-sm">View workspace preview</Link>
           <button className="btn btn-secondary btn-sm" onClick={() => { logout(); nav('/fleet/login'); }}><LogOut size={14} /> Sign out</button>
         </div>
       </header>

@@ -20,6 +20,10 @@ function ensureColumn(table, column, definition) {
   }
 }
 
+function selectColumnOrDefault(table, column, fallbackSql = 'NULL') {
+  return tableHasColumn(table, column) ? column : fallbackSql;
+}
+
 function ensureBikeStatusSchema() {
   const schemaRow = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'bikes'`).get();
   const schemaSql = String(schemaRow?.sql || '');
@@ -155,7 +159,23 @@ function ensureUserRoleSchema() {
   const expectedConstraint = `CHECK(role IN ('rider','admin','superadmin','fleet_owner_admin','fleet_owner_ops','fleet_owner_billing','fleet_owner_viewer'))`;
   if (schemaSql && schemaSql.includes(expectedConstraint) && schemaSql.includes('organization_id')) return;
 
-  const organizationSelect = tableHasColumn('users', 'organization_id') ? 'organization_id' : 'NULL';
+  const organizationSelect = selectColumnOrDefault('users', 'organization_id');
+  const roleSelect = selectColumnOrDefault('users', 'role', "'rider'");
+  const statusSelect = selectColumnOrDefault('users', 'status', "'active'");
+  const idNumberSelect = selectColumnOrDefault('users', 'id_number');
+  const dateOfBirthSelect = selectColumnOrDefault('users', 'date_of_birth');
+  const addressSelect = selectColumnOrDefault('users', 'address');
+  const citySelect = selectColumnOrDefault('users', 'city');
+  const provinceSelect = selectColumnOrDefault('users', 'province');
+  const postalCodeSelect = selectColumnOrDefault('users', 'postal_code');
+  const emergencyContactNameSelect = selectColumnOrDefault('users', 'emergency_contact_name');
+  const emergencyContactPhoneSelect = selectColumnOrDefault('users', 'emergency_contact_phone');
+  const avatarUrlSelect = selectColumnOrDefault('users', 'avatar_url');
+  const countryOfOriginSelect = selectColumnOrDefault('users', 'country_of_origin');
+  const userTagsSelect = selectColumnOrDefault('users', 'user_tags');
+  const deletedAtSelect = selectColumnOrDefault('users', 'deleted_at');
+  const createdAtSelect = selectColumnOrDefault('users', 'created_at', 'CURRENT_TIMESTAMP');
+  const updatedAtSelect = selectColumnOrDefault('users', 'updated_at', 'CURRENT_TIMESTAMP');
 
   db.exec(`
     PRAGMA foreign_keys = OFF;
@@ -191,9 +211,9 @@ function ensureUserRoleSchema() {
       avatar_url, country_of_origin, user_tags, deleted_at, created_at, updated_at
     )
     SELECT
-      id, email, phone, password_hash, full_name, role, ${organizationSelect}, status, id_number, date_of_birth,
-      address, city, province, postal_code, emergency_contact_name, emergency_contact_phone,
-      avatar_url, country_of_origin, user_tags, deleted_at, created_at, updated_at
+      id, email, phone, password_hash, full_name, ${roleSelect}, ${organizationSelect}, ${statusSelect}, ${idNumberSelect}, ${dateOfBirthSelect},
+      ${addressSelect}, ${citySelect}, ${provinceSelect}, ${postalCodeSelect}, ${emergencyContactNameSelect}, ${emergencyContactPhoneSelect},
+      ${avatarUrlSelect}, ${countryOfOriginSelect}, ${userTagsSelect}, ${deletedAtSelect}, ${createdAtSelect}, ${updatedAtSelect}
     FROM users;
     DROP TABLE users;
     ALTER TABLE users_new RENAME TO users;
@@ -504,7 +524,6 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
 );
 
 CREATE INDEX IF NOT EXISTS idx_org_slug ON organizations(slug);
-CREATE INDEX IF NOT EXISTS idx_users_org ON users(organization_id, role);
 CREATE INDEX IF NOT EXISTS idx_payments_agreement ON payments(agreement_id);
 CREATE INDEX IF NOT EXISTS idx_schedule_agreement ON payment_schedules(agreement_id);
 CREATE INDEX IF NOT EXISTS idx_kyc_user ON kyc_documents(user_id);
@@ -551,5 +570,9 @@ ensureColumn('bikes', 'license_disc_original_name', 'TEXT');
 ensureBikeStatusSchema();
 ensureAgreementStatusSchema();
 ensureUserRoleSchema();
+
+if (tableHasColumn('users', 'organization_id')) {
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_users_org ON users(organization_id, role);`);
+}
 
 module.exports = db;

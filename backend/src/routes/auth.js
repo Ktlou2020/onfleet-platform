@@ -41,10 +41,10 @@ const signupUpload = multer({
     const isPayslip = String(file.fieldname || '').startsWith('payslip_');
     const ok = isPayslip
       ? file.mimetype === 'application/pdf'
-      : ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'].includes(file.mimetype);
+      : ['application/pdf', 'image/jpeg', 'image/jpg', 'image/pjpeg', 'image/png', 'image/webp'].includes(file.mimetype);
     const error = isPayslip
       ? 'Payslips must be uploaded as PDF documents only'
-      : 'Only PDF, JPG, JPEG, and PNG files are allowed';
+      : 'Only PDF, JPG, JPEG, PNG, and WEBP files are allowed';
     cb(ok ? null : new Error(error), ok);
   }
 });
@@ -59,8 +59,8 @@ const profileUpload = multer({
   }),
   limits: { fileSize: 8 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const ok = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(file.mimetype);
-    cb(ok ? null : new Error('Only JPG, PNG, and WEBP images are allowed'), ok);
+    const ok = ['image/jpeg', 'image/jpg', 'image/pjpeg', 'image/png', 'image/webp'].includes(file.mimetype);
+    cb(ok ? null : new Error('Only JPG, JPEG, PNG, and WEBP images are allowed'), ok);
   }
 });
 

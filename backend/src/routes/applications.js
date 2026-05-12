@@ -25,8 +25,8 @@ const upload = multer({
   storage,
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const ok = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'].includes(file.mimetype);
-    cb(ok ? null : new Error('Only PDF, JPG, JPEG, and PNG files are allowed'), ok);
+    const ok = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/pjpeg', 'image/png', 'image/webp'].includes(file.mimetype);
+    cb(ok ? null : new Error('Only PDF, JPG, JPEG, PNG, and WEBP files are allowed'), ok);
   }
 });
 
@@ -69,6 +69,13 @@ function getPayslipSummary(applicationId) {
   const total = payslips.reduce((sum, row) => sum + Number(row.extracted_amount || 0), 0);
   const average = payslips.length ? +(total / payslips.length).toFixed(2) : 0;
   return { payslips, total: +total.toFixed(2), average };
+}
+
+function refreshApplicationFinancials(applicationId) {
+  const { total, average } = getPayslipSummary(applicationId);
+  db.prepare(`UPDATE applications SET total_paid_last_3 = ?, average_weekly_earnings = ? WHERE id = ?`)
+    .run(total, average, applicationId);
+  return { total, average };
 }
 
 async function recalcApplicationDecision(applicationId) {
@@ -355,6 +362,165 @@ router.post('/bulk-review', authRequired, adminOnly, async (req, res) => {
   }
 
   res.json({ ok: errors.length === 0, action, processed: results.length, failed: errors.length, results, errors });
+});
+
+router.patch('/:id/admin-update', authRequired, adminOnly, (req, res) => {
+  const applicationId = Number(req.params.id);
+  if (!Number.isInteger(applicationId) || applicationId <= 0) {
+    return res.status(400).json({ error: 'Invalid application id' });
+  }
+
+  const current = getApplicationWithRelations(applicationId);
+  if (!current) return res.status(404).json({ error: 'Application not found' });
+
+  const userUpdates = [];
+  const userValues = [];
+  const applicationUpdates = [];
+  const applicationValues = [];
+
+  if (req.body.full_name !== undefined) {
+    const fullName = String(req.body.full_name || '').trim();
+    if (!fullName) return res.status(400).json({ error: 'Full name is required' });
+    userUpdates.push('full_name = ?');
+    userValues.push(fullName);
+  }
+
+  if (req.body.email !== undefined) {
+    const email = String(req.body.email || '').trim().toLowerCase();
+    if (!email || !email.includes('@')) return res.status(400).json({ error: 'A valid email is required' });
+    const conflict = db.prepare('SELECT id FROM users WHERE email = ? AND id != ? AND deleted_at IS NULL').get(email, current.user_id);
+    if (conflict) return res.status(409).json({ error: 'Email already exists for another user' });
+    userUpdates.push('email = ?');
+    userValues.push(email);
+  }
+
+  for (const field of ['phone', 'id_number', 'address', 'city', 'province']) {
+    if (req.body[field] !== undefined) {
+      userUpdates.push(`${field} = ?`);
+      userValues.push(String(req.body[field] || '').trim() || null);
+    }
+  }
+
+  if (req.body.preferred_bike_id !== undefined) {
+    const bikeId = req.body.preferred_bike_id ? Number(req.body.preferred_bike_id) : null;
+    if (bikeId !== null && !Number.isInteger(bikeId)) return res.status(400).json({ error: 'Invalid preferred bike' });
+    if (bikeId !== null) {
+      const bike = db.prepare('SELECT id FROM bikes WHERE id = ?').get(bikeId);
+      if (!bike) return res.status(404).json({ error: 'Preferred bike not found' });
+    }
+    applicationUpdates.push('preferred_bike_id = ?');
+    applicationValues.push(bikeId);
+  }
+
+  if (req.body.delivery_platforms !== undefined) {
+    const platforms = Array.isArray(req.body.delivery_platforms)
+      ? req.body.delivery_platforms.filter(Boolean)
+      : String(req.body.delivery_platforms || '').split(',').map((item) => item.trim()).filter(Boolean);
+    applicationUpdates.push('delivery_platforms = ?');
+    applicationValues.push(platforms.join(','));
+  }
+
+  if (req.body.has_riding_experience !== undefined) {
+    applicationUpdates.push('has_riding_experience = ?');
+    applicationValues.push(req.body.has_riding_experience ? 1 : 0);
+  }
+
+  if (req.body.years_riding !== undefined) {
+    const years = req.body.years_riding === '' || req.body.years_riding === null ? null : Number(req.body.years_riding);
+    if (years !== null && (!Number.isFinite(years) || years < 0)) return res.status(400).json({ error: 'Years riding must be zero or greater' });
+    applicationUpdates.push('years_riding = ?');
+    applicationValues.push(years);
+  }
+
+  if (req.body.has_drivers_license !== undefined) {
+    applicationUpdates.push('has_drivers_license = ?');
+    applicationValues.push(req.body.has_drivers_license ? 1 : 0);
+  }
+
+  if (req.body.payout_preference !== undefined) {
+    const payout = String(req.body.payout_preference || '').trim();
+    if (!['eft', 'ewallet'].includes(payout)) return res.status(400).json({ error: 'Invalid payout preference' });
+    applicationUpdates.push('payout_preference = ?');
+    applicationValues.push(payout);
+  }
+
+  for (const field of ['bank_name', 'account_holder', 'account_number', 'branch_code', 'ewallet_number']) {
+    if (req.body[field] !== undefined) {
+      applicationUpdates.push(`${field} = ?`);
+      applicationValues.push(String(req.body[field] || '').trim() || null);
+    }
+  }
+
+  if (!userUpdates.length && !applicationUpdates.length) return res.json({ ok: true });
+
+  db.transaction(() => {
+    if (userUpdates.length) {
+      db.prepare(`UPDATE users SET ${userUpdates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...userValues, current.user_id);
+    }
+    if (applicationUpdates.length) {
+      db.prepare(`UPDATE applications SET ${applicationUpdates.join(', ')}, reviewed_at = COALESCE(reviewed_at, CURRENT_TIMESTAMP) WHERE id = ?`).run(...applicationValues, applicationId);
+    }
+  })();
+
+  logAudit(req.user.id, 'application.admin_update', 'applications', applicationId, {
+    user_fields_updated: userUpdates.length,
+    application_fields_updated: applicationUpdates.length
+  });
+
+  res.json({ ok: true, application: getApplicationWithRelations(applicationId) });
+});
+
+router.patch('/:id/documents/:docId', authRequired, adminOnly, async (req, res) => {
+  const applicationId = Number(req.params.id);
+  const documentId = Number(req.params.docId);
+  if (!Number.isInteger(applicationId) || applicationId <= 0 || !Number.isInteger(documentId) || documentId <= 0) {
+    return res.status(400).json({ error: 'Invalid application document id' });
+  }
+
+  const app = db.prepare('SELECT id, status, auto_decision FROM applications WHERE id = ?').get(applicationId);
+  if (!app) return res.status(404).json({ error: 'Application not found' });
+
+  const existing = db.prepare('SELECT * FROM application_documents WHERE id = ? AND application_id = ?').get(documentId, applicationId);
+  if (!existing) return res.status(404).json({ error: 'Document not found' });
+
+  const updates = [];
+  const values = [];
+
+  if (req.body.extracted_amount !== undefined) {
+    const amount = req.body.extracted_amount === '' || req.body.extracted_amount === null ? null : Number(req.body.extracted_amount);
+    if (amount !== null && (!Number.isFinite(amount) || amount < 0)) {
+      return res.status(400).json({ error: 'Extracted amount must be zero or greater' });
+    }
+    updates.push('extracted_amount = ?');
+    values.push(amount);
+  }
+
+  if (req.body.status !== undefined) {
+    const status = String(req.body.status || '').trim();
+    if (!['uploaded', 'verified', 'rejected', 'signed'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid document status' });
+    }
+    updates.push('status = ?');
+    values.push(status);
+  }
+
+  if (!updates.length) return res.json({ ok: true, document: existing });
+
+  db.prepare(`UPDATE application_documents SET ${updates.join(', ')} WHERE id = ?`).run(...values, documentId);
+
+  let decision = null;
+  if (existing.doc_type === 'payslip') {
+    if (['submitted', 'under_review', 'rejected'].includes(app.status)) decision = await recalcApplicationDecision(applicationId);
+    else decision = { ...refreshApplicationFinancials(applicationId), decision: app.auto_decision || null };
+  }
+
+  logAudit(req.user.id, 'application.document_update', 'application_documents', documentId, {
+    application_id: applicationId,
+    doc_type: existing.doc_type
+  });
+
+  const document = db.prepare('SELECT id, doc_type, file_path, original_name, mime_type, extracted_amount, status, uploaded_at FROM application_documents WHERE id = ?').get(documentId);
+  res.json({ ok: true, document, decision });
 });
 
 router.get('/:id', authRequired, (req, res) => {

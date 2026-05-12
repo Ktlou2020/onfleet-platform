@@ -899,3 +899,124 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
     grid-template-columns: 1fr;
   }
 }
+
+/* Fleet owner help */
+.fleet-help-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 420px);
+  gap: 20px;
+  align-items: center;
+  background:
+    radial-gradient(circle at top right, rgba(79,168,224,0.14), transparent 42%),
+    linear-gradient(135deg, rgba(30,136,209,0.08), rgba(13,15,20,0.92));
+}
+.fleet-help-hero-copy {
+  min-width: 0;
+}
+.fleet-help-search-wrap {
+  min-width: 0;
+}
+.fleet-help-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.fleet-help-inline.compact {
+  gap: 6px;
+}
+.fleet-help-tooltip {
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(79,168,224,0.12);
+  color: var(--primary-light);
+  border: 1px solid rgba(79,168,224,0.18);
+  cursor: help;
+  flex-shrink: 0;
+}
+.fleet-help-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--primary-light);
+  font-weight: 600;
+}
+.fleet-help-link:hover {
+  color: var(--accent);
+}
+.fleet-help-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.fleet-help-grid {
+  align-items: start;
+}
+.fleet-help-card {
+  height: 100%;
+  display: grid;
+  gap: 16px;
+}
+.fleet-help-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.fleet-help-icon-info {
+  background: rgba(79,168,224,0.14);
+  color: var(--primary-light);
+}
+.fleet-help-icon-success {
+  background: rgba(34,197,94,0.14);
+  color: var(--success);
+}
+.fleet-help-icon-warn {
+  background: rgba(255,182,39,0.14);
+  color: var(--warn);
+}
+.fleet-help-steps {
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+.fleet-help-steps li {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.04);
+}
+.fleet-help-steps li.is-match {
+  border-color: rgba(79,168,224,0.34);
+  background: rgba(79,168,224,0.08);
+}
+.fleet-help-step-number {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  background: rgba(79,168,224,0.16);
+  color: var(--primary-light);
+}
+
+@media(max-width: 900px) {
+  .fleet-help-hero {
+    grid-template-columns: 1fr;
+  }
+}

@@ -6,6 +6,7 @@ import api from '../../api';
 import { useAuth } from '../../auth';
 import { Badge, EmptyState, Loading, Stat, fmt, fmtDate, fmtDateTime } from '../../components/ui';
 import { canAccessFleetRoute } from './access';
+import { FleetHelpTip } from './helpSupport';
 
 const emptyPortal = {
   organization: null,
@@ -45,6 +46,7 @@ export default function FleetDashboard() {
   const canOpenBikes = canAccessFleetRoute(user?.role, 'bikes');
   const canOpenAgreements = canAccessFleetRoute(user?.role, 'agreements');
   const canOpenPayments = canAccessFleetRoute(user?.role, 'payments');
+  const canOpenHelp = canAccessFleetRoute(user?.role, 'help');
 
   if (loading) return <Loading />;
 
@@ -53,10 +55,12 @@ export default function FleetDashboard() {
       <div className="flex-between mb-4" style={{ gap: 16, flexWrap: 'wrap' }}>
         <div>
           <h1 className="page-title">Fleet dashboard</h1>
-          <p className="page-sub">Run the same day-to-day bike, agreement, and payment workflows as the super admin console, but scoped to your organization only.</p>
+          <p className="page-sub" style={{ marginBottom: 8 }}>Run the same day-to-day bike, agreement, and payment workflows as the super admin console, but scoped to your organization only.</p>
+          <FleetHelpTip section="dashboard" tooltip="The dashboard shows your live fleet health, collections queue, maintenance reminders, and shortcuts to the next actions your team should take." label="Learn more about the dashboard" />
         </div>
         <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
           <div className="muted text-sm">Live sync {portal.live_updated_at ? fmtDateTime(portal.live_updated_at) : '—'}</div>
+          {canOpenHelp && <Link className="btn btn-secondary btn-sm" to="/fleet/app/help">Open help guide</Link>}
           <button className="btn btn-secondary btn-sm" onClick={() => loadPortal({ silent: true })}>Refresh</button>
         </div>
       </div>
@@ -70,7 +74,7 @@ export default function FleetDashboard() {
 
       <div className="grid grid-3 mb-4">
         <div className="card">
-          <div className="card-title"><h3>Organization account</h3><Badge status={organization.status === 'trialing' ? 'pending' : 'active'}>{organization.status || 'trialing'}</Badge></div>
+          <div className="card-title"><div className="row" style={{ gap: 8, flexWrap: 'wrap' }}><h3>Organization account</h3><FleetHelpTip section="getting-started" tooltip="Use this card to confirm your company name, plan, trial dates, and team access before working through daily operations." compact /></div><Badge status={organization.status === 'trialing' ? 'pending' : 'active'}>{organization.status || 'trialing'}</Badge></div>
           <div className="fleet-demo-list">
             <div className="fleet-demo-list-item"><Bike size={16} /> Company: {organization.name || '—'}</div>
             <div className="fleet-demo-list-item"><CreditCard size={16} /> Plan: {String(organization.plan_key || 'trial').replace(/_/g, ' ')}</div>
@@ -80,7 +84,7 @@ export default function FleetDashboard() {
         </div>
 
         <div className="card">
-          <div className="card-title"><h3>Operations snapshot</h3><Badge status="active">Live</Badge></div>
+          <div className="card-title"><div className="row" style={{ gap: 8, flexWrap: 'wrap' }}><h3>Operations snapshot</h3><FleetHelpTip section="dashboard" tooltip="Use this snapshot to decide whether to work on bikes, agreements, or payments next." compact /></div><Badge status="active">Live</Badge></div>
           <div className="fleet-demo-list">
             <div className="fleet-demo-list-item"><CheckCircle2 size={16} /> {summary.ready_bikes || 0} bikes ready for agreement allocation</div>
             <div className="fleet-demo-list-item"><AlertTriangle size={16} /> {summary.defaulted_agreements || 0} agreements need follow-up</div>
@@ -94,7 +98,7 @@ export default function FleetDashboard() {
         </div>
 
         <div className="card">
-          <div className="card-title"><h3>Recent maintenance</h3><Badge status={portal.recent_services.length ? 'success' : 'pending'}>{portal.recent_services.length} logs</Badge></div>
+          <div className="card-title"><div className="row" style={{ gap: 8, flexWrap: 'wrap' }}><h3>Recent maintenance</h3><FleetHelpTip section="maintenance-and-accuracy" tooltip="Review recent service logs to verify maintenance was recorded and to spot bikes that may need follow-up service planning." compact /></div><Badge status={portal.recent_services.length ? 'success' : 'pending'}>{portal.recent_services.length} logs</Badge></div>
           {portal.recent_services.length ? (
             <div className="fleet-demo-list">
               {portal.recent_services.slice(0, 3).map((item) => (
@@ -113,7 +117,7 @@ export default function FleetDashboard() {
 
       <div className="grid grid-2">
         <div className="card">
-          <div className="card-title"><h3>Collections queue</h3><Badge status="overdue">{fmt(summary.overdue_amount || 0)}</Badge></div>
+          <div className="card-title"><div className="row" style={{ gap: 8, flexWrap: 'wrap' }}><h3>Collections queue</h3><FleetHelpTip section="common-questions" tooltip="Start here when you need to know which overdue or defaulted agreements need payment follow-up first." compact /></div><Badge status="overdue">{fmt(summary.overdue_amount || 0)}</Badge></div>
           {quickQueues.length ? (
             <div className="fleet-demo-list">
               {quickQueues.map((item) => (
@@ -135,7 +139,7 @@ export default function FleetDashboard() {
         </div>
 
         <div className="card">
-          <div className="card-title"><h3>Upcoming services</h3><Badge status="pending">{portal.upcoming_services.length}</Badge></div>
+          <div className="card-title"><div className="row" style={{ gap: 8, flexWrap: 'wrap' }}><h3>Upcoming services</h3><FleetHelpTip section="maintenance-and-accuracy" tooltip="Use upcoming services to plan maintenance before bikes become unavailable or overdue for attention." compact /></div><Badge status="pending">{portal.upcoming_services.length}</Badge></div>
           {portal.upcoming_services.length ? (
             <div className="fleet-demo-list">
               {portal.upcoming_services.slice(0, 6).map((item) => (

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Bike as BikeIcon, Pencil, Plus } from 'lucide-react';
+import { FleetHelpTip } from './helpSupport';
 import toast from 'react-hot-toast';
 import api from '../../api';
 import { useAuth } from '../../auth';
@@ -199,21 +200,23 @@ export default function FleetOwnerBikes() {
 
   return (
     <>
-      <div className="flex-between mb-2">
+      <div className="flex-between mb-2" style={{ gap: 16, flexWrap: 'wrap' }}>
         <div>
           <h1 className="page-title">Bikes Fleet</h1>
-          <p className="page-sub">Add new bikes, edit current inventory, and manage operational status with the same fast card workflow used in the super admin console.</p>
+          <p className="page-sub" style={{ marginBottom: 8 }}>Add new bikes, edit current inventory, and manage operational status with the same fast card workflow used in the super admin console.</p>
+          <FleetHelpTip section="bikes" tooltip="Use this guide for adding bikes, searching by registration or VIN, managing fleet tags, and updating bike status changes." label="Learn more about bikes" />
         </div>
-        {canManage && <button className="btn" onClick={openAddModal}><Plus size={16} /> Add bike</button>}
+        {canManage && <button className="btn" onClick={openAddModal} title="Add a new bike record to your fleet inventory"><Plus size={16} /> Add bike</button>}
       </div>
       <div className="row mb-3" style={{ flexWrap: 'wrap', justifyContent: 'space-between' }}>
         <SearchInput value={search} onChange={setSearch} placeholder="Search VIN, rider, registration, fleet, disc expiry" style={{ flex: '1 1 320px', maxWidth: 420 }} />
         <div className="row" style={{ gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          <select value={fleetFilter} onChange={(e) => setFleetFilter(e.target.value)} style={{ minWidth: 180 }}>
+          <select value={fleetFilter} onChange={(e) => setFleetFilter(e.target.value)} style={{ minWidth: 180 }} title="Filter bikes by fleet tag or business unit">
             <option value="">All fleets</option>
             {fleetOptions.map((fleetName) => <option key={fleetName} value={fleetName}>{fleetName}</option>)}
           </select>
           <div className="muted text-sm">Showing {filtered.length} matching bikes</div>
+          <FleetHelpTip section="common-questions" tooltip="Search works best with registration, VIN, fleet name, rider name, agreement number, or licence disc details." label="Search tips" compact />
         </div>
       </div>
       <div className="row mb-4" style={{ flexWrap: 'wrap' }}>
@@ -253,7 +256,10 @@ export default function FleetOwnerBikes() {
                 {bike.agreement_no && <div className="text-xs muted">Agreement: {bike.agreement_no}</div>}
                 {canManage && (
                   <div className="card mt-3" style={{ background: 'var(--surface-2)', padding: 12 }}>
-                    <div className="text-xs muted" style={{ marginBottom: 8 }}>Quick actions</div>
+                    <div className="fleet-help-meta" style={{ marginBottom: 8 }}>
+                      <div className="text-xs muted">Quick actions</div>
+                      <FleetHelpTip section="bikes" tooltip="Use quick actions to move a bike through its lifecycle and keep the fleet status accurate for allocations and maintenance." label="Learn more" compact />
+                    </div>
                     <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                       <select value={draftStatus} onChange={(e) => setStatusDrafts((current) => ({ ...current, [bike.id]: e.target.value }))} style={{ flex: '1 1 190px' }}>
                         {bikeStatusOptions.filter((option) => option.value).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
@@ -276,6 +282,9 @@ export default function FleetOwnerBikes() {
 
       {showAdd && (
         <Modal title={editingBike ? 'Edit bike' : 'Add bike'} onClose={closeModal}>
+          <div className="mb-3">
+            <FleetHelpTip section="bikes" tooltip="Capture registration, fleet tag, pricing, licence disc data, and status so the bike is ready for rider allocation and reporting." label="Open bike setup guide" compact />
+          </div>
           <div className="grid grid-2">
             <div className="field"><label className="label">VIN *</label><input value={form.vin} onChange={(e) => setForm({ ...form, vin: e.target.value })} disabled={!!editingBike} /></div>
             <div className="field"><label className="label">Registration</label><input value={form.registration} onChange={(e) => setForm({ ...form, registration: e.target.value })} /></div>

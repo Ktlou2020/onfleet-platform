@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
+import { FleetHelpTip } from './helpSupport';
 import api from '../../api';
 import { useAuth } from '../../auth';
 import { Badge, EmptyState, Loading, Modal, Pagination, SearchInput, fmt, fmtDate, matchesSearch, paginateItems } from '../../components/ui';
@@ -162,12 +163,13 @@ export default function FleetOwnerAgreements() {
 
   return (
     <>
-      <div className="flex-between mb-2">
+      <div className="flex-between mb-2" style={{ gap: 16, flexWrap: 'wrap' }}>
         <div>
           <h1 className="page-title">Agreements</h1>
-          <p className="page-sub">Create new rider agreements, reassign bikes, and manage contract status with the same table-first workflow as the super admin portal.</p>
+          <p className="page-sub" style={{ marginBottom: 8 }}>Create new rider agreements, reassign bikes, and manage contract status with the same table-first workflow as the super admin portal.</p>
+          <FleetHelpTip section="agreements" tooltip="Use this guide for creating agreements, reassigning bikes, changing statuses, and editing remaining balances." label="Learn more about agreements" />
         </div>
-        {canManage && <button className="btn" onClick={openCreate}>Add agreement</button>}
+        {canManage && <button className="btn" onClick={openCreate} title="Create a new agreement between a ready bike and an available rider">Add agreement</button>}
       </div>
 
       <div className="row mb-3" style={{ flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
@@ -178,11 +180,15 @@ export default function FleetOwnerAgreements() {
             {STATUS_OPTIONS.map((value) => <option key={value || 'all'} value={value}>{labelize(value)}</option>)}
           </select>
         </div>
-        <button className="btn btn-secondary" onClick={() => { setSearch(''); setStatus(''); }}>Clear filters</button>
+        <button className="btn btn-secondary" onClick={() => { setSearch(''); setStatus(''); }} title="Reset the current agreement search and status filters">Clear filters</button>
+        <FleetHelpTip section="agreements" tooltip="Filter by agreement status to focus on active collections, paused contracts, defaulted riders, or completed agreements." label="Filtering help" compact />
       </div>
 
       <div className="row mb-3" style={{ flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div className="muted text-sm">Showing {agreements.length} matching agreements</div>
+        <div className="row" style={{ gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          <div className="muted text-sm">Showing {agreements.length} matching agreements</div>
+          <FleetHelpTip section="common-questions" tooltip="Remaining balances can be edited on active, paused, and defaulted agreements to recalculate the unpaid schedule." label="Balance help" compact />
+        </div>
         <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
           <div className="badge badge-muted">Ready bikes: {readyBikeOptions.length}</div>
           <div className="badge badge-muted">Available riders: {riderOptions.length}</div>
@@ -199,7 +205,7 @@ export default function FleetOwnerAgreements() {
               <th>Bike status</th>
               <th>Weekly</th>
               <th>Overdue</th>
-              <th>Remaining</th>
+              <th title="For active, paused, and defaulted agreements, click the remaining balance value to edit the outstanding amount.">Remaining</th>
               <th>Status</th>
               <th>Start</th>
               <th>Actions</th>
@@ -270,6 +276,9 @@ export default function FleetOwnerAgreements() {
 
       {showCreate && (
         <Modal title="Add agreement" onClose={() => setShowCreate(false)}>
+          <div className="mb-3">
+            <FleetHelpTip section="agreements" tooltip="Create agreements only with ready bikes and riders who do not already have an open agreement." label="Open agreement creation guide" compact />
+          </div>
           <div className="grid grid-2">
             <div className="field"><label className="label">Bike</label><select value={createForm.bike_id} onChange={(e) => setCreateForm({ ...createForm, bike_id: e.target.value })}><option value="">Select ready bike</option>{readyBikeOptions.map((bike) => <option key={bike.id} value={bike.id}>{bike.registration || `Bike #${bike.id}`} · {bike.make} {bike.model}</option>)}</select></div>
             <div className="field"><label className="label">Rider</label><select value={createForm.rider_id} onChange={(e) => setCreateForm({ ...createForm, rider_id: e.target.value })}><option value="">Select rider</option>{riderOptions.map((rider) => <option key={rider.id} value={rider.id}>{rider.full_name} · {rider.email}</option>)}</select></div>
@@ -287,6 +296,9 @@ export default function FleetOwnerAgreements() {
 
       {showReassign && (
         <Modal title="Reassign bike" onClose={() => setShowReassign(false)}>
+          <div className="mb-3">
+            <FleetHelpTip section="agreements" tooltip="Reassign when the rider should continue the same agreement on a different ready bike instead of starting a new contract." label="When to reassign" compact />
+          </div>
           <div className="field"><label className="label">Target bike</label><select value={reassignForm.target_bike_id} onChange={(e) => setReassignForm({ ...reassignForm, target_bike_id: e.target.value })}><option value="">Select ready bike</option>{readyBikeOptions.map((bike) => <option key={bike.id} value={bike.id}>{bike.registration || `Bike #${bike.id}`} · {bike.make} {bike.model}</option>)}</select></div>
           <div className="field"><label className="label">Note</label><textarea rows={3} value={reassignForm.note} onChange={(e) => setReassignForm({ ...reassignForm, note: e.target.value })} /></div>
           <div className="row" style={{ justifyContent: 'flex-end' }}>

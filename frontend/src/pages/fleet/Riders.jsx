@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
+import { FleetHelpTip } from './helpSupport';
 import api from '../../api';
 import { useAuth } from '../../auth';
 import southAfricanCities from '../../constants/southAfricanCities';
@@ -373,9 +374,10 @@ export default function FleetOwnerRiders() {
       <div className="flex-between mb-2" style={{ gap: 16, flexWrap: 'wrap' }}>
         <div>
           <h1 className="page-title">Riders</h1>
-          <p className="page-sub">Create rider applications on behalf of riders, keep their details current, upload compliance documents, and share a no-login rider application link.</p>
+          <p className="page-sub" style={{ marginBottom: 8 }}>Create rider applications on behalf of riders, keep their details current, upload compliance documents, and share a no-login rider application link.</p>
+          <FleetHelpTip section="riders" tooltip="Use this guide for sharing the public rider form, capturing applications manually, reviewing documents, and approving or declining riders." label="Learn more about riders" />
         </div>
-        {canManage && <button className="btn" onClick={openCreate}>Add rider</button>}
+        {canManage && <button className="btn" onClick={openCreate} title="Create a rider application manually for someone who has not used the public form">Add rider</button>}
       </div>
 
       <div className="card mb-4" style={{ background: 'var(--surface-2)' }}>
@@ -383,6 +385,7 @@ export default function FleetOwnerRiders() {
           <div>
             <strong>Public rider application link</strong>
             <div className="muted text-sm mt-1">Share this link with a rider so they can submit the same onboarding details and documents without logging in.</div>
+            <div className="mt-2"><FleetHelpTip section="riders" tooltip="Use the public link when riders should complete their own application and upload their own compliance documents." label="When to use this link" compact /></div>
           </div>
           <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             <input value={shareUrl} readOnly style={{ minWidth: 320 }} />
@@ -398,6 +401,7 @@ export default function FleetOwnerRiders() {
             <div>
               <h3 style={{ marginBottom: 4 }}>{mode === 'create' ? 'Create rider application' : `Update rider #${detail?.application?.id || ''}`}</h3>
               <div className="muted text-sm">Use the same rider onboarding fields as the public rider sign-up flow, without requiring a password.</div>
+              <div className="mt-2"><FleetHelpTip section="riders" tooltip="Complete personal details, payout details, preferred bike, and compliance fields before creating or updating the application." label="Application field guide" compact /></div>
             </div>
             <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
               {detail?.application?.status ? <Badge status={detail.application.status}>{detail.application.auto_decision === 'pre_approved' ? 'pre-approved' : detail.application.status}</Badge> : null}
@@ -454,7 +458,10 @@ export default function FleetOwnerRiders() {
 
           {mode === 'edit' && detail && canManage && ['submitted', 'under_review'].includes(detail.application?.status) ? (
             <>
-              <h3 className="mt-4 mb-3">Application decision</h3>
+              <div className="fleet-help-meta mt-4 mb-3">
+                <h3>Application decision</h3>
+                <FleetHelpTip section="riders" tooltip="Approve only after reviewing the rider details, uploaded documents, selected bike, weekly amount, and start date." label="Approval guide" compact />
+              </div>
               <div className="card mb-3" style={{ background: 'var(--surface-2)' }}>
                 <div className="grid grid-2">
                   <div className="field"><label className="label">Allocate bike</label><select value={decisionForm.bike_id} onChange={(event) => chooseDecisionBike(event.target.value)}><option value="">— Select a bike —</option>{bikes.map((bike) => <option key={bike.id} value={bike.id}>{bike.make} {bike.model} · {bike.registration || 'No reg'} · {fmt(bike.rental_weekly)}/week</option>)}</select></div>
@@ -488,7 +495,10 @@ export default function FleetOwnerRiders() {
 
           {mode === 'create' ? (
             <>
-              <h3 className="mt-4 mb-3">Required uploads</h3>
+              <div className="fleet-help-meta mt-4 mb-3">
+                <h3>Required uploads</h3>
+                <FleetHelpTip section="riders" tooltip="ID, licence, selfie, and three payslips are required so the application can be reviewed properly and assessed against the auto-decision rules." label="Upload guide" compact />
+              </div>
               <div className="grid grid-2">
                 <UploadField label="ID document *" file={files.id_document} onChange={(file) => setFile('id_document', file)} accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" />
                 <UploadField label="Driver's licence *" file={files.drivers_license} onChange={(file) => setFile('drivers_license', file)} accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" />
@@ -504,7 +514,10 @@ export default function FleetOwnerRiders() {
             </>
           ) : detail ? (
             <>
-              <h3 className="mt-4 mb-3">Existing documents</h3>
+              <div className="fleet-help-meta mt-4 mb-3">
+                <h3>Existing documents</h3>
+                <FleetHelpTip section="riders" tooltip="Upload missing documents here when an application is incomplete or when newer compliance files need to replace earlier ones." label="Document help" compact />
+              </div>
               <div className="card mb-3" style={{ background: 'var(--surface-2)' }}>
                 <div className="grid grid-3" style={{ alignItems: 'end' }}>
                   <div className="field"><label className="label">Document type</label><select value={uploadForm.doc_type} onChange={(event) => setUploadForm((current) => ({ ...current, doc_type: event.target.value, file: null }))}>{DOC_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
@@ -539,7 +552,10 @@ export default function FleetOwnerRiders() {
 
       <div className="card" style={{ padding: 0 }}>
         <div className="flex-between" style={{ padding: 16, gap: 12, flexWrap: 'wrap' }}>
-          <strong>Rider applications</strong>
+          <div>
+            <strong>Rider applications</strong>
+            <div className="mt-2"><FleetHelpTip section="common-questions" tooltip="Search by rider name, email, phone number, bike details, registration, application status, or earnings decision." label="Search tips" compact /></div>
+          </div>
           <SearchInput value={search} onChange={setSearch} placeholder="Search rider, email, bike, status" style={{ width: 320 }} />
         </div>
         <table className="table">

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Bike, FileText, CreditCard, LogOut, Users } from 'lucide-react';
+import { LayoutDashboard, Bike, FileText, CreditCard, HelpCircle, LogOut, Users } from 'lucide-react';
 import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
 import { useAuth } from '../../auth';
@@ -11,7 +11,8 @@ const navIconMap = {
   bikes: Bike,
   agreements: FileText,
   payments: CreditCard,
-  riders: Users
+  riders: Users,
+  help: HelpCircle
 };
 
 export default function FleetOwnerShell() {
@@ -56,7 +57,7 @@ export default function FleetOwnerShell() {
         <div className="topbar" style={{ gap: 16 }}>
           <div className="text-sm muted">Fleet Owner Console · OnFleet Africa</div>
           <div style={{ position: 'relative', width: 'min(520px, 100%)', marginLeft: 'auto' }}>
-            <SearchInput value={search} onChange={setSearch} placeholder="Search fleet tabs and press Enter" inputProps={{ onKeyDown: goToFirstMatch }} style={{ width: '100%' }} />
+            <SearchInput value={search} onChange={setSearch} placeholder="Search fleet tabs, including Help" inputProps={{ onKeyDown: goToFirstMatch }} style={{ width: '100%' }} />
             {!!search && (
               <div className="card" style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: '100%', zIndex: 20, padding: 12 }}>
                 {filteredNav.length ? filteredNav.map((item) => {

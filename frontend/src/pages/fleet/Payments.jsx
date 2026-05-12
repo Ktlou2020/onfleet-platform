@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
+import { FleetHelpTip } from './helpSupport';
 import api from '../../api';
 import { useAuth } from '../../auth';
 import { Badge, EmptyState, Loading, Modal, Pagination, SearchInput, fmt, fmtDateTime, matchesSearch, paginateItems } from '../../components/ui';
@@ -107,20 +108,24 @@ export default function FleetOwnerPayments() {
 
   return (
     <>
-      <div className="flex-between mb-2">
+      <div className="flex-between mb-2" style={{ gap: 16, flexWrap: 'wrap' }}>
         <div>
           <h1 className="page-title">Payments</h1>
-          <p className="page-sub">Rental received {fmt(totalCredited)} · Gateway fees {fmt(totalFees)} · Gross processed {fmt(totalGross)}</p>
+          <p className="page-sub" style={{ marginBottom: 8 }}>Rental received {fmt(totalCredited)} · Gateway fees {fmt(totalFees)} · Gross processed {fmt(totalGross)}</p>
+          <FleetHelpTip section="payments" tooltip="Use this page to record manual collections, review payment methods and references, and fix incorrect payment rows safely." label="Learn more about payments" />
         </div>
         <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-          {canManage && <button className="btn btn-sm" onClick={() => setShowPay(true)}>+ Record manual payment</button>}
-          {canManage && <button className="btn btn-sm btn-danger" onClick={deleteSelected} disabled={!selectedIds.length || busy}>{busy ? 'Deleting…' : 'Delete selected'}</button>}
+          {canManage && <button className="btn btn-sm" onClick={() => setShowPay(true)} title="Record an EFT, cash, card, or other manual rental payment">+ Record manual payment</button>}
+          {canManage && <button className="btn btn-sm btn-danger" onClick={deleteSelected} disabled={!selectedIds.length || busy} title="Delete incorrect payment rows and recalculate schedules for the selected agreements">{busy ? 'Deleting…' : 'Delete selected'}</button>}
         </div>
       </div>
 
       <div className="row mb-4" style={{ flexWrap: 'wrap', justifyContent: 'space-between' }}>
         <SearchInput value={search} onChange={setSearch} placeholder="Search rider, agreement, reference, method" style={{ flex: '1 1 320px', maxWidth: 440 }} />
-        <div className="muted text-sm">{canManage ? `${selectedIds.length} selected · ` : ''}Showing {filtered.length} matching payments</div>
+        <div className="row" style={{ gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          <div className="muted text-sm">{canManage ? `${selectedIds.length} selected · ` : ''}Showing {filtered.length} matching payments</div>
+          <FleetHelpTip section="common-questions" tooltip="Search works well with rider names, agreement numbers, payment references, methods, and bike registrations." label="Search tips" compact />
+        </div>
       </div>
 
       <div className="card" style={{ padding: 0 }}>
@@ -150,6 +155,9 @@ export default function FleetOwnerPayments() {
 
       {showPay && (
         <Modal title="Record manual payment" onClose={() => setShowPay(false)}>
+          <div className="mb-3">
+            <FleetHelpTip section="payments" tooltip="Choose the correct agreement, enter the collected amount, and add a useful payment reference so later reconciliation is easier." label="Open payment guide" compact />
+          </div>
           <div className="grid grid-2">
             <div className="field" style={{ gridColumn: '1 / -1' }}><label className="label">Agreement</label><select value={pay.agreement_id} onChange={(e) => setPay({ ...pay, agreement_id: e.target.value, amount: pay.amount || agreements.find((agreement) => String(agreement.id) === e.target.value)?.weekly_amount || '' })}><option value="">Select agreement</option>{agreements.map((agreement) => <option key={agreement.id} value={agreement.id}>{agreement.agreement_no} · {agreement.rider_name} · {agreement.bike_registration || `${agreement.make} ${agreement.model}`}</option>)}</select></div>
             <div className="field"><label className="label">Amount</label><input type="number" value={pay.amount} onChange={(e) => setPay({ ...pay, amount: e.target.value })} /></div>

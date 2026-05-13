@@ -314,15 +314,20 @@ export default function AdminBikes() {
                   </div>
                 )}
               </div>
-              <div className="body" style={{ padding: 16 }}>
-                <div className="flex-between mb-2" style={{ gap: 12 }}>
-                  <h3>{bike.make} {bike.model}</h3>
+              <div className="body admin-bike-card-body" style={{ padding: 16 }}>
+                <div className="flex-between mb-2" style={{ gap: 12, alignItems: 'flex-start' }}>
+                  <div>
+                    <div className="admin-bike-registration">{bike.registration || `Bike #${bike.id}`}</div>
+                    <div className="text-xs muted mt-1">Primary registration</div>
+                  </div>
                   <Badge status={bike.status}>{getBikeStatusLabel(bike.status)}</Badge>
                 </div>
-                <div className="text-sm muted mb-3">{bike.year} · {bike.engine_cc}cc · {bike.color}</div>
+                <div className="row mb-3 bike-card-meta-row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                  <span className="admin-bike-fleet-badge">Fleet: {bike.fleet || 'Unassigned'}</span>
+                  <span className="badge badge-muted">{bike.year || '—'} · {bike.engine_cc || '—'}cc · {bike.color || '—'}</span>
+                </div>
                 <div className="text-xs muted">VIN: {bike.vin}</div>
-                <div className="text-xs muted">REG: {bike.registration || '—'}</div>
-                <div className="text-xs muted">Fleet: {bike.fleet || '—'}</div>
+                <div className="admin-bike-model mt-1">{[bike.make, bike.model].filter(Boolean).join(' ') || '—'}</div>
                 <div className="flex-between mt-3 mb-1"><span className="muted text-sm">Weekly</span><strong style={{ color: 'var(--primary-light)' }}>{fmt(bike.rental_weekly)}</strong></div>
                 <div className="flex-between"><span className="muted text-sm">Odometer</span><span>{bike.odometer_km || 0} km</span></div>
                 {bike.next_service_date && <div className="flex-between"><span className="muted text-sm">Next service</span><span className="text-xs">{fmtDate(bike.next_service_date)}</span></div>}

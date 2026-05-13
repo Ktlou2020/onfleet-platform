@@ -167,7 +167,15 @@ function listCatalogValues(column, whereClauses = [], params = []) {
 }
 
 function adminVisibleBikeClause(alias = 'b') {
-  return `${alias}.organization_id IS NULL`;
+  return `${alias}.organization_id IS NULL AND NOT EXISTS (
+    SELECT 1
+    FROM organizations o
+    WHERE LOWER(TRIM(COALESCE(${alias}.fleet, ''))) <> ''
+      AND LOWER(TRIM(COALESCE(${alias}.fleet, ''))) IN (
+        LOWER(TRIM(COALESCE(o.name, ''))),
+        LOWER(TRIM(COALESCE(o.slug, '')))
+      )
+  )`;
 }
 
 router.get('/catalog', (req, res) => {

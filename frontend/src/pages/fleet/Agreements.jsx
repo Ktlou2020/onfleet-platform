@@ -220,7 +220,7 @@ export default function FleetOwnerAgreements() {
                 <tr key={agreement.id}>
                   <td><strong>{agreement.agreement_no}</strong></td>
                   <td>{agreement.rider_name}<div className="text-xs muted">{agreement.rider_email}</div></td>
-                  <td>{agreement.make} {agreement.model}<div className="text-xs muted">{agreement.bike_registration || '—'}</div></td>
+                  <td>{agreement.bike_registration || 'Pending registration'}<div className="text-xs muted">{[agreement.make, agreement.model].filter(Boolean).join(' ') || '—'}</div></td>
                   <td><Badge status={agreement.bike_status}>{labelize(agreement.bike_status)}</Badge></td>
                   <td>{fmt(agreement.weekly_amount)}</td>
                   <td>{fmt(agreement.overdue_balance)}</td>

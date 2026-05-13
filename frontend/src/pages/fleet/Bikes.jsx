@@ -242,10 +242,11 @@ export default function FleetOwnerBikes() {
                 </div>
                 <div className="text-sm" style={{ marginBottom: 8, fontWeight: 600 }}>{[bike.make, bike.model].filter(Boolean).join(' ') || '—'}</div>
                 <div className="row mb-3" style={{ gap: 8, flexWrap: 'wrap' }}>
-                  <span className="badge badge-info">Fleet: {bike.fleet || 'Unassigned'}</span>
+                  <span className="badge badge-info">Fleet tag: {bike.fleet || 'Unassigned'}</span>
                   <span className="badge badge-muted">{bike.year || '—'} · {bike.engine_cc || '—'}cc · {bike.color || '—'}</span>
                 </div>
                 <div className="text-xs muted">VIN: {bike.vin}</div>
+                <div className="text-xs muted">Registration: {bike.registration || 'Pending registration'}</div>
                 <div className="text-xs muted">Make / model: {[bike.make, bike.model].filter(Boolean).join(' ') || '—'}</div>
                 <div className="flex-between mt-3 mb-1"><span className="muted text-sm">Weekly</span><strong style={{ color: 'var(--primary-light)' }}>{fmt(bike.rental_weekly)}</strong></div>
                 <div className="flex-between"><span className="muted text-sm">Odometer</span><span>{bike.odometer_km || 0} km</span></div>

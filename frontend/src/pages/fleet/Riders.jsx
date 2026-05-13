@@ -425,7 +425,7 @@ export default function FleetOwnerRiders() {
 
           <h3 className="mt-4 mb-3">Application details</h3>
           <div className="grid grid-2">
-            <div className="field"><label className="label">Preferred bike *</label><select value={form.preferred_bike_id} onChange={setText('preferred_bike_id')}><option value="">— Select a bike —</option>{bikes.map((bike) => <option key={bike.id} value={bike.id}>{bike.make} {bike.model} · {bike.registration || 'No reg'} · {fmt(bike.rental_weekly)}/week</option>)}</select></div>
+            <div className="field"><label className="label">Preferred bike *</label><select value={form.preferred_bike_id} onChange={setText('preferred_bike_id')}><option value="">— Select a bike —</option>{bikes.map((bike) => <option key={bike.id} value={bike.id}>{bike.registration || `Bike #${bike.id}`} · {[bike.make, bike.model].filter(Boolean).join(' ') || 'Unspecified bike'} · {bike.fleet || 'No fleet tag'} · {fmt(bike.rental_weekly)}/week</option>)}</select></div>
             <div className="field"><label className="label">Payout preference</label><select value={form.payout_preference} onChange={setText('payout_preference')}><option value="eft">EFT banking details</option><option value="ewallet">E-wallet number</option></select></div>
           </div>
 
@@ -464,7 +464,7 @@ export default function FleetOwnerRiders() {
               </div>
               <div className="card mb-3" style={{ background: 'var(--surface-2)' }}>
                 <div className="grid grid-2">
-                  <div className="field"><label className="label">Allocate bike</label><select value={decisionForm.bike_id} onChange={(event) => chooseDecisionBike(event.target.value)}><option value="">— Select a bike —</option>{bikes.map((bike) => <option key={bike.id} value={bike.id}>{bike.make} {bike.model} · {bike.registration || 'No reg'} · {fmt(bike.rental_weekly)}/week</option>)}</select></div>
+                  <div className="field"><label className="label">Allocate bike</label><select value={decisionForm.bike_id} onChange={(event) => chooseDecisionBike(event.target.value)}><option value="">— Select a bike —</option>{bikes.map((bike) => <option key={bike.id} value={bike.id}>{bike.registration || `Bike #${bike.id}`} · {[bike.make, bike.model].filter(Boolean).join(' ') || 'Unspecified bike'} · {bike.fleet || 'No fleet tag'} · {fmt(bike.rental_weekly)}/week</option>)}</select></div>
                   <div className="field"><label className="label">Start date</label><input type="date" value={decisionForm.start_date} onChange={(event) => setDecisionForm((current) => ({ ...current, start_date: event.target.value }))} /></div>
                   <div className="field"><label className="label">Weekly amount</label><input type="number" min="1" value={decisionForm.weekly_amount} onChange={(event) => setDecisionForm((current) => ({ ...current, weekly_amount: event.target.value }))} /></div>
                   <div className="field"><label className="label">Total weeks</label><input type="number" min="1" value={decisionForm.total_weeks} onChange={(event) => setDecisionForm((current) => ({ ...current, total_weeks: event.target.value }))} /></div>
@@ -564,7 +564,7 @@ export default function FleetOwnerRiders() {
             {pagination.items.map((item) => (
               <tr key={item.id}>
                 <td>{item.full_name}<div className="text-xs muted">{item.email} · {item.phone || '—'}</div></td>
-                <td>{item.make ? `${item.make} ${item.model}` : '—'}<div className="text-xs muted">{item.registration || 'No registration'}</div></td>
+                <td>{item.registration || 'No registration'}<div className="text-xs muted">{item.make ? `${item.make} ${item.model}` : '—'}</div></td>
                 <td><Badge status={item.status}>{item.auto_decision === 'pre_approved' ? 'pre-approved' : item.status}</Badge></td>
                 <td>{item.average_weekly_earnings ? fmt(item.average_weekly_earnings) : 'Pending'}</td>
                 <td>{item.document_count || 0}<div className="text-xs muted">Payslips: {item.payslip_count || 0}/3</div></td>

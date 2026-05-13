@@ -119,12 +119,24 @@ function fleetOrgScope(alias = 'b', orgAlias = 'o') {
   return `(${alias}.organization_id = ${orgAlias}.id OR (${alias}.organization_id IS NULL AND LOWER(TRIM(COALESCE(${alias}.fleet, ''))) IN (LOWER(TRIM(COALESCE(${orgAlias}.name, ''))), LOWER(TRIM(COALESCE(${orgAlias}.slug, ''))))))`;
 }
 
+function superadminVisibleBikeScope(alias = 'b') {
+  return `${alias}.organization_id IS NULL AND NOT EXISTS (
+    SELECT 1
+    FROM organizations o
+    WHERE LOWER(TRIM(COALESCE(${alias}.fleet, ''))) <> ''
+      AND LOWER(TRIM(COALESCE(${alias}.fleet, ''))) IN (
+        LOWER(TRIM(COALESCE(o.name, ''))),
+        LOWER(TRIM(COALESCE(o.slug, '')))
+      )
+  )`;
+}
+
 function superadminPortalAgreementScope(aAlias = 'a', bAlias = 'b', uAlias = 'u') {
-  return `${bAlias}.organization_id IS NULL AND ${uAlias}.organization_id IS NULL`;
+  return `${superadminVisibleBikeScope(bAlias)} AND ${uAlias}.organization_id IS NULL`;
 }
 
 function superadminPortalApplicationScope(aAlias = 'a', uAlias = 'u', bAlias = 'b') {
-  return `${uAlias}.organization_id IS NULL AND (${bAlias}.id IS NULL OR ${bAlias}.organization_id IS NULL)`;
+  return `${uAlias}.organization_id IS NULL AND (${bAlias}.id IS NULL OR ${superadminVisibleBikeScope(bAlias)})`;
 }
 
 function listFleetOwnerOrganizations() {

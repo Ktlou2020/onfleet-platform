@@ -26,7 +26,7 @@ body {
 }
 h1,h2,h3,h4 { font-family: 'Space Grotesk', 'Inter', sans-serif; font-weight: 700; }
 a { color: var(--primary); text-decoration: none; }
-button { font-family: inherit; cursor: pointer; border: none; }
+button { font-family: inherit; cursor: pointer; border: none; color: inherit; }
 input, select, textarea {
   font-family: inherit; background: var(--surface-2); color: var(--text);
   border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; width: 100%;
@@ -456,6 +456,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 }
 .fleet-plan-card {
   text-align: left;
+  color: var(--text);
   transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
 }
 .fleet-plan-card:hover {
@@ -521,12 +522,18 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   font-weight: 700;
   font-family: 'Space Grotesk', 'Inter', sans-serif;
 }
+.fleet-pilot-page .muted,
+.fleet-pilot-page .page-sub,
+.fleet-pilot-page .section .sub,
+.fleet-pilot-page .fleet-pilot-note {
+  color: #a7b4c7;
+}
 .fleet-pilot-note {
   padding: 14px;
   border-radius: 12px;
   background: rgba(79,168,224,0.08);
   border: 1px solid rgba(79,168,224,0.18);
-  color: var(--muted);
+  color: #a7b4c7;
 }
 .pilot-admin-filters {
   display: grid;

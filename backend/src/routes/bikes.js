@@ -4,10 +4,11 @@ const path = require('path');
 const fs = require('fs');
 const db = require('../db');
 const { authRequired, adminOnly } = require('../middleware/auth');
-const { logAudit } = require('../utils/helpers');
+const { logAudit, generateAgreementNo, buildPaymentSchedule, addDays } = require('../utils/helpers');
 const { setBikeStatus } = require('../utils/bikeStatus');
-const { discontinueAgreementForStolenBike } = require('../services/agreementLifecycle');
+const { discontinueAgreementForStolenBike, discontinueAgreement } = require('../services/agreementLifecycle');
 const { extractLicenseDiscInsights } = require('../services/documentInsights');
+const { writeContractSnapshot } = require('../services/contracts');
 
 const router = express.Router();
 const bikeUploadDir = path.join(__dirname, '../../uploads/bikes');
@@ -44,6 +45,14 @@ const bikeDocumentUpload = multer({
   limits: { fileSize: 15 * 1024 * 1024 }
 });
 
+const OPEN_AGREEMENT_STATUSES = ['active', 'paused', 'defaulted'];
+const OPEN_AGREEMENT_STATUSES_SQL = "('active','paused','defaulted')";
+const ALLOCATION_ELIGIBLE_BIKE_STATUSES = ['ready_to_go', 'active'];
+
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 function superadminOnly(req, res, next) {
   if (!['admin', 'superadmin'].includes(req.user.role)) return res.status(403).json({ error: 'Admin access required' });
   next();
@@ -76,6 +85,7 @@ const bikeSelectSql = `SELECT b.*,
     SELECT u.full_name FROM agreements a
     JOIN users u ON u.id = a.user_id
     WHERE a.bike_id = b.id
+      AND a.status IN ${OPEN_AGREEMENT_STATUSES_SQL}
     ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.created_at DESC
     LIMIT 1
   ) AS allocated_rider_name,
@@ -83,6 +93,7 @@ const bikeSelectSql = `SELECT b.*,
     SELECT u.phone FROM agreements a
     JOIN users u ON u.id = a.user_id
     WHERE a.bike_id = b.id
+      AND a.status IN ${OPEN_AGREEMENT_STATUSES_SQL}
     ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.created_at DESC
     LIMIT 1
   ) AS allocated_rider_phone,
@@ -90,6 +101,7 @@ const bikeSelectSql = `SELECT b.*,
     SELECT u.email FROM agreements a
     JOIN users u ON u.id = a.user_id
     WHERE a.bike_id = b.id
+      AND a.status IN ${OPEN_AGREEMENT_STATUSES_SQL}
     ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.created_at DESC
     LIMIT 1
   ) AS allocated_rider_email,
@@ -97,6 +109,7 @@ const bikeSelectSql = `SELECT b.*,
     SELECT u.id_number FROM agreements a
     JOIN users u ON u.id = a.user_id
     WHERE a.bike_id = b.id
+      AND a.status IN ${OPEN_AGREEMENT_STATUSES_SQL}
     ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.created_at DESC
     LIMIT 1
   ) AS allocated_rider_id_number,
@@ -104,6 +117,7 @@ const bikeSelectSql = `SELECT b.*,
     SELECT u.address FROM agreements a
     JOIN users u ON u.id = a.user_id
     WHERE a.bike_id = b.id
+      AND a.status IN ${OPEN_AGREEMENT_STATUSES_SQL}
     ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.created_at DESC
     LIMIT 1
   ) AS allocated_rider_address,
@@ -111,6 +125,7 @@ const bikeSelectSql = `SELECT b.*,
     SELECT u.city FROM agreements a
     JOIN users u ON u.id = a.user_id
     WHERE a.bike_id = b.id
+      AND a.status IN ${OPEN_AGREEMENT_STATUSES_SQL}
     ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.created_at DESC
     LIMIT 1
   ) AS allocated_rider_city,
@@ -118,6 +133,7 @@ const bikeSelectSql = `SELECT b.*,
     SELECT u.province FROM agreements a
     JOIN users u ON u.id = a.user_id
     WHERE a.bike_id = b.id
+      AND a.status IN ${OPEN_AGREEMENT_STATUSES_SQL}
     ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.created_at DESC
     LIMIT 1
   ) AS allocated_rider_province,
@@ -125,6 +141,7 @@ const bikeSelectSql = `SELECT b.*,
     SELECT u.avatar_url FROM agreements a
     JOIN users u ON u.id = a.user_id
     WHERE a.bike_id = b.id
+      AND a.status IN ${OPEN_AGREEMENT_STATUSES_SQL}
     ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.created_at DESC
     LIMIT 1
   ) AS allocated_rider_avatar_url,
@@ -132,6 +149,7 @@ const bikeSelectSql = `SELECT b.*,
     SELECT ap.payout_preference FROM agreements a
     LEFT JOIN applications ap ON ap.id = a.application_id
     WHERE a.bike_id = b.id
+      AND a.status IN ${OPEN_AGREEMENT_STATUSES_SQL}
     ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.created_at DESC
     LIMIT 1
   ) AS allocated_rider_payout_preference,
@@ -139,18 +157,21 @@ const bikeSelectSql = `SELECT b.*,
     SELECT ap.ewallet_number FROM agreements a
     LEFT JOIN applications ap ON ap.id = a.application_id
     WHERE a.bike_id = b.id
+      AND a.status IN ${OPEN_AGREEMENT_STATUSES_SQL}
     ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.created_at DESC
     LIMIT 1
   ) AS allocated_rider_ewallet_number,
   (
     SELECT a.id FROM agreements a
     WHERE a.bike_id = b.id
+      AND a.status IN ${OPEN_AGREEMENT_STATUSES_SQL}
     ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.created_at DESC
     LIMIT 1
   ) AS allocated_agreement_id,
   (
     SELECT a.agreement_no FROM agreements a
     WHERE a.bike_id = b.id
+      AND a.status IN ${OPEN_AGREEMENT_STATUSES_SQL}
     ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.created_at DESC
     LIMIT 1
   ) AS allocated_agreement_no
@@ -176,6 +197,35 @@ function adminVisibleBikeClause(alias = 'b') {
         LOWER(TRIM(COALESCE(o.slug, '')))
       )
   )`;
+}
+
+function getAdminVisibleBike(bikeId) {
+  return db.prepare(`${bikeSelectSql} WHERE b.id = ? AND ${adminVisibleBikeClause('b')}`).get(bikeId);
+}
+
+function getAdminVisibleRider(riderId) {
+  return db.prepare(`SELECT *
+    FROM users
+    WHERE id = ?
+      AND role = 'rider'
+      AND deleted_at IS NULL
+      AND organization_id IS NULL`).get(riderId);
+}
+
+function getOpenAgreementForBike(bikeId) {
+  return db.prepare(`SELECT *
+    FROM agreements
+    WHERE bike_id = ? AND status IN ${OPEN_AGREEMENT_STATUSES_SQL}
+    ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at DESC
+    LIMIT 1`).get(bikeId);
+}
+
+function getOpenAgreementForRider(riderId) {
+  return db.prepare(`SELECT *
+    FROM agreements
+    WHERE user_id = ? AND status IN ${OPEN_AGREEMENT_STATUSES_SQL}
+    ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at DESC
+    LIMIT 1`).get(riderId);
 }
 
 router.get('/catalog', (req, res) => {
@@ -351,6 +401,224 @@ router.put('/:id', authRequired, adminOnly, (req, res) => {
   if (!sets.length && !statusMeta) return res.json({ ok: true });
   logAudit(req.user.id, 'bike.update', 'bikes', Number(req.params.id), { ...req.body, ...(statusMeta || {}) });
   res.json({ ok: true, ...(statusMeta || {}) });
+});
+
+
+router.post('/:id/allocate', authRequired, adminOnly, (req, res) => {
+  try {
+    const bikeId = Number(req.params.id);
+    const riderId = Number(req.body.rider_id);
+    const startDate = String(req.body.start_date || todayIso()).slice(0, 10);
+    const note = String(req.body.notes || '').trim() || null;
+
+    if (!Number.isInteger(bikeId) || bikeId <= 0 || !Number.isInteger(riderId) || riderId <= 0) {
+      return res.status(400).json({ error: 'Bike and rider are required' });
+    }
+
+    const bike = getAdminVisibleBike(bikeId);
+    if (!bike) return res.status(404).json({ error: 'Bike not found' });
+    if (!ALLOCATION_ELIGIBLE_BIKE_STATUSES.includes(String(bike.status || ''))) {
+      return res.status(400).json({ error: 'Bike must be active or ready to go before allocation' });
+    }
+    if (getOpenAgreementForBike(bikeId)) {
+      return res.status(400).json({ error: 'This bike already has an allocated rider' });
+    }
+
+    const rider = getAdminVisibleRider(riderId);
+    if (!rider) return res.status(404).json({ error: 'Rider not found' });
+    if (getOpenAgreementForRider(riderId)) {
+      return res.status(400).json({ error: 'This rider already has an open agreement' });
+    }
+
+    const weeklyAmount = Number(req.body.weekly_amount || bike.rental_weekly || 0);
+    const totalWeeks = Number(req.body.total_weeks || bike.total_weeks || 78);
+    if (!Number.isFinite(weeklyAmount) || weeklyAmount <= 0) {
+      return res.status(400).json({ error: 'Weekly amount must be greater than zero' });
+    }
+    if (!Number.isFinite(totalWeeks) || totalWeeks <= 0) {
+      return res.status(400).json({ error: 'Total weeks must be greater than zero' });
+    }
+
+    const matchingApplication = db.prepare(`SELECT ap.*
+      FROM applications ap
+      LEFT JOIN bikes pref ON pref.id = ap.preferred_bike_id
+      WHERE ap.user_id = ?
+        AND ap.status IN ('approved', 'submitted', 'under_review')
+        AND (ap.preferred_bike_id = ? OR ap.preferred_bike_id IS NULL OR pref.organization_id IS NULL)
+      ORDER BY CASE WHEN ap.preferred_bike_id = ? THEN 0 ELSE 1 END, ap.submitted_at DESC, ap.id DESC
+      LIMIT 1`).get(riderId, bikeId, bikeId);
+
+    const totalAmount = +(weeklyAmount * totalWeeks).toFixed(2);
+    const endDate = addDays(startDate, totalWeeks * 7);
+    const agreementNo = generateAgreementNo();
+
+    const agreementId = db.transaction(() => {
+      if (matchingApplication?.id) {
+        db.prepare(`UPDATE applications
+          SET status = 'approved', reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP, rejection_reason = NULL
+          WHERE id = ?`).run(req.user.id, matchingApplication.id);
+      }
+      const info = db.prepare(`INSERT INTO agreements
+        (agreement_no, user_id, bike_id, application_id, weekly_amount, total_weeks, total_amount, start_date, end_date, status, notes, created_by)
+        VALUES (?,?,?,?,?,?,?,?,?, 'active', ?, ?)`).run(
+          agreementNo,
+          riderId,
+          bikeId,
+          matchingApplication?.id || null,
+          weeklyAmount,
+          totalWeeks,
+          totalAmount,
+          startDate,
+          endDate,
+          note,
+          req.user.id
+        );
+      buildPaymentSchedule(info.lastInsertRowid, weeklyAmount, totalWeeks, startDate);
+      db.prepare(`UPDATE bikes SET status = 'active' WHERE id = ?`).run(bikeId);
+      return info.lastInsertRowid;
+    })();
+
+    const agreement = db.prepare('SELECT * FROM agreements WHERE id = ?').get(agreementId);
+    const contractPath = writeContractSnapshot({ agreement, rider, bike, application: matchingApplication || null, kind: 'unsigned' });
+    db.prepare(`UPDATE agreements SET contract_file_path = ?, contract_pdf_path = ? WHERE id = ?`).run(contractPath, contractPath, agreementId);
+
+    if (matchingApplication?.id) {
+      db.prepare(`INSERT INTO application_documents
+        (application_id, user_id, doc_type, file_path, original_name, mime_type, status, uploaded_by)
+        VALUES (?,?,?,?,?,?,?,?)`).run(
+          matchingApplication.id,
+          riderId,
+          'unsigned_contract',
+          contractPath,
+          `${agreementNo}-contract.html`,
+          'text/html',
+          'verified',
+          req.user.id
+        );
+    }
+
+    logAudit(req.user.id, 'bike.allocate_rider', 'agreements', agreementId, {
+      bike_id: bikeId,
+      rider_id: riderId,
+      weekly_amount: weeklyAmount,
+      total_weeks: totalWeeks,
+      start_date: startDate
+    }, req.ip);
+
+    res.status(201).json({ ok: true, agreement_id: agreementId, agreement_no: agreementNo, contract_file_path: contractPath });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'Could not allocate rider' });
+  }
+});
+
+router.patch('/:id/allocated-rider', authRequired, adminOnly, (req, res) => {
+  const bikeId = Number(req.params.id);
+  if (!Number.isInteger(bikeId) || bikeId <= 0) {
+    return res.status(400).json({ error: 'Invalid bike id' });
+  }
+
+  const bike = getAdminVisibleBike(bikeId);
+  if (!bike) return res.status(404).json({ error: 'Bike not found' });
+
+  const agreement = getOpenAgreementForBike(bikeId);
+  if (!agreement) return res.status(400).json({ error: 'No allocated rider found for this bike' });
+
+  const rider = getAdminVisibleRider(agreement.user_id);
+  if (!rider) return res.status(404).json({ error: 'Allocated rider not found' });
+
+  const updates = [];
+  const values = [];
+
+  if (req.body.full_name !== undefined) {
+    const fullName = String(req.body.full_name || '').trim();
+    if (!fullName) return res.status(400).json({ error: 'Full name is required' });
+    updates.push('full_name = ?');
+    values.push(fullName);
+  }
+
+  if (req.body.email !== undefined) {
+    const email = String(req.body.email || '').trim().toLowerCase();
+    if (!email || !email.includes('@')) return res.status(400).json({ error: 'A valid email is required' });
+    const conflict = db.prepare('SELECT id FROM users WHERE email = ? AND id != ? AND deleted_at IS NULL').get(email, rider.id);
+    if (conflict) return res.status(409).json({ error: 'Email already exists for another user' });
+    updates.push('email = ?');
+    values.push(email);
+  }
+
+  for (const field of ['phone', 'id_number', 'address', 'city', 'province']) {
+    if (req.body[field] !== undefined) {
+      updates.push(`${field} = ?`);
+      values.push(String(req.body[field] || '').trim() || null);
+    }
+  }
+
+  if (!updates.length) return res.json({ ok: true });
+
+  db.prepare(`UPDATE users SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...values, rider.id);
+  logAudit(req.user.id, 'bike.allocated_rider_update', 'users', rider.id, { bike_id: bikeId, agreement_id: agreement.id }, req.ip);
+  res.json({ ok: true });
+});
+
+router.post('/:id/terminate-contract', authRequired, adminOnly, (req, res) => {
+  try {
+    const bikeId = Number(req.params.id);
+    if (!Number.isInteger(bikeId) || bikeId <= 0) {
+      return res.status(400).json({ error: 'Invalid bike id' });
+    }
+
+    const bike = getAdminVisibleBike(bikeId);
+    if (!bike) return res.status(404).json({ error: 'Bike not found' });
+
+    const agreement = getOpenAgreementForBike(bikeId);
+    if (!agreement) return res.status(400).json({ error: 'This bike has no open contract to terminate' });
+
+    const result = discontinueAgreement({
+      agreementId: agreement.id,
+      reason: String(req.body.reason || 'manual_bike_contract_termination').trim() || 'manual_bike_contract_termination',
+      actorId: req.user.id,
+      ip: req.ip,
+      auditAction: 'agreement.terminated_from_bike'
+    });
+
+    db.prepare(`UPDATE bikes SET status = 'active' WHERE id = ?`).run(bikeId);
+    logAudit(req.user.id, 'bike.terminate_contract', 'bikes', bikeId, {
+      agreement_id: agreement.id,
+      agreement_no: agreement.agreement_no,
+      waived_schedule_rows: result.waived_rows || 0
+    }, req.ip);
+
+    res.json({ ok: true, agreement_id: agreement.id, agreement_no: agreement.agreement_no, waived_schedule_rows: result.waived_rows || 0 });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'Could not terminate contract' });
+  }
+});
+
+router.delete('/:id', authRequired, adminOnly, (req, res) => {
+  const bikeId = Number(req.params.id);
+  if (!Number.isInteger(bikeId) || bikeId <= 0) {
+    return res.status(400).json({ error: 'Invalid bike id' });
+  }
+
+  const bike = getAdminVisibleBike(bikeId);
+  if (!bike) return res.status(404).json({ error: 'Bike not found' });
+  if (getOpenAgreementForBike(bikeId)) {
+    return res.status(400).json({ error: 'Terminate the current contract before deleting this bike' });
+  }
+
+  const agreementCount = db.prepare('SELECT COUNT(*) c FROM agreements WHERE bike_id = ?').get(bikeId).c || 0;
+  if (agreementCount > 0) {
+    return res.status(400).json({ error: 'Bikes with agreement history cannot be deleted' });
+  }
+
+  db.transaction(() => {
+    db.prepare('UPDATE applications SET preferred_bike_id = NULL WHERE preferred_bike_id = ?').run(bikeId);
+    db.prepare('DELETE FROM service_records WHERE bike_id = ?').run(bikeId);
+    db.prepare('DELETE FROM gps_pings WHERE bike_id = ?').run(bikeId);
+    db.prepare('DELETE FROM bikes WHERE id = ?').run(bikeId);
+  })();
+
+  logAudit(req.user.id, 'bike.delete', 'bikes', bikeId, { registration: bike.registration || null, vin: bike.vin }, req.ip);
+  res.json({ ok: true });
 });
 
 router.post('/:id/image', authRequired, adminOnly, bikeImageUpload.single('image'), (req, res) => {

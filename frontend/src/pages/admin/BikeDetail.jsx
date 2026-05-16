@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import L from 'leaflet';
 import api from '../../api';
 import toast from 'react-hot-toast';
-import { Loading, Badge, Modal, Pagination, fmt, fmtDate, paginateItems, CopyableContactValue } from '../../components/ui';
+import { Loading, Badge, Modal, Pagination, SearchInput, fmt, fmtDate, paginateItems, CopyableContactValue, matchesSearch } from '../../components/ui';
 import { useAuth } from '../../auth';
 
 const bikeStatusOptions = [
@@ -40,6 +40,32 @@ function getExpiryMeta(date) {
   return { tone: 'var(--muted)', label: `License disc valid until ${fmtDate(date)}` };
 }
 
+function buildInitialAllocationForm(bike = {}) {
+  return {
+    rider_id: '',
+    weekly_amount: bike?.rental_weekly || '',
+    total_weeks: bike?.total_weeks || 78,
+    start_date: new Date().toISOString().slice(0, 10),
+    notes: ''
+  };
+}
+
+function buildInitialRiderForm(bike = {}) {
+  return {
+    full_name: bike?.allocated_rider_name || '',
+    email: bike?.allocated_rider_email || '',
+    phone: bike?.allocated_rider_phone || '',
+    id_number: bike?.allocated_rider_id_number || '',
+    address: bike?.allocated_rider_address || '',
+    city: bike?.allocated_rider_city || '',
+    province: bike?.allocated_rider_province || ''
+  };
+}
+
+function riderOptionLabel(rider) {
+  return `${rider.full_name} · ${rider.email}${rider.phone ? ` · ${rider.phone}` : ''}`;
+}
+
 function Row({ k, v }) {
   return <div className="flex-between" style={{ padding: '8px 0', borderBottom: '1px solid var(--border)' }}><span className="muted text-sm">{k}</span><span>{v || '—'}</span></div>;
 }
@@ -47,11 +73,15 @@ function Row({ k, v }) {
 export default function AdminBikeDetail() {
   const { user } = useAuth();
   const { id } = useParams();
+  const nav = useNavigate();
   const canManageDocuments = ['admin', 'superadmin'].includes(user?.role);
   const [data, setData] = useState(null);
+  const [riders, setRiders] = useState([]);
   const [edit, setEdit] = useState(false);
   const [form, setForm] = useState({});
   const [showService, setShowService] = useState(false);
+  const [showAllocate, setShowAllocate] = useState(false);
+  const [showEditRider, setShowEditRider] = useState(false);
   const [imageFile, setImageFile] = useState(null);
   const [rc1File, setRc1File] = useState(null);
   const [licenseDiscFile, setLicenseDiscFile] = useState(null);
@@ -59,14 +89,37 @@ export default function AdminBikeDetail() {
   const [servicePage, setServicePage] = useState(1);
   const [servicePageSize, setServicePageSize] = useState(10);
   const [deletingServiceId, setDeletingServiceId] = useState(null);
+  const [riderSearch, setRiderSearch] = useState('');
+  const [allocating, setAllocating] = useState(false);
+  const [savingRider, setSavingRider] = useState(false);
+  const [terminating, setTerminating] = useState(false);
+  const [deletingBike, setDeletingBike] = useState(false);
+  const [allocationForm, setAllocationForm] = useState(buildInitialAllocationForm());
+  const [riderForm, setRiderForm] = useState(buildInitialRiderForm());
   const [service, setService] = useState({ service_date: new Date().toISOString().slice(0, 10), service_type: 'monthly', description: '', odometer_km: '', cost: 0, next_service_date: '', next_service_km: '', performed_by: 'OnFleet Workshop', invoice: null });
 
   const load = () => api.get(`/bikes/${id}`).then((response) => {
     setData(response.data);
     setForm(response.data.bike);
+    setAllocationForm(buildInitialAllocationForm(response.data.bike));
+    setRiderForm(buildInitialRiderForm(response.data.bike));
   });
 
   useEffect(() => { load(); }, [id]);
+  useEffect(() => {
+    api.get('/admin/users', { params: { role: 'rider' } })
+      .then((response) => setRiders(response.data.users || []))
+      .catch(() => setRiders([]));
+  }, []);
+
+  const filteredRiders = useMemo(() => riders.filter((rider) => matchesSearch(
+    riderSearch,
+    rider.full_name,
+    rider.email,
+    rider.phone,
+    rider.id_number,
+    rider.id
+  )), [riders, riderSearch]);
 
   const uploadBikeDocument = async (documentType, file) => {
     const fd = new FormData();
@@ -107,6 +160,7 @@ export default function AdminBikeDetail() {
   const servicePagination = paginateItems(data.services, servicePage, servicePageSize);
   const discMeta = getExpiryMeta(bike.license_disc_expiry);
   const address = [bike.allocated_rider_address, bike.allocated_rider_city, bike.allocated_rider_province].filter(Boolean).join(', ');
+  const hasAllocatedRider = Boolean(bike.allocated_agreement_id);
 
   const save = async () => {
     try {
@@ -117,7 +171,7 @@ export default function AdminBikeDetail() {
         toast.success('Saved');
       }
       setEdit(false);
-      load();
+      await load();
     } catch (error) {
       toast.error(error.response?.data?.error || 'Failed');
     }
@@ -131,7 +185,7 @@ export default function AdminBikeDetail() {
       await api.post(`/bikes/${id}/image`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       toast.success('Bike image updated');
       setImageFile(null);
-      load();
+      await load();
     } catch (error) {
       toast.error(error.response?.data?.error || 'Upload failed');
     }
@@ -148,7 +202,7 @@ export default function AdminBikeDetail() {
       await api.post(`/bikes/${id}/service`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       toast.success('Service event logged');
       setShowService(false);
-      load();
+      await load();
     } catch (error) {
       toast.error(error.response?.data?.error || 'Failed');
     }
@@ -168,15 +222,86 @@ export default function AdminBikeDetail() {
     }
   };
 
+  const allocateRider = async () => {
+    if (!allocationForm.rider_id) return toast.error('Choose a rider to allocate');
+    setAllocating(true);
+    try {
+      const response = await api.post(`/bikes/${id}/allocate`, {
+        rider_id: Number(allocationForm.rider_id),
+        weekly_amount: Number(allocationForm.weekly_amount),
+        total_weeks: Number(allocationForm.total_weeks),
+        start_date: allocationForm.start_date,
+        notes: allocationForm.notes || undefined
+      });
+      toast.success(`Rider allocated. Agreement ${response.data.agreement_no} created.`);
+      setShowAllocate(false);
+      setRiderSearch('');
+      await load();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not allocate rider');
+    } finally {
+      setAllocating(false);
+    }
+  };
+
+  const saveAllocatedRider = async () => {
+    setSavingRider(true);
+    try {
+      await api.patch(`/bikes/${id}/allocated-rider`, riderForm);
+      toast.success('Allocated rider updated');
+      setShowEditRider(false);
+      await load();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not update rider details');
+    } finally {
+      setSavingRider(false);
+    }
+  };
+
+  const terminateContract = async () => {
+    if (!window.confirm('Terminate this contract, set the bike back to active, and remove the current driver from the bike?')) return;
+    setTerminating(true);
+    try {
+      const response = await api.post(`/bikes/${id}/terminate-contract`, {});
+      toast.success(`Contract ${response.data.agreement_no} terminated`);
+      await load();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not terminate contract');
+    } finally {
+      setTerminating(false);
+    }
+  };
+
+  const deleteBike = async () => {
+    if (!window.confirm('Delete this bike from the fleet? This cannot be undone.')) return;
+    setDeletingBike(true);
+    try {
+      await api.delete(`/bikes/${id}`);
+      toast.success('Bike deleted');
+      nav('/admin/bikes');
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not delete bike');
+    } finally {
+      setDeletingBike(false);
+    }
+  };
+
   return (
     <>
       <Link to="/admin/bikes" className="muted text-sm">← Back to fleet</Link>
-      <div className="flex-between mt-2 mb-4">
+      <div className="flex-between mt-2 mb-4" style={{ gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 className="page-title">{bike.make} {bike.model}</h1>
           <div className="muted">VIN {bike.vin} · {bike.registration || 'no registration yet'}{bike.fleet ? ` · Fleet ${bike.fleet}` : ''}</div>
         </div>
-        <div className="row"><Badge status={bike.status}>{getBikeStatusLabel(bike.status)}</Badge><button className="btn btn-sm btn-secondary" onClick={() => setEdit(!edit)}>{edit ? 'Cancel' : 'Edit'}</button><button className="btn btn-sm" onClick={() => setShowService(true)}>+ Log service / repair</button></div>
+        <div className="row" style={{ flexWrap: 'wrap' }}>
+          <Badge status={bike.status}>{getBikeStatusLabel(bike.status)}</Badge>
+          <button className="btn btn-sm btn-secondary" onClick={() => setEdit(!edit)}>{edit ? 'Cancel' : 'Edit bike'}</button>
+          {!hasAllocatedRider && <button className="btn btn-sm" onClick={() => setShowAllocate(true)}>Allocate rider</button>}
+          {hasAllocatedRider && <button className="btn btn-sm btn-secondary" onClick={() => setShowEditRider(true)}>Edit rider</button>}
+          {hasAllocatedRider && <button className="btn btn-sm btn-danger" onClick={terminateContract} disabled={terminating}>{terminating ? 'Terminating…' : 'Terminate contract'}</button>}
+          <button className="btn btn-sm" onClick={() => setShowService(true)}>+ Log service / repair</button>
+        </div>
       </div>
 
       {bike.status === 'stolen' && (
@@ -204,7 +329,7 @@ export default function AdminBikeDetail() {
         <div className="card">
           <h3 className="mb-3">Bike image</h3>
           <div style={{ height: 260, borderRadius: 12, background: '#0a1219 center/cover no-repeat', backgroundImage: bike.image_url ? `url("${bike.image_url}")` : 'none', position: 'relative' }}>
-            {bike.allocated_rider_name && (
+            {hasAllocatedRider && (
               <div style={{ position: 'absolute', left: 16, right: 16, bottom: 16, display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 12, background: 'rgba(8,12,18,0.76)', backdropFilter: 'blur(8px)' }}>
                 <div className="avatar" style={{ width: 44, height: 44, backgroundImage: bike.allocated_rider_avatar_url ? `url(${bike.allocated_rider_avatar_url})` : 'none', backgroundSize: 'cover', backgroundPosition: 'center' }}>{bike.allocated_rider_avatar_url ? '' : bike.allocated_rider_name?.[0]}</div>
                 <div>
@@ -295,12 +420,24 @@ export default function AdminBikeDetail() {
               </div>
             </div>
           </div>
+
+          <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+            <div style={{ fontWeight: 700, marginBottom: 6, color: 'var(--danger)' }}>Danger zone</div>
+            <div className="muted text-sm" style={{ marginBottom: 12 }}>Delete bikes that should no longer exist in the fleet. Bikes with current or past agreement history are protected from deletion.</div>
+            <button className="btn btn-danger btn-sm" onClick={deleteBike} disabled={deletingBike || hasAllocatedRider}>{deletingBike ? 'Deleting…' : 'Delete bike'}</button>
+          </div>
         </div>
       </div>
 
-      {bike.allocated_rider_name && (
+      {hasAllocatedRider ? (
         <div className="card mb-4">
-          <h3 className="mb-3">Allocated rider</h3>
+          <div className="flex-between mb-3" style={{ gap: 12, flexWrap: 'wrap' }}>
+            <h3 style={{ marginBottom: 0 }}>Allocated rider</h3>
+            <div className="row" style={{ flexWrap: 'wrap' }}>
+              <button className="btn btn-sm btn-secondary" onClick={() => setShowEditRider(true)}>Edit rider</button>
+              {bike.allocated_agreement_id && <Link to={`/admin/agreements/${bike.allocated_agreement_id}`} className="btn btn-sm btn-secondary">Open agreement</Link>}
+            </div>
+          </div>
           <div className="row" style={{ alignItems: 'center', gap: 16 }}>
             <div className="avatar" style={{ width: 72, height: 72, backgroundImage: bike.allocated_rider_avatar_url ? `url(${bike.allocated_rider_avatar_url})` : 'none', backgroundSize: 'cover', backgroundPosition: 'center', fontSize: 28 }}>{bike.allocated_rider_avatar_url ? '' : bike.allocated_rider_name?.[0]}</div>
             <div style={{ flex: 1 }}>
@@ -312,9 +449,18 @@ export default function AdminBikeDetail() {
               {bike.allocated_rider_payout_preference && <div className="text-xs muted mt-1">Payout: {bike.allocated_rider_payout_preference}{bike.allocated_rider_payout_preference === 'ewallet' && bike.allocated_rider_ewallet_number ? ` · ${bike.allocated_rider_ewallet_number}` : ''}</div>}
               <div className="row mt-2" style={{ gap: 8, flexWrap: 'wrap' }}>
                 <div className="text-xs muted">Agreement {bike.allocated_agreement_no || '—'}</div>
-                {bike.allocated_agreement_id && <Link to={`/admin/agreements/${bike.allocated_agreement_id}`} className="btn btn-sm btn-secondary">Open agreement</Link>}
               </div>
             </div>
+          </div>
+        </div>
+      ) : (
+        <div className="card mb-4" style={{ border: '1px dashed var(--border)' }}>
+          <div className="flex-between" style={{ gap: 12, flexWrap: 'wrap' }}>
+            <div>
+              <h3 style={{ marginBottom: 6 }}>No rider allocated</h3>
+              <div className="muted text-sm">Allocate a rider directly from this bike page. Admins can search riders, create the agreement, and start the contract without leaving this screen.</div>
+            </div>
+            <button className="btn" onClick={() => setShowAllocate(true)}>Allocate rider</button>
           </div>
         </div>
       )}
@@ -347,6 +493,41 @@ export default function AdminBikeDetail() {
           <Pagination page={servicePagination.currentPage} pageSize={servicePagination.pageSize} totalItems={servicePagination.totalItems} onPageChange={setServicePage} onPageSizeChange={setServicePageSize} label="service records" />
         </div>
       </div>
+
+      {showAllocate && <Modal title="Allocate rider" onClose={() => setShowAllocate(false)}>
+        <div className="field">
+          <label className="label">Search rider</label>
+          <SearchInput value={riderSearch} onChange={setRiderSearch} placeholder="Search rider name, email, phone" style={{ minWidth: 0 }} />
+        </div>
+        <div className="field"><label className="label">Rider</label>
+          <select value={allocationForm.rider_id} onChange={(e) => setAllocationForm({ ...allocationForm, rider_id: e.target.value })}>
+            <option value="">— Select rider —</option>
+            {filteredRiders.map((rider) => <option key={rider.id} value={rider.id}>{riderOptionLabel(rider)}</option>)}
+          </select>
+          <div className="text-xs muted mt-1">{filteredRiders.length} rider{filteredRiders.length === 1 ? '' : 's'} match the search.</div>
+        </div>
+        <div className="grid grid-2">
+          <div className="field"><label className="label">Weekly amount</label><input type="number" value={allocationForm.weekly_amount} onChange={(e) => setAllocationForm({ ...allocationForm, weekly_amount: e.target.value })} /></div>
+          <div className="field"><label className="label">Total weeks</label><input type="number" value={allocationForm.total_weeks} onChange={(e) => setAllocationForm({ ...allocationForm, total_weeks: Number(e.target.value) })} /></div>
+        </div>
+        <div className="field"><label className="label">Start date</label><input type="date" value={allocationForm.start_date} onChange={(e) => setAllocationForm({ ...allocationForm, start_date: e.target.value })} /></div>
+        <div className="field"><label className="label">Allocation note</label><textarea rows={3} value={allocationForm.notes} onChange={(e) => setAllocationForm({ ...allocationForm, notes: e.target.value })} placeholder="Optional note for the agreement" /></div>
+        <div className="card mb-3" style={{ background: 'var(--surface-2)' }}><strong>Total contract value: {fmt((allocationForm.weekly_amount || 0) * (allocationForm.total_weeks || 0))}</strong></div>
+        <div className="row"><button className="btn" onClick={allocateRider} disabled={allocating}>{allocating ? 'Allocating…' : 'Allocate rider'}</button><button className="btn btn-secondary" onClick={() => setShowAllocate(false)}>Cancel</button></div>
+      </Modal>}
+
+      {showEditRider && <Modal title="Edit allocated rider" onClose={() => setShowEditRider(false)}>
+        <div className="grid grid-2">
+          <div className="field"><label className="label">Full name</label><input value={riderForm.full_name} onChange={(e) => setRiderForm({ ...riderForm, full_name: e.target.value })} /></div>
+          <div className="field"><label className="label">Email</label><input type="email" value={riderForm.email} onChange={(e) => setRiderForm({ ...riderForm, email: e.target.value })} /></div>
+          <div className="field"><label className="label">Phone</label><input value={riderForm.phone} onChange={(e) => setRiderForm({ ...riderForm, phone: e.target.value })} /></div>
+          <div className="field"><label className="label">ID number / Passport / Asylum</label><input value={riderForm.id_number} onChange={(e) => setRiderForm({ ...riderForm, id_number: e.target.value })} /></div>
+          <div className="field" style={{ gridColumn: '1 / -1' }}><label className="label">Address</label><input value={riderForm.address} onChange={(e) => setRiderForm({ ...riderForm, address: e.target.value })} /></div>
+          <div className="field"><label className="label">City</label><input value={riderForm.city} onChange={(e) => setRiderForm({ ...riderForm, city: e.target.value })} /></div>
+          <div className="field"><label className="label">Province</label><input value={riderForm.province} onChange={(e) => setRiderForm({ ...riderForm, province: e.target.value })} /></div>
+        </div>
+        <div className="row" style={{ justifyContent: 'flex-end' }}><button className="btn btn-secondary" onClick={() => setShowEditRider(false)}>Cancel</button><button className="btn" onClick={saveAllocatedRider} disabled={savingRider}>{savingRider ? 'Saving…' : 'Save rider changes'}</button></div>
+      </Modal>}
 
       {showService && <Modal title="Log service or repair" onClose={() => setShowService(false)}>
         <div className="grid grid-2">

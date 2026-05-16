@@ -8,6 +8,14 @@ import { sortNewestFirst } from '../../utils/sortNewestFirst';
 const today = new Date().toISOString().slice(0, 10);
 const canReview = (application) => ['submitted', 'under_review'].includes(application.status);
 
+function bikeOptionLabel(bike) {
+  return `${bike.registration || `Bike #${bike.id}`} · ${bike.make} ${bike.model} · ${fmt(bike.rental_weekly)}/week`;
+}
+
+function riderOptionLabel(rider) {
+  return `${rider.full_name} · ${rider.email}${rider.phone ? ` · ${rider.phone}` : ''}`;
+}
+
 export default function AdminApplications() {
   const [params, setParams] = useSearchParams();
   const status = params.get('status') || '';
@@ -23,13 +31,15 @@ export default function AdminApplications() {
   const [selectedIds, setSelectedIds] = useState([]);
   const [bulkRejectReason, setBulkRejectReason] = useState('');
   const [bulkAssignments, setBulkAssignments] = useState({});
+  const [riderSearch, setRiderSearch] = useState('');
+  const [bikeSearch, setBikeSearch] = useState('');
   const [form, setForm] = useState({ user_id: '', preferred_bike_id: '', payout_preference: 'eft' });
 
   const load = () => api.get('/applications', { params: status ? { status } : {} }).then((response) => setList(response.data.applications));
   useEffect(() => { load(); }, [status]);
   useEffect(() => {
-    api.get('/admin/users', { params: { role: 'rider' } }).then((response) => setRiders(response.data.users));
-    api.get('/bikes/catalog').then((response) => setBikes(response.data.bikes));
+    api.get('/admin/users', { params: { role: 'rider' } }).then((response) => setRiders(response.data.users || []));
+    api.get('/bikes/catalog').then((response) => setBikes(response.data.bikes || []));
   }, []);
   useEffect(() => { setPage(1); }, [search, status]);
   useEffect(() => {
@@ -37,11 +47,20 @@ export default function AdminApplications() {
   }, [list]);
 
   const createApplication = async () => {
+    if (!form.user_id) return toast.error('Choose a rider');
+    if (!form.preferred_bike_id) return toast.error('Choose a preferred bike');
+
     try {
-      await api.post('/applications/admin-create', { ...form, user_id: Number(form.user_id), preferred_bike_id: Number(form.preferred_bike_id) });
+      await api.post('/applications/admin-create', {
+        ...form,
+        user_id: Number(form.user_id),
+        preferred_bike_id: form.preferred_bike_id ? Number(form.preferred_bike_id) : null
+      });
       toast.success('Application created');
       setShowCreate(false);
       setForm({ user_id: '', preferred_bike_id: '', payout_preference: 'eft' });
+      setRiderSearch('');
+      setBikeSearch('');
       load();
     } catch (error) {
       toast.error(error.response?.data?.error || 'Could not create application');
@@ -61,6 +80,26 @@ export default function AdminApplications() {
     application.average_weekly_earnings,
     application.id
   )), ['submitted_at', 'created_at', 'id']), [list, search]);
+
+  const filteredRiders = useMemo(() => riders.filter((rider) => matchesSearch(
+    riderSearch,
+    rider.full_name,
+    rider.email,
+    rider.phone,
+    rider.id_number,
+    rider.id
+  )), [riders, riderSearch]);
+
+  const filteredBikeOptions = useMemo(() => bikes.filter((bike) => matchesSearch(
+    bikeSearch,
+    bike.registration,
+    bike.make,
+    bike.model,
+    bike.year,
+    bike.engine_cc,
+    bike.id,
+    bikeOptionLabel(bike)
+  )), [bikes, bikeSearch]);
 
   const pagination = useMemo(() => paginateItems(filtered, page, pageSize), [filtered, page, pageSize]);
   const pagedApplications = pagination.items;
@@ -224,17 +263,33 @@ export default function AdminApplications() {
       <Pagination page={pagination.currentPage} pageSize={pagination.pageSize} totalItems={pagination.totalItems} onPageChange={setPage} onPageSizeChange={setPageSize} label="applications" />
 
       {showCreate && (
-        <Modal title="Add application" onClose={() => setShowCreate(false)}>
+        <Modal title="Add application" onClose={() => {
+          setShowCreate(false);
+          setRiderSearch('');
+          setBikeSearch('');
+        }}>
+          <div className="field">
+            <label className="label">Search rider</label>
+            <SearchInput value={riderSearch} onChange={setRiderSearch} placeholder="Search rider name, email, phone" style={{ minWidth: 0 }} />
+          </div>
           <div className="field"><label className="label">Rider</label>
             <select value={form.user_id} onChange={(e) => setForm({ ...form, user_id: e.target.value })}>
               <option value="">— Select rider —</option>
-              {riders.map((rider) => <option key={rider.id} value={rider.id}>{rider.full_name} · {rider.email}</option>)}
-            </select></div>
+              {filteredRiders.map((rider) => <option key={rider.id} value={rider.id}>{riderOptionLabel(rider)}</option>)}
+            </select>
+            <div className="text-xs muted mt-1">{filteredRiders.length} rider{filteredRiders.length === 1 ? '' : 's'} match the search.</div>
+          </div>
+          <div className="field">
+            <label className="label">Search preferred bike</label>
+            <SearchInput value={bikeSearch} onChange={setBikeSearch} placeholder="Search registration, make, model" style={{ minWidth: 0 }} />
+          </div>
           <div className="field"><label className="label">Preferred bike</label>
             <select value={form.preferred_bike_id} onChange={(e) => setForm({ ...form, preferred_bike_id: e.target.value })}>
               <option value="">— Select bike —</option>
-              {bikes.map((bike) => <option key={bike.id} value={bike.id}>{bike.make} {bike.model} · {fmt(bike.rental_weekly)}/week</option>)}
-            </select></div>
+              {filteredBikeOptions.map((bike) => <option key={bike.id} value={bike.id}>{bikeOptionLabel(bike)}</option>)}
+            </select>
+            <div className="text-xs muted mt-1">Registration is shown first so number plates are easier to spot.</div>
+          </div>
           <div className="field"><label className="label">Payout preference</label>
             <select value={form.payout_preference} onChange={(e) => setForm({ ...form, payout_preference: e.target.value })}>
               <option value="eft">EFT</option>
@@ -242,7 +297,11 @@ export default function AdminApplications() {
             </select></div>
           <div className="row">
             <button className="btn" onClick={createApplication}>Create</button>
-            <button className="btn btn-secondary" onClick={() => setShowCreate(false)}>Cancel</button>
+            <button className="btn btn-secondary" onClick={() => {
+              setShowCreate(false);
+              setRiderSearch('');
+              setBikeSearch('');
+            }}>Cancel</button>
           </div>
         </Modal>
       )}
@@ -278,7 +337,7 @@ export default function AdminApplications() {
                         }));
                       }}>
                         <option value="">— Select ready to go bike —</option>
-                        {bikes.map((bike) => <option key={bike.id} value={bike.id} disabled={bikeTakenByAnotherSelection(application.id, bike.id)}>{bike.make} {bike.model} · {fmt(bike.rental_weekly)}/week</option>)}
+                        {bikes.map((bike) => <option key={bike.id} value={bike.id} disabled={bikeTakenByAnotherSelection(application.id, bike.id)}>{bikeOptionLabel(bike)}</option>)}
                       </select>
                     </div>
                     <div className="field"><label className="label">Start date</label><input type="date" value={assignment.start_date} onChange={(e) => setBulkAssignments((current) => ({ ...current, [application.id]: { ...current[application.id], start_date: e.target.value } }))} /></div>

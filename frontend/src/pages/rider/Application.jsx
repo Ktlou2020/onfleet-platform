@@ -5,6 +5,10 @@ import { Loading, Badge, SearchInput, Pagination, fmt, fmtDate, matchesSearch, p
 
 const PLATFORMS = ['Uber Eats', 'Mr D', 'Bolt Food', 'Takealot', 'Checkers Sixty60', 'Other'];
 
+function isPayslipImageFile(file) {
+  return ['image/jpeg', 'image/jpg'].includes(String(file?.type || '').toLowerCase());
+}
+
 export default function RiderApplication() {
   const [apps, setApps] = useState(null);
   const [bikes, setBikes] = useState([]);
@@ -16,6 +20,11 @@ export default function RiderApplication() {
   const [historyPageSize, setHistoryPageSize] = useState(6);
   const [docPage, setDocPage] = useState(1);
   const [docPageSize, setDocPageSize] = useState(8);
+  const [payslipDrafts, setPayslipDrafts] = useState({
+    1: { file: null, amount: '' },
+    2: { file: null, amount: '' },
+    3: { file: null, amount: '' }
+  });
   const [form, setForm] = useState({
     preferred_bike_id: '',
     delivery_platforms: [],
@@ -75,6 +84,16 @@ export default function RiderApplication() {
       : [...current.delivery_platforms, platform]
   }));
 
+  const setPayslipDraft = (slot, patch) => {
+    setPayslipDrafts((current) => ({
+      ...current,
+      [slot]: {
+        ...current[slot],
+        ...patch
+      }
+    }));
+  };
+
   const submit = async (event) => {
     event.preventDefault();
     if (!form.preferred_bike_id) return toast.error('Please choose a bike');
@@ -95,22 +114,40 @@ export default function RiderApplication() {
     }
   };
 
-  const uploadDocument = async (docType, file) => {
-    if (!latest) return;
+  const uploadDocument = async (docType, file, extraFields = {}, successMessage = 'Uploaded successfully') => {
+    if (!latest) return null;
     const fd = new FormData();
     fd.append('doc_type', docType);
     fd.append('file', file);
-    setUploading(docType);
+    Object.entries(extraFields).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') fd.append(key, value);
+    });
+    setUploading(docType === 'payslip' ? `payslip-${extraFields.slot || 'generic'}` : docType);
     try {
       const { data } = await api.post(`/applications/${latest.id}/documents`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      if (data?.extracted_amount) toast.success(`Uploaded. Extracted total paid ${fmt(data.extracted_amount)}`);
-      else toast.success('Uploaded successfully');
+      if (data?.extracted_amount) toast.success(`${successMessage} Amount saved: ${fmt(data.extracted_amount)}`);
+      else toast.success(successMessage);
       await load();
+      return data;
     } catch (error) {
       toast.error(error.response?.data?.error || 'Upload failed');
+      return null;
     } finally {
       setUploading('');
     }
+  };
+
+  const uploadPayslip = async (slot) => {
+    const draft = payslipDrafts[slot];
+    if (!draft?.file) return toast.error(`Choose Payslip ${slot} first`);
+    if (isPayslipImageFile(draft.file) && !String(draft.amount || '').trim()) {
+      return toast.error(`Enter the Rand amount for Payslip ${slot}`);
+    }
+    const data = await uploadDocument('payslip', draft.file, {
+      manual_payslip_amount: isPayslipImageFile(draft.file) ? draft.amount : '',
+      slot
+    }, `Payslip ${slot} uploaded.`);
+    if (data) setPayslipDraft(slot, { file: null, amount: '' });
   };
 
   if (!apps) return <Loading />;
@@ -121,10 +158,23 @@ export default function RiderApplication() {
       <p className="page-sub">Submit your rider application, upload compliance documents, and track your pre-approval.</p>
 
       <div className="card mb-4" style={{ background: 'var(--surface-2)' }}>
+        <div className="grid grid-2" style={{ gap: 16 }}>
+          <div>
+            <strong>Application help</strong>
+            <div className="muted text-sm mt-2">1. Create your application with the correct bike and payout details. 2. Upload ID and licence. 3. Upload 3 recent payslips. PDF payslips are read automatically. JPG / JPEG payslips need a manual Rand amount.</div>
+          </div>
+          <div>
+            <strong>What helps approval move faster</strong>
+            <div className="muted text-sm mt-2">Use clear document photos, make sure names and numbers are readable, and keep your phone number and payout details up to date.</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="card mb-4" style={{ background: 'var(--surface-2)' }}>
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <strong>Document rules</strong>
-            <div className="muted text-sm mt-1">ID documents and licences may be PDF or image files. Payslips must be PDF only. Upload 3 latest payslips so OnFleet can calculate average weekly earnings.</div>
+            <div className="muted text-sm mt-1">ID documents and licences may be PDF or image files. Payslips may be PDF or JPG / JPEG. If you upload a JPG / JPEG payslip, enter the Rand amount manually for that image.</div>
           </div>
           <div className="badge badge-info">Minimum R1000/week</div>
         </div>
@@ -239,10 +289,18 @@ export default function RiderApplication() {
           <div className="card mb-4">
             <h3 className="mb-3">Upload application documents</h3>
             <div className="grid grid-2">
-              <UploadCard title="ID document" sub="South African ID, passport, or asylum document" accept="application/pdf,image/jpeg,image/jpg,image/png" onPick={(file) => uploadDocument('id_document', file)} busy={uploading === 'id_document'} />
-              <UploadCard title="Driver's licence" sub="Front / single PDF or image" accept="application/pdf,image/jpeg,image/jpg,image/png" onPick={(file) => uploadDocument('drivers_license', file)} busy={uploading === 'drivers_license'} />
+              <UploadCard title="ID document" sub="South African ID, passport, or asylum document" note="PDF, JPG, or PNG" accept="application/pdf,image/jpeg,image/jpg,image/png" onPick={(file) => uploadDocument('id_document', file, {}, 'ID document uploaded.')} busy={uploading === 'id_document'} />
+              <UploadCard title="Driver's licence" sub="Front / single PDF or image" note="PDF, JPG, or PNG" accept="application/pdf,image/jpeg,image/jpg,image/png" onPick={(file) => uploadDocument('drivers_license', file, {}, "Driver's licence uploaded.")} busy={uploading === 'drivers_license'} />
               {[1, 2, 3].map((slot) => (
-                <UploadCard key={slot} title={`Payslip ${slot}`} sub="Latest payslip, PDF only" accept="application/pdf" onPick={(file) => uploadDocument('payslip', file)} busy={uploading === 'payslip'} />
+                <PayslipUploadCard
+                  key={slot}
+                  title={`Payslip ${slot}`}
+                  draft={payslipDrafts[slot]}
+                  busy={uploading === `payslip-${slot}`}
+                  onPick={(file) => setPayslipDraft(slot, { file, amount: isPayslipImageFile(file) ? payslipDrafts[slot].amount : '' })}
+                  onAmountChange={(value) => setPayslipDraft(slot, { amount: value })}
+                  onUpload={() => uploadPayslip(slot)}
+                />
               ))}
             </div>
           </div>
@@ -275,14 +333,42 @@ export default function RiderApplication() {
   );
 }
 
-function UploadCard({ title, sub, onPick, busy, accept }) {
+function UploadCard({ title, sub, note, onPick, busy, accept }) {
   return (
     <label className="card" style={{ background: 'var(--surface-2)', cursor: 'pointer' }}>
       <strong>{title}</strong>
       <div className="muted text-sm mt-1">{sub}</div>
+      {note && <div className="muted text-sm mt-1">{note}</div>}
       <div className="mt-3"><span className="btn btn-secondary btn-sm">{busy ? 'Uploading…' : 'Choose file'}</span></div>
       <input type="file" hidden accept={accept} onChange={(e) => e.target.files?.[0] && onPick(e.target.files[0])} />
     </label>
+  );
+}
+
+function PayslipUploadCard({ title, draft, onPick, onAmountChange, onUpload, busy }) {
+  const imagePayslip = isPayslipImageFile(draft.file);
+  return (
+    <div className="card" style={{ background: 'var(--surface-2)' }}>
+      <strong>{title}</strong>
+      <div className="muted text-sm mt-1">Upload PDF for automatic reading, or JPG / JPEG and enter the Rand amount manually.</div>
+      <div className="muted text-sm mt-2">{draft.file ? draft.file.name : 'No file selected yet'}</div>
+      <div className="row mt-3" style={{ gap: 8, flexWrap: 'wrap' }}>
+        <label className="btn btn-secondary btn-sm" style={{ cursor: 'pointer' }}>
+          Choose file
+          <input type="file" hidden accept="application/pdf,image/jpeg,image/jpg" onChange={(e) => onPick(e.target.files?.[0] || null)} />
+        </label>
+        <button type="button" className="btn btn-sm" onClick={onUpload} disabled={!draft.file || busy || (imagePayslip && !String(draft.amount || '').trim())}>
+          {busy ? 'Uploading…' : 'Upload payslip'}
+        </button>
+      </div>
+      {imagePayslip && (
+        <div className="field" style={{ marginTop: 12, marginBottom: 0 }}>
+          <label className="label">Rand amount *</label>
+          <input type="number" min="0" step="0.01" value={draft.amount} onChange={(e) => onAmountChange(e.target.value)} placeholder="Example: 3200" />
+          <div className="muted text-sm mt-1">This amount is required because JPG / JPEG payslips are captured manually.</div>
+        </div>
+      )}
+    </div>
   );
 }
 

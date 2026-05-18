@@ -71,6 +71,11 @@ export default function RiderDashboard() {
         <div className="muted text-sm">Showing {upcoming.length + quickActions.length} dashboard matches</div>
       </div>
 
+      <div className="card mb-4" style={{ background: 'var(--surface-2)' }}>
+        <strong>Need help using the rider portal?</strong>
+        <div className="muted text-sm mt-2">Use Application to upload documents and track approval, My Agreement to read your contract and monthly statement, Payments to stay up to date, and Profile to keep your contact details correct.</div>
+      </div>
+
       <div className="grid grid-4 mb-4">
         <Stat label="Total paid" value={fmt(summary.total_paid)} icon={<TrendingUp size={16}/>} />
         <Stat label="Remaining" value={fmt(summary.remaining)} icon={<Calendar size={16}/>} accent="var(--accent)" />

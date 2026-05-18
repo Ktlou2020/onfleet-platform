@@ -5,10 +5,15 @@ import api from '../api';
 import toast from 'react-hot-toast';
 import Logo from '../components/Logo';
 import southAfricanCities from '../constants/southAfricanCities';
-import { fmt, normalizePhoneInput } from '../components/ui';
+import { fmt, normalizePhoneInput, Modal } from '../components/ui';
 
 const PLATFORMS = ['Uber Eats', 'Mr D', 'Bolt Food', 'Takealot', 'Checkers Sixty60', 'Other'];
 const PROVINCES = ['Gauteng', 'Western Cape', 'KwaZulu-Natal', 'Eastern Cape', 'Free State', 'Limpopo', 'Mpumalanga', 'North West', 'Northern Cape'];
+const PAYSLIP_FIELDS = ['payslip_1', 'payslip_2', 'payslip_3'];
+
+function isPayslipImage(file) {
+  return ['image/jpeg', 'image/jpg'].includes(String(file?.type || '').toLowerCase());
+}
 
 export default function Signup() {
   const [form, setForm] = useState({
@@ -27,6 +32,8 @@ export default function Signup() {
     payslip_2: null,
     payslip_3: null
   });
+  const [payslipAmounts, setPayslipAmounts] = useState({ payslip_1: '', payslip_2: '', payslip_3: '' });
+  const [validationIssues, setValidationIssues] = useState([]);
   const [busy, setBusy] = useState(false);
   const [step, setStep] = useState(1);
   const [bikes, setBikes] = useState([]);
@@ -49,48 +56,76 @@ export default function Signup() {
   }));
 
   const setFile = (key, file) => setFiles((current) => ({ ...current, [key]: file || null }));
+  const setPayslipFile = (key, file) => {
+    setFile(key, file);
+    if (!isPayslipImage(file)) {
+      setPayslipAmounts((current) => ({ ...current, [key]: '' }));
+    }
+  };
+
+  const buildStepIssues = () => {
+    const issues = [];
+
+    if (step === 1) {
+      if (!form.full_name.trim()) issues.push('Enter your full name.');
+      if (!form.email.trim()) issues.push('Enter your email address.');
+      else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) issues.push('Enter a valid email address.');
+      if (!form.phone.trim()) issues.push('Enter your phone or WhatsApp number.');
+      if (!form.id_number.trim()) issues.push('Enter your ID number, passport number, or asylum number.');
+      if (!form.password) issues.push('Create a password.');
+      else if (form.password.length < 6) issues.push('Your password must be at least 6 characters long.');
+    }
+
+    if (step === 2) {
+      if (!form.address.trim()) issues.push('Enter your street address.');
+      if (!form.city.trim()) issues.push('Choose your city.');
+      if (!form.province.trim()) issues.push('Choose your province.');
+    }
+
+    if (step === 3) {
+      if (!form.preferred_bike_id) issues.push('Choose your preferred bike.');
+      if (!form.delivery_platforms.length) issues.push('Select at least one delivery platform.');
+      if (form.payout_preference === 'eft') {
+        if (!form.bank_name.trim()) issues.push('Enter your bank name.');
+        if (!form.account_holder.trim()) issues.push('Enter the bank account holder name.');
+        if (!form.account_number.trim()) issues.push('Enter the bank account number.');
+        if (!form.branch_code.trim()) issues.push('Enter the bank branch code.');
+      }
+      if (form.payout_preference === 'ewallet' && !form.ewallet_number.trim()) {
+        issues.push('Enter your e-wallet cellphone number.');
+      }
+    }
+
+    if (step === 4) {
+      if (!files.id_document) issues.push('Upload your ID document.');
+      if (!files.drivers_license) issues.push("Upload your driver's licence.");
+      if (!files.selfie) issues.push('Upload your selfie holding your ID.');
+
+      PAYSLIP_FIELDS.forEach((field, index) => {
+        const file = files[field];
+        if (!file) {
+          issues.push(`Upload Payslip ${index + 1}.`);
+          return;
+        }
+        if (isPayslipImage(file) && !String(payslipAmounts[field] || '').trim()) {
+          issues.push(`Enter the Rand amount for Payslip ${index + 1} because JPEG payslips are captured manually.`);
+        }
+      });
+    }
+
+    return issues;
+  };
+
+  const openValidationPopup = (issues) => {
+    setValidationIssues(issues);
+    if (issues.length) toast.error('Please fix the highlighted requirements');
+  };
 
   const validateStep = () => {
-    if (step === 1) {
-      if (!form.full_name || !form.email || !form.phone || !form.id_number || !form.password) {
-        toast.error('Please complete all required personal details');
-        return false;
-      }
-      return true;
-    }
-    if (step === 2) {
-      if (!form.address || !form.city || !form.province) {
-        toast.error('Please complete your address details');
-        return false;
-      }
-      return true;
-    }
-    if (step === 3) {
-      if (!form.preferred_bike_id) {
-        toast.error('Please choose your preferred bike');
-        return false;
-      }
-      if (!form.delivery_platforms.length) {
-        toast.error('Select at least one delivery platform');
-        return false;
-      }
-      if (form.payout_preference === 'eft' && (!form.bank_name || !form.account_holder || !form.account_number || !form.branch_code)) {
-        toast.error('Please complete all EFT banking details');
-        return false;
-      }
-      if (form.payout_preference === 'ewallet' && !form.ewallet_number) {
-        toast.error('Please provide your e-wallet number');
-        return false;
-      }
-      return true;
-    }
-    if (step === 4) {
-      const missing = Object.entries(files).filter(([, file]) => !file);
-      if (missing.length) {
-        toast.error('Please upload all required KYC documents and 3 payslips');
-        return false;
-      }
-      return true;
+    const issues = buildStepIssues();
+    if (issues.length) {
+      openValidationPopup(issues);
+      return false;
     }
     return true;
   };
@@ -108,11 +143,16 @@ export default function Signup() {
       });
       fd.append('has_riding_experience', Number(form.years_riding || 0) > 0 ? '1' : '0');
       Object.entries(files).forEach(([key, value]) => { if (value) fd.append(key, value); });
+      PAYSLIP_FIELDS.forEach((field, index) => {
+        if (payslipAmounts[field]) fd.append(`payslip_amount_${index + 1}`, payslipAmounts[field]);
+      });
       await signup(fd);
       toast.success('Account created and full application submitted. We are reviewing your documents now.');
       nav('/dashboard');
     } catch (error) {
-      toast.error(error.response?.data?.error || 'Sign up failed');
+      const backendIssues = error.response?.data?.errors?.map((item) => item.msg)
+        || (error.response?.data?.error ? [error.response.data.error] : ['Sign up failed']);
+      openValidationPopup(backendIssues);
     } finally {
       setBusy(false);
     }
@@ -136,6 +176,10 @@ export default function Signup() {
         <form onSubmit={submit}>
           {step === 1 && (
             <>
+              <div className="card mb-3" style={{ background: 'var(--surface-2)' }}>
+                <strong>What you need for this step</strong>
+                <div className="muted text-sm mt-1">Use your real name, a working email address, a WhatsApp number, your ID / passport / asylum number, and a password with at least 6 characters.</div>
+              </div>
               <div className="field"><label className="label">Full name *</label><input required value={form.full_name} onChange={f('full_name')} placeholder="Thabo Mokoena" /></div>
               <div className="grid grid-2">
                 <div className="field"><label className="label">Email *</label><input type="email" required value={form.email} onChange={f('email')} /></div>
@@ -151,6 +195,10 @@ export default function Signup() {
 
           {step === 2 && (
             <>
+              <div className="card mb-3" style={{ background: 'var(--surface-2)' }}>
+                <strong>Address help</strong>
+                <div className="muted text-sm mt-1">Add the address where you stay most of the time so support, verification, and recovery teams can reach the right area.</div>
+              </div>
               <div className="field"><label className="label">Street address *</label><input value={form.address} onChange={f('address')} placeholder="123 Main Road" /></div>
               <div className="grid grid-2">
                 <div className="field"><label className="label">City *</label>
@@ -176,6 +224,10 @@ export default function Signup() {
 
           {step === 3 && (
             <>
+              <div className="card mb-3" style={{ background: 'var(--surface-2)' }}>
+                <strong>Application help</strong>
+                <div className="muted text-sm mt-1">Choose a bike, tell us which delivery platforms you use, and add payout details. If you choose EFT, all banking fields are required.</div>
+              </div>
               <div className="grid grid-2">
                 <div className="field"><label className="label">Preferred bike *</label>
                   <select value={form.preferred_bike_id} onChange={f('preferred_bike_id')}>
@@ -244,19 +296,19 @@ export default function Signup() {
             <>
               <div className="card mb-3" style={{ background: 'var(--surface-2)' }}>
                 <strong>Required uploads</strong>
-                <div className="muted text-sm mt-1">Upload all KYC documents now. ID document, driver's licence, and selfie may be PDF or image files. Payslips must be uploaded as PDF documents only.</div>
+                <div className="muted text-sm mt-1">Upload all KYC documents now. ID document, driver's licence, and selfie may be PDF or image files. Payslips may be uploaded as PDF or JPG / JPEG. If you upload a JPG / JPEG payslip, you must type the Rand amount for that image manually.</div>
               </div>
               <div className="grid grid-2">
-                <UploadField label="ID document *" file={files.id_document} onChange={(file) => setFile('id_document', file)} accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" />
-                <UploadField label="Driver's licence *" file={files.drivers_license} onChange={(file) => setFile('drivers_license', file)} accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" />
-                <UploadField label="Selfie *" file={files.selfie} onChange={(file) => setFile('selfie', file)} accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" />
+                <UploadField label="ID document *" file={files.id_document} onChange={(file) => setFile('id_document', file)} accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" helpText="PDF, JPG, PNG, or WEBP" />
+                <UploadField label="Driver's licence *" file={files.drivers_license} onChange={(file) => setFile('drivers_license', file)} accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" helpText="PDF, JPG, PNG, or WEBP" />
+                <UploadField label="Selfie holding ID *" file={files.selfie} onChange={(file) => setFile('selfie', file)} accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" helpText="PDF, JPG, PNG, or WEBP" />
                 <div className="card" style={{ background: 'var(--surface-2)' }}>
                   <strong>Auto-decision rule</strong>
                   <div className="muted text-sm mt-2">OnFleet reads the 3 latest payslips, totals the paid amounts, and computes average weekly earnings. Below R1000/week = auto-decline with 2-week retry. R1000/week or more = auto-pre-approval.</div>
                 </div>
-                <UploadField label="Payslip 1 *" file={files.payslip_1} onChange={(file) => setFile('payslip_1', file)} accept="application/pdf" />
-                <UploadField label="Payslip 2 *" file={files.payslip_2} onChange={(file) => setFile('payslip_2', file)} accept="application/pdf" />
-                <UploadField label="Payslip 3 *" file={files.payslip_3} onChange={(file) => setFile('payslip_3', file)} accept="application/pdf" />
+                <PayslipUploadField label="Payslip 1 *" file={files.payslip_1} amount={payslipAmounts.payslip_1} onAmountChange={(value) => setPayslipAmounts((current) => ({ ...current, payslip_1: value }))} onChange={(file) => setPayslipFile('payslip_1', file)} />
+                <PayslipUploadField label="Payslip 2 *" file={files.payslip_2} amount={payslipAmounts.payslip_2} onAmountChange={(value) => setPayslipAmounts((current) => ({ ...current, payslip_2: value }))} onChange={(file) => setPayslipFile('payslip_2', file)} />
+                <PayslipUploadField label="Payslip 3 *" file={files.payslip_3} amount={payslipAmounts.payslip_3} onAmountChange={(value) => setPayslipAmounts((current) => ({ ...current, payslip_3: value }))} onChange={(file) => setPayslipFile('payslip_3', file)} />
               </div>
             </>
           )}
@@ -275,17 +327,54 @@ export default function Signup() {
           Already have an account? <Link to="/login">Sign in</Link>
         </div>
       </div>
+
+      {!!validationIssues.length && (
+        <Modal title="Please fix these items" onClose={() => setValidationIssues([])}>
+          <div className="muted text-sm mb-3">Your application cannot continue until the required information below is completed correctly.</div>
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {validationIssues.map((issue, index) => <li key={`${issue}-${index}`} style={{ marginBottom: 8 }}>{issue}</li>)}
+          </ul>
+          <div className="row mt-4">
+            <button type="button" className="btn" onClick={() => setValidationIssues([])}>Ok, I will fix it</button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
 
-function UploadField({ label, file, onChange, accept }) {
+function UploadField({ label, file, onChange, accept, helpText }) {
   return (
     <label className="card" style={{ background: 'var(--surface-2)', cursor: 'pointer' }}>
       <strong>{label}</strong>
+      {helpText && <div className="muted text-sm mt-1">{helpText}</div>}
       <div className="muted text-sm mt-2">{file ? file.name : 'Choose file'}</div>
       <div className="mt-3"><span className="btn btn-secondary btn-sm">Select file</span></div>
       <input hidden type="file" accept={accept} onChange={(e) => onChange(e.target.files?.[0] || null)} />
     </label>
+  );
+}
+
+function PayslipUploadField({ label, file, amount, onAmountChange, onChange }) {
+  const imagePayslip = isPayslipImage(file);
+  return (
+    <div className="card" style={{ background: 'var(--surface-2)' }}>
+      <strong>{label}</strong>
+      <div className="muted text-sm mt-1">Upload PDF for automatic reading, or JPG / JPEG and type the Rand amount manually.</div>
+      <div className="muted text-sm mt-2">{file ? file.name : 'Choose file'}</div>
+      <div className="mt-3">
+        <label className="btn btn-secondary btn-sm" style={{ cursor: 'pointer' }}>
+          Select file
+          <input hidden type="file" accept="application/pdf,image/jpeg,image/jpg" onChange={(e) => onChange(e.target.files?.[0] || null)} />
+        </label>
+      </div>
+      {imagePayslip && (
+        <div className="field" style={{ marginTop: 12, marginBottom: 0 }}>
+          <label className="label">Rand amount *</label>
+          <input type="number" min="0" step="0.01" value={amount} onChange={(e) => onAmountChange(e.target.value)} placeholder="Example: 3200" />
+          <div className="muted text-sm mt-1">JPEG payslips are saved with the amount you type here.</div>
+        </div>
+      )}
+    </div>
   );
 }

@@ -40,10 +40,10 @@ const signupUpload = multer({
   fileFilter: (req, file, cb) => {
     const isPayslip = String(file.fieldname || '').startsWith('payslip_');
     const ok = isPayslip
-      ? file.mimetype === 'application/pdf'
+      ? ['application/pdf', 'image/jpeg', 'image/jpg', 'image/pjpeg'].includes(file.mimetype)
       : ['application/pdf', 'image/jpeg', 'image/jpg', 'image/pjpeg', 'image/png', 'image/webp'].includes(file.mimetype);
     const error = isPayslip
-      ? 'Payslips must be uploaded as PDF documents only'
+      ? 'Payslips must be uploaded as PDF, JPG, or JPEG files'
       : 'Only PDF, JPG, JPEG, PNG, and WEBP files are allowed';
     cb(ok ? null : new Error(error), ok);
   }
@@ -139,6 +139,43 @@ function getSafeUser(userId) {
 
 function getRequiredFile(req, field) {
   return req.files?.[field]?.[0] || null;
+}
+
+function parseMoneyAmount(value) {
+  const cleaned = String(value ?? '').replace(/[^0-9.-]/g, '');
+  if (!cleaned) return null;
+  const amount = Number(cleaned);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  return +amount.toFixed(2);
+}
+
+function isPayslipImageMime(mimeType) {
+  return ['image/jpeg', 'image/jpg', 'image/pjpeg'].includes(String(mimeType || '').toLowerCase());
+}
+
+async function resolvePayslipInsights(file, manualAmountRaw) {
+  const manualAmount = parseMoneyAmount(manualAmountRaw);
+
+  if (file.mimetype === 'application/pdf') {
+    const insights = await extractPayslipInsights(path.join(uploadDir, file.filename), file.mimetype);
+    if (insights.extracted_amount || !manualAmount) return insights;
+    return {
+      extracted_amount: manualAmount,
+      extracted_text: 'Manual amount entered for PDF payslip'
+    };
+  }
+
+  if (isPayslipImageMime(file.mimetype)) {
+    if (!manualAmount) {
+      throw new Error(`Please enter the Rand amount for ${file.originalname} because JPEG payslips are captured manually`);
+    }
+    return {
+      extracted_amount: manualAmount,
+      extracted_text: 'Manual amount entered for JPEG payslip'
+    };
+  }
+
+  throw new Error('Payslips must be uploaded as PDF, JPG, or JPEG files');
 }
 
 function createApplication(userId, payload) {
@@ -295,6 +332,13 @@ router.post('/signup-complete', signupUpload.fields([
       if (!getRequiredFile(req, field)) return res.status(400).json({ error: `Missing required file: ${field.replace(/_/g, ' ')}` });
     }
 
+    ['payslip_1', 'payslip_2', 'payslip_3'].forEach((field, index) => {
+      const file = getRequiredFile(req, field);
+      if (file && isPayslipImageMime(file.mimetype) && !parseMoneyAmount(req.body[`payslip_amount_${index + 1}`])) {
+        throw new Error(`Please enter the Rand amount for payslip ${index + 1} because JPEG payslips are captured manually`);
+      }
+    });
+
     if (payout_preference === 'eft' && (!bank_name || !account_holder || !account_number || !branch_code)) {
       return res.status(400).json({ error: 'Please provide all EFT banking details' });
     }
@@ -348,7 +392,7 @@ router.post('/signup-complete', signupUpload.fields([
     insertKycDocument({ userId: created.userId, docType: 'selfie', file: selfie });
 
     const payslipInsights = await Promise.all(
-      payslipFiles.map(payslip => extractPayslipInsights(path.join(uploadDir, payslip.filename), payslip.mimetype))
+      payslipFiles.map((payslip, index) => resolvePayslipInsights(payslip, req.body[`payslip_amount_${index + 1}`]))
     );
 
     for (let i = 0; i < payslipFiles.length; i++) {

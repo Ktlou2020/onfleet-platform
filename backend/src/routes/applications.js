@@ -30,6 +30,18 @@ const upload = multer({
   }
 });
 
+function parseMoneyAmount(value) {
+  const cleaned = String(value ?? '').replace(/[^0-9.-]/g, '');
+  if (!cleaned) return null;
+  const amount = Number(cleaned);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  return +amount.toFixed(2);
+}
+
+function isPayslipImageMime(mimeType) {
+  return ['image/jpeg', 'image/jpg'].includes(String(mimeType || '').toLowerCase());
+}
+
 function createApplication(payload, actor, userId) {
   const totalPaid = Number(payload.total_paid_last_3 || 0);
   const averageWeekly = Number(payload.average_weekly_earnings || 0);
@@ -262,13 +274,32 @@ router.post('/:id/documents', authRequired, upload.single('file'), async (req, r
   }
 
   let insights = { extracted_amount: null, extracted_text: null };
-  if (doc_type === 'payslip' && req.file.mimetype !== 'application/pdf') {
-    fs.unlink(req.file.path, () => {});
-    return res.status(400).json({ error: 'Payslips must be uploaded as PDF documents only' });
-  }
-
   if (doc_type === 'payslip') {
-    insights = await extractPayslipInsights(req.file.path, req.file.mimetype);
+    if (!['application/pdf', 'image/jpeg', 'image/jpg'].includes(req.file.mimetype)) {
+      fs.unlink(req.file.path, () => {});
+      return res.status(400).json({ error: 'Payslips must be uploaded as PDF, JPG, or JPEG files' });
+    }
+
+    const manualPayslipAmount = parseMoneyAmount(req.body.manual_payslip_amount);
+    if (isPayslipImageMime(req.file.mimetype)) {
+      if (!manualPayslipAmount) {
+        fs.unlink(req.file.path, () => {});
+        return res.status(400).json({ error: 'Enter the Rand amount for JPEG payslips before uploading' });
+      }
+      insights = {
+        extracted_amount: manualPayslipAmount,
+        extracted_text: 'Manual amount entered for JPEG payslip'
+      };
+    } else {
+      insights = await extractPayslipInsights(req.file.path, req.file.mimetype);
+      if (!insights.extracted_amount && manualPayslipAmount) {
+        insights = {
+          ...insights,
+          extracted_amount: manualPayslipAmount,
+          extracted_text: insights.extracted_text || 'Manual amount entered for PDF payslip'
+        };
+      }
+    }
   }
 
   const publicFile = `/uploads/applications/${req.file.filename}`;

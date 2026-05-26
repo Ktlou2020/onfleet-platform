@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth';
 import InstallPrompt from './components/InstallPrompt';
+import AnalyticsTracker from './analytics';
 import Landing from './pages/Landing';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
@@ -75,6 +76,7 @@ function HomeRoute() {
 export default function App() {
   return (
     <AuthProvider>
+      <AnalyticsTracker />
       <Routes>
         <Route path="/" element={<HomeRoute />} />
         <Route path="/login" element={<Login />} />

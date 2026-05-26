@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import api from '../../api';
 import toast from 'react-hot-toast';
 import { Loading, Badge, SearchInput, Pagination, fmt, fmtDate, EmptyState, matchesSearch, paginateItems } from '../../components/ui';
+import { trackAnalyticsEvent } from '../../analytics';
 import { CreditCard } from 'lucide-react';
 
 const calcFee = (amt) => +(Number(amt || 0) * 0.029 + 1).toFixed(2);
@@ -62,9 +63,20 @@ export default function RiderPayments() {
     if (!amount || Number(amount) < 1) return toast.error('Enter an amount');
     setBusy(true);
     try {
-      const { data: d } = await api.post('/payments/paystack/init', { agreement_id: selected, amount: Number(amount) });
+      const paymentAmount = Number(amount);
+      const { data: d } = await api.post('/payments/paystack/init', { agreement_id: selected, amount: paymentAmount });
+      trackAnalyticsEvent('begin_checkout', {
+        currency: 'ZAR',
+        value: paymentAmount,
+        agreement_id: selected,
+        payment_gateway: 'paystack'
+      });
       window.location.href = d.authorization_url;
     } catch (e) {
+      trackAnalyticsEvent('begin_checkout_failed', {
+        agreement_id: selected,
+        error_message: e.response?.data?.error || 'Payment init failed'
+      });
       toast.error(e.response?.data?.error || 'Payment init failed. Configure Paystack keys in backend environment.');
       setBusy(false);
     }

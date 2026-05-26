@@ -61,7 +61,6 @@ npm run dev                # http://localhost:4000
 
 # Frontend (separate terminal)
 cd frontend
-cp .env.example .env       # optional: add GA4 Measurement ID and other Vite env vars
 npm install
 npm run dev                # http://localhost:5173
 ```
@@ -87,16 +86,6 @@ npm run dev                # http://localhost:5173
    PAYSTACK_CALLBACK_URL=http://localhost:5173/payments/callback
    ```
 4. (Optional) Add a webhook URL `https://your-domain.com/api/payments/paystack/webhook` in the Paystack dashboard for server-to-server reconciliation.
-
-## 📊 GA4 analytics setup
-
-To enable Google Analytics 4 page view tracking in the frontend, set this Vite environment variable in `frontend/.env`:
-
-```
-VITE_GA4_MEASUREMENT_ID=G-RZFE5KMNCD
-```
-
-If `VITE_GA4_MEASUREMENT_ID` is not set, GA4 tracking stays disabled.
 
 ## 🚀 Production deployment
 

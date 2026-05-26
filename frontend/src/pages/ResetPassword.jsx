@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import api from '../api';
 import Logo from '../components/Logo';
+import { trackAnalyticsEvent } from '../analytics';
 
 export default function ResetPassword() {
   const [params] = useSearchParams();
@@ -31,9 +32,14 @@ export default function ResetPassword() {
     try {
       const { data } = await api.post('/auth/reset-password', { token, new_password: newPassword });
       setDone(true);
+      trackAnalyticsEvent('reset_password', { reset_status: 'success' });
       toast.success(data.message || 'Password reset successful');
       setTimeout(() => navigate('/login'), 1200);
     } catch (error) {
+      trackAnalyticsEvent('reset_password', {
+        reset_status: 'failed',
+        error_message: error.response?.data?.error || 'Reset link is invalid or expired'
+      });
       toast.error(error.response?.data?.error || 'Reset link is invalid or expired');
     } finally {
       setBusy(false);

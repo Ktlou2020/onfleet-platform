@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { Briefcase, CreditCard, ShieldCheck, Users } from 'lucide-react';
 import Logo from '../components/Logo';
 import { useAuth } from '../auth';
+import { trackAnalyticsEvent } from '../analytics';
 
 export default function FleetLogin() {
   const { login } = useAuth();
@@ -18,9 +19,14 @@ export default function FleetLogin() {
     try {
       const user = await login(email, password);
       if (!String(user.role || '').startsWith('fleet_owner_')) {
+        trackAnalyticsEvent('fleet_login_failed', {
+          reason: 'wrong_role',
+          user_role: user.role || 'unknown'
+        });
         toast.error('This login is for fleet-owner accounts only');
         return;
       }
+      trackAnalyticsEvent('fleet_login_success', { user_role: user.role || 'fleet_owner' });
       toast.success(`Welcome back, ${user.full_name.split(' ')[0]}!`);
       nav('/fleet/app');
     } catch (error) {

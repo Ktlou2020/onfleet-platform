@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import api from '../../api';
 import toast from 'react-hot-toast';
 import { Loading, Badge, SearchInput, Pagination, fmt, fmtDate, matchesSearch, paginateItems, normalizePhoneInput } from '../../components/ui';
+import { trackAnalyticsEvent } from '../../analytics';
 
 const PLATFORMS = ['Uber Eats', 'Mr D', 'Bolt Food', 'Takealot', 'Checkers Sixty60', 'Other'];
 
@@ -105,6 +106,11 @@ export default function RiderApplication() {
         years_riding: form.years_riding ? Number(form.years_riding) : null
       };
       await api.post('/applications', payload);
+      trackAnalyticsEvent('application_created', {
+        payout_preference: form.payout_preference,
+        selected_bike_id: payload.preferred_bike_id,
+        delivery_platform_count: form.delivery_platforms.length
+      });
       toast.success('Application created. Now upload your ID, licence, and 3 payslips.');
       await load();
     } catch (error) {
@@ -125,6 +131,12 @@ export default function RiderApplication() {
     setUploading(docType === 'payslip' ? `payslip-${extraFields.slot || 'generic'}` : docType);
     try {
       const { data } = await api.post(`/applications/${latest.id}/documents`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      trackAnalyticsEvent('application_document_uploaded', {
+        document_type: docType,
+        mime_type: file?.type || undefined,
+        manual_amount_used: Boolean(extraFields.manual_payslip_amount),
+        extracted_amount: data?.extracted_amount || undefined
+      });
       if (data?.extracted_amount) toast.success(`${successMessage} Amount saved: ${fmt(data.extracted_amount)}`);
       else toast.success(successMessage);
       await load();
@@ -141,6 +153,11 @@ export default function RiderApplication() {
     const draft = payslipDrafts[slot];
     if (!draft?.file) return toast.error(`Choose Payslip ${slot} first`);
     if (isPayslipImageFile(draft.file) && !String(draft.amount || '').trim()) {
+      trackAnalyticsEvent('application_document_upload_validation_error', {
+        document_type: 'payslip',
+        slot,
+        reason: 'missing_manual_amount'
+      });
       return toast.error(`Enter the Rand amount for Payslip ${slot}`);
     }
     const data = await uploadDocument('payslip', draft.file, {

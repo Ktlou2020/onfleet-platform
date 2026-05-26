@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import api from '../api';
 import Logo from '../components/Logo';
+import { trackAnalyticsEvent } from '../analytics';
 
 export default function ForgotPassword() {
   const [email, setEmail] = useState('');
@@ -15,8 +16,13 @@ export default function ForgotPassword() {
     try {
       const { data } = await api.post('/auth/forgot-password', { email });
       setSent(true);
+      trackAnalyticsEvent('forgot_password_request', { request_status: 'success' });
       toast.success(data.message || 'If the email exists, a reset link has been sent.');
     } catch (error) {
+      trackAnalyticsEvent('forgot_password_request', {
+        request_status: 'failed',
+        error_message: error.response?.data?.error || 'Unable to start password reset'
+      });
       toast.error(error.response?.data?.error || 'Unable to start password reset');
     } finally {
       setBusy(false);

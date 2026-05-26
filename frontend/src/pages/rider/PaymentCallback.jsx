@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import api from '../../api';
 import { fmt } from '../../components/ui';
+import { trackAnalyticsEvent } from '../../analytics';
 
 export default function PaymentCallback() {
   const [params] = useSearchParams();
@@ -10,8 +11,24 @@ export default function PaymentCallback() {
   useEffect(() => {
     const ref = params.get('reference') || params.get('trxref');
     if (!ref) return setState({ loading: false, error: 'Missing reference' });
-    api.get(`/payments/paystack/verify/${ref}`).then((r) => setState({ loading: false, ...r.data }))
-      .catch((e) => setState({ loading: false, error: e.response?.data?.error || 'Verification failed' }));
+    api.get(`/payments/paystack/verify/${ref}`).then((r) => {
+      trackAnalyticsEvent('purchase', {
+        transaction_id: ref,
+        currency: 'ZAR',
+        value: Number(r.data.credited_amount || r.data.net_amount || 0),
+        fee_amount: Number(r.data.fee || 0),
+        gross_amount: Number(r.data.amount || 0),
+        payment_status: r.data.status || 'success'
+      });
+      setState({ loading: false, ...r.data });
+    })
+      .catch((e) => {
+        trackAnalyticsEvent('payment_verification_failed', {
+          transaction_id: ref,
+          error_message: e.response?.data?.error || 'Verification failed'
+        });
+        setState({ loading: false, error: e.response?.data?.error || 'Verification failed' });
+      });
   }, [params]);
 
   return (

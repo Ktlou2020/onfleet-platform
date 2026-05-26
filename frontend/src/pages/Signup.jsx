@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 import Logo from '../components/Logo';
 import southAfricanCities from '../constants/southAfricanCities';
 import { fmt, normalizePhoneInput, Modal } from '../components/ui';
+import { trackAnalyticsEvent } from '../analytics';
 
 const PLATFORMS = ['Uber Eats', 'Mr D', 'Bolt Food', 'Takealot', 'Checkers Sixty60', 'Other'];
 const PROVINCES = ['Gauteng', 'Western Cape', 'KwaZulu-Natal', 'Eastern Cape', 'Free State', 'Limpopo', 'Mpumalanga', 'North West', 'Northern Cape'];
@@ -118,7 +119,13 @@ export default function Signup() {
 
   const openValidationPopup = (issues) => {
     setValidationIssues(issues);
-    if (issues.length) toast.error('Please fix the highlighted requirements');
+    if (issues.length) {
+      trackAnalyticsEvent('signup_validation_error', {
+        signup_step: step,
+        issue_count: issues.length
+      });
+      toast.error('Please fix the highlighted requirements');
+    }
   };
 
   const validateStep = () => {
@@ -145,6 +152,12 @@ export default function Signup() {
       Object.entries(files).forEach(([key, value]) => { if (value) fd.append(key, value); });
       PAYSLIP_FIELDS.forEach((field, index) => {
         if (payslipAmounts[field]) fd.append(`payslip_amount_${index + 1}`, payslipAmounts[field]);
+      });
+      trackAnalyticsEvent('signup_submit_attempt', {
+        signup_step: step,
+        selected_bike: form.preferred_bike_id || undefined,
+        payout_preference: form.payout_preference,
+        jpeg_payslip_count: PAYSLIP_FIELDS.filter((field) => isPayslipImage(files[field])).length
       });
       await signup(fd);
       toast.success('Account created and full application submitted. We are reviewing your documents now.');

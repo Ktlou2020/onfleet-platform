@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { Briefcase, CreditCard, ShieldCheck, Users } from 'lucide-react';
 import Logo from '../components/Logo';
 import { useAuth } from '../auth';
+import { trackAnalyticsEvent } from '../analytics';
 
 const ROLE_OPTIONS = [
   { value: 'fleet_owner_admin', label: 'Company admin' },
@@ -34,6 +35,11 @@ export default function FleetSignup() {
     event.preventDefault();
     setBusy(true);
     try {
+      trackAnalyticsEvent('fleet_signup_submit_attempt', {
+        requested_role: form.role,
+        plan_interest: form.plan_interest,
+        fleet_size: Number(form.fleet_size || 0) || 0
+      });
       const user = await signupFleet({ ...form, fleet_size: Number(form.fleet_size || 0) || 0 });
       toast.success(`Company account created for ${user.organization_name || form.company_name}`);
       nav('/fleet/app');

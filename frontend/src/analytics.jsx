@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 
-const GA_MEASUREMENT_ID = 'G-RZFE5KMNCD';
+const GA_MEASUREMENT_ID = import.meta.env.VITE_GA4_MEASUREMENT_ID || '';
 const GA_SCRIPT_ID = 'onfleet-ga4-script';
 
 function ensureDataLayer() {
@@ -11,7 +11,12 @@ function ensureDataLayer() {
   };
 }
 
+function isGaEnabled() {
+  return Boolean(GA_MEASUREMENT_ID);
+}
+
 function loadGa4Script() {
+  if (!isGaEnabled()) return;
   if (document.getElementById(GA_SCRIPT_ID)) return;
   const script = document.createElement('script');
   script.id = GA_SCRIPT_ID;
@@ -21,6 +26,7 @@ function loadGa4Script() {
 }
 
 function initializeGa4() {
+  if (!isGaEnabled()) return;
   if (typeof window === 'undefined' || typeof document === 'undefined') return;
   if (window.__onfleetGaInitialized) return;
 
@@ -32,6 +38,7 @@ function initializeGa4() {
 }
 
 function trackPageView(pathname, search = '') {
+  if (!isGaEnabled()) return;
   if (typeof window === 'undefined') return;
   ensureDataLayer();
   const pagePath = `${pathname || '/'}${search || ''}`;

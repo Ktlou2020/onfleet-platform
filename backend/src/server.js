@@ -6,6 +6,7 @@ const morgan = require('morgan');
 const path = require('path');
 const fs = require('fs');
 const { ensureSuperadminFromEnv } = require('./services/bootstrapSuperadmin');
+const { ensureContractSnapshotForRelativePath } = require('./services/contracts');
 
 const app = express();
 const uploadRoots = [
@@ -85,13 +86,21 @@ app.use(morgan('dev'));
 app.use(express.json({ limit: '5mb' }));
 app.get(/^\/uploads\/(.+)$/, (req, res) => {
   const relativePath = String(req.params[0] || '');
-  const absolutePath = resolveUploadPath(relativePath);
+  let absolutePath = resolveUploadPath(relativePath);
+  if (!absolutePath) {
+    const regenerated = ensureContractSnapshotForRelativePath(relativePath);
+    absolutePath = regenerated?.absolutePath || null;
+  }
   if (!absolutePath) return sendMissingUpload(res, relativePath);
   return res.sendFile(absolutePath);
 });
 app.head(/^\/uploads\/(.+)$/, (req, res) => {
   const relativePath = String(req.params[0] || '');
-  const absolutePath = resolveUploadPath(relativePath);
+  let absolutePath = resolveUploadPath(relativePath);
+  if (!absolutePath) {
+    const regenerated = ensureContractSnapshotForRelativePath(relativePath);
+    absolutePath = regenerated?.absolutePath || null;
+  }
   if (!absolutePath) return sendMissingUpload(res, relativePath);
   return res.sendFile(absolutePath);
 });

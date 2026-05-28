@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import api from '../api';
 import Logo from '../components/Logo';
 import { fmt } from '../components/ui';
-import { Bike, ShieldCheck, Wrench, MapPin, Zap, CreditCard, Menu, X, CheckCircle2 } from 'lucide-react';
+import { Bike, ShieldCheck, Wrench, MapPin, Zap, CreditCard, Menu, X, CheckCircle2, ArrowRight } from 'lucide-react';
 
 const EMPTY_FILTERS = { make: '', model: '', condition: '' };
 const MONTHS_PER_WEEK = 12 / 52;
@@ -15,6 +15,18 @@ function formatWeeksToMonths(totalWeeks) {
   const roundedMonths = Number.isInteger(months) ? String(months) : months.toFixed(1).replace(/\.0$/, '');
   return `${roundedMonths} month${Number(roundedMonths) === 1 ? '' : 's'} (${weeks} week${weeks === 1 ? '' : 's'})`;
 }
+
+const METRICS = [
+  { value: 'R850', label: 'per week', highlight: true },
+  { value: '18', label: 'months to own', highlight: true },
+  { value: 'R0', label: 'deposit', highlight: true },
+];
+
+const TRUST_ITEMS = [
+  { icon: <ShieldCheck size={15} />, label: 'Fast approval flow' },
+  { icon: <Wrench size={15} />, label: 'Free monthly servicing' },
+  { icon: <MapPin size={15} />, label: 'Built for South African delivery work' },
+];
 
 export default function Landing() {
   const [bikes, setBikes] = useState([]);
@@ -49,25 +61,18 @@ export default function Landing() {
         if (!cancelled) setBikesLoading(false);
       });
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [bikeFilters.make, bikeFilters.model, bikeFilters.condition]);
 
   useEffect(() => {
-    const handleResize = () => {
-      if (window.innerWidth > 900) setMenuOpen(false);
-    };
-
+    const handleResize = () => { if (window.innerWidth > 900) setMenuOpen(false); };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
   useEffect(() => {
     document.body.style.overflow = menuOpen ? 'hidden' : '';
-    return () => {
-      document.body.style.overflow = '';
-    };
+    return () => { document.body.style.overflow = ''; };
   }, [menuOpen]);
 
   const closeMenu = () => setMenuOpen(false);
@@ -101,36 +106,64 @@ export default function Landing() {
 
       <section className="hero">
         <div className="hero-copy">
-          <div className="hero-pill"><CheckCircle2 size={14} /> No deposit · Monthly service included</div>
-          <h1>Ride. Earn. <span>Own.</span></h1>
+          <div className="hero-pill" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 999, border: '1px solid rgba(249,115,22,0.35)', background: 'rgba(249,115,22,0.10)', padding: '6px 14px', color: '#fdba74', fontSize: 13, fontWeight: 500, marginBottom: 4 }}>
+            <CheckCircle2 size={14} style={{ color: '#f97316' }} /> No deposit · Monthly service included
+          </div>
+
+          <h1 style={{ lineHeight: 1.08 }}>
+            Ride. Earn.{' '}
+            <span style={{
+              background: 'linear-gradient(135deg, #f97316 0%, #fbbf24 100%)',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+              backgroundClip: 'text'
+            }}>
+              Own.
+            </span>
+          </h1>
+
           <p>Africa&apos;s smartest rent-to-own platform for delivery riders. No deposit, free monthly servicing, and full ownership of a brand-new motorbike in just 18 months.</p>
+
           <div className="hero-cta">
-            <Link to="/signup" className="btn hero-cta-btn">Start your application</Link>
+            <Link
+              to="/signup"
+              className="btn hero-cta-btn"
+              style={{ boxShadow: '0 8px 32px rgba(249,115,22,0.35)', display: 'inline-flex', alignItems: 'center', gap: 8 }}
+            >
+              Start your application
+              <ArrowRight size={16} />
+            </Link>
             <a href="#how" className="btn btn-secondary hero-cta-btn">How it works</a>
           </div>
-          <div className="hero-metrics">
-            <div className="hero-metric">
-              <div className="text-2xl font-bold" style={{ color: 'var(--primary-light)' }}>R850</div>
-              <div className="muted text-sm">per week</div>
-            </div>
-            <div className="hero-metric">
-              <div className="text-2xl font-bold" style={{ color: 'var(--primary-light)' }}>18</div>
-              <div className="muted text-sm">months to own</div>
-            </div>
-            <div className="hero-metric">
-              <div className="text-2xl font-bold" style={{ color: 'var(--primary-light)' }}>R0</div>
-              <div className="muted text-sm">deposit</div>
-            </div>
+
+          <div className="hero-metrics" style={{ display: 'flex', gap: 28, marginTop: 28 }}>
+            {METRICS.map((m) => (
+              <div key={m.label} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <div style={{ fontSize: '2rem', fontWeight: 800, lineHeight: 1, background: 'linear-gradient(135deg, #f97316, #fbbf24)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>
+                  {m.value}
+                </div>
+                <div className="muted" style={{ fontSize: 12 }}>{m.label}</div>
+              </div>
+            ))}
           </div>
-          <div className="hero-trust-list">
-            <div className="hero-trust-item"><ShieldCheck size={16} /> Fast approval flow</div>
-            <div className="hero-trust-item"><Wrench size={16} /> Free monthly servicing</div>
-            <div className="hero-trust-item"><MapPin size={16} /> Built for South African delivery work</div>
+
+          <div className="hero-trust-list" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 20 }}>
+            {TRUST_ITEMS.map((t) => (
+              <div
+                key={t.label}
+                className="hero-trust-item"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 999, border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.05)', padding: '5px 12px', fontSize: 12 }}
+              >
+                <span style={{ color: '#2dd4bf' }}>{t.icon}</span>
+                {t.label}
+              </div>
+            ))}
           </div>
         </div>
+
         <div className="hero-visual-wrap">
           <div className="hero-art" style={heroImageUrl ? { backgroundImage: `url("${heroImageUrl}")` } : undefined} />
-          <div className="hero-floating-card">
+          <div className="hero-floating-card" style={{ borderRadius: 20, border: '1px solid rgba(249,115,22,0.2)', boxShadow: '0 8px 40px rgba(0,0,0,0.25)' }}>
             <div className="badge badge-info">Popular rider plan</div>
             <strong>Own your bike after 78 weekly payments</strong>
             <div className="muted text-sm">Track payments, service bookings, location and ownership progress from your rider dashboard.</div>
@@ -151,10 +184,10 @@ export default function Landing() {
             { n: '4', t: 'Own it in 18 months', d: 'Pay R850 weekly. Free monthly service. Full ownership at the end.', i: <CreditCard /> }
           ].map((s) => (
             <div className="card landing-step-card" key={s.n}>
-              <div style={{ width: 44, height: 44, borderRadius: 10, background: 'rgba(30,136,209,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--primary-light)', marginBottom: 12 }}>{s.i}</div>
-              <div className="muted text-xs mb-2">STEP {s.n}</div>
-              <h3>{s.t}</h3>
-              <div className="muted text-sm mt-2">{s.d}</div>
+              <div style={{ width: 48, height: 48, borderRadius: 12, background: 'rgba(249,115,22,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#f97316', marginBottom: 14 }}>{s.i}</div>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#f97316', marginBottom: 6 }}>Step {s.n}</div>
+              <h3 style={{ marginBottom: 6 }}>{s.t}</h3>
+              <div className="muted text-sm">{s.d}</div>
             </div>
           ))}
         </div>
@@ -218,15 +251,13 @@ export default function Landing() {
                     <div className="price">{fmt(b.rental_weekly)}<span className="muted text-sm">/week</span></div>
                     <div className="muted text-xs">{formatWeeksToMonths(b.total_weeks)} to own</div>
                   </div>
-                  <Link to="/signup" className="btn btn-sm bike-card-action">Apply</Link>
+                  <Link to="/signup" className="btn btn-sm bike-card-action" style={{ boxShadow: '0 4px 16px rgba(249,115,22,0.28)' }}>Apply</Link>
                 </div>
               </div>
             </div>
           )) : null}
           {!bikesLoading && !bikes.length ? (
-            <div className="card muted">
-              No ready-to-go bikes match the selected filters right now.
-            </div>
+            <div className="card muted">No ready-to-go bikes match the selected filters right now.</div>
           ) : null}
         </div>
       </section>
@@ -246,7 +277,7 @@ export default function Landing() {
             { i: <Bike />, t: 'Real ownership', d: 'After 78 weekly payments, the bike is fully yours. No balloon payments.' }
           ].map((x, i) => (
             <div className="card landing-benefit-card" key={i}>
-              <div style={{ color: 'var(--primary-light)', marginBottom: 10 }}>{x.i}</div>
+              <div style={{ color: '#f97316', marginBottom: 10, padding: '10px 0 0' }}>{x.i}</div>
               <h3>{x.t}</h3>
               <div className="muted text-sm mt-2">{x.d}</div>
             </div>
@@ -258,7 +289,14 @@ export default function Landing() {
         <h2>Ready to own your bike?</h2>
         <div className="sub">Join thousands of South African riders earning more, every day.</div>
         <div className="hero-cta" style={{ justifyContent: 'center' }}>
-          <Link to="/signup" className="btn landing-final-cta-btn">Apply now — it&apos;s free</Link>
+          <Link
+            to="/signup"
+            className="btn landing-final-cta-btn"
+            style={{ boxShadow: '0 8px 32px rgba(249,115,22,0.35)', display: 'inline-flex', alignItems: 'center', gap: 8 }}
+          >
+            Apply now — it&apos;s free
+            <ArrowRight size={16} />
+          </Link>
           <Link to="/fleet" className="btn btn-secondary landing-final-cta-btn">Fleet owners</Link>
         </div>
       </section>

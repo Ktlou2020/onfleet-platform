@@ -2000,9 +2000,11 @@ router.post('/billing/subscribe', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billi
     }
 
     const reference = `OF-SUB-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
+    const amountCents = FLEET_BILLING_PLANS[plan_key].price_zar * 100;
     const initResp = await axios.post(`${PAYSTACK_API}/transaction/initialize`,
       {
         email: req.user.email,
+        amount: amountCents,
         plan: planCode,
         reference,
         callback_url: `${process.env.FRONTEND_URL}/fleet/app/billing`,

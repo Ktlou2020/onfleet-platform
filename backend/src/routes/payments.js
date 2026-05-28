@@ -225,7 +225,7 @@ router.get('/paystack/verify/:reference', authRequired, async (req, res) => {
   }
 });
 
-router.post('/paystack/webhook', express.raw({ type: 'application/json' }), (req, res) => {
+router.post('/paystack/webhook', (req, res) => {
   // Validate Paystack HMAC signature when present
   const sig = req.headers['x-paystack-signature'];
   if (sig && process.env.PAYSTACK_SECRET_KEY) {

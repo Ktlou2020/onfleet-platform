@@ -1959,8 +1959,15 @@ router.post('/billing/subscribe', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billi
     const org = getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
     const { plan_key } = req.body;
     if (!FLEET_BILLING_PLANS[plan_key]) return res.status(400).json({ error: 'Invalid plan key. Choose small, medium, or large.' });
+
+    if (!process.env.PAYSTACK_SECRET_KEY || process.env.PAYSTACK_SECRET_KEY.includes('xxxx')) {
+      return res.status(500).json({ error: 'Paystack is not configured on this server. Please set PAYSTACK_SECRET_KEY.' });
+    }
+
     const planCode = getPlanPaystackCode(plan_key);
-    if (!planCode) return res.status(400).json({ error: 'This plan is not yet configured for online payment — contact support.' });
+    if (!planCode || planCode.includes('xxxx')) {
+      return res.status(400).json({ error: `The ${plan_key} plan is not yet linked to a Paystack plan code. Please set PAYSTACK_PLAN_${plan_key.toUpperCase()} in the server environment.` });
+    }
 
     // Create Paystack customer if not yet linked
     let customerCode = org.paystack_customer_code;
@@ -1994,7 +2001,12 @@ router.post('/billing/subscribe', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billi
       plan: FLEET_BILLING_PLANS[plan_key]
     });
   } catch (error) {
-    res.status(500).json({ error: 'Could not initiate subscription checkout', details: error.response?.data || error.message });
+    const paystackMsg = error.response?.data?.message || error.response?.data?.error;
+    const detail = paystackMsg || error.message;
+    res.status(error.response?.status || 500).json({
+      error: paystackMsg ? `Paystack: ${paystackMsg}` : 'Could not initiate subscription checkout',
+      details: detail
+    });
   }
 });
 

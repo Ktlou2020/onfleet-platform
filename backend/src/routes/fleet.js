@@ -1999,18 +1999,6 @@ router.post('/billing/subscribe', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billi
       return res.status(400).json({ error: `The ${plan_key} plan is not yet linked to a Paystack plan code. Please set PAYSTACK_PLAN_${plan_key.toUpperCase()} in the server environment.` });
     }
 
-    // Create Paystack customer if not yet linked
-    let customerCode = org.paystack_customer_code;
-    if (!customerCode) {
-      const custResp = await axios.post(`${PAYSTACK_API}/customer`,
-        { email: req.user.email, first_name: req.user.full_name, metadata: { organization_id: org.id } },
-        { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } }
-      );
-      customerCode = custResp.data.data.customer_code;
-      db.prepare('UPDATE organizations SET paystack_customer_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-        .run(customerCode, org.id);
-    }
-
     const reference = `OF-SUB-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
     const initResp = await axios.post(`${PAYSTACK_API}/transaction/initialize`,
       {
@@ -2022,6 +2010,10 @@ router.post('/billing/subscribe', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billi
       },
       { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } }
     );
+
+    if (!initResp.data?.status) {
+      return res.status(400).json({ error: `Paystack rejected the request: ${initResp.data?.message || 'Unknown error'}` });
+    }
 
     logAudit(req.user.id, 'fleet_owner.billing.subscribe_init', 'organizations', org.id, { plan_key, reference }, req.ip);
     res.json({

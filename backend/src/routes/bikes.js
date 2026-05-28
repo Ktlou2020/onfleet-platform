@@ -178,12 +178,13 @@ const bikeSelectSql = `SELECT b.*,
 FROM bikes b`;
 
 function listCatalogValues(column, whereClauses = [], params = []) {
-  const sql = `SELECT DISTINCT ${column} AS value
-    FROM bikes
-    WHERE status = 'ready_to_go'
+  const sql = `SELECT DISTINCT b.${column} AS value
+    FROM bikes b
+    WHERE b.status = 'ready_to_go'
+      AND ${adminVisibleBikeClause('b')}
       ${whereClauses.length ? `AND ${whereClauses.join(' AND ')}` : ''}
-      AND COALESCE(TRIM(${column}), '') <> ''
-    ORDER BY ${column}`;
+      AND COALESCE(TRIM(b.${column}), '') <> ''
+    ORDER BY b.${column}`;
   return db.prepare(sql).all(...params).map((row) => row.value);
 }
 
@@ -232,26 +233,26 @@ router.get('/catalog', (req, res) => {
   const make = String(req.query.make || '').trim();
   const model = String(req.query.model || '').trim();
   const condition = String(req.query.condition || '').trim();
-  const whereClauses = [`status = 'ready_to_go'`];
+  const whereClauses = [`b.status = 'ready_to_go'`, adminVisibleBikeClause('b')];
   const params = [];
 
   if (make) {
-    whereClauses.push('make = ?');
+    whereClauses.push('b.make = ?');
     params.push(make);
   }
   if (model) {
-    whereClauses.push('model = ?');
+    whereClauses.push('b.model = ?');
     params.push(model);
   }
   if (condition) {
-    whereClauses.push('condition = ?');
+    whereClauses.push('b.condition = ?');
     params.push(condition);
   }
 
-  const bikes = db.prepare(`SELECT id, make, model, year, engine_cc, condition, rental_weekly, total_weeks, image_url, status, registration
-    FROM bikes
+  const bikes = db.prepare(`SELECT b.id, b.make, b.model, b.year, b.engine_cc, b.condition, b.rental_weekly, b.total_weeks, b.image_url, b.status, b.registration
+    FROM bikes b
     WHERE ${whereClauses.join(' AND ')}
-    ORDER BY make, model, year DESC, id DESC`).all(...params);
+    ORDER BY b.make, b.model, b.year DESC, b.id DESC`).all(...params);
 
   const modelWhereClauses = [];
   const modelParams = [];

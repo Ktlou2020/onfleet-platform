@@ -11,6 +11,12 @@ api.interceptors.request.use((cfg) => {
 api.interceptors.response.use(
   (r) => r,
   (err) => {
+    if (err.response?.status === 402 && err.response.data?.code === 'SUBSCRIPTION_REQUIRED') {
+      if (!window.location.pathname.endsWith('/billing')) {
+        window.location.href = '/fleet/app/billing';
+      }
+      return Promise.reject(err);
+    }
     if (err.response?.status === 401) {
       let redirectTo = '/login';
       try {

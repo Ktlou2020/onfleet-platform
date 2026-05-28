@@ -36,6 +36,25 @@ function getExpiryMeta(date) {
   return { tone: 'var(--muted)', label: `License disc valid until ${fmtDate(date)}` };
 }
 
+function getServiceUrgency(nextServiceDate, nextServiceKm, odometerKm) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  if (nextServiceDate) {
+    const serviceDay = new Date(`${nextServiceDate}T00:00:00`);
+    const days = Math.round((serviceDay - today) / 86400000);
+    if (days < 0) return { cls: 'urgency-overdue', label: `Service overdue by ${Math.abs(days)}d` };
+    if (days === 0) return { cls: 'urgency-overdue', label: 'Service due today' };
+    if (days <= 14) return { cls: 'urgency-soon', label: `Service in ${days}d` };
+    return { cls: 'urgency-ok', label: `Service in ${days}d` };
+  }
+  if (nextServiceKm && odometerKm) {
+    const kmLeft = Number(nextServiceKm) - Number(odometerKm);
+    if (kmLeft <= 0) return { cls: 'urgency-overdue', label: 'Service overdue by km' };
+    if (kmLeft <= 500) return { cls: 'urgency-soon', label: `Service in ${kmLeft} km` };
+  }
+  return null;
+}
+
 function buildInitialForm() {
   return {
     vin: '',
@@ -228,12 +247,19 @@ export default function FleetOwnerBikes() {
       <div className="grid grid-3">
         {pagination.items.map((bike) => {
           const discMeta = getExpiryMeta(bike.license_disc_expiry);
+          const serviceUrgency = getServiceUrgency(bike.next_service_date, bike.next_service_km, bike.odometer_km);
           const draftStatus = statusDrafts[bike.id] || bike.status;
           const changed = draftStatus !== bike.status;
           return (
             <div key={bike.id} className="bike-card" style={{ color: 'var(--text)', display: 'block' }}>
-              <div className="img" style={{ height: 170, backgroundImage: bike.image_url ? `url("${bike.image_url}")` : 'none', backgroundSize: 'cover', backgroundPosition: 'center', backgroundColor: '#0a1219', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <div className="img" style={{ height: 170, backgroundImage: bike.image_url ? `url("${bike.image_url}")` : 'none', backgroundSize: 'cover', backgroundPosition: 'center', backgroundColor: '#0a1219', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
                 {!bike.image_url && <BikeIcon size={42} style={{ color: 'var(--muted)' }} />}
+                {serviceUrgency && (
+                  <div style={{ position: 'absolute', top: 10, right: 10, display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 100, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                    <span className={`urgency-dot ${serviceUrgency.cls}`} />
+                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text)' }}>{serviceUrgency.label}</span>
+                  </div>
+                )}
               </div>
               <div className="body" style={{ padding: 16 }}>
                 <div className="flex-between mb-2" style={{ gap: 12 }}>
@@ -242,18 +268,23 @@ export default function FleetOwnerBikes() {
                 </div>
                 <div className="text-sm" style={{ marginBottom: 8, fontWeight: 600 }}>{[bike.make, bike.model].filter(Boolean).join(' ') || '—'}</div>
                 <div className="row mb-3" style={{ gap: 8, flexWrap: 'wrap' }}>
-                  <span className="badge badge-info">Fleet tag: {bike.fleet || 'Unassigned'}</span>
+                  <span className="badge badge-info">Fleet: {bike.fleet || 'Unassigned'}</span>
                   <span className="badge badge-muted">{bike.year || '—'} · {bike.engine_cc || '—'}cc · {bike.color || '—'}</span>
                 </div>
                 <div className="text-xs muted">VIN: {bike.vin}</div>
-                <div className="text-xs muted">Registration: {bike.registration || 'Pending registration'}</div>
-                <div className="text-xs muted">Make / model: {[bike.make, bike.model].filter(Boolean).join(' ') || '—'}</div>
-                <div className="flex-between mt-3 mb-1"><span className="muted text-sm">Weekly</span><strong style={{ color: 'var(--primary-light)' }}>{fmt(bike.rental_weekly)}</strong></div>
+                <div className="flex-between mt-3 mb-1"><span className="muted text-sm">Weekly rental</span><strong style={{ color: 'var(--primary-light)' }}>{fmt(bike.rental_weekly)}</strong></div>
                 <div className="flex-between"><span className="muted text-sm">Odometer</span><span>{bike.odometer_km || 0} km</span></div>
-                {bike.next_service_date && <div className="flex-between"><span className="muted text-sm">Next service</span><span className="text-xs">{fmtDate(bike.next_service_date)}</span></div>}
-                <div className="flex-between"><span className="muted text-sm">License disc</span><span className="text-xs">{bike.license_disc_expiry ? fmtDate(bike.license_disc_expiry) : '—'}</span></div>
-                {discMeta && <div className="text-xs" style={{ marginTop: 8, color: discMeta.tone }}>{discMeta.label}</div>}
-                {bike.rider_name && <div className="text-xs muted mt-2">Allocated rider: {bike.rider_name}</div>}
+                {(bike.next_service_date || bike.next_service_km) && (
+                  <div className="flex-between mt-1">
+                    <span className="muted text-sm">Next service</span>
+                    <span className="text-xs" style={{ color: serviceUrgency?.cls === 'urgency-overdue' ? 'var(--danger)' : serviceUrgency?.cls === 'urgency-soon' ? 'var(--warn)' : undefined }}>
+                      {bike.next_service_date ? fmtDate(bike.next_service_date) : '—'}{bike.next_service_km ? ` · ${Number(bike.next_service_km).toLocaleString('en-ZA')} km` : ''}
+                    </span>
+                  </div>
+                )}
+                <div className="flex-between mt-1"><span className="muted text-sm">License disc</span><span className="text-xs">{bike.license_disc_expiry ? fmtDate(bike.license_disc_expiry) : '—'}</span></div>
+                {discMeta && <div className="text-xs" style={{ marginTop: 6, color: discMeta.tone }}>{discMeta.label}</div>}
+                {bike.rider_name && <div className="text-xs muted mt-2">Rider: {bike.rider_name}</div>}
                 {bike.agreement_no && <div className="text-xs muted">Agreement: {bike.agreement_no}</div>}
                 {canManage && (
                   <div className="card mt-3" style={{ background: 'var(--surface-2)', padding: 12 }}>

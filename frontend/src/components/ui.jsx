@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Search, X, ChevronLeft, ChevronRight, Copy, Check, Phone } from 'lucide-react';
+import { Search, X, ChevronLeft, ChevronRight, Copy, Check, Phone, AlertTriangle } from 'lucide-react';
 
 export const fmt = (n) => `R${Number(n || 0).toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 export const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-ZA', { year: 'numeric', month: 'short', day: 'numeric' }) : '—';
@@ -205,6 +205,37 @@ export function EmptyState({ title, sub, action }) {
       <h3 style={{ marginBottom: 6 }}>{title}</h3>
       <div className="muted mb-4">{sub}</div>
       {action}
+    </div>
+  );
+}
+
+export function Skeleton({ lines = 3, height, className = '' }) {
+  if (height) return <div className={`skeleton ${className}`} style={{ height }} />;
+  return (
+    <div style={{ padding: 4 }}>
+      {Array.from({ length: lines }).map((_, i) => (
+        <div key={i} className={`skeleton skeleton-line ${i === lines - 1 ? 'short' : i % 2 === 0 ? '' : 'medium'}`} />
+      ))}
+    </div>
+  );
+}
+
+export function ConfirmModal({ title, body, confirmLabel = 'Confirm', danger = false, onConfirm, onClose, busy = false }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 440 }} onClick={(e) => e.stopPropagation()}>
+        <div className="confirm-modal-icon" style={{ background: danger ? 'rgba(239,68,68,0.12)' : 'rgba(30,136,209,0.12)', color: danger ? 'var(--danger)' : 'var(--primary-light)' }}>
+          <AlertTriangle size={22} />
+        </div>
+        <h2 style={{ marginBottom: 10, fontSize: 20 }}>{title}</h2>
+        <div className="confirm-modal-body">{body}</div>
+        <div className="row" style={{ justifyContent: 'flex-end', gap: 10 }}>
+          <button className="btn btn-secondary" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className={`btn ${danger ? 'btn-danger' : ''}`} onClick={onConfirm} disabled={busy}>
+            {busy ? 'Working…' : confirmLabel}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

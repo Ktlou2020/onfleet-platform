@@ -525,11 +525,24 @@ function getOrganization(organizationId) {
   return db.prepare(`SELECT * FROM organizations WHERE id = ?`).get(organizationId);
 }
 
-function getOrganizationOrThrow(organizationId) {
+function getOrganizationOrThrow(organizationId, { allowExpired = false } = {}) {
   const organization = getOrganization(organizationId);
   if (!organization) {
     const error = new Error('Organization not found');
     error.status = 404;
+    throw error;
+  }
+  // Auto-expire trial on every request so the status is always accurate
+  if (organization.status === 'trialing' && organization.trial_ends_at) {
+    if (new Date(organization.trial_ends_at) < new Date()) {
+      db.prepare("UPDATE organizations SET status = 'past_due', updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(organization.id);
+      organization.status = 'past_due';
+    }
+  }
+  if (!allowExpired && ['past_due', 'suspended', 'cancelled'].includes(organization.status)) {
+    const error = new Error('Your subscription has ended. Go to Billing to upgrade your plan.');
+    error.status = 402;
+    error.code = 'SUBSCRIPTION_REQUIRED';
     throw error;
   }
   return organization;
@@ -992,7 +1005,7 @@ router.get('/account', companyRoleAllowed(FLEET_RESOURCE_ACCESS.dashboard.view),
 
 router.get('/portal-data', companyRoleAllowed(FLEET_RESOURCE_ACCESS.dashboard.view), (req, res) => {
   try {
-    const organization = getOrganizationOrThrow(req.user.organization_id);
+    const organization = getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
     res.json(getPortalData(organization, req.user.role));
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Could not load fleet portal data' });
@@ -1921,11 +1934,7 @@ function applyPlanToOrg(orgId, planKey, subscriptionCode) {
 // GET /fleet/billing/status
 router.get('/billing/status', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.view), (req, res) => {
   try {
-    const org = getOrganizationOrThrow(req.user.organization_id);
-    if (org.status === 'trialing' && org.trial_ends_at && new Date(org.trial_ends_at) < new Date()) {
-      db.prepare("UPDATE organizations SET status = 'past_due', updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(org.id);
-      org.status = 'past_due';
-    }
+    const org = getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
     const trialDaysLeft = (org.status === 'trialing' && org.trial_ends_at)
       ? Math.max(0, Math.round((new Date(org.trial_ends_at) - new Date()) / 86400000))
       : null;
@@ -1947,7 +1956,7 @@ router.get('/billing/status', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.v
 // POST /fleet/billing/subscribe — initialise Paystack subscription checkout
 router.post('/billing/subscribe', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
   try {
-    const org = getOrganizationOrThrow(req.user.organization_id);
+    const org = getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
     const { plan_key } = req.body;
     if (!FLEET_BILLING_PLANS[plan_key]) return res.status(400).json({ error: 'Invalid plan key. Choose small, medium, or large.' });
     const planCode = getPlanPaystackCode(plan_key);
@@ -1994,7 +2003,7 @@ router.get('/billing/verify', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.m
   try {
     const { reference } = req.query;
     if (!reference) return res.status(400).json({ error: 'Reference is required' });
-    const org = getOrganizationOrThrow(req.user.organization_id);
+    const org = getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
 
     const verifyResp = await axios.get(
       `${PAYSTACK_API}/transaction/verify/${encodeURIComponent(reference)}`,
@@ -2022,7 +2031,7 @@ router.get('/billing/verify', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.m
 // POST /fleet/billing/cancel — cancel active subscription
 router.post('/billing/cancel', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), (req, res) => {
   try {
-    const org = getOrganizationOrThrow(req.user.organization_id);
+    const org = getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
     if (org.status !== 'active') return res.status(400).json({ error: 'No active subscription to cancel' });
     db.prepare("UPDATE organizations SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(org.id);
     logAudit(req.user.id, 'fleet_owner.billing.cancelled', 'organizations', org.id, {}, req.ip);

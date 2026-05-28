@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Bike, FileText, CreditCard, HelpCircle, LogOut, Users, Wallet } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
+import { LayoutDashboard, Bike, FileText, CreditCard, HelpCircle, LogOut, Users, Wallet, AlertTriangle } from 'lucide-react';
 import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
 import { useAuth } from '../../auth';
 import { FLEET_NAV_ITEMS, canAccessFleetRoute, getFleetRoleLabel } from './access';
+import api from '../../api';
 
 const navIconMap = {
   dashboard: LayoutDashboard,
@@ -16,10 +17,53 @@ const navIconMap = {
   help: HelpCircle
 };
 
+const BLOCKED_STATUSES = ['past_due', 'suspended', 'cancelled'];
+
+function SubscriptionGate({ status, canOpenBilling, onGoToBilling }) {
+  const messages = {
+    past_due: { heading: 'Trial ended — subscription required', body: 'Your free trial has expired. Choose a plan to keep accessing the fleet portal.' },
+    suspended: { heading: 'Account suspended', body: 'Your subscription payment failed. Update your payment method to restore access.' },
+    cancelled: { heading: 'Subscription cancelled', body: 'Your subscription has been cancelled. Choose a plan to regain access.' },
+  };
+  const { heading, body } = messages[status] || { heading: 'Subscription required', body: 'Please subscribe to continue.' };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '60vh', gap: 24, padding: 32, textAlign: 'center' }}>
+      <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'rgba(239,68,68,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <AlertTriangle size={30} style={{ color: 'var(--danger)' }} />
+      </div>
+      <div>
+        <h2 style={{ marginBottom: 8 }}>{heading}</h2>
+        <p className="muted" style={{ maxWidth: 400 }}>{body}</p>
+      </div>
+      {canOpenBilling ? (
+        <button className="btn" onClick={onGoToBilling} style={{ minWidth: 160 }}>
+          <Wallet size={15} /> View Plans &amp; Subscribe
+        </button>
+      ) : (
+        <p className="muted text-sm">Contact your account administrator to reactivate this account.</p>
+      )}
+    </div>
+  );
+}
+
 export default function FleetOwnerShell() {
   const { user, logout } = useAuth();
   const nav = useNavigate();
+  const location = useLocation();
   const [search, setSearch] = useState('');
+  const [orgStatus, setOrgStatus] = useState(null);
+  const [statusLoaded, setStatusLoaded] = useState(false);
+
+  const canOpenBilling = canAccessFleetRoute(user?.role, 'billing');
+  const onBillingPage = location.pathname.endsWith('/billing');
+
+  useEffect(() => {
+    api.get('/fleet/billing/status')
+      .then((r) => { setOrgStatus(r.data.organization?.status ?? null); })
+      .catch(() => { setOrgStatus(null); })
+      .finally(() => setStatusLoaded(true));
+  }, [location.pathname]);
 
   const allowedNav = useMemo(() => FLEET_NAV_ITEMS.filter((item) => canAccessFleetRoute(user?.role, item.key)), [user?.role]);
   const filteredNav = useMemo(() => allowedNav.filter((item) => matchesSearch(search, item.label, item.to)), [allowedNav, search]);
@@ -31,6 +75,8 @@ export default function FleetOwnerShell() {
       setSearch('');
     }
   };
+
+  const isBlocked = statusLoaded && BLOCKED_STATUSES.includes(orgStatus) && !onBillingPage;
 
   return (
     <div className="app-shell">
@@ -70,7 +116,17 @@ export default function FleetOwnerShell() {
           </div>
           <div className="text-xs muted">Logged in as <strong>{user?.email}</strong></div>
         </div>
-        <div className="content"><Outlet /></div>
+        <div className="content">
+          {isBlocked ? (
+            <SubscriptionGate
+              status={orgStatus}
+              canOpenBilling={canOpenBilling}
+              onGoToBilling={() => nav('/fleet/app/billing')}
+            />
+          ) : (
+            <Outlet />
+          )}
+        </div>
       </div>
     </div>
   );

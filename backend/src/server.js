@@ -83,6 +83,8 @@ function injectShareMeta(template, meta) {
 app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: false, crossOriginEmbedderPolicy: false }));
 app.use(cors({ origin: '*', credentials: true }));
 app.use(morgan('dev'));
+// Webhook must receive the raw body for HMAC validation — register before express.json()
+app.use('/api/payments/paystack/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json({ limit: '5mb' }));
 app.get(/^\/uploads\/(.+)$/, (req, res) => {
   const relativePath = String(req.params[0] || '');

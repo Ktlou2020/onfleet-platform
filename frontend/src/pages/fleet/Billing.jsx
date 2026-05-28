@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { AlertTriangle, CheckCircle2, Clock3, CreditCard, RefreshCw, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Clock3, CreditCard, RefreshCw, XCircle, Wrench } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../api';
 import { Badge, ConfirmModal, Loading, fmt, fmtDate } from '../../components/ui';
@@ -21,6 +21,18 @@ const STATUS_BADGE = {
   suspended: 'overdue',
   cancelled: 'cancelled'
 };
+
+function DiagRow({ ok, label, value }) {
+  return (
+    <div className="row" style={{ gap: 10, alignItems: 'flex-start', fontSize: 13 }}>
+      {ok
+        ? <CheckCircle2 size={14} style={{ color: 'var(--success)', flexShrink: 0, marginTop: 1 }} />
+        : <XCircle size={14} style={{ color: 'var(--danger)', flexShrink: 0, marginTop: 1 }} />}
+      <span style={{ minWidth: 200 }}>{label}</span>
+      <code className="muted" style={{ fontSize: 12, wordBreak: 'break-all' }}>{value}</code>
+    </div>
+  );
+}
 
 function PlanCard({ plan, current, canSubscribe, onSubscribe, busy }) {
   const isCurrent = current?.plan_key === plan.key && current?.status === 'active';
@@ -69,6 +81,8 @@ export default function FleetBilling() {
   const [showCancel, setShowCancel] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [verified, setVerified] = useState(false);
+  const [diag, setDiag] = useState(null);
+  const [diagBusy, setDiagBusy] = useState(false);
 
   const load = async () => {
     const { data } = await api.get('/fleet/billing/status');
@@ -117,6 +131,18 @@ export default function FleetBilling() {
       toast.error(err.response?.data?.error || 'Could not cancel subscription');
     } finally {
       setBusy('');
+    }
+  };
+
+  const runDiag = async () => {
+    setDiagBusy(true);
+    try {
+      const { data } = await api.get('/fleet/billing/diagnose');
+      setDiag(data);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Diagnose failed');
+    } finally {
+      setDiagBusy(false);
     }
   };
 
@@ -226,6 +252,28 @@ export default function FleetBilling() {
             <div className="muted text-sm">For 100+ bikes, dedicated onboarding, or custom integrations, contact the OnFleet team directly.</div>
           </div>
         </div>
+      </div>
+
+      {/* Paystack config diagnostics */}
+      <div className="card mt-4" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
+        <div className="flex-between" style={{ marginBottom: diag ? 12 : 0 }}>
+          <div className="row" style={{ gap: 8 }}>
+            <Wrench size={14} style={{ color: 'var(--muted)' }} />
+            <span className="text-sm muted">Paystack configuration diagnostics</span>
+          </div>
+          <button className="btn btn-secondary btn-sm" onClick={runDiag} disabled={diagBusy}>
+            {diagBusy ? 'Checking…' : 'Run check'}
+          </button>
+        </div>
+        {diag && (
+          <div style={{ display: 'grid', gap: 6, marginTop: 8 }}>
+            <DiagRow ok={diag.secret_key_set} label="Paystack secret key" value={diag.secret_key_env} />
+            <DiagRow ok={diag.paystack_reachable} label="Paystack API reachable" value={diag.paystack_error || 'OK'} />
+            {Object.entries(diag.plans).map(([key, p]) => (
+              <DiagRow key={key} ok={p.valid_format} label={`Plan code: ${key}`} value={p.code} />
+            ))}
+          </div>
+        )}
       </div>
 
       {showCancel && (

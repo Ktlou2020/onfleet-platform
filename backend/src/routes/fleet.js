@@ -1908,7 +1908,10 @@ const FLEET_BILLING_PLANS = {
 };
 
 function getPlanPaystackCode(planKey) {
-  return process.env[`PAYSTACK_PLAN_${String(planKey).toUpperCase()}`] || null;
+  const raw = process.env[`PAYSTACK_PLAN_${String(planKey).toUpperCase()}`];
+  // Trim whitespace and strip inline shell-style comments (e.g. "PLN_xxx  # comment")
+  const cleaned = String(raw || '').split('#')[0].trim();
+  return cleaned || null;
 }
 
 function getKeyForPlanCode(planCode) {
@@ -1930,6 +1933,33 @@ function applyPlanToOrg(orgId, planKey, subscriptionCode) {
     updated_at = CURRENT_TIMESTAMP
     WHERE id = ?`).run(...updates, ...subParams, orgId);
 }
+
+// GET /fleet/billing/diagnose — admin-only config check (does not charge)
+router.get('/billing/diagnose', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
+  const secretKey = process.env.PAYSTACK_SECRET_KEY || '';
+  const checks = {
+    secret_key_set: !!secretKey && !secretKey.includes('xxxx'),
+    secret_key_env: secretKey ? secretKey.slice(0, 7) + '…' : '(not set)',
+    plans: {}
+  };
+  for (const key of Object.keys(FLEET_BILLING_PLANS)) {
+    const code = getPlanPaystackCode(key);
+    checks.plans[key] = { code: code || '(not set)', valid_format: !!(code && code.startsWith('PLN_')) };
+  }
+
+  let paystackReachable = false;
+  let paystackError = null;
+  try {
+    const r = await axios.get(`${PAYSTACK_API}/bank`, { headers: { Authorization: `Bearer ${secretKey}` }, timeout: 5000 });
+    paystackReachable = r.data?.status === true;
+  } catch (e) {
+    paystackError = e.response?.data?.message || e.message;
+  }
+  checks.paystack_reachable = paystackReachable;
+  checks.paystack_error = paystackError;
+
+  res.json(checks);
+});
 
 // GET /fleet/billing/status
 router.get('/billing/status', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.view), (req, res) => {

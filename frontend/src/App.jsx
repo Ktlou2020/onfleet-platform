@@ -18,6 +18,7 @@ import FleetOwnerAgreements from './pages/fleet/Agreements';
 import FleetOwnerPayments from './pages/fleet/Payments';
 import FleetOwnerRiders from './pages/fleet/Riders';
 import FleetOwnerHelp from './pages/fleet/Help';
+import FleetBilling from './pages/fleet/Billing';
 import RiderShell from './pages/rider/RiderShell';
 import RiderDashboard from './pages/rider/Dashboard';
 import RiderAgreements from './pages/rider/Agreements';
@@ -94,6 +95,7 @@ export default function App() {
           <Route path="agreements" element={<FleetRouteGate section="agreements"><FleetOwnerAgreements /></FleetRouteGate>} />
           <Route path="payments" element={<FleetRouteGate section="payments"><FleetOwnerPayments /></FleetRouteGate>} />
           <Route path="riders" element={<FleetRouteGate section="riders"><FleetOwnerRiders /></FleetRouteGate>} />
+          <Route path="billing" element={<FleetRouteGate section="billing"><FleetBilling /></FleetRouteGate>} />
           <Route path="help" element={<FleetRouteGate section="help"><FleetOwnerHelp /></FleetRouteGate>} />
         </Route>
 

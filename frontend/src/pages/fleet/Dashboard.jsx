@@ -95,9 +95,20 @@ export default function FleetDashboard() {
     return days > 0 && days <= 30;
   }), [portal.bikes]);
 
+  const canOpenBilling = canAccessFleetRoute(user?.role, 'billing');
+
+  // Trial / subscription status checks
+  const orgStatus = organization.status;
+  const trialEndsAt = organization.trial_ends_at ? new Date(organization.trial_ends_at) : null;
+  const todayDate = new Date();
+  todayDate.setHours(0, 0, 0, 0);
+  const trialDaysLeft = trialEndsAt ? Math.max(0, Math.round((trialEndsAt - todayDate) / 86400000)) : null;
+  const trialExpired = orgStatus === 'past_due' || (orgStatus === 'trialing' && trialEndsAt && trialEndsAt < todayDate);
+  const trialExpiringSoon = orgStatus === 'trialing' && trialDaysLeft !== null && trialDaysLeft <= 5 && !trialExpired;
+
   if (loading) return <Loading />;
 
-  const hasAlerts = (summary.defaulted_agreements || 0) > 0 || overdueServiceBikes.length > 0 || expiredDiscBikes.length > 0;
+  const hasAlerts = (summary.defaulted_agreements || 0) > 0 || overdueServiceBikes.length > 0 || expiredDiscBikes.length > 0 || trialExpired || trialExpiringSoon;
 
   return (
     <>
@@ -121,6 +132,24 @@ export default function FleetDashboard() {
       {/* Alert banners */}
       {hasAlerts && (
         <div className="mb-4">
+          {trialExpired && (
+            <div className="alert-banner alert-danger">
+              <AlertTriangle size={16} style={{ flexShrink: 0, marginTop: 1 }} />
+              <span>
+                <strong>Your trial has ended.</strong> Subscribe to a paid plan to restore full access.
+                {canOpenBilling && <> <Link to="/fleet/app/billing">View billing →</Link></>}
+              </span>
+            </div>
+          )}
+          {trialExpiringSoon && (
+            <div className="alert-banner alert-warn">
+              <Clock3 size={16} style={{ flexShrink: 0, marginTop: 1 }} />
+              <span>
+                <strong>Trial expires in {trialDaysLeft} day{trialDaysLeft !== 1 ? 's' : ''}.</strong> Subscribe now to avoid disruption.
+                {canOpenBilling && <> <Link to="/fleet/app/billing">Subscribe →</Link></>}
+              </span>
+            </div>
+          )}
           {(summary.defaulted_agreements || 0) > 0 && (
             <div className="alert-banner alert-danger">
               <AlertTriangle size={16} style={{ flexShrink: 0, marginTop: 1 }} />

@@ -629,7 +629,7 @@ function getFleetBikes(org) {
 
 function getFleetAgreements(org) {
   const scope = getBikeScope(org, 'b');
-  return db.prepare(`SELECT a.id, a.agreement_no, a.status, a.weekly_amount, a.total_amount, a.total_weeks, a.start_date, a.end_date, a.notes,
+  return db.prepare(`SELECT a.id, a.agreement_no, a.status, a.weekly_amount, a.total_amount, a.total_weeks, a.start_date, a.end_date, a.notes, a.discontinued_reason,
       b.id AS bike_id, b.registration AS bike_registration, b.make, b.model, b.status AS bike_status,
       u.id AS rider_id, u.full_name AS rider_name, u.email AS rider_email, u.phone AS rider_phone,
       COALESCE((

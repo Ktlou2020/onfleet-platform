@@ -7,7 +7,7 @@ import { useAuth } from '../auth';
 import { trackAnalyticsEvent } from '../analytics';
 
 export default function FleetLogin() {
-  const { login } = useAuth();
+  const { login, logout } = useAuth();
   const nav = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -23,6 +23,7 @@ export default function FleetLogin() {
           reason: 'wrong_role',
           user_role: user.role || 'unknown'
         });
+        logout();
         toast.error('This login is for fleet-owner accounts only');
         return;
       }

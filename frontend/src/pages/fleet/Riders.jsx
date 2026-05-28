@@ -72,6 +72,7 @@ export default function FleetOwnerRiders() {
   const canManage = canManageFleetSection(user?.role, 'riders');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [loadingDetail, setLoadingDetail] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -165,7 +166,7 @@ export default function FleetOwnerRiders() {
 
   const openEdit = async (applicationId) => {
     try {
-      setSaving(true);
+      setLoadingDetail(true);
       const { data } = await api.get(`/fleet/riders/${applicationId}`);
       setDetail(data);
       setForm({
@@ -199,7 +200,7 @@ export default function FleetOwnerRiders() {
     } catch (error) {
       toast.error(error.response?.data?.error || 'Could not load rider details');
     } finally {
-      setSaving(false);
+      setLoadingDetail(false);
     }
   };
 
@@ -569,7 +570,7 @@ export default function FleetOwnerRiders() {
                 <td>{item.average_weekly_earnings ? fmt(item.average_weekly_earnings) : 'Pending'}</td>
                 <td>{item.document_count || 0}<div className="text-xs muted">Payslips: {item.payslip_count || 0}/3</div></td>
                 <td>{fmtDate(item.submitted_at)}</td>
-                <td>{canManage ? <button className="btn btn-sm btn-secondary" disabled={saving} onClick={() => openEdit(item.id)}>Manage</button> : <span className="muted text-sm">View only</span>}</td>
+                <td>{canManage ? <button className="btn btn-sm btn-secondary" disabled={loadingDetail} onClick={() => openEdit(item.id)}>Manage</button> : <span className="muted text-sm">View only</span>}</td>
               </tr>
             ))}
           </tbody>

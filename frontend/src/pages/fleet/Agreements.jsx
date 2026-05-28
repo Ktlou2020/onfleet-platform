@@ -27,6 +27,7 @@ export default function FleetOwnerAgreements() {
   const { user } = useAuth();
   const canManage = canManageFleetSection(user?.role, 'agreements');
   const [portal, setPortal] = useState(emptyPortal);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
   const [page, setPage] = useState(1);
@@ -40,14 +41,16 @@ export default function FleetOwnerAgreements() {
   const [createForm, setCreateForm] = useState({ bike_id: '', rider_id: '', start_date: todayIso(), weekly_amount: '', total_weeks: '', notes: '' });
   const [reassignForm, setReassignForm] = useState({ agreement_id: '', target_bike_id: '', note: '' });
 
-  const load = async () => {
+  const load = async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true);
     const { data } = await api.get('/fleet/portal-data');
     const nextPortal = { ...emptyPortal, ...data };
     setPortal(nextPortal);
     setRemainingDrafts(Object.fromEntries((nextPortal.agreements || []).map((agreement) => [agreement.id, String(Number(agreement.remaining_balance || 0).toFixed(2))])));
+    if (!silent) setLoading(false);
   };
 
-  useEffect(() => { load().catch(() => toast.error('Could not load agreements')); }, []);
+  useEffect(() => { load().catch(() => { toast.error('Could not load agreements'); setLoading(false); }); }, []);
   useEffect(() => { setPage(1); }, [search, status]);
 
   const agreements = useMemo(() => (portal.agreements || []).filter((agreement) => {
@@ -81,7 +84,7 @@ export default function FleetOwnerAgreements() {
       });
       toast.success('Agreement created');
       setShowCreate(false);
-      await load();
+      await load({ silent: true });
     } catch (error) {
       toast.error(error.response?.data?.error || 'Could not create agreement');
     } finally {
@@ -99,7 +102,7 @@ export default function FleetOwnerAgreements() {
       });
       toast.success('Agreement reassigned');
       setShowReassign(false);
-      await load();
+      await load({ silent: true });
     } catch (error) {
       toast.error(error.response?.data?.error || 'Could not reassign agreement');
     } finally {
@@ -116,7 +119,7 @@ export default function FleetOwnerAgreements() {
       setActionBusy(`${agreement.id}-${nextStatus}`);
       await api.post(`/fleet/agreements/${agreement.id}/status`, { status: nextStatus });
       toast.success(`Agreement updated to ${labelize(nextStatus)}`);
-      await load();
+      await load({ silent: true });
     } catch (error) {
       toast.error(error.response?.data?.error || 'Could not update agreement');
     } finally {
@@ -130,7 +133,7 @@ export default function FleetOwnerAgreements() {
       setActionBusy(`${agreement.id}-reinstate`);
       await api.post(`/fleet/agreements/${agreement.id}/reinstate`);
       toast.success('Agreement reinstated');
-      await load();
+      await load({ silent: true });
     } catch (error) {
       toast.error(error.response?.data?.error || 'Could not reinstate agreement');
     } finally {
@@ -151,7 +154,7 @@ export default function FleetOwnerAgreements() {
       await api.patch(`/fleet/agreements/${agreement.id}/remaining-balance`, { remaining_balance: amount });
       toast.success('Remaining balance updated');
       setEditingRemainingId(null);
-      await load();
+      await load({ silent: true });
     } catch (error) {
       toast.error(error.response?.data?.error || 'Could not update remaining balance');
     } finally {
@@ -159,7 +162,7 @@ export default function FleetOwnerAgreements() {
     }
   };
 
-  if (!portal.agreements) return <Loading />;
+  if (loading) return <Loading />;
 
   return (
     <>

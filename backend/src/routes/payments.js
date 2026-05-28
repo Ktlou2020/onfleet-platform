@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const multer = require('multer');
 const axios = require('axios');
 const { v4: uuid } = require('uuid');
@@ -224,9 +225,72 @@ router.get('/paystack/verify/:reference', authRequired, async (req, res) => {
   }
 });
 
-router.post('/paystack/webhook', express.json(), (req, res) => {
-  const event = req.body;
-  if (event.event === 'charge.success') {
+router.post('/paystack/webhook', express.raw({ type: 'application/json' }), (req, res) => {
+  // Validate Paystack HMAC signature when present
+  const sig = req.headers['x-paystack-signature'];
+  if (sig && process.env.PAYSTACK_SECRET_KEY) {
+    const expected = crypto.createHmac('sha512', process.env.PAYSTACK_SECRET_KEY)
+      .update(req.body)
+      .digest('hex');
+    if (expected !== sig) return res.sendStatus(401);
+  }
+
+  let event;
+  try { event = JSON.parse(req.body.toString()); } catch { return res.sendStatus(400); }
+
+  // Fleet subscription events — identified by the presence of a plan code
+  const planCode = event.data?.plan?.plan_code || event.data?.plan;
+  const isFleetEvent = planCode && typeof planCode === 'string' && planCode.startsWith('PLN_');
+
+  if (event.event === 'subscription.create' && isFleetEvent) {
+    const customerCode = event.data.customer?.customer_code;
+    const subscriptionCode = event.data.subscription_code;
+    const key = getKeyForPlanCode(planCode);
+    if (customerCode && key) {
+      const org = db.prepare('SELECT * FROM organizations WHERE paystack_customer_code = ?').get(customerCode);
+      if (org) {
+        const plan = FLEET_BILLING_PLAN_ENTITLEMENTS[key];
+        if (plan) {
+          db.prepare(`UPDATE organizations SET plan_key = ?, status = 'active',
+            paystack_subscription_code = ?,
+            max_bikes = ?, max_admin_users = ?,
+            updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+            .run(key, subscriptionCode, plan.max_bikes, plan.max_admin_users, org.id);
+        }
+      }
+    }
+  } else if (event.event === 'charge.success' && isFleetEvent) {
+    // Recurring subscription charge — keep org active and update subscription code if needed
+    const customerCode = event.data.customer?.customer_code;
+    const subscriptionCode = event.data.subscription?.subscription_code;
+    const key = getKeyForPlanCode(planCode);
+    if (customerCode) {
+      const org = db.prepare('SELECT * FROM organizations WHERE paystack_customer_code = ?').get(customerCode);
+      if (org && key) {
+        const plan = FLEET_BILLING_PLAN_ENTITLEMENTS[key];
+        if (plan) {
+          db.prepare(`UPDATE organizations SET plan_key = ?, status = 'active',
+            ${subscriptionCode ? 'paystack_subscription_code = ?,' : ''}
+            max_bikes = ?, max_admin_users = ?,
+            updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+            .run(key, ...(subscriptionCode ? [subscriptionCode] : []), plan.max_bikes, plan.max_admin_users, org.id);
+        }
+      }
+    }
+  } else if (event.event === 'subscription.disable') {
+    const subscriptionCode = event.data.subscription_code;
+    if (subscriptionCode) {
+      db.prepare("UPDATE organizations SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE paystack_subscription_code = ?")
+        .run(subscriptionCode);
+    }
+  } else if (event.event === 'invoice.payment_failed') {
+    const subscriptionCode = event.data.subscription?.subscription_code;
+    if (subscriptionCode) {
+      db.prepare("UPDATE organizations SET status = 'past_due', updated_at = CURRENT_TIMESTAMP WHERE paystack_subscription_code = ?")
+        .run(subscriptionCode);
+    }
+  } else if (event.event === 'charge.success' && !isFleetEvent) {
+    // Rider one-time payment
     const ref = event.data.reference;
     const payment = db.prepare('SELECT * FROM payments WHERE reference = ?').get(ref);
     if (payment && payment.status !== 'success') {
@@ -237,8 +301,24 @@ router.post('/paystack/webhook', express.json(), (req, res) => {
       applyPaymentToSchedule(payment.agreement_id, netAmount);
     }
   }
+
   res.sendStatus(200);
 });
+
+// Shared plan lookup used by webhook (mirrors fleet.js FLEET_BILLING_PLANS)
+const FLEET_BILLING_PLAN_ENTITLEMENTS = {
+  small:  { max_bikes: 20, max_admin_users: 3 },
+  medium: { max_bikes: 60, max_admin_users: 5 },
+  large:  { max_bikes: 100, max_admin_users: 10 }
+};
+
+function getKeyForPlanCode(planCode) {
+  for (const key of Object.keys(FLEET_BILLING_PLAN_ENTITLEMENTS)) {
+    const envCode = process.env[`PAYSTACK_PLAN_${key.toUpperCase()}`];
+    if (envCode && envCode === planCode) return key;
+  }
+  return null;
+}
 
 router.post('/manual', authRequired, adminOnly, (req, res) => {
   try {

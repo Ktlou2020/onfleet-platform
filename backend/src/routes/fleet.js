@@ -1,6 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
+const axios = require('axios');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -41,6 +42,10 @@ const FLEET_RESOURCE_ACCESS = {
   },
   team: {
     view: ['fleet_owner_admin'],
+    manage: ['fleet_owner_admin']
+  },
+  billing: {
+    view: ['fleet_owner_admin', 'fleet_owner_billing'],
     manage: ['fleet_owner_admin']
   }
 };
@@ -1876,6 +1881,154 @@ router.post('/payments/bulk-delete', companyRoleAllowed(FLEET_RESOURCE_ACCESS.pa
     res.json({ ok: true, requested: paymentIds.length, deleted_count: deleted.length, not_found_count: notFound.length, not_found: notFound });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Could not delete payments' });
+  }
+});
+
+// ─── Fleet Billing (Paystack Subscriptions) ───────────────────────────────────
+
+const PAYSTACK_API = 'https://api.paystack.co';
+
+const FLEET_BILLING_PLANS = {
+  small:  { key: 'small',  name: 'Small Fleet',  price_zar: 1499, max_bikes: 20, max_admin_users: 3,  features: ['Up to 20 bikes', '3 admin users', 'CSV imports', 'Maintenance reminders', 'Standard support'] },
+  medium: { key: 'medium', name: 'Medium Fleet', price_zar: 3999, max_bikes: 60, max_admin_users: 5,  features: ['Up to 60 bikes', '5 admin users', 'Advanced filters', 'Bulk contract actions', 'Performance reporting'] },
+  large:  { key: 'large',  name: 'Large Fleet',  price_zar: 6999, max_bikes: 100, max_admin_users: 10, features: ['Up to 100 bikes', '10 admin users', 'Priority onboarding', 'Audit visibility', 'Multi-branch support'] }
+};
+
+function getPlanPaystackCode(planKey) {
+  return process.env[`PAYSTACK_PLAN_${String(planKey).toUpperCase()}`] || null;
+}
+
+function getKeyForPlanCode(planCode) {
+  for (const key of Object.keys(FLEET_BILLING_PLANS)) {
+    if (getPlanPaystackCode(key) === planCode) return key;
+  }
+  return null;
+}
+
+function applyPlanToOrg(orgId, planKey, subscriptionCode) {
+  const plan = FLEET_BILLING_PLANS[planKey];
+  if (!plan) return;
+  const updates = [plan.max_bikes, plan.max_admin_users, planKey];
+  const subUpdate = subscriptionCode ? `, paystack_subscription_code = ?` : '';
+  const subParams = subscriptionCode ? [subscriptionCode] : [];
+  db.prepare(`UPDATE organizations SET
+    max_bikes = ?, max_admin_users = ?, plan_key = ?,
+    status = 'active'${subUpdate},
+    updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?`).run(...updates, ...subParams, orgId);
+}
+
+// GET /fleet/billing/status
+router.get('/billing/status', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.view), (req, res) => {
+  try {
+    const org = getOrganizationOrThrow(req.user.organization_id);
+    if (org.status === 'trialing' && org.trial_ends_at && new Date(org.trial_ends_at) < new Date()) {
+      db.prepare("UPDATE organizations SET status = 'past_due', updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(org.id);
+      org.status = 'past_due';
+    }
+    const trialDaysLeft = (org.status === 'trialing' && org.trial_ends_at)
+      ? Math.max(0, Math.round((new Date(org.trial_ends_at) - new Date()) / 86400000))
+      : null;
+    res.json({
+      organization: {
+        id: org.id, name: org.name, plan_key: org.plan_key, status: org.status,
+        trial_ends_at: org.trial_ends_at, trial_days_left: trialDaysLeft,
+        paystack_subscription_code: org.paystack_subscription_code,
+        max_bikes: org.max_bikes, max_admin_users: org.max_admin_users
+      },
+      plans: Object.values(FLEET_BILLING_PLANS),
+      can_subscribe: ['trialing', 'past_due', 'cancelled', 'suspended'].includes(org.status)
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not load billing status' });
+  }
+});
+
+// POST /fleet/billing/subscribe — initialise Paystack subscription checkout
+router.post('/billing/subscribe', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
+  try {
+    const org = getOrganizationOrThrow(req.user.organization_id);
+    const { plan_key } = req.body;
+    if (!FLEET_BILLING_PLANS[plan_key]) return res.status(400).json({ error: 'Invalid plan key. Choose small, medium, or large.' });
+    const planCode = getPlanPaystackCode(plan_key);
+    if (!planCode) return res.status(400).json({ error: 'This plan is not yet configured for online payment — contact support.' });
+
+    // Create Paystack customer if not yet linked
+    let customerCode = org.paystack_customer_code;
+    if (!customerCode) {
+      const custResp = await axios.post(`${PAYSTACK_API}/customer`,
+        { email: req.user.email, first_name: req.user.full_name, metadata: { organization_id: org.id } },
+        { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } }
+      );
+      customerCode = custResp.data.data.customer_code;
+      db.prepare('UPDATE organizations SET paystack_customer_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+        .run(customerCode, org.id);
+    }
+
+    const reference = `OF-SUB-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
+    const initResp = await axios.post(`${PAYSTACK_API}/transaction/initialize`,
+      {
+        email: req.user.email,
+        plan: planCode,
+        reference,
+        callback_url: `${process.env.FRONTEND_URL}/fleet/app/billing`,
+        metadata: { organization_id: org.id, plan_key, type: 'fleet_subscription' }
+      },
+      { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } }
+    );
+
+    logAudit(req.user.id, 'fleet_owner.billing.subscribe_init', 'organizations', org.id, { plan_key, reference }, req.ip);
+    res.json({
+      authorization_url: initResp.data.data.authorization_url,
+      reference,
+      plan_key,
+      plan: FLEET_BILLING_PLANS[plan_key]
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Could not initiate subscription checkout', details: error.response?.data || error.message });
+  }
+});
+
+// GET /fleet/billing/verify?reference=xxx — verify subscription after redirect
+router.get('/billing/verify', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
+  try {
+    const { reference } = req.query;
+    if (!reference) return res.status(400).json({ error: 'Reference is required' });
+    const org = getOrganizationOrThrow(req.user.organization_id);
+
+    const verifyResp = await axios.get(
+      `${PAYSTACK_API}/transaction/verify/${encodeURIComponent(reference)}`,
+      { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } }
+    );
+    const txn = verifyResp.data.data;
+    if (txn.status !== 'success') {
+      return res.status(400).json({ error: `Payment was not completed (status: ${txn.status})`, txn_status: txn.status });
+    }
+
+    const planKey = txn.metadata?.plan_key
+      || (txn.plan?.plan_code ? getKeyForPlanCode(txn.plan.plan_code) : null);
+
+    if (planKey && FLEET_BILLING_PLANS[planKey]) {
+      applyPlanToOrg(org.id, planKey, txn.subscription?.subscription_code || null);
+    }
+
+    logAudit(req.user.id, 'fleet_owner.billing.subscribe_verified', 'organizations', org.id, { reference, plan_key: planKey }, req.ip);
+    res.json({ ok: true, plan_key: planKey, txn_status: txn.status });
+  } catch (error) {
+    res.status(500).json({ error: 'Could not verify subscription', details: error.response?.data || error.message });
+  }
+});
+
+// POST /fleet/billing/cancel — cancel active subscription
+router.post('/billing/cancel', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), (req, res) => {
+  try {
+    const org = getOrganizationOrThrow(req.user.organization_id);
+    if (org.status !== 'active') return res.status(400).json({ error: 'No active subscription to cancel' });
+    db.prepare("UPDATE organizations SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(org.id);
+    logAudit(req.user.id, 'fleet_owner.billing.cancelled', 'organizations', org.id, {}, req.ip);
+    res.json({ ok: true, note: 'Subscription cancelled. Access continues until your current billing period ends.' });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not cancel subscription' });
   }
 });
 

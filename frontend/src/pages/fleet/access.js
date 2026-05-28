@@ -32,6 +32,10 @@ export const FLEET_RESOURCE_ACCESS = {
   help: {
     view: ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'],
     manage: []
+  },
+  billing: {
+    view: ['fleet_owner_admin', 'fleet_owner_billing'],
+    manage: ['fleet_owner_admin']
   }
 };
 
@@ -41,6 +45,7 @@ export const FLEET_NAV_ITEMS = [
   { key: 'agreements', to: '/fleet/app/agreements', label: 'Agreements' },
   { key: 'payments', to: '/fleet/app/payments', label: 'Payments' },
   { key: 'riders', to: '/fleet/app/riders', label: 'Riders' },
+  { key: 'billing', to: '/fleet/app/billing', label: 'Billing' },
   { key: 'help', to: '/fleet/app/help', label: 'Help' }
 ];
 

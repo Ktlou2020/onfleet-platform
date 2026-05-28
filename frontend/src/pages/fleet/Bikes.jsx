@@ -318,7 +318,7 @@ export default function FleetOwnerBikes() {
             <FleetHelpTip section="bikes" tooltip="Capture registration, fleet tag, pricing, licence disc data, and status so the bike is ready for rider allocation and reporting." label="Open bike setup guide" compact />
           </div>
           <div className="grid grid-2">
-            <div className="field"><label className="label">VIN *</label><input value={form.vin} onChange={(e) => setForm({ ...form, vin: e.target.value })} disabled={!!editingBike} /></div>
+            <div className="field"><label className="label">VIN *</label><input value={form.vin} onChange={(e) => setForm({ ...form, vin: e.target.value })} /></div>
             <div className="field"><label className="label">Registration</label><input value={form.registration} onChange={(e) => setForm({ ...form, registration: e.target.value })} /></div>
             <div className="field"><label className="label">Make *</label><input value={form.make} onChange={(e) => setForm({ ...form, make: e.target.value })} /></div>
             <div className="field"><label className="label">Model *</label><input value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} /></div>

@@ -1627,7 +1627,7 @@ router.put('/bikes/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.manage),
     const bike = getScopedBike(organization, bikeId);
     if (!bike) return res.status(404).json({ error: 'Bike not found in your fleet' });
 
-    const allowed = ['registration', 'make', 'model', 'fleet', 'year', 'engine_cc', 'color', 'condition', 'purchase_price', 'rental_weekly', 'total_weeks', 'gps_device_id', 'odometer_km', 'next_service_km', 'next_service_date', 'insurance_provider', 'insurance_policy_no', 'insurance_expiry', 'license_disc_no', 'license_disc_expiry', 'image_url', 'notes'];
+    const allowed = ['vin', 'registration', 'make', 'model', 'fleet', 'year', 'engine_cc', 'color', 'condition', 'purchase_price', 'rental_weekly', 'total_weeks', 'gps_device_id', 'odometer_km', 'next_service_km', 'next_service_date', 'insurance_provider', 'insurance_policy_no', 'insurance_expiry', 'license_disc_no', 'license_disc_expiry', 'image_url', 'notes'];
     const sets = [];
     const vals = [];
     let statusMeta = null;

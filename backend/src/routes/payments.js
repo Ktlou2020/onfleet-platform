@@ -245,17 +245,21 @@ router.post('/paystack/webhook', express.raw({ type: 'application/json' }), (req
   if (event.event === 'subscription.create' && isFleetEvent) {
     const customerCode = event.data.customer?.customer_code;
     const subscriptionCode = event.data.subscription_code;
+    const orgIdMeta = event.data.metadata?.organization_id || event.data.plan?.metadata?.organization_id;
     const key = getKeyForPlanCode(planCode);
-    if (customerCode && key) {
-      const org = db.prepare('SELECT * FROM organizations WHERE paystack_customer_code = ?').get(customerCode);
+    if (key) {
+      // Prefer lookup by customer code; fall back to metadata org_id for first-time subscribers
+      const org = (customerCode && db.prepare('SELECT * FROM organizations WHERE paystack_customer_code = ?').get(customerCode))
+        || (orgIdMeta && db.prepare('SELECT * FROM organizations WHERE id = ?').get(Number(orgIdMeta)));
       if (org) {
         const plan = FLEET_BILLING_PLAN_ENTITLEMENTS[key];
         if (plan) {
           db.prepare(`UPDATE organizations SET plan_key = ?, status = 'active',
             paystack_subscription_code = ?,
+            paystack_customer_code = COALESCE(paystack_customer_code, ?),
             max_bikes = ?, max_admin_users = ?,
             updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
-            .run(key, subscriptionCode, plan.max_bikes, plan.max_admin_users, org.id);
+            .run(key, subscriptionCode, customerCode || null, plan.max_bikes, plan.max_admin_users, org.id);
         }
       }
     }
@@ -263,17 +267,20 @@ router.post('/paystack/webhook', express.raw({ type: 'application/json' }), (req
     // Recurring subscription charge — keep org active and update subscription code if needed
     const customerCode = event.data.customer?.customer_code;
     const subscriptionCode = event.data.subscription?.subscription_code;
+    const orgIdMeta = event.data.metadata?.organization_id;
     const key = getKeyForPlanCode(planCode);
-    if (customerCode) {
-      const org = db.prepare('SELECT * FROM organizations WHERE paystack_customer_code = ?').get(customerCode);
-      if (org && key) {
+    if (key) {
+      const org = (customerCode && db.prepare('SELECT * FROM organizations WHERE paystack_customer_code = ?').get(customerCode))
+        || (orgIdMeta && db.prepare('SELECT * FROM organizations WHERE id = ?').get(Number(orgIdMeta)));
+      if (org) {
         const plan = FLEET_BILLING_PLAN_ENTITLEMENTS[key];
         if (plan) {
           db.prepare(`UPDATE organizations SET plan_key = ?, status = 'active',
             ${subscriptionCode ? 'paystack_subscription_code = ?,' : ''}
+            paystack_customer_code = COALESCE(paystack_customer_code, ?),
             max_bikes = ?, max_admin_users = ?,
             updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
-            .run(key, ...(subscriptionCode ? [subscriptionCode] : []), plan.max_bikes, plan.max_admin_users, org.id);
+            .run(key, ...(subscriptionCode ? [subscriptionCode] : []), customerCode || null, plan.max_bikes, plan.max_admin_users, org.id);
         }
       }
     }

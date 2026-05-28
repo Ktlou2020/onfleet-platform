@@ -1908,7 +1908,10 @@ const FLEET_BILLING_PLANS = {
 };
 
 function getPlanPaystackCode(planKey) {
-  return process.env[`PAYSTACK_PLAN_${String(planKey).toUpperCase()}`] || null;
+  const raw = process.env[`PAYSTACK_PLAN_${String(planKey).toUpperCase()}`];
+  // Trim whitespace and strip inline shell-style comments (e.g. "PLN_xxx  # comment")
+  const cleaned = String(raw || '').split('#')[0].trim();
+  return cleaned || null;
 }
 
 function getKeyForPlanCode(planCode) {
@@ -1930,6 +1933,33 @@ function applyPlanToOrg(orgId, planKey, subscriptionCode) {
     updated_at = CURRENT_TIMESTAMP
     WHERE id = ?`).run(...updates, ...subParams, orgId);
 }
+
+// GET /fleet/billing/diagnose — admin-only config check (does not charge)
+router.get('/billing/diagnose', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
+  const secretKey = process.env.PAYSTACK_SECRET_KEY || '';
+  const checks = {
+    secret_key_set: !!secretKey && !secretKey.includes('xxxx'),
+    secret_key_env: secretKey ? secretKey.slice(0, 7) + '…' : '(not set)',
+    plans: {}
+  };
+  for (const key of Object.keys(FLEET_BILLING_PLANS)) {
+    const code = getPlanPaystackCode(key);
+    checks.plans[key] = { code: code || '(not set)', valid_format: !!(code && code.startsWith('PLN_')) };
+  }
+
+  let paystackReachable = false;
+  let paystackError = null;
+  try {
+    const r = await axios.get(`${PAYSTACK_API}/bank`, { headers: { Authorization: `Bearer ${secretKey}` }, timeout: 5000 });
+    paystackReachable = r.data?.status === true;
+  } catch (e) {
+    paystackError = e.response?.data?.message || e.message;
+  }
+  checks.paystack_reachable = paystackReachable;
+  checks.paystack_error = paystackError;
+
+  res.json(checks);
+});
 
 // GET /fleet/billing/status
 router.get('/billing/status', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.view), (req, res) => {
@@ -1959,19 +1989,14 @@ router.post('/billing/subscribe', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billi
     const org = getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
     const { plan_key } = req.body;
     if (!FLEET_BILLING_PLANS[plan_key]) return res.status(400).json({ error: 'Invalid plan key. Choose small, medium, or large.' });
-    const planCode = getPlanPaystackCode(plan_key);
-    if (!planCode) return res.status(400).json({ error: 'This plan is not yet configured for online payment — contact support.' });
 
-    // Create Paystack customer if not yet linked
-    let customerCode = org.paystack_customer_code;
-    if (!customerCode) {
-      const custResp = await axios.post(`${PAYSTACK_API}/customer`,
-        { email: req.user.email, first_name: req.user.full_name, metadata: { organization_id: org.id } },
-        { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } }
-      );
-      customerCode = custResp.data.data.customer_code;
-      db.prepare('UPDATE organizations SET paystack_customer_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-        .run(customerCode, org.id);
+    if (!process.env.PAYSTACK_SECRET_KEY || process.env.PAYSTACK_SECRET_KEY.includes('xxxx')) {
+      return res.status(500).json({ error: 'Paystack is not configured on this server. Please set PAYSTACK_SECRET_KEY.' });
+    }
+
+    const planCode = getPlanPaystackCode(plan_key);
+    if (!planCode || planCode.includes('xxxx')) {
+      return res.status(400).json({ error: `The ${plan_key} plan is not yet linked to a Paystack plan code. Please set PAYSTACK_PLAN_${plan_key.toUpperCase()} in the server environment.` });
     }
 
     const reference = `OF-SUB-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
@@ -1986,6 +2011,10 @@ router.post('/billing/subscribe', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billi
       { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } }
     );
 
+    if (!initResp.data?.status) {
+      return res.status(400).json({ error: `Paystack rejected the request: ${initResp.data?.message || 'Unknown error'}` });
+    }
+
     logAudit(req.user.id, 'fleet_owner.billing.subscribe_init', 'organizations', org.id, { plan_key, reference }, req.ip);
     res.json({
       authorization_url: initResp.data.data.authorization_url,
@@ -1994,7 +2023,12 @@ router.post('/billing/subscribe', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billi
       plan: FLEET_BILLING_PLANS[plan_key]
     });
   } catch (error) {
-    res.status(500).json({ error: 'Could not initiate subscription checkout', details: error.response?.data || error.message });
+    const paystackMsg = error.response?.data?.message || error.response?.data?.error;
+    const detail = paystackMsg || error.message;
+    res.status(error.response?.status || 500).json({
+      error: paystackMsg ? `Paystack: ${paystackMsg}` : 'Could not initiate subscription checkout',
+      details: detail
+    });
   }
 });
 

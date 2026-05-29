@@ -10,8 +10,7 @@ const { extractPayslipInsights } = require('../services/documentInsights');
 const { writeContractSnapshot } = require('../services/contracts');
 
 const router = express.Router();
-const uploadDir = path.join(__dirname, '../../uploads/applications');
-fs.mkdirSync(uploadDir, { recursive: true });
+const { applications: uploadDir } = require('../uploadPaths');
 
 const storage = multer.diskStorage({
   destination: uploadDir,

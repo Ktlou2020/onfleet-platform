@@ -13,7 +13,7 @@ const { extractPayslipInsights } = require('../services/documentInsights');
 const { sendNotification } = require('../services/notifier');
 
 const router = express.Router();
-const uploadDir = path.join(__dirname, '../../uploads/applications');
+const { applications: uploadDir, profiles: profileUploadDir } = require('../uploadPaths');
 const FLEET_ROLE_VALUES = ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'];
 const FLEET_PLAN_ENTITLEMENTS = {
   trial: { max_bikes: 10, max_admin_users: 2 },
@@ -22,9 +22,6 @@ const FLEET_PLAN_ENTITLEMENTS = {
   large: { max_bikes: 100, max_admin_users: 10 },
   enterprise: { max_bikes: 250, max_admin_users: 25 }
 };
-const profileUploadDir = path.join(__dirname, '../../uploads/profiles');
-fs.mkdirSync(uploadDir, { recursive: true });
-fs.mkdirSync(profileUploadDir, { recursive: true });
 
 const storage = multer.diskStorage({
   destination: uploadDir,

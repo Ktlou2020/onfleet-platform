@@ -9,7 +9,9 @@ const { ensureSuperadminFromEnv } = require('./services/bootstrapSuperadmin');
 const { ensureContractSnapshotForRelativePath } = require('./services/contracts');
 
 const app = express();
+const UPLOAD_DIRS = require('./uploadPaths');
 const uploadRoots = [
+  UPLOAD_DIRS.base,
   path.join(__dirname, '../uploads'),
   path.join(__dirname, '../../uploads')
 ];

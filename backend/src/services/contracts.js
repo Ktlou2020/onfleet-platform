@@ -1,9 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const db = require('../db');
-
-const contractDir = path.join(__dirname, '../../uploads/contracts');
-fs.mkdirSync(contractDir, { recursive: true });
+const { contracts: contractDir } = require('../uploadPaths');
 
 function publicPath(filename) {
   return `/uploads/contracts/${filename}`;

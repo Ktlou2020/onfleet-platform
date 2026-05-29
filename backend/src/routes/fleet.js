@@ -58,8 +58,7 @@ function canManageFleetResource(role, resourceKey) {
   return (FLEET_RESOURCE_ACCESS[resourceKey]?.manage || []).includes(role);
 }
 
-const applicationUploadDir = path.join(__dirname, '../../uploads/applications');
-fs.mkdirSync(applicationUploadDir, { recursive: true });
+const { applications: applicationUploadDir } = require('../uploadPaths');
 
 const riderApplicationUpload = multer({
   storage: multer.diskStorage({

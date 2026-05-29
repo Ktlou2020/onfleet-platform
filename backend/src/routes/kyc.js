@@ -7,8 +7,7 @@ const { authRequired, adminOnly } = require('../middleware/auth');
 const { logAudit } = require('../utils/helpers');
 
 const router = express.Router();
-const uploadDir = path.join(__dirname, '../../uploads/kyc');
-fs.mkdirSync(uploadDir, { recursive: true });
+const { kyc: uploadDir } = require('../uploadPaths');
 
 const storage = multer.diskStorage({
   destination: uploadDir,

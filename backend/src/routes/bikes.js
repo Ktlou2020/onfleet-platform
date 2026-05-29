@@ -11,12 +11,7 @@ const { extractLicenseDiscInsights } = require('../services/documentInsights');
 const { writeContractSnapshot } = require('../services/contracts');
 
 const router = express.Router();
-const bikeUploadDir = path.join(__dirname, '../../uploads/bikes');
-const invoiceUploadDir = path.join(__dirname, '../../uploads/service-invoices');
-const bikeDocumentUploadDir = path.join(__dirname, '../../uploads/bike-documents');
-fs.mkdirSync(bikeUploadDir, { recursive: true });
-fs.mkdirSync(invoiceUploadDir, { recursive: true });
-fs.mkdirSync(bikeDocumentUploadDir, { recursive: true });
+const { bikes: bikeUploadDir, serviceInvoices: invoiceUploadDir, bikeDocuments: bikeDocumentUploadDir } = require('../uploadPaths');
 
 const bikeImageUpload = multer({
   storage: multer.diskStorage({

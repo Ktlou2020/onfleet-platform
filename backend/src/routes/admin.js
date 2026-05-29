@@ -11,10 +11,9 @@ const { generateStrategicReport } = require('../services/strategicReport');
 const { sendNotification, detectEmailProvider } = require('../services/notifier');
 
 const router = express.Router();
-const brandingUploadDir = path.join(__dirname, '../../uploads/branding');
+const { branding: brandingUploadDir } = require('../uploadPaths');
 const FLEET_OWNER_ROLE_VALUES = ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'];
 const FLEET_OWNER_ROLE_SQL = FLEET_OWNER_ROLE_VALUES.map(() => '?').join(',');
-fs.mkdirSync(brandingUploadDir, { recursive: true });
 const heroImageUpload = multer({
   storage: multer.diskStorage({
     destination: brandingUploadDir,

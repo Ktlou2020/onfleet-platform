@@ -84,7 +84,8 @@ export default function FleetOwnerRiders() {
   const [form, setForm] = useState(buildInitialForm());
   const [files, setFiles] = useState(buildInitialFiles());
   const [detail, setDetail] = useState(null);
-  const [uploadForm, setUploadForm] = useState({ doc_type: 'payslip', file: null });
+  const [uploadForm, setUploadForm] = useState({ doc_type: 'payslip', file: null, manual_amount: '' });
+  const [createPayslipAmounts, setCreatePayslipAmounts] = useState({ payslip_1: '', payslip_2: '', payslip_3: '' });
   const [decisionForm, setDecisionForm] = useState(() => buildDecisionForm(null, []));
   const [decisionBusy, setDecisionBusy] = useState(false);
 
@@ -152,7 +153,8 @@ export default function FleetOwnerRiders() {
     setForm(buildInitialForm());
     setFiles(buildInitialFiles());
     setDetail(null);
-    setUploadForm({ doc_type: 'payslip', file: null });
+    setUploadForm({ doc_type: 'payslip', file: null, manual_amount: '' });
+    setCreatePayslipAmounts({ payslip_1: '', payslip_2: '', payslip_3: '' });
     setDecisionForm(buildDecisionForm(null, bikes));
   };
 
@@ -160,6 +162,7 @@ export default function FleetOwnerRiders() {
     setMode('create');
     setForm(buildInitialForm());
     setFiles(buildInitialFiles());
+    setCreatePayslipAmounts({ payslip_1: '', payslip_2: '', payslip_3: '' });
     setDetail(null);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -230,6 +233,13 @@ export default function FleetOwnerRiders() {
       toast.error('Upload ID document, licence, selfie, and 3 payslips');
       return false;
     }
+    for (const field of ['payslip_1', 'payslip_2', 'payslip_3']) {
+      const file = files[field];
+      if (file && file.type !== 'application/pdf' && !String(createPayslipAmounts[field] || '').trim()) {
+        toast.error(`Enter the monthly Rand amount shown on ${field.replace('_', ' ')} (non-PDF file)`);
+        return false;
+      }
+    }
     return true;
   };
 
@@ -250,6 +260,9 @@ export default function FleetOwnerRiders() {
         else fd.append(key, value ?? '');
       });
       Object.entries(files).forEach(([key, value]) => { if (value) fd.append(key, value); });
+      ['payslip_1', 'payslip_2', 'payslip_3'].forEach((field) => {
+        if (createPayslipAmounts[field]) fd.append(`${field}_amount`, createPayslipAmounts[field]);
+      });
       await api.post('/fleet/riders', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       toast.success('Rider created and application submitted');
       resetEditor();
@@ -276,16 +289,22 @@ export default function FleetOwnerRiders() {
     }
   };
 
+  const fleetPayslipNeedsAmount = uploadForm.doc_type === 'payslip' && uploadForm.file && uploadForm.file.type !== 'application/pdf';
+
   const uploadDocument = async () => {
     if (!detail?.application?.id || !uploadForm.file) return toast.error('Choose a file first');
+    if (fleetPayslipNeedsAmount && !String(uploadForm.manual_amount || '').trim()) {
+      return toast.error('Enter the Rand amount shown on this payslip');
+    }
     setUploading(true);
     try {
       const fd = new FormData();
       fd.append('doc_type', uploadForm.doc_type);
       fd.append('file', uploadForm.file);
+      if (uploadForm.manual_amount) fd.append('manual_payslip_amount', uploadForm.manual_amount);
       const { data } = await api.post(`/fleet/riders/${detail.application.id}/documents`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       setDetail((current) => ({ ...current, documents: data.documents || [] }));
-      setUploadForm({ doc_type: uploadForm.doc_type, file: null });
+      setUploadForm({ doc_type: uploadForm.doc_type, file: null, manual_amount: '' });
       toast.success('Document uploaded');
       await load({ silent: true });
     } catch (error) {
@@ -508,9 +527,9 @@ export default function FleetOwnerRiders() {
                   <strong>Auto-decision rule</strong>
                   <div className="muted text-sm mt-2">Three payslips are required so the platform can calculate average weekly earnings. Below R1000/week auto-declines. R1000/week or above pre-approves for review.</div>
                 </div>
-                <UploadField label="Payslip 1 *" file={files.payslip_1} onChange={(file) => setFile('payslip_1', file)} accept="application/pdf" />
-                <UploadField label="Payslip 2 *" file={files.payslip_2} onChange={(file) => setFile('payslip_2', file)} accept="application/pdf" />
-                <UploadField label="Payslip 3 *" file={files.payslip_3} onChange={(file) => setFile('payslip_3', file)} accept="application/pdf" />
+                <PayslipUploadField label="Payslip 1 *" file={files.payslip_1} amount={createPayslipAmounts.payslip_1} onFileChange={(file) => { setFile('payslip_1', file); setCreatePayslipAmounts((current) => ({ ...current, payslip_1: '' })); }} onAmountChange={(value) => setCreatePayslipAmounts((current) => ({ ...current, payslip_1: value }))} />
+                <PayslipUploadField label="Payslip 2 *" file={files.payslip_2} amount={createPayslipAmounts.payslip_2} onFileChange={(file) => { setFile('payslip_2', file); setCreatePayslipAmounts((current) => ({ ...current, payslip_2: '' })); }} onAmountChange={(value) => setCreatePayslipAmounts((current) => ({ ...current, payslip_2: value }))} />
+                <PayslipUploadField label="Payslip 3 *" file={files.payslip_3} amount={createPayslipAmounts.payslip_3} onFileChange={(file) => { setFile('payslip_3', file); setCreatePayslipAmounts((current) => ({ ...current, payslip_3: '' })); }} onAmountChange={(value) => setCreatePayslipAmounts((current) => ({ ...current, payslip_3: value }))} />
               </div>
             </>
           ) : detail ? (
@@ -522,9 +541,12 @@ export default function FleetOwnerRiders() {
               <div className="card mb-3" style={{ background: 'var(--surface-2)' }}>
                 <div className="grid grid-3" style={{ alignItems: 'end' }}>
                   <div className="field"><label className="label">Document type</label><select value={uploadForm.doc_type} onChange={(event) => setUploadForm((current) => ({ ...current, doc_type: event.target.value, file: null }))}>{DOC_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
-                  <div className="field"><label className="label">File</label><input type="file" accept={uploadForm.doc_type === 'payslip' ? 'application/pdf' : 'application/pdf,image/jpeg,image/jpg,image/png,image/webp'} onChange={(event) => setUploadForm((current) => ({ ...current, file: event.target.files?.[0] || null }))} /></div>
-                  <div><button className="btn" onClick={uploadDocument} disabled={uploading || !uploadForm.file}>{uploading ? 'Uploading…' : 'Upload document'}</button></div>
+                  <div className="field"><label className="label">File</label><input type="file" accept={uploadForm.doc_type === 'payslip' ? 'application/pdf,image/*,.doc,.docx,.heic' : 'application/pdf,image/jpeg,image/jpg,image/png,image/webp'} onChange={(event) => setUploadForm((current) => ({ ...current, file: event.target.files?.[0] || null, manual_amount: '' }))} /></div>
+                  <div><button className="btn" onClick={uploadDocument} disabled={uploading || !uploadForm.file || (fleetPayslipNeedsAmount && !String(uploadForm.manual_amount || '').trim())}>{uploading ? 'Uploading…' : 'Upload document'}</button></div>
                 </div>
+                {fleetPayslipNeedsAmount && (
+                  <div className="field mt-3"><label className="label">Monthly amount on payslip (Rand) *</label><input type="number" min="0" step="0.01" placeholder="e.g. 8500" value={uploadForm.manual_amount} onChange={(event) => setUploadForm((current) => ({ ...current, manual_amount: event.target.value }))} /></div>
+                )}
               </div>
               <table className="table">
                 <thead><tr><th>Type</th><th>File</th><th>Uploaded</th><th>Amount</th><th></th></tr></thead>
@@ -590,5 +612,25 @@ function UploadField({ label, file, onChange, accept }) {
       <div className="mt-3"><span className="btn btn-secondary btn-sm">Select file</span></div>
       <input hidden type="file" accept={accept} onChange={(event) => onChange(event.target.files?.[0] || null)} />
     </label>
+  );
+}
+
+function PayslipUploadField({ label, file, amount, onFileChange, onAmountChange }) {
+  const needsAmount = file && file.type !== 'application/pdf';
+  return (
+    <div className="card" style={{ background: 'var(--surface-2)' }}>
+      <label style={{ cursor: 'pointer' }}>
+        <strong>{label}</strong>
+        <div className="muted text-sm mt-2">{file ? file.name : 'Choose file'}</div>
+        <div className="mt-3"><span className="btn btn-secondary btn-sm">Select file</span></div>
+        <input hidden type="file" accept="application/pdf,image/*,.doc,.docx,.heic" onChange={(event) => onFileChange(event.target.files?.[0] || null)} />
+      </label>
+      {needsAmount && (
+        <div className="field mt-3">
+          <label className="label">Monthly amount on payslip (Rand) *</label>
+          <input type="number" min="0" step="0.01" placeholder="e.g. 8500" value={amount} onChange={(event) => onAmountChange(event.target.value)} onClick={(event) => event.stopPropagation()} />
+        </div>
+      )}
+    </div>
   );
 }

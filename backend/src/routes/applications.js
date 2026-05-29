@@ -24,8 +24,9 @@ const upload = multer({
   storage,
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const ok = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/pjpeg', 'image/png', 'image/webp'].includes(file.mimetype);
-    cb(ok ? null : new Error('Only PDF, JPG, JPEG, PNG, and WEBP files are allowed'), ok);
+    // Allow PDF, images, and common document formats
+    const blocked = ['application/x-msdownload', 'application/x-sh', 'text/html'];
+    cb(blocked.includes(file.mimetype) ? new Error('File type not allowed') : null, !blocked.includes(file.mimetype));
   }
 });
 
@@ -274,30 +275,21 @@ router.post('/:id/documents', authRequired, upload.single('file'), async (req, r
 
   let insights = { extracted_amount: null, extracted_text: null };
   if (doc_type === 'payslip') {
-    if (!['application/pdf', 'image/jpeg', 'image/jpg'].includes(req.file.mimetype)) {
-      fs.unlink(req.file.path, () => {});
-      return res.status(400).json({ error: 'Payslips must be uploaded as PDF, JPG, or JPEG files' });
-    }
-
+    const isPdf = req.file.mimetype === 'application/pdf';
     const manualPayslipAmount = parseMoneyAmount(req.body.manual_payslip_amount);
-    if (isPayslipImageMime(req.file.mimetype)) {
-      if (!manualPayslipAmount) {
-        fs.unlink(req.file.path, () => {});
-        return res.status(400).json({ error: 'Enter the Rand amount for JPEG payslips before uploading' });
-      }
-      insights = {
-        extracted_amount: manualPayslipAmount,
-        extracted_text: 'Manual amount entered for JPEG payslip'
-      };
-    } else {
+    if (isPdf) {
       insights = await extractPayslipInsights(req.file.path, req.file.mimetype);
-      if (!insights.extracted_amount && manualPayslipAmount) {
-        insights = {
-          ...insights,
-          extracted_amount: manualPayslipAmount,
-          extracted_text: insights.extracted_text || 'Manual amount entered for PDF payslip'
-        };
-      }
+    }
+    if (!insights.extracted_amount && manualPayslipAmount) {
+      insights = {
+        ...insights,
+        extracted_amount: manualPayslipAmount,
+        extracted_text: isPdf ? 'Manual amount entered for PDF payslip' : 'Manual amount entered (non-PDF payslip)'
+      };
+    }
+    if (!insights.extracted_amount) {
+      fs.unlink(req.file.path, () => {});
+      return res.status(400).json({ error: isPdf ? 'Could not read amount from PDF — enter the Rand amount manually.' : 'Enter the monthly Rand amount for this payslip.' });
     }
   }
 

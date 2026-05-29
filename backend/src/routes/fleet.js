@@ -67,8 +67,8 @@ const riderApplicationUpload = multer({
   }),
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const ok = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/pjpeg', 'image/png', 'image/webp'].includes(file.mimetype);
-    cb(ok ? null : new Error('Only PDF, JPG, JPEG, PNG, and WEBP files are allowed'), ok);
+    const blocked = ['application/x-msdownload', 'application/x-sh', 'text/html'];
+    cb(blocked.includes(file.mimetype) ? new Error('File type not allowed') : null, !blocked.includes(file.mimetype));
   }
 });
 
@@ -359,12 +359,21 @@ function upsertFleetKycDocument(userId, docType, file) {
   return publicPath;
 }
 
-async function insertFleetApplicationDocument({ applicationId, userId, docType, file, uploadedBy }) {
+async function insertFleetApplicationDocument({ applicationId, userId, docType, file, uploadedBy, manualAmount }) {
   let storedDocType = docType;
   let insights = { extracted_amount: null, extracted_text: null };
   if (docType === 'payslip') {
-    if (file.mimetype !== 'application/pdf') throw new Error('Payslips must be uploaded as PDF documents only');
-    insights = await extractPayslipInsights(path.join(applicationUploadDir, file.filename), file.mimetype);
+    const isPdf = file.mimetype === 'application/pdf';
+    if (isPdf) {
+      insights = await extractPayslipInsights(path.join(applicationUploadDir, file.filename), file.mimetype);
+    }
+    const cleanManual = manualAmount ? Number(String(manualAmount).replace(/[^0-9.]/g, '')) : null;
+    if (!insights.extracted_amount && cleanManual && cleanManual > 0) {
+      insights = {
+        extracted_amount: cleanManual,
+        extracted_text: isPdf ? 'Manual amount entered for PDF payslip' : 'Manual amount entered (non-PDF payslip)'
+      };
+    }
   }
   if (docType === 'selfie') {
     storedDocType = 'other';
@@ -491,7 +500,8 @@ router.post('/public/:slug/rider-application', riderApplicationUpload.fields([
     const applicationId = insertFleetApplication(payload, null, userId);
     for (const field of ['id_document', 'drivers_license', 'selfie', 'payslip_1', 'payslip_2', 'payslip_3']) {
       const docType = field.startsWith('payslip') ? 'payslip' : field;
-      await insertFleetApplicationDocument({ applicationId, userId, docType, file: requiredFile(req, field), uploadedBy: userId });
+      const manualAmount = field.startsWith('payslip') ? req.body[`${field}_amount`] : null;
+      await insertFleetApplicationDocument({ applicationId, userId, docType, file: requiredFile(req, field), uploadedBy: userId, manualAmount });
     }
     const decision = recalcFleetApplicationDecision(applicationId);
     res.status(201).json({ ok: true, application_id: applicationId, decision });
@@ -1088,7 +1098,8 @@ router.post('/riders', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), 
     const applicationId = insertFleetApplication(payload, req.user.id, userId);
     for (const field of ['id_document', 'drivers_license', 'selfie', 'payslip_1', 'payslip_2', 'payslip_3']) {
       const docType = field.startsWith('payslip') ? 'payslip' : field;
-      await insertFleetApplicationDocument({ applicationId, userId, docType, file: requiredFile(req, field), uploadedBy: req.user.id });
+      const manualAmount = field.startsWith('payslip') ? req.body[`${field}_amount`] : null;
+      await insertFleetApplicationDocument({ applicationId, userId, docType, file: requiredFile(req, field), uploadedBy: req.user.id, manualAmount });
     }
     const decision = recalcFleetApplicationDecision(applicationId);
     res.status(201).json({ ok: true, application: getScopedFleetApplication(organization, applicationId), decision });
@@ -1191,7 +1202,7 @@ router.post('/riders/:id/documents', companyRoleAllowed(FLEET_RESOURCE_ACCESS.ri
     if (!['id_document', 'drivers_license', 'payslip', 'selfie', 'other'].includes(docType)) {
       return res.status(400).json({ error: 'Invalid document type' });
     }
-    const result = await insertFleetApplicationDocument({ applicationId, userId: application.user_id, docType, file: req.file, uploadedBy: req.user.id });
+    const result = await insertFleetApplicationDocument({ applicationId, userId: application.user_id, docType, file: req.file, uploadedBy: req.user.id, manualAmount: req.body.manual_payslip_amount });
     const decision = docType === 'payslip' ? recalcFleetApplicationDecision(applicationId) : null;
     logAudit(req.user.id, 'fleet_owner.rider_document_upload', 'application_documents', result.id, { application_id: applicationId, doc_type: docType }, req.ip);
     res.status(201).json({ ok: true, decision, documents: getFleetApplicationDocuments(applicationId) });

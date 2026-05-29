@@ -6,8 +6,11 @@ import { trackAnalyticsEvent } from '../../analytics';
 
 const PLATFORMS = ['Uber Eats', 'Mr D', 'Bolt Food', 'Takealot', 'Checkers Sixty60', 'Other'];
 
-function isPayslipImageFile(file) {
-  return ['image/jpeg', 'image/jpg'].includes(String(file?.type || '').toLowerCase());
+function isPayslipPdf(file) {
+  return String(file?.type || '').toLowerCase() === 'application/pdf';
+}
+function needsManualAmount(file) {
+  return file && !isPayslipPdf(file);
 }
 
 export default function RiderApplication() {
@@ -152,7 +155,7 @@ export default function RiderApplication() {
   const uploadPayslip = async (slot) => {
     const draft = payslipDrafts[slot];
     if (!draft?.file) return toast.error(`Choose Payslip ${slot} first`);
-    if (isPayslipImageFile(draft.file) && !String(draft.amount || '').trim()) {
+    if (needsManualAmount(draft.file) && !String(draft.amount || '').trim()) {
       trackAnalyticsEvent('application_document_upload_validation_error', {
         document_type: 'payslip',
         slot,
@@ -161,7 +164,7 @@ export default function RiderApplication() {
       return toast.error(`Enter the Rand amount for Payslip ${slot}`);
     }
     const data = await uploadDocument('payslip', draft.file, {
-      manual_payslip_amount: isPayslipImageFile(draft.file) ? draft.amount : '',
+      manual_payslip_amount: draft.amount || '',
       slot
     }, `Payslip ${slot} uploaded.`);
     if (data) setPayslipDraft(slot, { file: null, amount: '' });
@@ -314,7 +317,7 @@ export default function RiderApplication() {
                   title={`Payslip ${slot}`}
                   draft={payslipDrafts[slot]}
                   busy={uploading === `payslip-${slot}`}
-                  onPick={(file) => setPayslipDraft(slot, { file, amount: isPayslipImageFile(file) ? payslipDrafts[slot].amount : '' })}
+                  onPick={(file) => setPayslipDraft(slot, { file, amount: needsManualAmount(file) ? payslipDrafts[slot].amount : '' })}
                   onAmountChange={(value) => setPayslipDraft(slot, { amount: value })}
                   onUpload={() => uploadPayslip(slot)}
                 />
@@ -363,26 +366,26 @@ function UploadCard({ title, sub, note, onPick, busy, accept }) {
 }
 
 function PayslipUploadCard({ title, draft, onPick, onAmountChange, onUpload, busy }) {
-  const imagePayslip = isPayslipImageFile(draft.file);
+  const manualRequired = needsManualAmount(draft.file);
   return (
     <div className="card" style={{ background: 'var(--surface-2)' }}>
       <strong>{title}</strong>
-      <div className="muted text-sm mt-1">Upload PDF for automatic reading, or JPG / JPEG and enter the Rand amount manually.</div>
+      <div className="muted text-sm mt-1">PDF payslips are read automatically. Any other format (image, Word, etc.) requires you to enter the Rand amount manually.</div>
       <div className="muted text-sm mt-2">{draft.file ? draft.file.name : 'No file selected yet'}</div>
       <div className="row mt-3" style={{ gap: 8, flexWrap: 'wrap' }}>
         <label className="btn btn-secondary btn-sm" style={{ cursor: 'pointer' }}>
           Choose file
-          <input type="file" hidden accept="application/pdf,image/jpeg,image/jpg" onChange={(e) => onPick(e.target.files?.[0] || null)} />
+          <input type="file" hidden accept="application/pdf,image/*,.doc,.docx,.heic" onChange={(e) => onPick(e.target.files?.[0] || null)} />
         </label>
-        <button type="button" className="btn btn-sm" onClick={onUpload} disabled={!draft.file || busy || (imagePayslip && !String(draft.amount || '').trim())}>
+        <button type="button" className="btn btn-sm" onClick={onUpload} disabled={!draft.file || busy || (manualRequired && !String(draft.amount || '').trim())}>
           {busy ? 'Uploading…' : 'Upload payslip'}
         </button>
       </div>
-      {imagePayslip && (
+      {manualRequired && (
         <div className="field" style={{ marginTop: 12, marginBottom: 0 }}>
-          <label className="label">Rand amount *</label>
-          <input type="number" min="0" step="0.01" value={draft.amount} onChange={(e) => onAmountChange(e.target.value)} placeholder="Example: 3200" />
-          <div className="muted text-sm mt-1">This amount is required because JPG / JPEG payslips are captured manually.</div>
+          <label className="label">Monthly Rand amount shown on this payslip *</label>
+          <input type="number" min="0" step="0.01" value={draft.amount} onChange={(e) => onAmountChange(e.target.value)} placeholder="e.g. 4500" />
+          <div className="muted text-sm mt-1">Required for non-PDF payslips — enter the total amount shown on the payslip.</div>
         </div>
       )}
     </div>

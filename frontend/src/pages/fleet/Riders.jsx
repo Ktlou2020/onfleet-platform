@@ -84,7 +84,7 @@ export default function FleetOwnerRiders() {
   const [form, setForm] = useState(buildInitialForm());
   const [files, setFiles] = useState(buildInitialFiles());
   const [detail, setDetail] = useState(null);
-  const [uploadForm, setUploadForm] = useState({ doc_type: 'payslip', file: null });
+  const [uploadForm, setUploadForm] = useState({ doc_type: 'payslip', file: null, manual_amount: '' });
   const [decisionForm, setDecisionForm] = useState(() => buildDecisionForm(null, []));
   const [decisionBusy, setDecisionBusy] = useState(false);
 
@@ -152,7 +152,7 @@ export default function FleetOwnerRiders() {
     setForm(buildInitialForm());
     setFiles(buildInitialFiles());
     setDetail(null);
-    setUploadForm({ doc_type: 'payslip', file: null });
+    setUploadForm({ doc_type: 'payslip', file: null, manual_amount: '' });
     setDecisionForm(buildDecisionForm(null, bikes));
   };
 
@@ -276,16 +276,22 @@ export default function FleetOwnerRiders() {
     }
   };
 
+  const fleetPayslipNeedsAmount = uploadForm.doc_type === 'payslip' && uploadForm.file && uploadForm.file.type !== 'application/pdf';
+
   const uploadDocument = async () => {
     if (!detail?.application?.id || !uploadForm.file) return toast.error('Choose a file first');
+    if (fleetPayslipNeedsAmount && !String(uploadForm.manual_amount || '').trim()) {
+      return toast.error('Enter the Rand amount shown on this payslip');
+    }
     setUploading(true);
     try {
       const fd = new FormData();
       fd.append('doc_type', uploadForm.doc_type);
       fd.append('file', uploadForm.file);
+      if (uploadForm.manual_amount) fd.append('manual_payslip_amount', uploadForm.manual_amount);
       const { data } = await api.post(`/fleet/riders/${detail.application.id}/documents`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       setDetail((current) => ({ ...current, documents: data.documents || [] }));
-      setUploadForm({ doc_type: uploadForm.doc_type, file: null });
+      setUploadForm({ doc_type: uploadForm.doc_type, file: null, manual_amount: '' });
       toast.success('Document uploaded');
       await load({ silent: true });
     } catch (error) {
@@ -522,9 +528,12 @@ export default function FleetOwnerRiders() {
               <div className="card mb-3" style={{ background: 'var(--surface-2)' }}>
                 <div className="grid grid-3" style={{ alignItems: 'end' }}>
                   <div className="field"><label className="label">Document type</label><select value={uploadForm.doc_type} onChange={(event) => setUploadForm((current) => ({ ...current, doc_type: event.target.value, file: null }))}>{DOC_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
-                  <div className="field"><label className="label">File</label><input type="file" accept={uploadForm.doc_type === 'payslip' ? 'application/pdf' : 'application/pdf,image/jpeg,image/jpg,image/png,image/webp'} onChange={(event) => setUploadForm((current) => ({ ...current, file: event.target.files?.[0] || null }))} /></div>
-                  <div><button className="btn" onClick={uploadDocument} disabled={uploading || !uploadForm.file}>{uploading ? 'Uploading…' : 'Upload document'}</button></div>
+                  <div className="field"><label className="label">File</label><input type="file" accept={uploadForm.doc_type === 'payslip' ? 'application/pdf,image/*,.doc,.docx,.heic' : 'application/pdf,image/jpeg,image/jpg,image/png,image/webp'} onChange={(event) => setUploadForm((current) => ({ ...current, file: event.target.files?.[0] || null, manual_amount: '' }))} /></div>
+                  <div><button className="btn" onClick={uploadDocument} disabled={uploading || !uploadForm.file || (fleetPayslipNeedsAmount && !String(uploadForm.manual_amount || '').trim())}>{uploading ? 'Uploading…' : 'Upload document'}</button></div>
                 </div>
+                {fleetPayslipNeedsAmount && (
+                  <div className="field mt-3"><label className="label">Monthly amount on payslip (Rand) *</label><input type="number" min="0" step="0.01" placeholder="e.g. 8500" value={uploadForm.manual_amount} onChange={(event) => setUploadForm((current) => ({ ...current, manual_amount: event.target.value }))} /></div>
+                )}
               </div>
               <table className="table">
                 <thead><tr><th>Type</th><th>File</th><th>Uploaded</th><th>Amount</th><th></th></tr></thead>

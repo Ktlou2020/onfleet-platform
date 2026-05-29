@@ -50,7 +50,7 @@ export default function AdminApplicationDetail() {
     branch_code: '',
     ewallet_number: ''
   });
-  const [uploadForm, setUploadForm] = useState({ doc_type: 'payslip', file: null });
+  const [uploadForm, setUploadForm] = useState({ doc_type: 'payslip', file: null, manual_amount: '' });
 
   const load = async () => {
     setLoadError('');
@@ -111,8 +111,9 @@ export default function AdminApplicationDetail() {
   }, [data?.documents]);
 
   const uploadAccept = uploadForm.doc_type === 'payslip'
-    ? 'application/pdf'
-    : 'application/pdf,image/jpeg,image/jpg,image/png,image/webp';
+    ? 'application/pdf,image/*,.doc,.docx,.heic'
+    : 'application/pdf,image/*,.doc,.docx,.heic';
+  const payslipNeedsAmount = uploadForm.doc_type === 'payslip' && uploadForm.file && uploadForm.file.type !== 'application/pdf';
 
   if (loadError && !data) {
     return (
@@ -178,14 +179,18 @@ export default function AdminApplicationDetail() {
 
   const uploadDocument = async () => {
     if (!uploadForm.file) return toast.error('Choose a file first');
+    if (payslipNeedsAmount && !String(uploadForm.manual_amount || '').trim()) {
+      return toast.error('Enter the Rand amount shown on this payslip');
+    }
     const fd = new FormData();
     fd.append('doc_type', uploadForm.doc_type);
     fd.append('file', uploadForm.file);
+    if (uploadForm.manual_amount) fd.append('manual_payslip_amount', uploadForm.manual_amount);
     setUploadingDoc(true);
     try {
       await api.post(`/applications/${id}/documents`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       toast.success('Document uploaded');
-      setUploadForm({ doc_type: uploadForm.doc_type, file: null });
+      setUploadForm({ doc_type: uploadForm.doc_type, file: null, manual_amount: '' });
       await load();
     } catch (error) {
       toast.error(error.response?.data?.error || 'Could not upload document');
@@ -284,19 +289,26 @@ export default function AdminApplicationDetail() {
         <div className="grid grid-3" style={{ alignItems: 'end' }}>
           <div className="field">
             <label className="label">Document type</label>
-            <select value={uploadForm.doc_type} onChange={(e) => setUploadForm((current) => ({ ...current, doc_type: e.target.value, file: null }))}>
+            <select value={uploadForm.doc_type} onChange={(e) => setUploadForm({ doc_type: e.target.value, file: null, manual_amount: '' })}>
               {DOC_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </div>
           <div className="field">
             <label className="label">File</label>
-            <input type="file" accept={uploadAccept} onChange={(e) => setUploadForm((current) => ({ ...current, file: e.target.files?.[0] || null }))} />
-            <div className="muted text-xs mt-1">Payslips remain PDF-only. Other documents support PDF, JPG, JPEG, PNG, and WEBP.</div>
+            <input type="file" accept={uploadAccept} onChange={(e) => setUploadForm((current) => ({ ...current, file: e.target.files?.[0] || null, manual_amount: '' }))} />
+            <div className="muted text-xs mt-1">PDF payslips are read automatically. Any other format requires a manual amount.</div>
           </div>
           <div>
-            <button className="btn" onClick={uploadDocument} disabled={uploadingDoc || !uploadForm.file}>{uploadingDoc ? 'Uploading…' : 'Upload document'}</button>
+            <button className="btn" onClick={uploadDocument} disabled={uploadingDoc || !uploadForm.file || (payslipNeedsAmount && !uploadForm.manual_amount)}>{uploadingDoc ? 'Uploading…' : 'Upload document'}</button>
           </div>
         </div>
+        {payslipNeedsAmount && (
+          <div className="field mt-3" style={{ maxWidth: 280 }}>
+            <label className="label">Monthly Rand amount on this payslip *</label>
+            <input type="number" min="0" step="0.01" value={uploadForm.manual_amount} onChange={(e) => setUploadForm((current) => ({ ...current, manual_amount: e.target.value }))} placeholder="e.g. 4500" />
+            <div className="muted text-xs mt-1">Required — enter the total shown on the payslip.</div>
+          </div>
+        )}
       </div>
 
       <div className="card mt-4">

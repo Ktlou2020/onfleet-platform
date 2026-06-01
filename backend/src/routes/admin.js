@@ -656,4 +656,50 @@ router.get('/audit-logs', (req, res) => {
   res.json({ logs });
 });
 
+// ---------- FLEET PAYOUT REQUESTS ----------
+
+router.get('/fleet-payouts', (req, res) => {
+  const requests = db.prepare(`SELECT p.*, o.name AS org_name, u.full_name AS requested_by_name,
+      pu.full_name AS processed_by_name
+    FROM fleet_payout_requests p
+    JOIN organizations o ON o.id = p.organization_id
+    JOIN users u ON u.id = p.requested_by
+    LEFT JOIN users pu ON pu.id = p.processed_by
+    ORDER BY
+      CASE p.status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END,
+      p.created_at DESC
+    LIMIT 200`).all();
+  res.json({ requests });
+});
+
+router.post('/fleet-payouts/:id/process', superadminOnly, (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid payout request id' });
+  const request = db.prepare('SELECT * FROM fleet_payout_requests WHERE id = ?').get(id);
+  if (!request) return res.status(404).json({ error: 'Payout request not found' });
+  if (request.status === 'paid') return res.status(400).json({ error: 'Payout already marked as paid' });
+
+  const { action, admin_notes } = req.body;
+  if (!['approve', 'paid', 'reject'].includes(action)) {
+    return res.status(400).json({ error: 'Invalid action. Use approve, paid, or reject' });
+  }
+
+  const newStatus = action === 'approve' ? 'approved' : action === 'paid' ? 'paid' : 'rejected';
+
+  if (newStatus === 'rejected' && request.status !== 'paid') {
+    // Refund the wallet balance
+    db.transaction(() => {
+      db.prepare(`UPDATE fleet_wallets SET balance = balance + ?, total_withdrawn = total_withdrawn - ?, updated_at = CURRENT_TIMESTAMP WHERE organization_id = ?`)
+        .run(request.amount_requested, request.amount_requested, request.organization_id);
+      db.prepare(`DELETE FROM fleet_wallet_transactions WHERE payout_request_id = ?`).run(id);
+    })();
+  }
+
+  db.prepare(`UPDATE fleet_payout_requests SET status = ?, admin_notes = ?, processed_by = ?, processed_at = CURRENT_TIMESTAMP WHERE id = ?`)
+    .run(newStatus, admin_notes || null, req.user.id, id);
+
+  logAudit(req.user.id, `fleet.payout.${newStatus}`, 'fleet_payout_requests', id, { action, admin_notes }, req.ip);
+  res.json({ ok: true, status: newStatus });
+});
+
 module.exports = router;

@@ -238,11 +238,60 @@ router.post('/paystack/webhook', (req, res) => {
   let event;
   try { event = JSON.parse(req.body.toString()); } catch { return res.sendStatus(400); }
 
-  // Fleet subscription events — identified by the presence of a plan code
+  // Distinguish fleet billing plans vs rider payment plans vs one-time
   const planCode = event.data?.plan?.plan_code || event.data?.plan;
-  const isFleetEvent = planCode && typeof planCode === 'string' && planCode.startsWith('PLN_');
+  const hasPlan = planCode && typeof planCode === 'string' && planCode.startsWith('PLN_');
+  const isRiderEvent = hasPlan && isRiderPlanCode(planCode);
+  const isFleetEvent = hasPlan && !isRiderEvent && !!getKeyForPlanCode(planCode);
 
-  if (event.event === 'subscription.create' && isFleetEvent) {
+  // Rider subscription.create — activate the rider_subscriptions record
+  if (event.event === 'subscription.create' && isRiderEvent) {
+    const customerCode = event.data.customer?.customer_code;
+    const subscriptionCode = event.data.subscription_code;
+    const meta = event.data.metadata || {};
+    const orgId = Number(meta.organization_id);
+    const riderId = Number(meta.rider_user_id);
+    if (orgId && riderId) {
+      db.prepare(`UPDATE rider_subscriptions SET status = 'active', paystack_subscription_code = ?, paystack_customer_code = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE organization_id = ? AND rider_user_id = ? AND status = 'pending'`)
+        .run(subscriptionCode || null, customerCode || null, orgId, riderId);
+    }
+  // Rider charge.success — credit the fleet wallet
+  } else if (event.event === 'charge.success' && isRiderEvent) {
+    const subscriptionCode = event.data.subscription?.subscription_code;
+    const customerCode = event.data.customer?.customer_code;
+    const meta = event.data.metadata || {};
+    const grossAmountZAR = (event.data.amount || 0) / 100;
+    const reference = event.data.reference;
+
+    let orgId = Number(meta.organization_id);
+    let riderId = Number(meta.rider_user_id);
+
+    if (!orgId && subscriptionCode) {
+      const sub = db.prepare(`SELECT * FROM rider_subscriptions WHERE paystack_subscription_code = ?`).get(subscriptionCode);
+      if (sub) { orgId = sub.organization_id; riderId = sub.rider_user_id; }
+    }
+    if (!orgId && customerCode) {
+      const user = db.prepare(`SELECT id, organization_id FROM users WHERE id IN (SELECT rider_user_id FROM rider_subscriptions WHERE paystack_customer_code = ?) LIMIT 1`)
+        .get(customerCode);
+      if (user) { orgId = user.organization_id; riderId = user.id; }
+    }
+
+    if (orgId && grossAmountZAR > 0) {
+      creditFleetWalletFromWebhook(orgId, grossAmountZAR, riderId || null, reference);
+      if (subscriptionCode) {
+        db.prepare(`UPDATE rider_subscriptions SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE paystack_subscription_code = ? AND status != 'cancelled'`)
+          .run(subscriptionCode);
+      }
+    }
+  // Rider subscription.disable — cancel the rider subscription
+  } else if (event.event === 'subscription.disable' && isRiderEvent) {
+    const subscriptionCode = event.data.subscription_code;
+    if (subscriptionCode) {
+      db.prepare(`UPDATE rider_subscriptions SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE paystack_subscription_code = ?`)
+        .run(subscriptionCode);
+    }
+  } else if (event.event === 'subscription.create' && isFleetEvent) {
     const customerCode = event.data.customer?.customer_code;
     const subscriptionCode = event.data.subscription_code;
     const orgIdMeta = event.data.metadata?.organization_id || event.data.plan?.metadata?.organization_id;
@@ -284,7 +333,7 @@ router.post('/paystack/webhook', (req, res) => {
         }
       }
     }
-  } else if (event.event === 'subscription.disable') {
+  } else if (event.event === 'subscription.disable' && !isRiderEvent) {
     const subscriptionCode = event.data.subscription_code;
     if (subscriptionCode) {
       db.prepare("UPDATE organizations SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE paystack_subscription_code = ?")
@@ -325,6 +374,32 @@ function getKeyForPlanCode(planCode) {
     if (envCode && envCode === planCode) return key;
   }
   return null;
+}
+
+const RIDER_PLAN_AMOUNTS = [650, 700, 750, 850];
+
+function isRiderPlanCode(planCode) {
+  return RIDER_PLAN_AMOUNTS.some((amt) => {
+    const code = process.env[`PAYSTACK_RIDER_PLAN_${amt}`];
+    return code && code === planCode;
+  });
+}
+
+function ensureFleetWallet(organizationId) {
+  db.prepare(`INSERT OR IGNORE INTO fleet_wallets (organization_id) VALUES (?)`).run(organizationId);
+}
+
+function creditFleetWalletFromWebhook(organizationId, grossAmountZAR, riderId, reference) {
+  const fee = +(grossAmountZAR * 0.035 + 1).toFixed(2);
+  const net = +(grossAmountZAR - fee).toFixed(2);
+  ensureFleetWallet(organizationId);
+  db.transaction(() => {
+    db.prepare(`UPDATE fleet_wallets SET balance = balance + ?, total_collected = total_collected + ?, updated_at = CURRENT_TIMESTAMP WHERE organization_id = ?`)
+      .run(net, net, organizationId);
+    db.prepare(`INSERT INTO fleet_wallet_transactions (organization_id, type, amount, fee_amount, net_amount, description, paystack_reference, rider_user_id)
+      VALUES (?,?,?,?,?,?,?,?)`)
+      .run(organizationId, 'credit', grossAmountZAR, fee, net, 'Weekly rider rental payment', reference || null, riderId || null);
+  })();
 }
 
 router.post('/manual', authRequired, adminOnly, (req, res) => {

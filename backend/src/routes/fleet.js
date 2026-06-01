@@ -15,6 +15,8 @@ const { sendNotification } = require('../services/notifier');
 const { writeContractSnapshot } = require('../services/contracts');
 
 const router = express.Router();
+const PAYSTACK_BASE = 'https://api.paystack.co';
+const RIDER_PLAN_AMOUNTS = [650, 700, 750, 850];
 const FLEET_ROLE_VALUES = ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'];
 const MEMBER_STATUSES = ['active', 'suspended'];
 const OPEN_AGREEMENT_STATUSES = ['active', 'paused', 'defaulted'];
@@ -47,6 +49,10 @@ const FLEET_RESOURCE_ACCESS = {
   billing: {
     view: ['fleet_owner_admin', 'fleet_owner_billing'],
     manage: ['fleet_owner_admin']
+  },
+  wallet: {
+    view: ['fleet_owner_admin', 'fleet_owner_billing'],
+    manage: ['fleet_owner_admin', 'fleet_owner_billing']
   }
 };
 
@@ -2071,6 +2077,208 @@ router.get('/billing/verify', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.m
     res.json({ ok: true, plan_key: planKey, txn_status: txn.status });
   } catch (error) {
     res.status(500).json({ error: 'Could not verify subscription', details: error.response?.data || error.message });
+  }
+});
+
+// ---------- RIDER PAYMENT PLAN HELPERS ----------
+
+function getRiderPlanCode(weeklyAmount) {
+  const amount = Math.round(Number(weeklyAmount));
+  for (const amt of RIDER_PLAN_AMOUNTS) {
+    if (amount === amt) return process.env[`PAYSTACK_RIDER_PLAN_${amt}`] || null;
+  }
+  return null;
+}
+
+function ensureFleetWallet(organizationId) {
+  db.prepare(`INSERT OR IGNORE INTO fleet_wallets (organization_id) VALUES (?)`).run(organizationId);
+}
+
+function creditFleetWallet(organizationId, grossAmountZAR, riderId, reference) {
+  const fee = +(grossAmountZAR * 0.035 + 1).toFixed(2);
+  const net = +(grossAmountZAR - fee).toFixed(2);
+  ensureFleetWallet(organizationId);
+  db.transaction(() => {
+    db.prepare(`UPDATE fleet_wallets SET balance = balance + ?, total_collected = total_collected + ?, updated_at = CURRENT_TIMESTAMP WHERE organization_id = ?`)
+      .run(net, net, organizationId);
+    db.prepare(`INSERT INTO fleet_wallet_transactions (organization_id, type, amount, fee_amount, net_amount, description, paystack_reference, rider_user_id)
+      VALUES (?,?,?,?,?,?,?,?)`)
+      .run(organizationId, 'credit', grossAmountZAR, fee, net, 'Weekly rider rental payment', reference || null, riderId || null);
+  })();
+  return { gross: grossAmountZAR, fee, net };
+}
+
+// GET /fleet/wallet — wallet balance and recent transactions
+router.get('/wallet', companyRoleAllowed(FLEET_RESOURCE_ACCESS.wallet.view), (req, res) => {
+  try {
+    const org = getOrganizationOrThrow(req.user.organization_id);
+    ensureFleetWallet(org.id);
+    const wallet = db.prepare('SELECT * FROM fleet_wallets WHERE organization_id = ?').get(org.id);
+    const transactions = db.prepare(`SELECT t.*, u.full_name AS rider_name
+      FROM fleet_wallet_transactions t
+      LEFT JOIN users u ON u.id = t.rider_user_id
+      WHERE t.organization_id = ?
+      ORDER BY t.created_at DESC LIMIT 100`).all(org.id);
+    const payoutRequests = db.prepare(`SELECT p.*, u.full_name AS requested_by_name
+      FROM fleet_payout_requests p
+      JOIN users u ON u.id = p.requested_by
+      WHERE p.organization_id = ?
+      ORDER BY p.created_at DESC LIMIT 20`).all(org.id);
+    res.json({ wallet, transactions, payout_requests: payoutRequests });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
+// POST /fleet/wallet/payout — request payout from wallet
+router.post('/wallet/payout', companyRoleAllowed(FLEET_RESOURCE_ACCESS.wallet.manage), (req, res) => {
+  try {
+    const org = getOrganizationOrThrow(req.user.organization_id);
+    ensureFleetWallet(org.id);
+    const wallet = db.prepare('SELECT * FROM fleet_wallets WHERE organization_id = ?').get(org.id);
+
+    const amount = Number(req.body.amount);
+    if (!amount || amount <= 0) return res.status(400).json({ error: 'Invalid withdrawal amount' });
+    if (!wallet || wallet.balance < amount) return res.status(400).json({ error: 'Insufficient wallet balance' });
+
+    const bankAccountName = req.body.bank_account_name || org.bank_account_name;
+    const bankName = req.body.bank_name || org.bank_name;
+    const bankAccountNumber = req.body.bank_account_number || org.bank_account_number;
+    const bankBranchCode = req.body.bank_branch_code || org.bank_branch_code;
+
+    if (!bankAccountName || !bankName || !bankAccountNumber) {
+      return res.status(400).json({ error: 'Bank account name, bank name, and account number are required' });
+    }
+
+    const withdrawalFee = +(amount * 0.005).toFixed(2);
+    const netPayout = +(amount - withdrawalFee).toFixed(2);
+
+    const requestId = db.transaction(() => {
+      db.prepare(`UPDATE fleet_wallets SET balance = balance - ?, total_withdrawn = total_withdrawn + ?, updated_at = CURRENT_TIMESTAMP WHERE organization_id = ?`)
+        .run(amount, amount, org.id);
+
+      const result = db.prepare(`INSERT INTO fleet_payout_requests
+        (organization_id, requested_by, amount_requested, withdrawal_fee, net_payout, status, bank_account_name, bank_name, bank_account_number, bank_branch_code)
+        VALUES (?,?,?,?,?, 'pending',?,?,?,?)`)
+        .run(org.id, req.user.id, amount, withdrawalFee, netPayout, bankAccountName, bankName, bankAccountNumber, bankBranchCode || null);
+
+      const reqId = result.lastInsertRowid;
+      db.prepare(`INSERT INTO fleet_wallet_transactions
+        (organization_id, type, amount, fee_amount, net_amount, description, payout_request_id)
+        VALUES (?,?,?,?,?,?,?)`)
+        .run(org.id, 'withdrawal', amount, withdrawalFee, netPayout, `Payout request #${reqId}`, reqId);
+
+      return reqId;
+    })();
+
+    logAudit(req.user.id, 'fleet.wallet.payout_requested', 'fleet_payout_requests', requestId, { amount, withdrawalFee, netPayout }, req.ip);
+    res.json({ ok: true, payout_request_id: requestId, amount, withdrawal_fee: withdrawalFee, net_payout: netPayout });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
+// GET /fleet/bank-details — get org bank account details
+router.get('/bank-details', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.view), (req, res) => {
+  try {
+    const org = getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
+    res.json({
+      bank_account_name: org.bank_account_name || '',
+      bank_name: org.bank_name || '',
+      bank_account_number: org.bank_account_number || '',
+      bank_branch_code: org.bank_branch_code || ''
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
+// PUT /fleet/bank-details — save org bank account details
+router.put('/bank-details', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), (req, res) => {
+  try {
+    const org = getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
+    const { bank_account_name, bank_name, bank_account_number, bank_branch_code } = req.body;
+    db.prepare(`UPDATE organizations SET bank_account_name = ?, bank_name = ?, bank_account_number = ?, bank_branch_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+      .run(bank_account_name || null, bank_name || null, bank_account_number || null, bank_branch_code || null, org.id);
+    logAudit(req.user.id, 'fleet.bank_details.updated', 'organizations', org.id, {}, req.ip);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
+// GET /fleet/riders/:id/subscription — get a rider's current subscription status
+router.get('/riders/:id/subscription', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.view), (req, res) => {
+  try {
+    const org = getOrganizationOrThrow(req.user.organization_id);
+    const sub = db.prepare(`SELECT * FROM rider_subscriptions WHERE rider_user_id = ? AND organization_id = ? ORDER BY created_at DESC LIMIT 1`)
+      .get(toInt(req.params.id), org.id);
+    res.json({ subscription: sub || null });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
+// POST /fleet/riders/:id/subscription/init — create Paystack subscription checkout for a rider
+router.post('/riders/:id/subscription/init', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), async (req, res) => {
+  try {
+    const org = getOrganizationOrThrow(req.user.organization_id);
+    const rider = getScopedRider(org, toInt(req.params.id));
+    if (!rider) return res.status(404).json({ error: 'Rider not found' });
+
+    const agreement = db.prepare(`SELECT a.* FROM agreements a
+      JOIN bikes b ON b.id = a.bike_id
+      WHERE a.user_id = ? AND a.status IN ('active','paused')
+        AND (b.organization_id = ? OR LOWER(TRIM(COALESCE(b.fleet,''))) IN (?,?))
+      ORDER BY a.created_at DESC LIMIT 1`)
+      .get(rider.id, org.id, String(org.name || '').toLowerCase().trim(), String(org.slug || '').toLowerCase().trim());
+
+    if (!agreement) return res.status(400).json({ error: 'Rider has no active agreement' });
+
+    const planCode = getRiderPlanCode(agreement.weekly_amount);
+    if (!planCode) {
+      return res.status(400).json({
+        error: `No payment plan configured for R${agreement.weekly_amount}/week. Available amounts: R650, R700, R750, R850.`
+      });
+    }
+
+    const existingSub = db.prepare(`SELECT * FROM rider_subscriptions WHERE rider_user_id = ? AND organization_id = ? AND status = 'active'`)
+      .get(rider.id, org.id);
+    if (existingSub) return res.status(400).json({ error: 'Rider already has an active payment subscription' });
+
+    const reference = `RSUB-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const resp = await axios.post(`${PAYSTACK_BASE}/transaction/initialize`, {
+      email: rider.email,
+      amount: Math.round(agreement.weekly_amount * 100),
+      currency: 'ZAR',
+      reference,
+      plan: planCode,
+      callback_url: process.env.PAYSTACK_CALLBACK_URL,
+      metadata: {
+        type: 'rider_subscription',
+        organization_id: org.id,
+        rider_user_id: rider.id,
+        agreement_id: agreement.id,
+        weekly_amount: agreement.weekly_amount
+      }
+    }, { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } });
+
+    db.prepare(`INSERT INTO rider_subscriptions (organization_id, rider_user_id, agreement_id, plan_code, weekly_amount, status) VALUES (?,?,?,?,?, 'pending')`)
+      .run(org.id, rider.id, agreement.id, planCode, agreement.weekly_amount);
+
+    logAudit(req.user.id, 'fleet.rider.subscription_init', 'rider_subscriptions', rider.id, { plan_code: planCode, weekly_amount: agreement.weekly_amount }, req.ip);
+    res.json({
+      authorization_url: resp.data.data.authorization_url,
+      access_code: resp.data.data.access_code,
+      reference,
+      plan_code: planCode,
+      weekly_amount: agreement.weekly_amount,
+      rider_name: rider.full_name,
+      rider_email: rider.email
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.response?.data?.message || error.message });
   }
 });
 

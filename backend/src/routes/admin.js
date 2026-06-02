@@ -390,6 +390,49 @@ router.get('/fleet-owners', superadminOnly, (req, res) => {
   });
 });
 
+const FLEET_PLAN_ENTITLEMENTS = {
+  trial:      { status: 'trialing', max_bikes: 10,  max_admin_users: 2  },
+  small:      { status: 'active',   max_bikes: 20,  max_admin_users: 3  },
+  medium:     { status: 'active',   max_bikes: 60,  max_admin_users: 5  },
+  large:      { status: 'active',   max_bikes: 100, max_admin_users: 10 },
+  enterprise: { status: 'active',   max_bikes: 999, max_admin_users: 50 }
+};
+
+router.post('/organizations/:id/plan', superadminOnly, (req, res) => {
+  const orgId = Number(req.params.id);
+  if (!Number.isInteger(orgId) || orgId <= 0) return res.status(400).json({ error: 'Invalid organization id' });
+
+  const org = db.prepare('SELECT * FROM organizations WHERE id = ?').get(orgId);
+  if (!org) return res.status(404).json({ error: 'Organization not found' });
+
+  const planKey = String(req.body.plan_key || '').trim();
+  if (!FLEET_PLAN_ENTITLEMENTS[planKey]) {
+    return res.status(400).json({ error: `Invalid plan. Valid options: ${Object.keys(FLEET_PLAN_ENTITLEMENTS).join(', ')}` });
+  }
+
+  const defaults = FLEET_PLAN_ENTITLEMENTS[planKey];
+  const newStatus = String(req.body.status || defaults.status).trim();
+  const validStatuses = ['trialing', 'active', 'past_due', 'suspended', 'cancelled'];
+  if (!validStatuses.includes(newStatus)) return res.status(400).json({ error: 'Invalid status' });
+
+  const maxBikes = Number(req.body.max_bikes) || defaults.max_bikes;
+  const maxAdmins = Number(req.body.max_admin_users) || defaults.max_admin_users;
+
+  db.prepare(`UPDATE organizations SET plan_key = ?, status = ?, max_bikes = ?, max_admin_users = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+    .run(planKey, newStatus, maxBikes, maxAdmins, orgId);
+
+  logAudit(req.user.id, 'organization.plan_changed', 'organizations', orgId, {
+    from_plan: org.plan_key,
+    to_plan: planKey,
+    from_status: org.status,
+    to_status: newStatus,
+    max_bikes: maxBikes,
+    max_admin_users: maxAdmins
+  }, req.ip);
+
+  res.json({ ok: true, plan_key: planKey, status: newStatus, max_bikes: maxBikes, max_admin_users: maxAdmins });
+});
+
 router.post('/fleet-owners/:id/status', superadminOnly, (req, res) => {
   const userId = Number(req.params.id);
   const status = String(req.body.status || '').trim();

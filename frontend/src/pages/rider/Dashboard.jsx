@@ -2,7 +2,41 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../api';
 import { Stat, Badge, Loading, SearchInput, fmt, fmtDate, EmptyState, matchesSearch } from '../../components/ui';
-import { Bike, TrendingUp, Calendar, AlertCircle } from 'lucide-react';
+import { Bike, TrendingUp, Calendar, AlertCircle, CreditCard, FileText, UserCircle, CheckCircle2 } from 'lucide-react';
+import TourModal from '../../components/TourModal';
+
+const RIDER_TOUR_STEPS = [
+  {
+    icon: <Bike size={32} />,
+    title: 'Welcome to your rider portal!',
+    description: "This is your personal dashboard for the rent-to-own programme. Track your bike, monitor your payments, and manage everything in one place.",
+    tip: 'Tip: bookmark this page for quick access from your phone.'
+  },
+  {
+    icon: <CheckCircle2 size={32} />,
+    title: 'Step 1 — Submit your application',
+    description: "Go to Application in the sidebar to upload your ID, driver's licence, selfie, and three recent payslips. Once submitted, the system reviews your income automatically and notifies you of the outcome.",
+    tip: "Payslips don't have to be PDFs — images and Word documents are accepted. You'll be asked to type the monthly Rand amount shown on the payslip."
+  },
+  {
+    icon: <FileText size={32} />,
+    title: 'Step 2 — Your agreement',
+    description: "Once approved, your rental agreement is created and a bike is allocated. Open My Agreement to read your contract, track your ownership progress, and download your monthly statement.",
+    tip: 'Your agreement tracks every week — you can see exactly how many weeks are paid, how many remain, and the full payment schedule.'
+  },
+  {
+    icon: <CreditCard size={32} />,
+    title: 'Step 3 — Making payments',
+    description: "Your fleet owner will set up a weekly Paystack subscription for you. You'll authorise your card once via a secure Paystack link — after that, your weekly rental is deducted automatically every week.",
+    tip: 'You can also make one-off manual payments from the Payments section at any time.'
+  },
+  {
+    icon: <UserCircle size={32} />,
+    title: 'Keep your profile updated',
+    description: "Go to Profile to update your phone number, address, emergency contact, and banking details. Keeping this information current ensures smooth communication and correct payment records.",
+    tip: "You're all set! If you ever have a question, reach out to your fleet manager directly."
+  }
+];
 
 const monthLabel = (monthKey) => new Date(`${monthKey}-01T00:00:00`).toLocaleDateString('en-ZA', { month: 'long', year: 'numeric' });
 const creditedAmount = (payment) => Number(payment?.net_amount || payment?.amount || 0);
@@ -30,6 +64,7 @@ export default function RiderDashboard() {
     const pending = apps.find((application) => application.status === 'submitted' || application.status === 'under_review');
     return (
       <>
+        <TourModal steps={RIDER_TOUR_STEPS} storageKey="onfleet_tour_rider_v1" />
         <h1 className="page-title">Dashboard</h1>
         <p className="page-sub">Get started on your rent-to-own journey</p>
         {pending ? (
@@ -63,6 +98,7 @@ export default function RiderDashboard() {
 
   return (
     <>
+      <TourModal steps={RIDER_TOUR_STEPS} storageKey="onfleet_tour_rider_v1" />
       <h1 className="page-title">Dashboard</h1>
       <p className="page-sub">Track your rent-to-own progress</p>
 

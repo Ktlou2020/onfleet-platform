@@ -1,12 +1,58 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, Bike, CheckCircle2, Clock3, CreditCard, FileText, TrendingUp, Wrench, RefreshCw } from 'lucide-react';
+import { AlertTriangle, Bike, CheckCircle2, Clock3, CreditCard, FileText, TrendingUp, Wrench, RefreshCw, PiggyBank, Users, LayoutDashboard, HelpCircle, Wallet } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../api';
 import { useAuth } from '../../auth';
 import { Badge, EmptyState, Loading, fmt, fmtDate, fmtDateTime } from '../../components/ui';
 import { canAccessFleetRoute } from './access';
 import { FleetHelpTip } from './helpSupport';
+import TourModal from '../../components/TourModal';
+
+const FLEET_TOUR_STEPS = [
+  {
+    icon: <LayoutDashboard size={32} />,
+    title: 'Welcome to your fleet console!',
+    description: "This is your command centre. You'll see your live fleet health, collections queue, maintenance schedule, and key stats at a glance — all updated in real time.",
+    tip: 'Use the Refresh button at any time to pull the latest data from all your bikes and agreements.'
+  },
+  {
+    icon: <Users size={32} />,
+    title: 'Manage your riders',
+    description: "Head to the Riders section to review applications, approve riders, allocate bikes, and upload compliance documents. Once a rider has an active agreement, you can set up their weekly payment subscription.",
+    tip: 'The auto-decision engine reads payslips and pre-approves or flags riders automatically — no manual income calculation needed.'
+  },
+  {
+    icon: <PiggyBank size={32} />,
+    title: 'Collect payments automatically',
+    description: "Open any approved rider's record and click '+ Setup weekly payment'. This generates a secure Paystack link. The rider enters their card once — Paystack handles the weekly debit every week after that.",
+    tip: '4 weekly plans available: R650, R700, R750, and R850. The right plan is matched automatically from the rider's agreement amount.'
+  },
+  {
+    icon: <Wallet size={32} />,
+    title: 'Your Fleet Wallet',
+    description: "Every rider payment — minus the 3.5% + R1 processing fee — lands in your Fleet Wallet. Check your balance, see every transaction, and request a payout to your bank account whenever you're ready.",
+    tip: 'A 0.5% withdrawal fee applies when you request a payout. Payouts are processed by OnFleet admin within 1–2 business days.'
+  },
+  {
+    icon: <FileText size={32} />,
+    title: 'Agreements & bikes',
+    description: "Track every rental contract in Agreements and manage your whole fleet in Bikes. You can handle discontinuations, reinstatements, bike swaps, and maintenance records from these two sections.",
+    tip: 'The collections queue on this dashboard surfaces overdue and defaulted agreements so your ops team always knows where to focus.'
+  },
+  {
+    icon: <CreditCard size={32} />,
+    title: 'Payments & reporting',
+    description: "The Payments section shows every payment recorded against your riders' agreements — both manual EFT entries and Paystack charges. Filter by status, export CSVs, and reconcile in minutes.",
+    tip: 'Use CSV Import to bulk-upload EFT payment records from your bank statement.'
+  },
+  {
+    icon: <HelpCircle size={32} />,
+    title: "You're all set!",
+    description: "That's the quick tour. If you ever get stuck, open the Help section in the sidebar — it covers every feature in detail with step-by-step guides.",
+    tip: 'Your team members only see the sections their role permits. Billing and Wallet are restricted to Admin and Billing roles.'
+  }
+];
 
 const emptyPortal = {
   organization: null,
@@ -112,6 +158,7 @@ export default function FleetDashboard() {
 
   return (
     <>
+      <TourModal steps={FLEET_TOUR_STEPS} storageKey="onfleet_tour_fleet_v1" />
       {/* Header */}
       <div className="flex-between mb-4" style={{ gap: 16, flexWrap: 'wrap' }}>
         <div>

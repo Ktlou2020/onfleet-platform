@@ -629,6 +629,55 @@ CREATE INDEX IF NOT EXISTS idx_fleet_payout_reqs_org ON fleet_payout_requests(or
 CREATE INDEX IF NOT EXISTS idx_fleet_payout_reqs_status ON fleet_payout_requests(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_rider_subs_org ON rider_subscriptions(organization_id);
 CREATE INDEX IF NOT EXISTS idx_rider_subs_rider ON rider_subscriptions(rider_user_id);
+
+CREATE TABLE IF NOT EXISTS hubs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  organization_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  address TEXT,
+  city TEXT,
+  contact_name TEXT,
+  contact_phone TEXT,
+  notes TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(organization_id) REFERENCES organizations(id)
+);
+
+CREATE TABLE IF NOT EXISTS collections_actions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agreement_id INTEGER NOT NULL,
+  organization_id INTEGER NOT NULL,
+  stage TEXT NOT NULL DEFAULT 'pending' CHECK(stage IN ('pending','contacted','notice_sent','recovery','resolved')),
+  action_type TEXT NOT NULL CHECK(action_type IN ('call','sms','whatsapp','email','visit','legal_notice','repo','note')),
+  notes TEXT,
+  outcome TEXT,
+  next_action_date TEXT,
+  created_by INTEGER NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(agreement_id) REFERENCES agreements(id),
+  FOREIGN KEY(organization_id) REFERENCES organizations(id),
+  FOREIGN KEY(created_by) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS api_keys (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  organization_id INTEGER NOT NULL,
+  created_by INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  key_hash TEXT NOT NULL UNIQUE,
+  key_prefix TEXT NOT NULL,
+  last_used_at DATETIME,
+  revoked_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(organization_id) REFERENCES organizations(id),
+  FOREIGN KEY(created_by) REFERENCES users(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_hubs_org ON hubs(organization_id);
+CREATE INDEX IF NOT EXISTS idx_collections_actions_agreement ON collections_actions(agreement_id);
+CREATE INDEX IF NOT EXISTS idx_collections_actions_org ON collections_actions(organization_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_api_keys_org ON api_keys(organization_id);
+CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
 `);
 
 // ---------- LIGHTWEIGHT MIGRATIONS FOR EXISTING DEPLOYS ----------
@@ -666,6 +715,7 @@ ensureColumn('organizations', 'bank_account_name', 'TEXT');
 ensureColumn('organizations', 'bank_name', 'TEXT');
 ensureColumn('organizations', 'bank_account_number', 'TEXT');
 ensureColumn('organizations', 'bank_branch_code', 'TEXT');
+ensureColumn('bikes', 'hub_id', 'INTEGER REFERENCES hubs(id)');
 ensureBikeStatusSchema();
 ensureAgreementStatusSchema();
 ensureUserRoleSchema();

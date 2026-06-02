@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet';
 import L from 'leaflet';
@@ -128,7 +128,11 @@ export default function RiderAgreementDetail() {
   const [data, setData] = useState(null);
   const [bike, setBike] = useState(null);
   const [signing, setSigning] = useState(false);
+  const [showSignModal, setShowSignModal] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState('');
+  const canvasRef = useRef(null);
+  const drawingRef = useRef(false);
+  const lastPosRef = useRef(null);
 
   const load = () => api.get(`/agreements/${id}`).then((response) => {
     setData(response.data);
@@ -153,11 +157,64 @@ export default function RiderAgreementDetail() {
 
   if (!data) return <Loading />;
 
-  const signAgreement = async () => {
+  const getCanvasPos = (e, canvas) => {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const source = e.touches ? e.touches[0] : e;
+    return { x: (source.clientX - rect.left) * scaleX, y: (source.clientY - rect.top) * scaleY };
+  };
+
+  const startDraw = (e) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    e.preventDefault();
+    drawingRef.current = true;
+    lastPosRef.current = getCanvasPos(e, canvas);
+  };
+
+  const draw = (e) => {
+    if (!drawingRef.current) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    e.preventDefault();
+    const ctx = canvas.getContext('2d');
+    const pos = getCanvasPos(e, canvas);
+    ctx.beginPath();
+    ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y);
+    ctx.lineTo(pos.x, pos.y);
+    ctx.strokeStyle = '#1a1a2e';
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+    lastPosRef.current = pos;
+  };
+
+  const stopDraw = () => { drawingRef.current = false; };
+
+  const clearCanvas = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  };
+
+  const confirmSignature = async () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const dataUrl = canvas.toDataURL('image/png');
+    const blank = document.createElement('canvas');
+    blank.width = canvas.width;
+    blank.height = canvas.height;
+    if (dataUrl === blank.toDataURL('image/png')) {
+      return toast.error('Please draw your signature before confirming');
+    }
     setSigning(true);
     try {
-      await api.post(`/agreements/${id}/sign`, { signature: `${agreement.full_name} · ${new Date().toLocaleString('en-ZA')}` });
+      await api.post(`/agreements/${id}/sign`, { signature: dataUrl });
       toast.success('Agreement signed electronically');
+      setShowSignModal(false);
       load();
     } catch (error) {
       toast.error(error.response?.data?.error || 'Could not sign agreement');
@@ -197,7 +254,7 @@ export default function RiderAgreementDetail() {
           <div className="row">
             {agreement.contract_file_path && <a href={agreement.contract_file_path} target="_blank" rel="noreferrer" className="btn btn-secondary btn-sm">View contract</a>}
             {agreement.signed_contract_path && <a href={agreement.signed_contract_path} target="_blank" rel="noreferrer" className="btn btn-secondary btn-sm">Signed copy</a>}
-            {!agreement.signed_at && !discontinued && <button className="btn btn-sm" onClick={signAgreement} disabled={signing}>{signing ? 'Signing…' : 'Sign now'}</button>}
+            {!agreement.signed_at && !discontinued && <button className="btn btn-sm" onClick={() => setShowSignModal(true)}>Sign now</button>}
           </div>
         </div>
         <div className="muted text-sm">The contract now uses the longer OnFleet rental wording structure, including ownership, payment, insurance, breach, and domicilium clauses.</div>
@@ -320,6 +377,33 @@ export default function RiderAgreementDetail() {
           </table>
         </div>
       </div>
+
+      {showSignModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div className="card" style={{ width: '100%', maxWidth: 480, padding: 24 }}>
+            <h3 className="mb-2">Sign agreement</h3>
+            <p className="muted text-sm mb-3">Draw your signature below using your finger or mouse. This acts as your electronic signature on the agreement.</p>
+            <canvas
+              ref={canvasRef}
+              width={400}
+              height={150}
+              style={{ border: '1px solid var(--border)', borderRadius: 8, background: '#fff', width: '100%', cursor: 'crosshair', touchAction: 'none' }}
+              onMouseDown={startDraw}
+              onMouseMove={draw}
+              onMouseUp={stopDraw}
+              onMouseLeave={stopDraw}
+              onTouchStart={startDraw}
+              onTouchMove={draw}
+              onTouchEnd={stopDraw}
+            />
+            <div className="row mt-3" style={{ justifyContent: 'flex-end', gap: 8 }}>
+              <button className="btn btn-secondary" onClick={clearCanvas}>Clear</button>
+              <button className="btn btn-secondary" onClick={() => setShowSignModal(false)}>Cancel</button>
+              <button className="btn" disabled={signing} onClick={confirmSignature}>{signing ? 'Signing…' : 'Confirm signature'}</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-2 mb-4">
         <div className="card">

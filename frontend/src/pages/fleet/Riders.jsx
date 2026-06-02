@@ -627,13 +627,24 @@ export default function FleetOwnerRiders() {
           <SearchInput value={search} onChange={setSearch} placeholder="Search rider, email, bike, status" style={{ width: 320 }} />
         </div>
         <table className="table">
-          <thead><tr><th>Rider</th><th>Bike</th><th>Status</th><th>Avg weekly</th><th>Docs</th><th>Submitted</th><th></th></tr></thead>
+          <thead><tr><th>Rider</th><th>Bike</th><th>Status</th><th>Score</th><th>Avg weekly</th><th>Docs</th><th>Submitted</th><th></th></tr></thead>
           <tbody>
             {pagination.items.map((item) => (
               <tr key={item.id}>
                 <td>{item.full_name}<div className="text-xs muted">{item.email} · {item.phone || '—'}</div></td>
                 <td>{item.registration || 'No registration'}<div className="text-xs muted">{item.make ? `${item.make} ${item.model}` : '—'}</div></td>
                 <td><Badge status={item.status}>{item.auto_decision === 'pre_approved' ? 'pre-approved' : item.status}</Badge></td>
+                <td>
+                  {item.performance_score !== null && item.performance_score !== undefined ? (
+                    <span style={{
+                      padding: '3px 10px', borderRadius: 100, fontSize: 12, fontWeight: 600,
+                      background: item.performance_score >= 80 ? 'rgba(34,197,94,0.15)' : item.performance_score >= 60 ? 'rgba(234,179,8,0.15)' : item.performance_score >= 40 ? 'rgba(249,115,22,0.15)' : 'rgba(239,68,68,0.15)',
+                      color: item.performance_score >= 80 ? 'var(--success)' : item.performance_score >= 60 ? '#ca8a04' : item.performance_score >= 40 ? '#ea580c' : 'var(--danger)'
+                    }}>
+                      {item.performance_label} · {item.performance_score}
+                    </span>
+                  ) : <span className="muted text-xs">—</span>}
+                </td>
                 <td>{item.average_weekly_earnings ? fmt(item.average_weekly_earnings) : 'Pending'}</td>
                 <td>{item.document_count || 0}<div className="text-xs muted">Payslips: {item.payslip_count || 0}/3</div></td>
                 <td>{fmtDate(item.submitted_at)}</td>

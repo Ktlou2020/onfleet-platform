@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { CheckCircle2, ChevronRight, CreditCard, ShieldCheck, Users, Bike, BarChart3, Layers3, Briefcase, Clock3, Rocket } from 'lucide-react';
+import { CheckCircle2, ChevronRight, CreditCard, ShieldCheck, Users, Bike, BarChart3, Layers3, Briefcase, Clock3, Rocket, PiggyBank, ArrowRight, Smartphone, Banknote, Repeat } from 'lucide-react';
 import Logo from '../components/Logo';
 import { fmt } from '../components/ui';
 
@@ -13,7 +13,7 @@ const plans = [
     summary: 'Best for validating the workflow with a live mini-fleet before going paid.',
     cta: 'Start trial',
     highlight: true,
-    features: ['2 admin users', 'Bike and agreement tracking', 'Payments dashboard', 'Collections visibility']
+    features: ['2 admin users', 'Bike and agreement tracking', 'Payments dashboard', 'Collections visibility', 'Rider payment collection']
   },
   {
     key: 'small',
@@ -22,7 +22,7 @@ const plans = [
     cap: 'Up to 20 bikes',
     summary: 'For early operators moving from spreadsheets to a daily operating system.',
     cta: 'Choose Small',
-    features: ['3 admin users', 'CSV imports', 'Maintenance reminders', 'Standard support']
+    features: ['3 admin users', 'CSV imports', 'Maintenance reminders', 'Fleet Wallet & payouts', 'Rider payment collection']
   },
   {
     key: 'medium',
@@ -31,7 +31,7 @@ const plans = [
     cap: 'Up to 60 bikes',
     summary: 'For growing fleets that need bulk actions, reporting, and tighter control.',
     cta: 'Choose Medium',
-    features: ['5 admin users', 'Advanced filters', 'Bulk contract actions', 'Performance reporting']
+    features: ['5 admin users', 'Advanced filters', 'Bulk contract actions', 'Performance reporting', 'Fleet Wallet & payouts']
   },
   {
     key: 'large',
@@ -40,7 +40,7 @@ const plans = [
     cap: 'Up to 100 bikes',
     summary: 'For scaled operations running multiple teams, hubs, and field processes.',
     cta: 'Choose Large',
-    features: ['10 admin users', 'Priority onboarding', 'Audit visibility', 'Multi-branch readiness']
+    features: ['10 admin users', 'Priority onboarding', 'Audit visibility', 'Fleet Wallet & payouts', 'Multi-branch readiness']
   },
   {
     key: 'enterprise',
@@ -49,7 +49,7 @@ const plans = [
     cap: '100+ bikes',
     summary: 'For enterprise rollouts needing custom onboarding, integrations, and support.',
     cta: 'Talk to us',
-    features: ['Custom bike limits', 'Dedicated onboarding', 'API/webhook options', 'Success support']
+    features: ['Custom bike limits', 'Dedicated onboarding', 'API/webhook options', 'Fleet Wallet & payouts', 'Success support']
   }
 ];
 
@@ -63,6 +63,7 @@ export default function FleetOwnerPilot() {
         <Logo />
         <nav className="landing-nav fleet-pilot-nav-inline">
           <a href="#plans">Plans</a>
+          <a href="#collect-payments">Collect payments</a>
           <a href="#features">Features</a>
           <Link to="/fleet/workspace">Preview workspace</Link>
           <a href="#launch">Launch now</a>
@@ -83,7 +84,8 @@ export default function FleetOwnerPilot() {
           </div>
           <div className="hero-trust-list">
             <div className="hero-trust-item"><Clock3 size={16} /> 14-day live trial</div>
-            <div className="hero-trust-item"><CreditCard size={16} /> Paystack billing flow ready</div>
+            <div className="hero-trust-item"><PiggyBank size={16} /> Collect weekly rider payments</div>
+            <div className="hero-trust-item"><CreditCard size={16} /> Fleet Wallet &amp; instant payouts</div>
             <div className="hero-trust-item"><ShieldCheck size={16} /> Access blocks when billing fails</div>
           </div>
         </div>
@@ -93,9 +95,10 @@ export default function FleetOwnerPilot() {
           <div className="fleet-pilot-checks mt-4">
             {[
               'Daily bike, rider, and agreement operations',
+              'Collect weekly rental payments from riders via Paystack',
+              'Fleet Wallet — funds accumulate, request payout to your bank',
               'Collections workflows and default handling',
               'Bulk imports, filters, and contract actions',
-              'Fleet billing and payment visibility',
               'Role-based access and billing controls for live operations'
             ].map((item) => (
               <div className="fleet-pilot-check" key={item}><CheckCircle2 size={16} /> {item}</div>
@@ -137,6 +140,80 @@ export default function FleetOwnerPilot() {
         </div>
       </section>
 
+      {/* Payment collection highlight section */}
+      <section id="collect-payments" className="section fleet-pilot-section" style={{ background: 'var(--surface-2)', borderRadius: 16, margin: '0 0 0 0' }}>
+        <div className="section-head">
+          <div className="hero-pill" style={{ margin: '0 auto 16px' }}><PiggyBank size={14} /> New — automatic payment collection</div>
+          <h2>Get paid weekly, automatically</h2>
+          <div className="sub">Set up a Paystack subscription for each rider and let the platform collect weekly rental payments on your behalf. Funds land in your Fleet Wallet and you can request a payout to your bank account at any time.</div>
+        </div>
+
+        <div className="grid grid-3 mt-4" style={{ gap: 20 }}>
+          {[
+            {
+              step: '1',
+              icon: <Smartphone size={28} />,
+              title: 'Rider authorises once',
+              text: 'Generate a secure Paystack checkout link from the Riders panel. The rider enters their card details once and the weekly debit is set up automatically — no manual payment needed each week.'
+            },
+            {
+              step: '2',
+              icon: <Repeat size={28} />,
+              title: 'Payments collected every week',
+              text: 'Paystack charges the agreed rental amount weekly. A 3.5% + R1 processing fee is deducted and the net amount is credited to your Fleet Wallet. You see every transaction in real time.'
+            },
+            {
+              step: '3',
+              icon: <Banknote size={28} />,
+              title: 'Withdraw to your bank anytime',
+              text: 'When you\'re ready, request a payout from your Fleet Wallet to your bank account. A 0.5% withdrawal fee applies on the net amount. OnFleet admin processes and transfers the funds within 1–2 business days.'
+            }
+          ].map((item) => (
+            <div className="card" key={item.step} style={{ position: 'relative', overflow: 'hidden' }}>
+              <div style={{
+                position: 'absolute', top: 12, right: 16,
+                fontSize: 48, fontWeight: 900, color: 'var(--border)',
+                lineHeight: 1, userSelect: 'none', fontFamily: "'Space Grotesk', sans-serif"
+              }}>{item.step}</div>
+              <div style={{ color: 'var(--primary-light)', marginBottom: 12 }}>{item.icon}</div>
+              <h3 style={{ marginBottom: 8 }}>{item.title}</h3>
+              <div className="muted text-sm" style={{ lineHeight: 1.6 }}>{item.text}</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="card mt-4" style={{ background: 'rgba(30,136,209,0.08)', border: '1px solid rgba(30,136,209,0.25)' }}>
+          <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            <div style={{ flex: 1, minWidth: 240 }}>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>Available weekly plans</div>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                {['R650 / week', 'R700 / week', 'R750 / week', 'R850 / week'].map((plan) => (
+                  <span key={plan} style={{
+                    background: 'var(--primary)', color: '#fff',
+                    borderRadius: 6, padding: '4px 12px', fontSize: 13, fontWeight: 600
+                  }}>{plan}</span>
+                ))}
+              </div>
+              <div className="muted text-sm mt-3">Plans are matched automatically from the rider's agreement weekly amount.</div>
+            </div>
+            <div style={{ flex: 1, minWidth: 240 }}>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>Fee transparency</div>
+              <div className="muted text-sm" style={{ lineHeight: 1.7 }}>
+                Collection fee: <strong>3.5% + R1.00</strong> per weekly charge<br />
+                Withdrawal fee: <strong>0.5%</strong> when you request a payout<br />
+                What you see is what you keep — no hidden charges.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ textAlign: 'center', marginTop: 28 }}>
+          <Link to="/fleet/signup" className="btn hero-cta-btn">
+            Start collecting payments <ArrowRight size={16} />
+          </Link>
+        </div>
+      </section>
+
       <section id="features" className="section fleet-pilot-section fleet-pilot-features">
         <div className="section-head">
           <h2>What the platform includes</h2>
@@ -145,8 +222,10 @@ export default function FleetOwnerPilot() {
         <div className="grid grid-4">
           {[
             { icon: <Bike />, title: 'Fleet operations', text: 'Manage bike statuses, allocations, service dates, and compliance documents from one place.' },
+            { icon: <PiggyBank />, title: 'Fleet Wallet', text: 'Rider payments land automatically in your wallet. Track every credit, fee, and payout in one place.' },
             { icon: <Users />, title: 'Agreement control', text: 'Track rider contracts, outstanding balances, defaults, discontinuations, and reinstatements.' },
             { icon: <BarChart3 />, title: 'Collections visibility', text: 'Spot overdue and defaulted agreements fast and route ops teams to the right follow-up.' },
+            { icon: <CreditCard />, title: 'Paystack billing', text: 'Both your platform subscription and rider payment collection run through Paystack — one trusted payment layer.' },
             { icon: <Layers3 />, title: 'Plan-based rollout', text: 'Plan entitlements map naturally to Small, Medium, Large, and Enterprise commercial tiers.' }
           ].map((item) => (
             <div className="card landing-benefit-card" key={item.title}>

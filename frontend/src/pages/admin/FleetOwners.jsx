@@ -4,7 +4,95 @@ import api from '../../api';
 import { useAuth } from '../../auth';
 import { Badge, CopyableContactValue, EmptyState, Loading, Pagination, SearchInput, Stat, fmtDate, fmtDateTime, matchesSearch, paginateItems } from '../../components/ui';
 import { getFleetRoleLabel } from '../fleet/access';
-import { Building2, ShieldCheck, Users, Wallet } from 'lucide-react';
+import { Building2, ShieldCheck, Users, Wallet, Settings } from 'lucide-react';
+
+const PLAN_OPTIONS = [
+  { key: 'trial',      label: 'Trial',       defaultStatus: 'trialing', maxBikes: 10,  maxAdmins: 2  },
+  { key: 'small',      label: 'Small',       defaultStatus: 'active',   maxBikes: 20,  maxAdmins: 3  },
+  { key: 'medium',     label: 'Medium',      defaultStatus: 'active',   maxBikes: 60,  maxAdmins: 5  },
+  { key: 'large',      label: 'Large',       defaultStatus: 'active',   maxBikes: 100, maxAdmins: 10 },
+  { key: 'enterprise', label: 'Enterprise',  defaultStatus: 'active',   maxBikes: 999, maxAdmins: 50 }
+];
+const ORG_STATUS_OPTIONS = ['trialing', 'active', 'past_due', 'suspended', 'cancelled'];
+
+function ChangePlanModal({ orgId, orgName, currentPlan, currentStatus, onClose, onSaved }) {
+  const plan = PLAN_OPTIONS.find((p) => p.key === currentPlan) || PLAN_OPTIONS[0];
+  const [selectedPlan, setSelectedPlan] = useState(plan.key);
+  const [selectedStatus, setSelectedStatus] = useState(currentStatus || plan.defaultStatus);
+  const [maxBikes, setMaxBikes] = useState(String(plan.maxBikes));
+  const [maxAdmins, setMaxAdmins] = useState(String(plan.maxAdmins));
+  const [busy, setBusy] = useState(false);
+
+  const onPlanChange = (key) => {
+    const p = PLAN_OPTIONS.find((o) => o.key === key);
+    setSelectedPlan(key);
+    setSelectedStatus(p.defaultStatus);
+    setMaxBikes(String(p.maxBikes));
+    setMaxAdmins(String(p.maxAdmins));
+  };
+
+  const submit = async () => {
+    setBusy(true);
+    try {
+      await api.post(`/admin/organizations/${orgId}/plan`, {
+        plan_key: selectedPlan,
+        status: selectedStatus,
+        max_bikes: Number(maxBikes),
+        max_admin_users: Number(maxAdmins)
+      });
+      toast.success(`${orgName} plan updated to ${selectedPlan}`);
+      onSaved();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Could not update plan');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+      <div className="card" style={{ maxWidth: 440, width: '100%' }}>
+        <div className="flex-between" style={{ marginBottom: 20 }}>
+          <div>
+            <h3 style={{ margin: 0 }}>Change plan</h3>
+            <div className="muted text-sm">{orgName}</div>
+          </div>
+          <button className="btn btn-secondary btn-sm" onClick={onClose}>Close</button>
+        </div>
+
+        <div className="field" style={{ marginBottom: 14 }}>
+          <label className="label">Plan</label>
+          <select value={selectedPlan} onChange={(e) => onPlanChange(e.target.value)}>
+            {PLAN_OPTIONS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+          </select>
+        </div>
+
+        <div className="field" style={{ marginBottom: 14 }}>
+          <label className="label">Status</label>
+          <select value={selectedStatus} onChange={(e) => setSelectedStatus(e.target.value)}>
+            {ORG_STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}
+          </select>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
+          <div className="field">
+            <label className="label">Max bikes</label>
+            <input type="number" min="1" value={maxBikes} onChange={(e) => setMaxBikes(e.target.value)} />
+          </div>
+          <div className="field">
+            <label className="label">Max admin users</label>
+            <input type="number" min="1" value={maxAdmins} onChange={(e) => setMaxAdmins(e.target.value)} />
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button className="btn" onClick={submit} disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button>
+          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 const roleOptions = ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'];
 
@@ -21,6 +109,7 @@ export default function AdminFleetOwners() {
   const [pageSize, setPageSize] = useState(10);
   const [busyKey, setBusyKey] = useState('');
   const [roleEdits, setRoleEdits] = useState({});
+  const [planModal, setPlanModal] = useState(null);
 
   const load = async () => {
     setLoading(true);
@@ -166,6 +255,17 @@ export default function AdminFleetOwners() {
         </div>
       </div>
 
+      {planModal && (
+        <ChangePlanModal
+          orgId={planModal.orgId}
+          orgName={planModal.orgName}
+          currentPlan={planModal.currentPlan}
+          currentStatus={planModal.currentStatus}
+          onClose={() => setPlanModal(null)}
+          onSaved={() => { setPlanModal(null); load(); }}
+        />
+      )}
+
       {!filtered.length ? (
         <EmptyState title="No fleet owners match this view" sub="Try a different organization, role, status, or search term." />
       ) : (
@@ -209,7 +309,17 @@ export default function AdminFleetOwners() {
                     </td>
                     <td><Badge status={account.status}>{account.status}</Badge></td>
                     <td>
-                      <Badge status={account.organization_status}>{String(account.organization_status || 'trialing').replace(/_/g, ' ')}</Badge>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                        <Badge status={account.organization_status}>{String(account.organization_status || 'trialing').replace(/_/g, ' ')}</Badge>
+                        <button
+                          className="btn btn-sm btn-secondary"
+                          style={{ padding: '2px 8px', fontSize: 11 }}
+                          onClick={() => setPlanModal({ orgId: account.organization_id, orgName: account.organization_name, currentPlan: account.plan_key, currentStatus: account.organization_status })}
+                          title="Change plan / status"
+                        >
+                          <Settings size={11} /> Change
+                        </button>
+                      </div>
                       <div className="text-xs muted" style={{ marginTop: 6 }}>
                         {String(account.plan_key || 'trial').replace(/_/g, ' ')} · {account.organization_payer_status === 'payer' ? 'payer' : 'non-payer'}
                       </div>

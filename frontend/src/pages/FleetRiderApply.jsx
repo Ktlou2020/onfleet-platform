@@ -165,21 +165,58 @@ export default function FleetRiderApply() {
   if (loading) return <div className="center-flex"><div className="spinner" /></div>;
 
   return (
-    <div className="auth-page">
-      <div className="auth-hero">
-        <Logo size="lg" />
+    <div style={{ minHeight: '100vh', background: 'var(--bg)' }}>
+      <div style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)', padding: '16px 24px', display: 'flex', alignItems: 'center', gap: 16 }}>
+        <Logo />
         <div>
-          <div className="auth-tagline">Rider application for<br /><span>{organization?.name || 'OnFleet Africa'}</span></div>
-          <p className="muted" style={{ maxWidth: 440 }}>Complete the same rider onboarding details and upload all documents now. No account password or sign-in is needed for this shared application link.</p>
+          <div style={{ fontWeight: 700 }}>{organization?.name || 'OnFleet Africa'}</div>
+          {organization?.city && <div className="text-xs muted">{organization.city}</div>}
         </div>
-        <div className="muted text-sm">Step {step} of 4</div>
       </div>
 
-      <div className="auth-form">
-        <h1>Submit rider application</h1>
-        <div className="sub">Fleet owner: {organization?.name || '—'}{organization?.city ? ` · ${organization.city}` : ''}</div>
+      {bikes.length > 0 && (
+        <div style={{ padding: '32px 24px', maxWidth: 1080, margin: '0 auto' }}>
+          <h2 style={{ marginBottom: 4 }}>Available bikes</h2>
+          <p className="muted text-sm" style={{ marginBottom: 24 }}>Choose from bikes available for rent-to-own through {organization?.name || 'this fleet'}. Select your preferred bike during the application.</p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 16 }}>
+            {bikes.map((bike) => (
+              <div key={bike.id} className="card" style={{ padding: 0, overflow: 'hidden', cursor: 'pointer', border: String(form.preferred_bike_id) === String(bike.id) ? '2px solid var(--primary)' : '1px solid var(--border)' }} onClick={() => { setForm((f) => ({ ...f, preferred_bike_id: String(bike.id) })); setStep(1); }}>
+                {bike.image_url ? (
+                  <img src={bike.image_url} alt={`${bike.make} ${bike.model}`} style={{ width: '100%', height: 160, objectFit: 'cover' }} />
+                ) : (
+                  <div style={{ width: '100%', height: 120, background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <span style={{ fontSize: 40 }}>🏍️</span>
+                  </div>
+                )}
+                <div style={{ padding: 16 }}>
+                  <div style={{ fontWeight: 700, fontSize: 16 }}>{bike.make} {bike.model}</div>
+                  {bike.year && <div className="text-xs muted">{bike.year}{bike.engine_cc ? ` · ${bike.engine_cc}cc` : ''}</div>}
+                  <div style={{ marginTop: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <div style={{ fontWeight: 700, color: 'var(--primary)', fontSize: 18 }}>{fmt(bike.rental_weekly)}<span className="muted text-xs">/week</span></div>
+                      {bike.total_weeks && <div className="text-xs muted">Own in {bike.total_weeks} weeks</div>}
+                    </div>
+                    {String(form.preferred_bike_id) === String(bike.id) && (
+                      <span style={{ padding: '4px 10px', borderRadius: 100, fontSize: 11, fontWeight: 700, background: 'rgba(30,136,209,0.15)', color: 'var(--primary)' }}>Selected</span>
+                    )}
+                  </div>
+                  {bike.registration && <div className="text-xs muted mt-1">Reg: {bike.registration}</div>}
+                  {bike.condition && <div className="text-xs muted">Condition: {bike.condition}</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="muted text-sm" style={{ marginTop: 12 }}>Click a bike to pre-select it in your application. You can change your selection in step 3.</div>
+        </div>
+      )}
 
-        <form onSubmit={submit}>
+      <div style={{ padding: '0 24px 48px', maxWidth: 540, margin: '0 auto' }}>
+        <div style={{ marginBottom: 24 }}>
+          <h2>Submit rider application</h2>
+          <div className="muted text-sm">Fleet: {organization?.name || '—'}{organization?.city ? ` · ${organization.city}` : ''} · Step {step} of 4</div>
+        </div>
+
+        <form onSubmit={submit} className="auth-form" style={{ maxWidth: '100%', padding: 0 }}>
           {step === 1 && (
             <>
               <div className="field"><label className="label">Full name *</label><input required value={form.full_name} onChange={setText('full_name')} placeholder="Thabo Mokoena" /></div>

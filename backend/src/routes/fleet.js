@@ -53,6 +53,18 @@ const FLEET_RESOURCE_ACCESS = {
   wallet: {
     view: ['fleet_owner_admin', 'fleet_owner_billing'],
     manage: ['fleet_owner_admin', 'fleet_owner_billing']
+  },
+  collections: {
+    view: ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing'],
+    manage: ['fleet_owner_admin', 'fleet_owner_ops']
+  },
+  hubs: {
+    view: ['fleet_owner_admin', 'fleet_owner_ops'],
+    manage: ['fleet_owner_admin', 'fleet_owner_ops']
+  },
+  api_keys: {
+    view: ['fleet_owner_admin'],
+    manage: ['fleet_owner_admin']
   }
 };
 
@@ -1033,10 +1045,41 @@ router.get('/riders/share-link', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders
   res.json({ slug: organization.slug, path: `/fleet/rider-apply/${organization.slug}` });
 });
 
+function computePerformanceScore(riderId) {
+  const schedule = db.prepare(`SELECT ps.status, ps.amount_due, ps.amount_paid, a.total_weeks
+    FROM payment_schedules ps
+    JOIN agreements a ON a.id = ps.agreement_id
+    WHERE a.user_id = ? AND a.status IN ('active','paused','defaulted','completed')
+    ORDER BY ps.week_number ASC`).all(riderId);
+  if (!schedule.length) return null;
+  const total = schedule.length;
+  const paid = schedule.filter((row) => row.status === 'paid').length;
+  const overdue = schedule.filter((row) => row.status === 'overdue').length;
+  const defaulted = schedule.some((row) => row.status === 'overdue' && Number(row.amount_due) > 0);
+  const onTimeRate = total > 0 ? paid / total : 0;
+  const statusScore = defaulted ? 0 : (overdue > 0 ? 0.4 : 1);
+  const weeksTotal = schedule[0]?.total_weeks || total;
+  const progressRate = weeksTotal > 0 ? Math.min(paid / weeksTotal, 1) : 0;
+  const raw = Math.round((onTimeRate * 40) + (statusScore * 40) + (progressRate * 20));
+  return Math.min(100, Math.max(0, raw));
+}
+
+function performanceLabel(score) {
+  if (score === null) return null;
+  if (score >= 80) return 'Excellent';
+  if (score >= 60) return 'Good';
+  if (score >= 40) return 'Fair';
+  return 'At Risk';
+}
+
 router.get('/riders', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.view), (req, res) => {
   try {
     const organization = getOrganizationOrThrow(req.user.organization_id);
-    res.json({ riders: listFleetRiderApplications(organization) });
+    const riders = listFleetRiderApplications(organization).map((rider) => {
+      const score = rider.status === 'approved' ? computePerformanceScore(rider.user_id) : null;
+      return { ...rider, performance_score: score, performance_label: performanceLabel(score) };
+    });
+    res.json({ riders });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Could not load riders' });
   }
@@ -2292,6 +2335,204 @@ router.post('/billing/cancel', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.
     res.json({ ok: true, note: 'Subscription cancelled. Access continues until your current billing period ends.' });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Could not cancel subscription' });
+  }
+});
+
+// ─── Hubs ─────────────────────────────────────────────────────────────────────
+
+router.get('/hubs', companyRoleAllowed(FLEET_RESOURCE_ACCESS.hubs.view), (req, res) => {
+  try {
+    const org = getOrganizationOrThrow(req.user.organization_id);
+    const hubs = db.prepare(`SELECT * FROM hubs WHERE organization_id = ? ORDER BY name ASC`).all(org.id);
+    res.json({ hubs });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not load hubs' });
+  }
+});
+
+router.post('/hubs', companyRoleAllowed(FLEET_RESOURCE_ACCESS.hubs.manage), (req, res) => {
+  try {
+    const org = getOrganizationOrThrow(req.user.organization_id);
+    const name = String(req.body.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Hub name is required' });
+    const info = db.prepare(`INSERT INTO hubs (organization_id, name, address, city, contact_name, contact_phone, notes) VALUES (?,?,?,?,?,?,?)`)
+      .run(org.id, name, String(req.body.address || '').trim() || null, String(req.body.city || '').trim() || null, String(req.body.contact_name || '').trim() || null, String(req.body.contact_phone || '').trim() || null, String(req.body.notes || '').trim() || null);
+    logAudit(req.user.id, 'fleet_owner.hub_create', 'hubs', info.lastInsertRowid, { organization_id: org.id }, req.ip);
+    res.status(201).json({ ok: true, hub: db.prepare(`SELECT * FROM hubs WHERE id = ?`).get(info.lastInsertRowid) });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not create hub' });
+  }
+});
+
+router.put('/hubs/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.hubs.manage), (req, res) => {
+  try {
+    const org = getOrganizationOrThrow(req.user.organization_id);
+    const hubId = toInt(req.params.id);
+    if (!hubId) return res.status(400).json({ error: 'Invalid hub id' });
+    const hub = db.prepare(`SELECT * FROM hubs WHERE id = ? AND organization_id = ?`).get(hubId, org.id);
+    if (!hub) return res.status(404).json({ error: 'Hub not found' });
+    const name = String(req.body.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Hub name is required' });
+    db.prepare(`UPDATE hubs SET name = ?, address = ?, city = ?, contact_name = ?, contact_phone = ?, notes = ? WHERE id = ?`)
+      .run(name, String(req.body.address || '').trim() || null, String(req.body.city || '').trim() || null, String(req.body.contact_name || '').trim() || null, String(req.body.contact_phone || '').trim() || null, String(req.body.notes || '').trim() || null, hubId);
+    logAudit(req.user.id, 'fleet_owner.hub_update', 'hubs', hubId, { organization_id: org.id }, req.ip);
+    res.json({ ok: true, hub: db.prepare(`SELECT * FROM hubs WHERE id = ?`).get(hubId) });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not update hub' });
+  }
+});
+
+router.delete('/hubs/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.hubs.manage), (req, res) => {
+  try {
+    const org = getOrganizationOrThrow(req.user.organization_id);
+    const hubId = toInt(req.params.id);
+    if (!hubId) return res.status(400).json({ error: 'Invalid hub id' });
+    const hub = db.prepare(`SELECT * FROM hubs WHERE id = ? AND organization_id = ?`).get(hubId, org.id);
+    if (!hub) return res.status(404).json({ error: 'Hub not found' });
+    const assigned = db.prepare(`SELECT COUNT(*) AS c FROM bikes WHERE hub_id = ?`).get(hubId);
+    if (assigned.c > 0) return res.status(400).json({ error: 'Cannot delete hub with bikes assigned. Reassign bikes first.' });
+    db.prepare(`DELETE FROM hubs WHERE id = ?`).run(hubId);
+    logAudit(req.user.id, 'fleet_owner.hub_delete', 'hubs', hubId, { organization_id: org.id }, req.ip);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not delete hub' });
+  }
+});
+
+// ─── Collections ──────────────────────────────────────────────────────────────
+
+router.get('/collections', companyRoleAllowed(FLEET_RESOURCE_ACCESS.collections.view), (req, res) => {
+  try {
+    const org = getOrganizationOrThrow(req.user.organization_id);
+    const scope = getBikeScope(org, 'b');
+    const items = db.prepare(`SELECT a.id, a.agreement_no, a.status, a.weekly_amount, a.start_date,
+        u.full_name AS rider_name, u.email AS rider_email, u.phone AS rider_phone,
+        b.registration AS bike_registration, b.make, b.model,
+        COALESCE((
+          SELECT SUM(CASE WHEN ps.amount_due > COALESCE(ps.amount_paid, 0) THEN ps.amount_due - COALESCE(ps.amount_paid, 0) ELSE 0 END)
+          FROM payment_schedules ps
+          WHERE ps.agreement_id = a.id AND ps.status = 'overdue'
+        ), 0) AS overdue_balance,
+        (
+          SELECT ca.stage FROM collections_actions ca
+          WHERE ca.agreement_id = a.id AND ca.organization_id = ?
+          ORDER BY ca.created_at DESC, ca.id DESC LIMIT 1
+        ) AS current_stage,
+        (
+          SELECT MIN(ps2.due_date) FROM payment_schedules ps2
+          WHERE ps2.agreement_id = a.id AND ps2.status = 'overdue'
+        ) AS first_overdue_date
+      FROM agreements a
+      JOIN bikes b ON b.id = a.bike_id
+      LEFT JOIN users u ON u.id = a.user_id
+      WHERE (a.status = 'defaulted' OR EXISTS(
+        SELECT 1 FROM payment_schedules ps WHERE ps.agreement_id = a.id AND ps.status = 'overdue'
+      )) AND ${scope.clause}
+      ORDER BY overdue_balance DESC, a.id DESC`).all(org.id, ...scope.params);
+
+    const today = todayIso();
+    const result = items.map((item) => ({
+      ...item,
+      current_stage: item.current_stage || 'pending',
+      days_overdue: item.first_overdue_date ? Math.max(0, Math.floor((new Date(today) - new Date(item.first_overdue_date)) / 86400000)) : 0
+    }));
+    res.json({ collections: result });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not load collections' });
+  }
+});
+
+router.post('/collections/:agreementId/action', companyRoleAllowed(FLEET_RESOURCE_ACCESS.collections.manage), (req, res) => {
+  try {
+    const org = getOrganizationOrThrow(req.user.organization_id);
+    const agreementId = toInt(req.params.agreementId);
+    if (!agreementId) return res.status(400).json({ error: 'Invalid agreement id' });
+
+    const agreement = getScopedAgreement(org, agreementId);
+    if (!agreement) return res.status(404).json({ error: 'Agreement not found' });
+
+    const stage = String(req.body.stage || '').trim();
+    const action_type = String(req.body.action_type || '').trim();
+    const validStages = ['pending', 'contacted', 'notice_sent', 'recovery', 'resolved'];
+    const validTypes = ['call', 'sms', 'whatsapp', 'email', 'visit', 'legal_notice', 'repo', 'note'];
+
+    if (!validStages.includes(stage)) return res.status(400).json({ error: 'Invalid stage' });
+    if (!validTypes.includes(action_type)) return res.status(400).json({ error: 'Invalid action type' });
+
+    const info = db.prepare(`INSERT INTO collections_actions (agreement_id, organization_id, stage, action_type, notes, outcome, next_action_date, created_by)
+      VALUES (?,?,?,?,?,?,?,?)`).run(
+        agreementId, org.id, stage, action_type,
+        String(req.body.notes || '').trim() || null,
+        String(req.body.outcome || '').trim() || null,
+        String(req.body.next_action_date || '').trim() || null,
+        req.user.id
+      );
+
+    logAudit(req.user.id, 'fleet_owner.collections_action', 'collections_actions', info.lastInsertRowid, { agreement_id: agreementId, stage, action_type }, req.ip);
+    const action = db.prepare(`SELECT ca.*, u.full_name AS created_by_name FROM collections_actions ca JOIN users u ON u.id = ca.created_by WHERE ca.id = ?`).get(info.lastInsertRowid);
+    res.status(201).json({ ok: true, action });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not log collections action' });
+  }
+});
+
+router.get('/collections/:agreementId/actions', companyRoleAllowed(FLEET_RESOURCE_ACCESS.collections.view), (req, res) => {
+  try {
+    const org = getOrganizationOrThrow(req.user.organization_id);
+    const agreementId = toInt(req.params.agreementId);
+    if (!agreementId) return res.status(400).json({ error: 'Invalid agreement id' });
+    const agreement = getScopedAgreement(org, agreementId);
+    if (!agreement) return res.status(404).json({ error: 'Agreement not found' });
+    const actions = db.prepare(`SELECT ca.*, u.full_name AS created_by_name FROM collections_actions ca JOIN users u ON u.id = ca.created_by WHERE ca.agreement_id = ? AND ca.organization_id = ? ORDER BY ca.created_at DESC, ca.id DESC`).all(agreementId, org.id);
+    res.json({ actions });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not load actions' });
+  }
+});
+
+// ─── API Keys ─────────────────────────────────────────────────────────────────
+
+router.get('/api-keys', companyRoleAllowed(FLEET_RESOURCE_ACCESS.api_keys.view), (req, res) => {
+  try {
+    const org = getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
+    const keys = db.prepare(`SELECT ak.id, ak.name, ak.key_prefix, ak.last_used_at, ak.revoked_at, ak.created_at, u.full_name AS created_by_name
+      FROM api_keys ak LEFT JOIN users u ON u.id = ak.created_by
+      WHERE ak.organization_id = ? ORDER BY ak.created_at DESC`).all(org.id);
+    res.json({ api_keys: keys });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not load API keys' });
+  }
+});
+
+router.post('/api-keys', companyRoleAllowed(FLEET_RESOURCE_ACCESS.api_keys.manage), (req, res) => {
+  try {
+    const org = getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
+    const name = String(req.body.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Key name is required' });
+    const rawKey = `onfleet_${crypto.randomBytes(32).toString('hex')}`;
+    const prefix = rawKey.slice(0, 16);
+    const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
+    const info = db.prepare(`INSERT INTO api_keys (organization_id, created_by, name, key_hash, key_prefix) VALUES (?,?,?,?,?)`)
+      .run(org.id, req.user.id, name, keyHash, prefix);
+    logAudit(req.user.id, 'fleet_owner.api_key_create', 'api_keys', info.lastInsertRowid, { organization_id: org.id, name }, req.ip);
+    res.status(201).json({ ok: true, key: rawKey, key_id: info.lastInsertRowid, prefix, name });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not create API key' });
+  }
+});
+
+router.delete('/api-keys/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.api_keys.manage), (req, res) => {
+  try {
+    const org = getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
+    const keyId = toInt(req.params.id);
+    if (!keyId) return res.status(400).json({ error: 'Invalid key id' });
+    const key = db.prepare(`SELECT * FROM api_keys WHERE id = ? AND organization_id = ? AND revoked_at IS NULL`).get(keyId, org.id);
+    if (!key) return res.status(404).json({ error: 'API key not found or already revoked' });
+    db.prepare(`UPDATE api_keys SET revoked_at = CURRENT_TIMESTAMP WHERE id = ?`).run(keyId);
+    logAudit(req.user.id, 'fleet_owner.api_key_revoke', 'api_keys', keyId, { organization_id: org.id }, req.ip);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not revoke API key' });
   }
 });
 

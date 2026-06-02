@@ -40,6 +40,18 @@ export const FLEET_RESOURCE_ACCESS = {
   wallet: {
     view: ['fleet_owner_admin', 'fleet_owner_billing'],
     manage: ['fleet_owner_admin', 'fleet_owner_billing']
+  },
+  collections: {
+    view: ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing'],
+    manage: ['fleet_owner_admin', 'fleet_owner_ops']
+  },
+  hubs: {
+    view: ['fleet_owner_admin', 'fleet_owner_ops'],
+    manage: ['fleet_owner_admin', 'fleet_owner_ops']
+  },
+  api_keys: {
+    view: ['fleet_owner_admin'],
+    manage: ['fleet_owner_admin']
   }
 };
 
@@ -49,8 +61,11 @@ export const FLEET_NAV_ITEMS = [
   { key: 'agreements', to: '/fleet/app/agreements', label: 'Agreements' },
   { key: 'payments', to: '/fleet/app/payments', label: 'Payments' },
   { key: 'riders', to: '/fleet/app/riders', label: 'Riders' },
+  { key: 'collections', to: '/fleet/app/collections', label: 'Collections' },
+  { key: 'hubs', to: '/fleet/app/hubs', label: 'Hubs' },
   { key: 'wallet', to: '/fleet/app/wallet', label: 'Fleet Wallet' },
   { key: 'billing', to: '/fleet/app/billing', label: 'Billing' },
+  { key: 'api_keys', to: '/fleet/app/api-keys', label: 'API Access' },
   { key: 'help', to: '/fleet/app/help', label: 'Help' }
 ];
 

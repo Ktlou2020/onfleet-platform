@@ -558,6 +558,77 @@ CREATE INDEX IF NOT EXISTS idx_pilot_leads_status ON fleet_owner_pilot_leads(sta
 CREATE INDEX IF NOT EXISTS idx_pilot_leads_email ON fleet_owner_pilot_leads(email);
 CREATE INDEX IF NOT EXISTS idx_password_reset_user ON password_reset_tokens(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_password_reset_expires ON password_reset_tokens(expires_at);
+
+CREATE TABLE IF NOT EXISTS fleet_wallets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  organization_id INTEGER UNIQUE NOT NULL,
+  balance REAL NOT NULL DEFAULT 0,
+  total_collected REAL NOT NULL DEFAULT 0,
+  total_withdrawn REAL NOT NULL DEFAULT 0,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(organization_id) REFERENCES organizations(id)
+);
+
+CREATE TABLE IF NOT EXISTS fleet_wallet_transactions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  organization_id INTEGER NOT NULL,
+  type TEXT NOT NULL CHECK(type IN ('credit','withdrawal','withdrawal_fee')),
+  amount REAL NOT NULL,
+  fee_amount REAL NOT NULL DEFAULT 0,
+  net_amount REAL NOT NULL,
+  description TEXT,
+  paystack_reference TEXT,
+  rider_user_id INTEGER,
+  payout_request_id INTEGER,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(organization_id) REFERENCES organizations(id),
+  FOREIGN KEY(rider_user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS fleet_payout_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  organization_id INTEGER NOT NULL,
+  requested_by INTEGER NOT NULL,
+  amount_requested REAL NOT NULL,
+  withdrawal_fee REAL NOT NULL DEFAULT 0,
+  net_payout REAL NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','paid','rejected')),
+  bank_account_name TEXT,
+  bank_name TEXT,
+  bank_account_number TEXT,
+  bank_branch_code TEXT,
+  admin_notes TEXT,
+  processed_by INTEGER,
+  processed_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(organization_id) REFERENCES organizations(id),
+  FOREIGN KEY(requested_by) REFERENCES users(id),
+  FOREIGN KEY(processed_by) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS rider_subscriptions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  organization_id INTEGER NOT NULL,
+  rider_user_id INTEGER NOT NULL,
+  agreement_id INTEGER,
+  paystack_subscription_code TEXT,
+  paystack_customer_code TEXT,
+  plan_code TEXT NOT NULL,
+  weekly_amount REAL NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('active','cancelled','pending')),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(organization_id) REFERENCES organizations(id),
+  FOREIGN KEY(rider_user_id) REFERENCES users(id),
+  FOREIGN KEY(agreement_id) REFERENCES agreements(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_fleet_wallets_org ON fleet_wallets(organization_id);
+CREATE INDEX IF NOT EXISTS idx_fleet_wallet_txns_org ON fleet_wallet_transactions(organization_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fleet_payout_reqs_org ON fleet_payout_requests(organization_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fleet_payout_reqs_status ON fleet_payout_requests(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_rider_subs_org ON rider_subscriptions(organization_id);
+CREATE INDEX IF NOT EXISTS idx_rider_subs_rider ON rider_subscriptions(rider_user_id);
 `);
 
 // ---------- LIGHTWEIGHT MIGRATIONS FOR EXISTING DEPLOYS ----------
@@ -591,6 +662,10 @@ ensureColumn('bikes', 'rc1_file_path', 'TEXT');
 ensureColumn('bikes', 'rc1_original_name', 'TEXT');
 ensureColumn('bikes', 'license_disc_file_path', 'TEXT');
 ensureColumn('bikes', 'license_disc_original_name', 'TEXT');
+ensureColumn('organizations', 'bank_account_name', 'TEXT');
+ensureColumn('organizations', 'bank_name', 'TEXT');
+ensureColumn('organizations', 'bank_account_number', 'TEXT');
+ensureColumn('organizations', 'bank_branch_code', 'TEXT');
 ensureBikeStatusSchema();
 ensureAgreementStatusSchema();
 ensureUserRoleSchema();

@@ -88,6 +88,8 @@ export default function FleetOwnerRiders() {
   const [createPayslipAmounts, setCreatePayslipAmounts] = useState({ payslip_1: '', payslip_2: '', payslip_3: '' });
   const [decisionForm, setDecisionForm] = useState(() => buildDecisionForm(null, []));
   const [decisionBusy, setDecisionBusy] = useState(false);
+  const [subscription, setSubscription] = useState(null);
+  const [subBusy, setSubBusy] = useState(false);
 
   const load = async ({ silent = false } = {}) => {
     if (!silent) setLoading(true);
@@ -156,6 +158,7 @@ export default function FleetOwnerRiders() {
     setUploadForm({ doc_type: 'payslip', file: null, manual_amount: '' });
     setCreatePayslipAmounts({ payslip_1: '', payslip_2: '', payslip_3: '' });
     setDecisionForm(buildDecisionForm(null, bikes));
+    setSubscription(null);
   };
 
   const openCreate = () => {
@@ -198,12 +201,31 @@ export default function FleetOwnerRiders() {
       });
       setFiles(buildInitialFiles());
       setDecisionForm(buildDecisionForm(data.application, bikes));
+      setSubscription(null);
+      if (data.application?.user_id) {
+        api.get(`/fleet/riders/${data.application.user_id}/subscription`)
+          .then((r) => setSubscription(r.data.subscription || null))
+          .catch(() => {});
+      }
       setMode('edit');
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (error) {
       toast.error(error.response?.data?.error || 'Could not load rider details');
     } finally {
       setLoadingDetail(false);
+    }
+  };
+
+  const setupSubscription = async (riderId) => {
+    setSubBusy(true);
+    try {
+      const { data } = await api.post(`/fleet/riders/${riderId}/subscription/init`);
+      window.open(data.authorization_url, '_blank', 'noopener');
+      toast.success(`Payment link opened for ${data.rider_name}. The rider should complete the card setup.`);
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Could not generate payment link');
+    } finally {
+      setSubBusy(false);
     }
   };
 
@@ -501,8 +523,31 @@ export default function FleetOwnerRiders() {
 
           {mode === 'edit' && detail?.agreement ? (
             <div className="card mt-4 mb-3" style={{ background: 'var(--surface-2)' }}>
-              <strong>Agreement created</strong>
-              <div className="muted text-sm mt-1">{detail.agreement.agreement_no} · {detail.agreement.status} · starts {fmtDate(detail.agreement.start_date)}</div>
+              <div className="flex-between" style={{ flexWrap: 'wrap', gap: 10 }}>
+                <div>
+                  <strong>Agreement</strong>
+                  <div className="muted text-sm mt-1">{detail.agreement.agreement_no} · {detail.agreement.status} · starts {fmtDate(detail.agreement.start_date)}</div>
+                  <div className="muted text-sm">Weekly: {fmt(detail.agreement.weekly_amount)}</div>
+                </div>
+                {canManage && ['active', 'paused'].includes(detail.agreement.status) && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    {subscription?.status === 'active' ? (
+                      <span className="badge" style={{ background: 'rgba(34,197,94,0.15)', color: 'var(--success)', fontSize: 12 }}>
+                        ✓ Payment subscription active
+                      </span>
+                    ) : (
+                      <button
+                        className="btn btn-sm"
+                        onClick={() => setupSubscription(detail.application.user_id)}
+                        disabled={subBusy}
+                        title="Generate a Paystack checkout link so the rider can authorise weekly recurring payments"
+                      >
+                        {subBusy ? 'Generating…' : '+ Setup weekly payment'}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           ) : null}
 

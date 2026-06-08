@@ -16,7 +16,7 @@ const SERVICE_BOOKING_LINKS = [
   {
     name: 'OnFix',
     city: 'Johannesburg',
-    url: 'https://calendar.app.google/JjLd7TFBdDGK6W4r6',
+    url: 'https://calendar.app.google/cnLsGRQPm2j7d6w27',
     description: 'Book your OnFleet service slot in JHB for inspections, routine maintenance, or repairs.'
   },
   {

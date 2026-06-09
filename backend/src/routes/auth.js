@@ -302,14 +302,26 @@ router.post('/signup',
     res.json({ token: signToken(user), user });
   });
 
-router.post('/signup-complete', signupUpload.fields([
+const SIGNUP_FIELDS = [
   { name: 'id_document', maxCount: 1 },
   { name: 'drivers_license', maxCount: 1 },
   { name: 'selfie', maxCount: 1 },
   { name: 'payslip_1', maxCount: 1 },
   { name: 'payslip_2', maxCount: 1 },
   { name: 'payslip_3', maxCount: 1 }
-]), async (req, res) => {
+];
+
+function handleSignupUpload(req, res, next) {
+  signupUpload.fields(SIGNUP_FIELDS)(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ error: 'One or more files are too large. Each file must be under 10 MB. Please compress the file and try again.' });
+    }
+    return res.status(400).json({ error: err.message || 'File upload failed. Please check your files and try again.' });
+  });
+}
+
+router.post('/signup-complete', handleSignupUpload, async (req, res) => {
   try {
     const {
       email, password, full_name, phone, id_number, address, city, province, postal_code,
@@ -318,37 +330,47 @@ router.post('/signup-complete', signupUpload.fields([
       bank_name, account_holder, account_number, branch_code, ewallet_number
     } = req.body;
 
-    if (!email || !password || !full_name || !phone || !id_number) {
-      return res.status(400).json({ error: 'Please complete all required personal details' });
-    }
-    if (!preferred_bike_id) return res.status(400).json({ error: 'Please choose a preferred bike' });
-    if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    if (!full_name || !full_name.trim()) return res.status(400).json({ error: 'Please enter your full name.' });
+    if (!email || !email.trim()) return res.status(400).json({ error: 'Please enter your email address.' });
+    if (!phone || !phone.trim()) return res.status(400).json({ error: 'Please enter your phone or WhatsApp number.' });
+    if (!id_number || !id_number.trim()) return res.status(400).json({ error: 'Please enter your ID number, passport number, or asylum number.' });
+    if (!password) return res.status(400).json({ error: 'Please create a password.' });
+    if (password.length < 6) return res.status(400).json({ error: 'Your password must be at least 6 characters long.' });
+    if (!preferred_bike_id) return res.status(400).json({ error: 'Please choose your preferred bike.' });
+
+    const platforms = parsePlatforms(req.body.delivery_platforms);
+    if (!platforms.length) return res.status(400).json({ error: 'Please select at least one delivery platform.' });
 
     const requiredFiles = ['id_document', 'drivers_license', 'selfie', 'payslip_1', 'payslip_2', 'payslip_3'];
+    const fileLabels = { id_document: 'ID document', drivers_license: "Driver's licence", selfie: 'Selfie holding your ID', payslip_1: 'Payslip 1', payslip_2: 'Payslip 2', payslip_3: 'Payslip 3' };
     for (const field of requiredFiles) {
-      if (!getRequiredFile(req, field)) return res.status(400).json({ error: `Missing required file: ${field.replace(/_/g, ' ')}` });
+      if (!getRequiredFile(req, field)) return res.status(400).json({ error: `Please upload your ${fileLabels[field]}.` });
     }
 
-    ['payslip_1', 'payslip_2', 'payslip_3'].forEach((field, index) => {
+    for (let index = 0; index < 3; index++) {
+      const field = `payslip_${index + 1}`;
       const file = getRequiredFile(req, field);
       if (file && isPayslipImageMime(file.mimetype) && !parseMoneyAmount(req.body[`payslip_amount_${index + 1}`])) {
-        throw new Error(`Please enter the Rand amount for payslip ${index + 1} because JPEG payslips are captured manually`);
+        return res.status(400).json({ error: `Please type the Rand amount shown on Payslip ${index + 1}. JPEG payslips cannot be read automatically — you must enter the amount manually.` });
       }
-    });
+    }
 
-    if (payout_preference === 'eft' && (!bank_name || !account_holder || !account_number || !branch_code)) {
-      return res.status(400).json({ error: 'Please provide all EFT banking details' });
+    if (payout_preference === 'eft') {
+      if (!bank_name) return res.status(400).json({ error: 'Please enter your bank name.' });
+      if (!account_holder) return res.status(400).json({ error: 'Please enter the bank account holder name.' });
+      if (!account_number) return res.status(400).json({ error: 'Please enter your bank account number.' });
+      if (!branch_code) return res.status(400).json({ error: 'Please enter your bank branch code.' });
     }
     if (payout_preference === 'ewallet' && !ewallet_number) {
-      return res.status(400).json({ error: 'Please provide an e-wallet number' });
+      return res.status(400).json({ error: 'Please enter your e-wallet cellphone number.' });
     }
 
     const existing = db.prepare('SELECT id FROM users WHERE email = ? AND deleted_at IS NULL').get(normalizeEmail(email));
-    if (existing) return res.status(409).json({ error: 'Email already registered' });
+    if (existing) return res.status(409).json({ error: 'This email address is already registered. Please sign in or use a different email address.' });
 
     const payload = {
       preferred_bike_id: Number(preferred_bike_id),
-      delivery_platforms: parsePlatforms(req.body.delivery_platforms),
+      delivery_platforms: platforms,
       has_riding_experience: toBool(req.body.has_riding_experience, true),
       years_riding: years_riding ? Number(years_riding) : null,
       has_drivers_license: toBool(req.body.has_drivers_license, true),
@@ -409,7 +431,14 @@ router.post('/signup-complete', signupUpload.fields([
 
     res.json({ token: signToken(user), user, application_id: created.applicationId, decision });
   } catch (error) {
-    res.status(400).json({ error: error.message || 'Sign up failed' });
+    const msg = String(error.message || '');
+    if (msg.includes('UNIQUE constraint') && msg.toLowerCase().includes('email')) {
+      return res.status(409).json({ error: 'This email address is already registered. Please sign in or use a different email address.' });
+    }
+    if (msg.includes('UNIQUE constraint')) {
+      return res.status(409).json({ error: 'An account with some of these details already exists. Please check your information and try again.' });
+    }
+    res.status(400).json({ error: msg || 'Sign up could not be completed. Please check all your details and try again.' });
   }
 });
 

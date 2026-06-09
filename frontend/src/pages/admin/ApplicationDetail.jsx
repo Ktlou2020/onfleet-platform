@@ -159,6 +159,16 @@ export default function AdminApplicationDetail() {
     }
   };
 
+  const reopen = async () => {
+    try {
+      await api.post(`/applications/${id}/reopen`);
+      toast.success('Application reopened — status set to Under review');
+      load();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not reopen application');
+    }
+  };
+
   const saveEdits = async () => {
     setSavingEdit(true);
     try {
@@ -358,6 +368,24 @@ export default function AdminApplicationDetail() {
         <div className="row mt-4">
           <button className="btn btn-success" onClick={() => setShowApprove(true)}>Approve & allocate bike</button>
           <button className="btn btn-danger" onClick={() => setShowReject(true)}>Reject</button>
+        </div>
+      )}
+
+      {application.status === 'rejected' && (
+        <div className="card mt-4" style={{ border: '1px solid var(--border)' }}>
+          <div className="flex-between" style={{ gap: 12, flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>Application was declined</div>
+              <div className="muted text-sm">
+                {application.rejection_reason ? `Reason: ${application.rejection_reason}` : 'No reason recorded.'}
+                {' '}You can reopen it for review or approve it directly if circumstances have changed.
+              </div>
+            </div>
+            <div className="row" style={{ gap: 8 }}>
+              <button className="btn btn-secondary" onClick={reopen}>Reopen for review</button>
+              <button className="btn btn-success" onClick={() => setShowApprove(true)}>Approve & allocate bike</button>
+            </div>
+          </div>
         </div>
       )}
 

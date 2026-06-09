@@ -161,8 +161,8 @@ async function approveApplication({ applicationId, bikeId, weeklyAmount, totalWe
 
   const app = db.prepare('SELECT * FROM applications WHERE id = ?').get(applicationId);
   if (!app) throw new Error('Application not found');
-  if (!['submitted', 'under_review'].includes(app.status)) {
-    throw new Error('Only submitted or under review applications can be approved');
+  if (!['submitted', 'under_review', 'rejected'].includes(app.status)) {
+    throw new Error('Only submitted, under review, or rejected applications can be approved');
   }
 
   const rider = db.prepare('SELECT * FROM users WHERE id = ?').get(app.user_id);
@@ -600,6 +600,16 @@ router.post('/:id/reject', authRequired, adminOnly, async (req, res) => {
   } catch (error) {
     res.status(error.message === 'Application not found' ? 404 : 400).json({ error: error.message });
   }
+});
+
+router.post('/:id/reopen', authRequired, adminOnly, (req, res) => {
+  const app = db.prepare(`SELECT id, status FROM applications WHERE id = ?`).get(req.params.id);
+  if (!app) return res.status(404).json({ error: 'Application not found' });
+  if (app.status !== 'rejected') return res.status(400).json({ error: 'Only rejected applications can be reopened' });
+  db.prepare(`UPDATE applications SET status = 'under_review', rejection_reason = NULL, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ?`)
+    .run(req.user.id, app.id);
+  logAudit(req.user.id, 'application.reopen', 'applications', app.id, {});
+  res.json({ ok: true });
 });
 
 module.exports = router;

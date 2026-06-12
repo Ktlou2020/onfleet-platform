@@ -2278,10 +2278,13 @@ router.post('/riders/:id/subscription/init', companyRoleAllowed(FLEET_RESOURCE_A
 
     if (!agreement) return res.status(400).json({ error: 'Rider has no active agreement' });
 
-    const planCode = getRiderPlanCode(agreement.weekly_amount);
+    const overrideAmount = req.body.plan_amount ? Math.round(Number(req.body.plan_amount)) : null;
+    const weeklyAmount = overrideAmount || Math.round(Number(agreement.weekly_amount));
+
+    const planCode = getRiderPlanCode(weeklyAmount);
     if (!planCode) {
       return res.status(400).json({
-        error: `No payment plan configured for R${agreement.weekly_amount}/week. Available amounts: R650, R700, R750, R850.`
+        error: `No payment plan configured for R${weeklyAmount}/week. Available amounts: R650, R700, R750, R850.`
       });
     }
 
@@ -2293,7 +2296,7 @@ router.post('/riders/:id/subscription/init', companyRoleAllowed(FLEET_RESOURCE_A
 
     const resp = await axios.post(`${PAYSTACK_BASE}/transaction/initialize`, {
       email: rider.email,
-      amount: Math.round(agreement.weekly_amount * 100),
+      amount: weeklyAmount * 100,
       currency: 'ZAR',
       reference,
       plan: planCode,
@@ -2303,12 +2306,12 @@ router.post('/riders/:id/subscription/init', companyRoleAllowed(FLEET_RESOURCE_A
         organization_id: org.id,
         rider_user_id: rider.id,
         agreement_id: agreement.id,
-        weekly_amount: agreement.weekly_amount
+        weekly_amount: weeklyAmount
       }
     }, { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } });
 
     db.prepare(`INSERT INTO rider_subscriptions (organization_id, rider_user_id, agreement_id, plan_code, weekly_amount, status) VALUES (?,?,?,?,?, 'pending')`)
-      .run(org.id, rider.id, agreement.id, planCode, agreement.weekly_amount);
+      .run(org.id, rider.id, agreement.id, planCode, weeklyAmount);
 
     logAudit(req.user.id, 'fleet.rider.subscription_init', 'rider_subscriptions', rider.id, { plan_code: planCode, weekly_amount: agreement.weekly_amount }, req.ip);
     res.json({

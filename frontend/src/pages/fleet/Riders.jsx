@@ -90,6 +90,7 @@ export default function FleetOwnerRiders() {
   const [decisionBusy, setDecisionBusy] = useState(false);
   const [subscription, setSubscription] = useState(null);
   const [subBusy, setSubBusy] = useState(false);
+  const [subPlanAmount, setSubPlanAmount] = useState('');
 
   const load = async ({ silent = false } = {}) => {
     if (!silent) setLoading(true);
@@ -202,6 +203,7 @@ export default function FleetOwnerRiders() {
       setFiles(buildInitialFiles());
       setDecisionForm(buildDecisionForm(data.application, bikes));
       setSubscription(null);
+      setSubPlanAmount(data.agreement?.weekly_amount ? String(Math.round(data.agreement.weekly_amount)) : '650');
       if (data.application?.user_id) {
         api.get(`/fleet/riders/${data.application.user_id}/subscription`)
           .then((r) => setSubscription(r.data.subscription || null))
@@ -219,9 +221,9 @@ export default function FleetOwnerRiders() {
   const setupSubscription = async (riderId) => {
     setSubBusy(true);
     try {
-      const { data } = await api.post(`/fleet/riders/${riderId}/subscription/init`);
+      const { data } = await api.post(`/fleet/riders/${riderId}/subscription/init`, { plan_amount: Number(subPlanAmount) });
       window.open(data.authorization_url, '_blank', 'noopener');
-      toast.success(`Payment link opened for ${data.rider_name}. The rider should complete the card setup.`);
+      toast.success(`Payment link opened for ${data.rider_name} (R${data.weekly_amount}/week). The rider should complete the card setup.`);
     } catch (e) {
       toast.error(e.response?.data?.error || 'Could not generate payment link');
     } finally {
@@ -530,20 +532,33 @@ export default function FleetOwnerRiders() {
                   <div className="muted text-sm">Weekly: {fmt(detail.agreement.weekly_amount)}</div>
                 </div>
                 {canManage && ['active', 'paused'].includes(detail.agreement.status) && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
                     {subscription?.status === 'active' ? (
                       <span className="badge" style={{ background: 'rgba(34,197,94,0.15)', color: 'var(--success)', fontSize: 12 }}>
-                        ✓ Payment subscription active
+                        ✓ Payment subscription active ({fmt(subscription.weekly_amount)}/week)
                       </span>
                     ) : (
-                      <button
-                        className="btn btn-sm"
-                        onClick={() => setupSubscription(detail.application.user_id)}
-                        disabled={subBusy}
-                        title="Generate a Paystack checkout link so the rider can authorise weekly recurring payments"
-                      >
-                        {subBusy ? 'Generating…' : '+ Setup weekly payment'}
-                      </button>
+                      <>
+                        <select
+                          value={subPlanAmount}
+                          onChange={(e) => setSubPlanAmount(e.target.value)}
+                          style={{ minWidth: 140 }}
+                          title="Weekly payment plan amount"
+                        >
+                          <option value="650">R650 / week</option>
+                          <option value="700">R700 / week</option>
+                          <option value="750">R750 / week</option>
+                          <option value="850">R850 / week</option>
+                        </select>
+                        <button
+                          className="btn btn-sm"
+                          onClick={() => setupSubscription(detail.application.user_id)}
+                          disabled={subBusy || !subPlanAmount}
+                          title="Generate a Paystack checkout link so the rider can authorise weekly recurring payments"
+                        >
+                          {subBusy ? 'Generating…' : 'Setup weekly payment'}
+                        </button>
+                      </>
                     )}
                   </div>
                 )}

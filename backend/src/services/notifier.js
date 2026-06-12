@@ -135,7 +135,7 @@ async function sendWithBrevo(to, subject, body) {
     });
   } catch (error) {
     const status = error.response?.status;
-    const detail = error.response?.data?.message || error.response?.data?.code || error.message;
+    const detail = error.response?.data?.message || error.response?.data?.code || error.message || 'unknown error';
     throw new Error(status ? `Brevo API ${status}: ${detail}` : `Brevo API error: ${detail}`);
   }
 }
@@ -182,7 +182,7 @@ async function sendWhatsApp(to, body) {
   console.log(`[WhatsApp→${to}] ${body}`);
 }
 
-async function sendNotification({ userId, channel, type, title, message }) {
+async function sendNotification({ userId, channel, type, title, message, throwOnError = true }) {
   const user = userId ? db.prepare('SELECT email, phone FROM users WHERE id = ?').get(userId) : null;
   const info = db.prepare(`INSERT INTO notifications (user_id, channel, type, title, message, status)
                            VALUES (?,?,?,?,?, 'pending')`).run(userId || null, channel, type, title || null, message);
@@ -195,7 +195,7 @@ async function sendNotification({ userId, channel, type, title, message }) {
   } catch (e) {
     console.error(`[notification:${channel}:${type}]`, e.message);
     db.prepare(`UPDATE notifications SET status = 'failed' WHERE id = ?`).run(info.lastInsertRowid);
-    throw e;
+    if (throwOnError) throw e;
   }
   return info.lastInsertRowid;
 }

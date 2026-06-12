@@ -145,7 +145,7 @@ async function runLicenseDiscAlerts() {
   }
 }
 
-function runDailyReminders() {
+async function runDailyReminders() {
   const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const due = db.prepare(`
     SELECT s.*, a.user_id, a.agreement_no, u.full_name FROM payment_schedules s
@@ -154,22 +154,47 @@ function runDailyReminders() {
     WHERE s.due_date = ? AND s.status IN ('pending','partial')`).all(tomorrow);
 
   for (const d of due) {
+    const title = `Payment due tomorrow · ${d.agreement_no}`;
+    if (notificationExistsToday(d.user_id, 'payment_reminder', title)) continue;
     const msg = `Hi ${d.full_name.split(' ')[0]}, your weekly OnFleet payment of R${d.amount_due} for agreement ${d.agreement_no} is due tomorrow (${d.due_date}). Pay via the app to keep your rent-to-own on track.`;
-    sendNotification({ userId: d.user_id, channel: 'whatsapp', type: 'payment_reminder', title: 'Payment due tomorrow', message: msg });
-    sendNotification({ userId: d.user_id, channel: 'sms', type: 'payment_reminder', message: msg });
-    sendNotification({ userId: d.user_id, channel: 'email', type: 'payment_reminder', title: 'OnFleet payment due tomorrow', message: msg });
+    try {
+      await sendNotification({ userId: d.user_id, channel: 'whatsapp', type: 'payment_reminder', title, message: msg });
+      await sendNotification({ userId: d.user_id, channel: 'sms', type: 'payment_reminder', message: msg });
+      await sendNotification({ userId: d.user_id, channel: 'email', type: 'payment_reminder', title: 'OnFleet payment due tomorrow', message: msg });
+    } catch (err) {
+      console.error(`[daily-reminder] due-tomorrow failed for ${d.agreement_no}:`, err.message);
+    }
   }
 
   const today = new Date().toISOString().slice(0, 10);
-  const overdue = db.prepare(`
-    SELECT s.*, a.user_id, a.agreement_no, u.full_name FROM payment_schedules s
+  const overdueRows = db.prepare(`
+    SELECT s.id, s.agreement_id, s.due_date, s.amount_due, s.amount_paid,
+           a.user_id, a.agreement_no, u.full_name FROM payment_schedules s
     JOIN agreements a ON a.id = s.agreement_id AND a.status = 'active'
     JOIN users u ON u.id = a.user_id AND u.status = 'active'
     WHERE s.due_date < ? AND s.status = 'overdue'`).all(today);
 
-  for (const d of overdue) {
-    const msg = `URGENT: OnFleet payment of R${d.amount_due - d.amount_paid} for ${d.agreement_no} is overdue (due ${d.due_date}). Please pay immediately to avoid agreement default.`;
-    sendNotification({ userId: d.user_id, channel: 'whatsapp', type: 'payment_overdue', title: 'Overdue payment', message: msg });
+  // Group by agreement — send at most one WhatsApp per agreement per day
+  const byAgreement = {};
+  for (const row of overdueRows) {
+    if (!byAgreement[row.agreement_id]) {
+      byAgreement[row.agreement_id] = { ...row, overdueWeeks: 0, totalOwed: 0 };
+    }
+    byAgreement[row.agreement_id].overdueWeeks++;
+    byAgreement[row.agreement_id].totalOwed += (row.amount_due - row.amount_paid);
+  }
+
+  for (const entry of Object.values(byAgreement)) {
+    const title = `Overdue payment · ${entry.agreement_no}`;
+    if (notificationExistsToday(entry.user_id, 'payment_overdue', title)) continue;
+    const owed = Number(entry.totalOwed).toFixed(2);
+    const weeksText = entry.overdueWeeks > 1 ? ` (${entry.overdueWeeks} weeks overdue)` : '';
+    const msg = `URGENT: OnFleet payment of R${owed}${weeksText} for ${entry.agreement_no} is overdue. Please pay immediately to avoid agreement default.`;
+    try {
+      await sendNotification({ userId: entry.user_id, channel: 'whatsapp', type: 'payment_overdue', title, message: msg });
+    } catch (err) {
+      console.error(`[daily-reminder] overdue notify failed for ${entry.agreement_no}:`, err.message);
+    }
   }
 
   const serviceDue = db.prepare(`
@@ -178,12 +203,16 @@ function runDailyReminders() {
     JOIN users u ON u.id = a.user_id
     WHERE b.next_service_date IS NOT NULL AND b.next_service_date <= date('now','+7 days')`).all();
   for (const s of serviceDue) {
-    sendNotification({
-      userId: s.user_id,
-      channel: 'sms',
-      type: 'service_reminder',
-      message: `Reminder: Your ${s.make} ${s.model} is due for free monthly service on ${s.next_service_date}. Book it via the app.`
-    });
+    try {
+      await sendNotification({
+        userId: s.user_id,
+        channel: 'sms',
+        type: 'service_reminder',
+        message: `Reminder: Your ${s.make} ${s.model} is due for free monthly service on ${s.next_service_date}. Book it via the app.`
+      });
+    } catch (err) {
+      console.error(`[daily-reminder] service reminder failed for ${s.agreement_no}:`, err.message);
+    }
   }
 
   runLicenseDiscAlerts().catch((error) => console.error('license disc alerts failed', error));
@@ -195,7 +224,7 @@ function runScheduleRecalc() {
 }
 
 function start() {
-  cron.schedule('0 6 * * *', runDailyReminders);
+  cron.schedule('0 6 * * *', () => runDailyReminders().catch((error) => console.error('daily reminders failed', error)));
   cron.schedule('5 0 * * *', runScheduleRecalc);
   cron.schedule('30 6 1 * *', () => runMonthlyStatements().catch((error) => console.error('monthly statements failed', error)));
   console.log('🕒 Scheduler started');

@@ -250,26 +250,26 @@ async function recalcApplicationDecision(applicationId) {
         retryAfter,
         applicationId
       );
-    await sendNotification({
+    sendNotification({
       userId: application.user_id,
       channel: 'email',
       type: 'application_auto_declined',
       title: 'OnFleet application update',
       message: `Hi ${application.full_name.split(' ')[0]}, your application has been auto-declined because the latest 3 payslips show average weekly earnings of R${average.toFixed(2)}, below the minimum R1000 threshold. You may retry after ${retryAfter}.`
-    });
+    }).catch((e) => console.error('[application] auto-decline email failed:', e.message));
     return { total, average, decision: 'auto_declined', retry_after_date: retryAfter };
   }
 
   db.prepare(`UPDATE applications
     SET status = 'under_review', auto_decision = 'pre_approved', rejection_reason = NULL, retry_after_date = NULL
     WHERE id = ?`).run(applicationId);
-  await sendNotification({
+  sendNotification({
     userId: application.user_id,
     channel: 'email',
     type: 'application_preapproved',
     title: 'OnFleet application pre-approved',
     message: `Hi ${application.full_name.split(' ')[0]}, great news — your application has been pre-approved based on average weekly earnings of R${average.toFixed(2)}. Our team will now allocate a bike and send your electronic contract.`
-  });
+  }).catch((e) => console.error('[application] pre-approval email failed:', e.message));
   return { total, average, decision: 'pre_approved' };
 }
 
@@ -545,13 +545,17 @@ router.post('/forgot-password',
 
     const firstName = user.full_name?.split(' ')?.[0] || 'there';
     const resetUrl = buildResetUrl(rawToken);
-    await sendNotification({
-      userId: user.id,
-      channel: 'email',
-      type: 'password_reset',
-      title: 'Reset your OnFleet password',
-      message: `Hi ${firstName},\n\nWe received a request to reset your OnFleet password.\n\nReset link: ${resetUrl}\n\nThis link expires in ${readEnv('PASSWORD_RESET_TOKEN_TTL_MINUTES', '60') || 60} minutes. If you did not request this, you can ignore this email.\n\nKind Regards\nOnFleet Team`
-    });
+    try {
+      await sendNotification({
+        userId: user.id,
+        channel: 'email',
+        type: 'password_reset',
+        title: 'Reset your OnFleet password',
+        message: `Hi ${firstName},\n\nWe received a request to reset your OnFleet password.\n\nReset link: ${resetUrl}\n\nThis link expires in ${readEnv('PASSWORD_RESET_TOKEN_TTL_MINUTES', '60') || 60} minutes. If you did not request this, you can ignore this email.\n\nKind Regards\nOnFleet Team`
+      });
+    } catch (emailErr) {
+      console.error('[forgot-password] email delivery failed:', emailErr.message);
+    }
 
     logAudit(user.id, 'user.password_reset_requested', 'users', user.id, {}, req.ip);
     res.json(generic);

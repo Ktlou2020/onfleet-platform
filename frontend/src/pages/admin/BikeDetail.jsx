@@ -291,7 +291,7 @@ export default function AdminBikeDetail() {
       <Link to="/admin/bikes" className="muted text-sm">← Back to fleet</Link>
       <div className="flex-between mt-2 mb-4" style={{ gap: 12, flexWrap: 'wrap' }}>
         <div>
-          <h1 className="page-title">{bike.make} {bike.model}</h1>
+          <h1 className="page-title">{[bike.make, bike.model].filter((v) => v && v !== 'Unknown').join(' ') || bike.registration || bike.vin}</h1>
           <div className="muted">VIN {bike.vin} · {bike.registration || 'no registration yet'}{bike.fleet ? ` · Fleet ${bike.fleet}` : ''}</div>
         </div>
         <div className="row" style={{ flexWrap: 'wrap' }}>

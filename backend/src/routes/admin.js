@@ -480,13 +480,18 @@ router.post('/fleet-owners/:id/send-password-reset', superadminOnly, async (req,
   if (target.status !== 'active') return res.status(400).json({ error: 'Only active fleet owners can receive password reset links' });
 
   const resetUrl = issuePasswordResetToken(target.id, req);
-  await sendNotification({
-    userId: target.id,
-    channel: 'email',
-    type: 'password_reset',
-    title: 'Reset your OnFleet password',
-    message: buildBulkResetMessage(target, resetUrl, req.user.full_name || req.user.email || 'OnFleet', req.body.message)
-  });
+  try {
+    await sendNotification({
+      userId: target.id,
+      channel: 'email',
+      type: 'password_reset',
+      title: 'Reset your OnFleet password',
+      message: buildBulkResetMessage(target, resetUrl, req.user.full_name || req.user.email || 'OnFleet', req.body.message)
+    });
+  } catch (emailErr) {
+    console.error('[admin] fleet-owner password reset email failed:', emailErr.message);
+    return res.status(502).json({ error: 'Password reset link was created but the email could not be delivered. Check email provider configuration.' });
+  }
 
   logAudit(req.user.id, 'fleet_owner.password_reset', 'users', userId, {
     email: target.email,

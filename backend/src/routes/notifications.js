@@ -34,8 +34,12 @@ router.post('/:id/read', authRequired, (req, res) => {
 
 router.post('/send', authRequired, adminOnly, async (req, res) => {
   const { user_id, channel, type, title, message } = req.body;
-  const id = await sendNotification({ userId: user_id, channel, type, title, message });
-  res.json({ id });
+  try {
+    const id = await sendNotification({ userId: user_id, channel, type, title, message });
+    res.json({ id });
+  } catch (e) {
+    res.status(502).json({ error: e.message || 'Notification delivery failed' });
+  }
 });
 
 module.exports = router;

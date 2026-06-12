@@ -212,13 +212,13 @@ async function approveFleetApplication({ organization, applicationId, bikeId, we
       reviewerId
     );
 
-  await sendNotification({
+  sendNotification({
     userId: application.user_id,
     channel: 'email',
     type: 'application_approved',
     title: 'OnFleet application approved',
     message: `Hi ${rider.full_name.split(' ')[0]}, your application has been approved. Your bike has been allocated and your agreement ${agreementNo} is now ready for review and signature on the platform.`
-  });
+  }).catch((e) => console.error('[fleet] approval email failed:', e.message));
 
   logAudit(reviewerId, 'fleet_owner.rider_application_approve', 'applications', Number(application.id), {
     organization_id: organization.id,
@@ -244,13 +244,13 @@ async function rejectFleetApplication({ organization, applicationId, reviewerId,
     SET status = 'rejected', rejection_reason = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP
     WHERE id = ?`).run(cleanReason, reviewerId, application.id);
 
-  await sendNotification({
+  sendNotification({
     userId: application.user_id,
     channel: 'email',
     type: 'application_rejected',
     title: 'OnFleet application update',
     message: `Hi ${application.full_name.split(' ')[0]}, your application has been declined. ${cleanReason || 'Please contact your fleet owner for more information.'}`
-  });
+  }).catch((e) => console.error('[fleet] rejection email failed:', e.message));
 
   logAudit(reviewerId, 'fleet_owner.rider_application_reject', 'applications', Number(application.id), {
     organization_id: organization.id,

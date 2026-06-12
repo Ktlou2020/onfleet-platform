@@ -103,8 +103,12 @@ async function runMonthlyStatements(statementMonth = previousMonthKey()) {
       'You can also open the app to view or download the full rider statement.'
     ].join('\n');
 
-    await sendNotification({ userId: snapshot.agreement.user_id, channel: 'in_app', type: 'monthly_statement', title, message });
-    await sendNotification({ userId: snapshot.agreement.user_id, channel: 'email', type: 'monthly_statement', title, message });
+    try {
+      await sendNotification({ userId: snapshot.agreement.user_id, channel: 'in_app', type: 'monthly_statement', title, message });
+      await sendNotification({ userId: snapshot.agreement.user_id, channel: 'email', type: 'monthly_statement', title, message });
+    } catch (err) {
+      console.error(`[monthly-statement] notify failed for agreement ${agreementRow.id}:`, err.message);
+    }
   }
 }
 
@@ -134,13 +138,17 @@ async function runLicenseDiscAlerts() {
 
     for (const admin of admins) {
       if (notificationExistsToday(admin.id, 'license_disc_expiry', `${title} · ${ref}`)) continue;
-      await sendNotification({
-        userId: admin.id,
-        channel: 'in_app',
-        type: 'license_disc_expiry',
-        title: `${title} · ${ref}`,
-        message
-      });
+      try {
+        await sendNotification({
+          userId: admin.id,
+          channel: 'in_app',
+          type: 'license_disc_expiry',
+          title: `${title} · ${ref}`,
+          message
+        });
+      } catch (err) {
+        console.error(`[license-disc] notify failed for bike ${ref}:`, err.message);
+      }
     }
   }
 }

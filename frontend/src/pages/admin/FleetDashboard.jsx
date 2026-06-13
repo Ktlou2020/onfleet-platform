@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Badge, EmptyState, Loading, SearchInput, Stat, fmt, fmtDate, fmtDateTime, matchesSearch } from '../../components/ui';
+import { Link } from 'react-router-dom';
 import api from '../../api';
 import toast from 'react-hot-toast';
-import { Briefcase, CreditCard, AlertTriangle, Wallet, Building2, Bike, FileText, Users } from 'lucide-react';
+import { Briefcase, CreditCard, AlertTriangle, Wallet, Building2, Bike, FileText, Users, ExternalLink } from 'lucide-react';
 
 const payerFilterOptions = [
   { value: 'all', label: 'All billing states' },
@@ -175,17 +176,17 @@ export default function AdminFleetDashboard() {
               ) : (
                 <div className="fleet-demo-list">
                   {topNonPayers.map((organization) => (
-                    <div key={organization.id} className="fleet-demo-list-item" style={{ alignItems: 'flex-start' }}>
-                      <Briefcase size={16} />
+                    <Link key={organization.id} to={`/admin/fleet-owners?search=${encodeURIComponent(organization.name)}`} className="fleet-demo-list-item" style={{ alignItems: 'flex-start', color: 'var(--text)', display: 'flex', gap: 10 }}>
+                      <Briefcase size={16} style={{ flexShrink: 0, marginTop: 2 }} />
                       <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 600 }}>{organization.name}</div>
+                        <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>{organization.name} <ExternalLink size={12} style={{ color: 'var(--muted)' }} /></div>
                         <div className="muted text-sm">{organization.open_agreements} open agreements · {organization.active_bikes}/{organization.bike_count} active bikes</div>
                       </div>
-                      <div style={{ textAlign: 'right' }}>
-                        <div style={{ fontWeight: 700 }}>{fmt(organization.overdue_amount || 0)}</div>
+                      <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                        <div style={{ fontWeight: 700, color: 'var(--danger)' }}>{fmt(organization.overdue_amount || 0)}</div>
                         <div className="text-xs muted">Last payment {fmtDate(organization.last_payment_at)}</div>
                       </div>
-                    </div>
+                    </Link>
                   ))}
                 </div>
               )}

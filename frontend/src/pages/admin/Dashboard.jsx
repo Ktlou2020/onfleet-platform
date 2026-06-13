@@ -6,7 +6,7 @@ import toast from 'react-hot-toast';
 import { Stat, Loading, SearchInput } from '../../components/ui';
 import { fmt, matchesSearch } from '../../components/ui';
 import { useAuth } from '../../auth';
-import { Users, Bike, AlertCircle, TrendingUp, FileCheck, ShieldCheck, Wrench, ImagePlus } from 'lucide-react';
+import { Users, Bike, AlertCircle, TrendingUp, FileCheck, ShieldCheck, Wrench, ImagePlus, ClipboardList, BadgeCheck, Shield, CreditCard } from 'lucide-react';
 
 export default function AdminDashboard() {
   const { user } = useAuth();
@@ -39,12 +39,12 @@ export default function AdminDashboard() {
   } = s;
 
   const actions = useMemo(() => ([
-    { icon: '📋', count: pending_applications, label: 'Pending applications', link: '/admin/applications?status=submitted' },
-    { icon: '🆔', count: pending_kyc, label: 'Application documents to review', link: '/admin/applications' },
-    { icon: '⚠️', count: default_action_count, label: 'Defaulted agreements needing action', link: '/admin/agreements?status=defaulted&exclude_bike_statuses=stolen,written_off,sold', danger: true },
-    { icon: '🔧', count: upcoming_services, label: 'Bikes due for service (14d)', link: '/admin/bikes?status=active' },
-    { icon: '🪪', count: expiring_license_disc, label: 'License discs expiring (30d)', link: '/admin/bikes', danger: true },
-    { icon: '🛡️', count: expiring_insurance, label: 'Insurance expiring (30d)', link: '/admin/bikes' }
+    { icon: <ClipboardList size={18} />, count: pending_applications, label: 'Pending applications', link: '/admin/applications?status=submitted' },
+    { icon: <BadgeCheck size={18} />, count: pending_kyc, label: 'Application documents to review', link: '/admin/applications?status=under_review' },
+    { icon: <AlertCircle size={18} />, count: default_action_count, label: 'Defaulted agreements needing action', link: '/admin/agreements?status=defaulted&exclude_bike_statuses=stolen,written_off,sold', danger: true },
+    { icon: <Wrench size={18} />, count: upcoming_services, label: 'Bikes due for service (14d)', link: '/admin/bikes?status=active' },
+    { icon: <CreditCard size={18} />, count: expiring_license_disc, label: 'License discs expiring (30d)', link: '/admin/bikes', danger: true },
+    { icon: <Shield size={18} />, count: expiring_insurance, label: 'Insurance expiring (30d)', link: '/admin/bikes' }
   ].filter((item) => matchesSearch(search, item.label, item.count))), [pending_applications, pending_kyc, default_action_count, upcoming_services, expiring_license_disc, expiring_insurance, search]);
 
   const uploadHeroImage = async () => {
@@ -151,8 +151,8 @@ export default function AdminDashboard() {
 
 function ActionItem({ icon, count, label, link, danger }) {
   return (
-    <Link to={link} style={{ display: 'flex', alignItems:'center', gap: 12, padding: '12px 0', borderBottom: '1px solid var(--border)', color: 'var(--text)' }}>
-      <div style={{ fontSize: 20 }}>{icon}</div>
+    <Link to={link} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 0', borderBottom: '1px solid var(--border)', color: 'var(--text)' }}>
+      <div style={{ color: count > 0 ? (danger ? 'var(--danger)' : 'var(--primary)') : 'var(--muted)', flexShrink: 0 }}>{icon}</div>
       <div style={{ flex: 1 }}>{label}</div>
       <div className="badge" style={{ background: count > 0 ? (danger ? 'rgba(239,68,68,0.2)' : 'rgba(255,107,53,0.2)') : 'var(--surface-2)', color: count > 0 ? (danger ? 'var(--danger)' : 'var(--primary)') : 'var(--muted)' }}>{count}</div>
     </Link>

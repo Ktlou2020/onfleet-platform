@@ -137,7 +137,6 @@ export default function App() {
           <Route path="fleet-payouts" element={<AdminFleetPayouts />} />
           <Route path="pilot" element={<Navigate to="/admin/fleet-dashboard" replace />} />
           <Route path="users" element={<AdminUsers />} />
-          <Route path="kyc" element={<Navigate to="/admin/applications" replace />} />
           <Route path="audit" element={<AdminAuditLogs />} />
         </Route>
       </Routes>

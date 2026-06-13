@@ -1,4 +1,5 @@
 const express = require('express');
+const axios = require('axios');
 const db = require('../db');
 const { authRequired, adminOnly } = require('../middleware/auth');
 const { logAudit, recalcScheduleStatuses } = require('../utils/helpers');
@@ -6,6 +7,16 @@ const { writeContractSnapshot } = require('../services/contracts');
 const { discontinueAgreement, reinstateDiscontinuedAgreement } = require('../services/agreementLifecycle');
 
 const router = express.Router();
+const PAYSTACK_BASE = 'https://api.paystack.co';
+const RIDER_PLAN_AMOUNTS = [650, 700, 750, 850];
+
+function getRiderPlanCode(weeklyAmount) {
+  const amount = Math.round(Number(weeklyAmount));
+  for (const amt of RIDER_PLAN_AMOUNTS) {
+    if (amount === amt) return process.env[`PAYSTACK_RIDER_PLAN_${amt}`] || null;
+  }
+  return null;
+}
 const AGREEMENT_STATUS_VALUES = ['active', 'completed', 'defaulted', 'cancelled', 'paused', 'discontinued'];
 
 function adminVisibleAgreementClause(aAlias = 'a', bAlias = 'b', uAlias = 'u') {
@@ -238,6 +249,59 @@ router.post('/:id/reinstate', authRequired, adminOnly, (req, res) => {
     res.json({ ok: true, ...result });
   } catch (error) {
     res.status(400).json({ error: error.message });
+  }
+});
+
+// POST /:id/subscription/init — admin generates a Paystack recurring-payment link for a rider
+router.post('/:id/subscription/init', authRequired, adminOnly, async (req, res) => {
+  try {
+    const ag = db.prepare(`SELECT a.*, u.email, u.full_name
+      FROM agreements a
+      JOIN users u ON u.id = a.user_id
+      JOIN bikes b ON b.id = a.bike_id
+      WHERE a.id = ? AND ${adminVisibleAgreementClause('a', 'b', 'u')}`).get(req.params.id);
+    if (!ag) return res.status(404).json({ error: 'Agreement not found' });
+
+    const overrideAmount = req.body.plan_amount ? Math.round(Number(req.body.plan_amount)) : null;
+    const weeklyAmount = overrideAmount || Math.round(Number(ag.weekly_amount));
+
+    const planCode = getRiderPlanCode(weeklyAmount);
+    if (!planCode) {
+      return res.status(400).json({
+        error: `No payment plan configured for R${weeklyAmount}/week. Available: R${RIDER_PLAN_AMOUNTS.join(', R')}.`
+      });
+    }
+
+    const reference = `RSUB-ADM-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const resp = await axios.post(`${PAYSTACK_BASE}/transaction/initialize`, {
+      email: ag.email,
+      amount: weeklyAmount * 100,
+      currency: 'ZAR',
+      reference,
+      plan: planCode,
+      callback_url: process.env.PAYSTACK_CALLBACK_URL,
+      metadata: {
+        type: 'rider_subscription',
+        rider_user_id: ag.user_id,
+        agreement_id: ag.id,
+        weekly_amount: weeklyAmount
+      }
+    }, { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } });
+
+    logAudit(req.user.id, 'agreement.subscription_link_generated', 'agreements', Number(req.params.id), { plan_code: planCode, weekly_amount: weeklyAmount }, req.ip);
+
+    res.json({
+      authorization_url: resp.data.data.authorization_url,
+      access_code: resp.data.data.access_code,
+      reference,
+      plan_code: planCode,
+      weekly_amount: weeklyAmount,
+      rider_name: ag.full_name,
+      rider_email: ag.email
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.response?.data?.message || error.message });
   }
 });
 

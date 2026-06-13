@@ -14,6 +14,8 @@ export default function AdminAgreementDetail() {
   const [showPay, setShowPay] = useState(false);
   const [pay, setPay] = useState({ amount: '', method: 'eft', reference: '', notes: '' });
   const [busyAction, setBusyAction] = useState('');
+  const [subAmount, setSubAmount] = useState('');
+  const [subLink, setSubLink] = useState(null);
 
   const load = () => api.get(`/agreements/${id}`).then((response) => {
     setData(response.data);
@@ -48,6 +50,19 @@ export default function AdminAgreementDetail() {
       load();
     } catch (error) {
       toast.error(error.response?.data?.error || 'Could not update agreement status');
+    } finally {
+      setBusyAction('');
+    }
+  };
+
+  const generateSubLink = async () => {
+    try {
+      setBusyAction('sub_link');
+      const body = subAmount ? { plan_amount: Number(subAmount) } : {};
+      const response = await api.post(`/agreements/${id}/subscription/init`, body);
+      setSubLink(response.data);
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not generate payment link');
     } finally {
       setBusyAction('');
     }
@@ -126,6 +141,35 @@ export default function AdminAgreementDetail() {
           <div>{summary.weeks_paid} / {summary.weeks_total} weeks</div>
           <div>End {fmtDate(agreement.end_date)}</div>
         </div>
+      </div>
+
+      <div className="card mb-4">
+        <h3 className="mb-3">Recurring payment link</h3>
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label className="label">Weekly amount (ZAR)</label>
+            <select value={subAmount} onChange={(e) => { setSubAmount(e.target.value); setSubLink(null); }}>
+              <option value="">Use agreement default (R{agreement.weekly_amount})</option>
+              <option value="650">R650</option>
+              <option value="700">R700</option>
+              <option value="750">R750</option>
+              <option value="850">R850</option>
+            </select>
+          </div>
+          <button className="btn btn-sm" onClick={generateSubLink} disabled={busyAction === 'sub_link'}>
+            {busyAction === 'sub_link' ? 'Generating…' : 'Generate payment link'}
+          </button>
+        </div>
+        {subLink && (
+          <div className="mt-3">
+            <div className="muted text-sm mb-1">Send this link to {subLink.rider_name} ({subLink.rider_email}) · R{subLink.weekly_amount}/week</div>
+            <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input readOnly value={subLink.authorization_url} style={{ flex: 1, minWidth: 200 }} onClick={(e) => e.target.select()} />
+              <button className="btn btn-sm btn-secondary" onClick={() => { navigator.clipboard.writeText(subLink.authorization_url); toast.success('Copied!'); }}>Copy</button>
+              <a className="btn btn-sm btn-secondary" href={subLink.authorization_url} target="_blank" rel="noreferrer">Open</a>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-2 mb-4">

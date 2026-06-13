@@ -300,14 +300,20 @@ router.get('/', authRequired, adminOnly, (req, res) => {
 
 router.post('/document-insights/license-disc', authRequired, adminOnly, bikeDocumentUpload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'A document file is required' });
-  const extracted = await extractLicenseDiscInsights(req.file.path, req.file.mimetype);
-  fs.unlink(req.file.path, () => {});
-  res.json({
-    ok: true,
-    license_disc_no: extracted.license_disc_no || null,
-    license_disc_expiry: extracted.license_disc_expiry || null,
-    extraction_error: extracted.extraction_error || null
-  });
+  try {
+    const extracted = await extractLicenseDiscInsights(req.file.path, req.file.mimetype);
+    fs.unlink(req.file.path, () => {});
+    res.json({
+      ok: true,
+      license_disc_no: extracted.license_disc_no || null,
+      license_disc_expiry: extracted.license_disc_expiry || null,
+      extraction_error: extracted.extraction_error || null
+    });
+  } catch (err) {
+    fs.unlink(req.file.path, () => {});
+    console.error('[license-disc-insights]', err.message);
+    res.status(500).json({ error: err.message || 'Document insight extraction failed' });
+  }
 });
 
 router.get('/:id', authRequired, (req, res) => {

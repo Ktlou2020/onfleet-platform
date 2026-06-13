@@ -552,6 +552,7 @@ router.post('/users', superadminOnly, (req, res) => {
 });
 
 router.post('/users/bulk-email', async (req, res) => {
+  try {
   const subject = String(req.body.subject || '').trim();
   const message = String(req.body.message || '').trim();
   const includeInApp = !!req.body.include_in_app;
@@ -614,9 +615,14 @@ router.post('/users/bulk-email', async (req, res) => {
     in_app_sent: inAppSent,
     failures: failures.slice(0, 20)
   });
+  } catch (err) {
+    console.error('[bulk-email]', err.message);
+    res.status(500).json({ error: err.message || 'Bulk email failed' });
+  }
 });
 
 router.post('/users/bulk-password-reset', async (req, res) => {
+  try {
   const customMessage = String(req.body.message || '').trim();
   const targets = selectBulkTargets({
     user_ids: req.body.user_ids,
@@ -664,6 +670,10 @@ router.post('/users/bulk-password-reset', async (req, res) => {
     failed,
     failures: failures.slice(0, 20)
   });
+  } catch (err) {
+    console.error('[bulk-password-reset]', err.message);
+    res.status(500).json({ error: err.message || 'Bulk password reset failed' });
+  }
 });
 
 router.post('/users/:id/status', (req, res) => {

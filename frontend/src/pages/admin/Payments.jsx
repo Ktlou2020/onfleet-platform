@@ -2,42 +2,56 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../api';
 import toast from 'react-hot-toast';
-import { Loading, Badge, SearchInput, Pagination, fmt, fmtDateTime, matchesSearch, paginateItems } from '../../components/ui';
+import { Loading, Badge, SearchInput, Pagination, Modal, fmt, fmtDateTime, matchesSearch, paginateItems } from '../../components/ui';
 import { sortNewestFirst } from '../../utils/sortNewestFirst';
 
 const creditedAmount = (payment) => Number(payment?.net_amount || payment?.amount || 0);
 const feeAmount = (payment) => Number(payment?.fee_amount || 0);
 const grossAmount = (payment) => Number(payment?.amount || 0);
 
+function inDateRange(dateStr, from, to) {
+  if (!dateStr) return true;
+  const d = dateStr.slice(0, 10);
+  if (from && d < from) return false;
+  if (to && d > to) return false;
+  return true;
+}
+
 export default function AdminPayments() {
   const [list, setList] = useState(null);
   const [search, setSearch] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(15);
   const [selectedIds, setSelectedIds] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [reverseTarget, setReverseTarget] = useState(null);
 
   const load = () => api.get('/payments/all').then((r) => setList(r.data.payments));
 
   useEffect(() => { load(); }, []);
-  useEffect(() => { setPage(1); }, [search]);
+  useEffect(() => { setPage(1); }, [search, dateFrom, dateTo]);
   useEffect(() => {
     setSelectedIds((current) => current.filter((id) => (list || []).some((payment) => payment.id === id)));
   }, [list]);
 
   const payments = list || [];
-  const filtered = useMemo(() => sortNewestFirst(payments.filter((payment) => matchesSearch(
-    search,
-    payment.full_name,
-    payment.email,
-    payment.agreement_no,
-    payment.reference,
-    payment.method,
-    payment.status,
-    payment.amount,
-    payment.net_amount,
-    payment.fee_amount
-  )), ['paid_at', 'created_at', 'id']), [payments, search]);
+  const filtered = useMemo(() => sortNewestFirst(payments.filter((payment) => {
+    if (!inDateRange(payment.paid_at || payment.created_at, dateFrom, dateTo)) return false;
+    return matchesSearch(
+      search,
+      payment.full_name,
+      payment.email,
+      payment.agreement_no,
+      payment.reference,
+      payment.method,
+      payment.status,
+      payment.amount,
+      payment.net_amount,
+      payment.fee_amount
+    );
+  }), ['paid_at', 'created_at', 'id']), [payments, search, dateFrom, dateTo]);
 
   const pagination = useMemo(() => paginateItems(filtered, page, pageSize), [filtered, page, pageSize]);
   const visibleIds = pagination.items.map((payment) => payment.id);
@@ -78,6 +92,21 @@ export default function AdminPayments() {
     }
   };
 
+  const reversePayment = async () => {
+    if (!reverseTarget) return;
+    setBusy(true);
+    try {
+      await api.post(`/payments/${reverseTarget.id}/reverse`);
+      toast.success('Payment reversed — schedule recalculated');
+      setReverseTarget(null);
+      load();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not reverse payment');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (!list) return <Loading />;
 
   return (
@@ -93,13 +122,22 @@ export default function AdminPayments() {
           <button className="btn btn-sm btn-danger" onClick={deleteSelected} disabled={!selectedIds.length || busy}>{busy ? 'Deleting…' : 'Delete selected'}</button>
         </div>
       </div>
-      <div className="row mb-4" style={{ flexWrap: 'wrap', justifyContent: 'space-between' }}>
-        <SearchInput value={search} onChange={setSearch} placeholder="Search rider, agreement, reference, method" style={{ flex: '1 1 320px', maxWidth: 440 }} />
-        <div className="muted text-sm">{selectedIds.length} selected · Showing {filtered.length} matching payments</div>
+      <div className="row mb-3" style={{ flexWrap: 'wrap', gap: 8, alignItems: 'flex-end' }}>
+        <SearchInput value={search} onChange={setSearch} placeholder="Search rider, agreement, reference, method" style={{ flex: '1 1 260px', maxWidth: 380 }} />
+        <div className="field" style={{ marginBottom: 0 }}>
+          <label className="label">From</label>
+          <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={{ width: 150 }} />
+        </div>
+        <div className="field" style={{ marginBottom: 0 }}>
+          <label className="label">To</label>
+          <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ width: 150 }} />
+        </div>
+        {(dateFrom || dateTo) && <button className="btn btn-sm btn-secondary" onClick={() => { setDateFrom(''); setDateTo(''); }}>Clear dates</button>}
+        <div className="muted text-sm">{selectedIds.length} selected · {filtered.length} payments</div>
       </div>
       <div className="card" style={{ padding: 0 }}>
         <table className="table">
-          <thead><tr><th style={{ width: 44 }}><input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} aria-label="Select all visible payments" /></th><th>Date</th><th>Rider</th><th>Agreement</th><th>Method</th><th>Reference</th><th>Status</th><th>Rental</th><th>Fee</th><th>Gross</th></tr></thead>
+          <thead><tr><th style={{ width: 44 }}><input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} aria-label="Select all visible payments" /></th><th>Date</th><th>Rider</th><th>Agreement</th><th>Method</th><th>Reference</th><th>Status</th><th>Rental</th><th>Fee</th><th>Gross</th><th></th></tr></thead>
           <tbody>
             {pagination.items.map((p) => (
               <tr key={p.id}>
@@ -113,13 +151,29 @@ export default function AdminPayments() {
                 <td><strong>{fmt(creditedAmount(p))}</strong></td>
                 <td>{feeAmount(p) > 0 ? fmt(feeAmount(p)) : '—'}</td>
                 <td>{fmt(grossAmount(p))}</td>
+                <td>
+                  {p.status === 'success' && (
+                    <button className="btn btn-sm btn-secondary" onClick={() => setReverseTarget(p)} style={{ color: 'var(--danger)', borderColor: 'var(--danger)' }}>Reverse</button>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
-        {!pagination.items.length && <div className="muted" style={{ padding: 24, textAlign: 'center' }}>{search ? 'No payments match your search.' : 'No payments yet.'}</div>}
+        {!pagination.items.length && <div className="muted" style={{ padding: 24, textAlign: 'center' }}>{search || dateFrom || dateTo ? 'No payments match your filters.' : 'No payments yet.'}</div>}
       </div>
       <Pagination page={pagination.currentPage} pageSize={pagination.pageSize} totalItems={pagination.totalItems} onPageChange={setPage} onPageSizeChange={setPageSize} label="payments" />
+
+      {reverseTarget && (
+        <Modal title="Reverse payment" onClose={() => setReverseTarget(null)}>
+          <p>Reverse <strong>{fmt(creditedAmount(reverseTarget))}</strong> paid by <strong>{reverseTarget.full_name}</strong> (ref: {reverseTarget.reference})?</p>
+          <p className="muted text-sm">The payment will be marked as reversed and the agreement payment schedule will be recalculated. This preserves the audit trail.</p>
+          <div className="row">
+            <button className="btn btn-danger" onClick={reversePayment} disabled={busy}>{busy ? 'Reversing…' : 'Reverse payment'}</button>
+            <button className="btn btn-secondary" onClick={() => setReverseTarget(null)}>Cancel</button>
+          </div>
+        </Modal>
+      )}
     </>
   );
 }

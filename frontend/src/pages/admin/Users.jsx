@@ -170,6 +170,9 @@ export default function AdminUsers() {
   };
 
   const createUser = async () => {
+    if (!form.full_name.trim()) return toast.error('Full name is required');
+    if (!form.email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) return toast.error('Enter a valid email address');
+    if (!form.password || form.password.length < 6) return toast.error('Password must be at least 6 characters');
     try {
       await api.post('/admin/users', form);
       toast.success('User added');

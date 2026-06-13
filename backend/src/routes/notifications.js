@@ -42,4 +42,21 @@ router.post('/send', authRequired, adminOnly, async (req, res) => {
   }
 });
 
+router.post('/:id/resend', authRequired, adminOnly, async (req, res) => {
+  const original = db.prepare('SELECT * FROM notifications WHERE id = ?').get(req.params.id);
+  if (!original) return res.status(404).json({ error: 'Notification not found' });
+  try {
+    const id = await sendNotification({
+      userId: original.user_id,
+      channel: original.channel,
+      type: original.type,
+      title: original.title,
+      message: original.message
+    });
+    res.json({ id });
+  } catch (e) {
+    res.status(502).json({ error: e.message || 'Resend failed' });
+  }
+});
+
 module.exports = router;

@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { PiggyBank, CheckCircle2, XCircle, Clock, RefreshCw, Banknote } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../api';
-import { Badge, Loading, fmt, fmtDate } from '../../components/ui';
+import { Badge, Loading, Modal, fmt, fmtDate } from '../../components/ui';
 
 const STATUS_BADGE = { pending: 'pending', approved: 'active', paid: 'active', rejected: 'cancelled' };
 const STATUS_LABEL = { pending: 'Pending', approved: 'Approved', paid: 'Paid out', rejected: 'Rejected' };
@@ -26,58 +26,51 @@ function ProcessModal({ request, onClose, onDone }) {
   };
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-      <div className="card" style={{ maxWidth: 480, width: '100%' }}>
-        <div className="flex-between" style={{ marginBottom: 20 }}>
-          <h3 style={{ margin: 0 }}>Process Payout #{request.id}</h3>
-          <button className="btn btn-secondary btn-sm" onClick={onClose}>Close</button>
-        </div>
-
-        <div className="card" style={{ background: 'var(--surface-2)', marginBottom: 16, fontSize: 13 }}>
-          <div><strong>{request.org_name}</strong></div>
-          <div className="muted">Requested by: {request.requested_by_name} · {fmtDate(request.created_at)}</div>
-          <div style={{ marginTop: 8 }}>
-            <span>Amount: <strong>{fmt(request.amount_requested)}</strong></span>
-            <span className="muted" style={{ marginLeft: 12 }}>Fee: {fmt(request.withdrawal_fee)}</span>
-            <span style={{ marginLeft: 12 }}>Net to pay: <strong>{fmt(request.net_payout)}</strong></span>
-          </div>
-        </div>
-
-        <div className="card" style={{ background: 'var(--surface-2)', marginBottom: 16, fontSize: 13 }}>
-          <div style={{ fontWeight: 600, marginBottom: 6 }}>Bank details</div>
-          <div>{request.bank_account_name}</div>
-          <div className="muted">{request.bank_name}</div>
-          <div className="muted">Account: {request.bank_account_number}</div>
-          {request.bank_branch_code && <div className="muted">Branch: {request.bank_branch_code}</div>}
-        </div>
-
-        <div className="field" style={{ marginBottom: 16 }}>
-          <label className="label">Action *</label>
-          <select value={action} onChange={(e) => setAction(e.target.value)}>
-            <option value="paid">Mark as Paid (transfer complete)</option>
-            <option value="approve">Approve (payment pending)</option>
-            <option value="reject">Reject (refund wallet)</option>
-          </select>
-        </div>
-
-        <div className="field" style={{ marginBottom: 20 }}>
-          <label className="label">Admin notes</label>
-          <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional notes for the fleet owner" />
-        </div>
-
-        <div style={{ display: 'flex', gap: 10 }}>
-          <button
-            className={`btn${action === 'reject' ? ' btn-secondary' : ''}`}
-            onClick={submit}
-            disabled={busy}
-            style={action === 'reject' ? { borderColor: 'var(--danger)', color: 'var(--danger)' } : {}}
-          >
-            {busy ? 'Processing…' : action === 'paid' ? 'Mark as Paid' : action === 'approve' ? 'Approve' : 'Reject & Refund'}
-          </button>
-          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+    <Modal title={`Process Payout #${request.id}`} onClose={onClose}>
+      <div className="card" style={{ background: 'var(--surface-2)', marginBottom: 16, fontSize: 13 }}>
+        <div><strong>{request.org_name}</strong></div>
+        <div className="muted">Requested by: {request.requested_by_name} · {fmtDate(request.created_at)}</div>
+        <div style={{ marginTop: 8 }}>
+          <span>Amount: <strong>{fmt(request.amount_requested)}</strong></span>
+          <span className="muted" style={{ marginLeft: 12 }}>Fee: {fmt(request.withdrawal_fee)}</span>
+          <span style={{ marginLeft: 12 }}>Net to pay: <strong>{fmt(request.net_payout)}</strong></span>
         </div>
       </div>
-    </div>
+
+      <div className="card" style={{ background: 'var(--surface-2)', marginBottom: 16, fontSize: 13 }}>
+        <div style={{ fontWeight: 600, marginBottom: 6 }}>Bank details</div>
+        <div>{request.bank_account_name}</div>
+        <div className="muted">{request.bank_name}</div>
+        <div className="muted">Account: {request.bank_account_number}</div>
+        {request.bank_branch_code && <div className="muted">Branch: {request.bank_branch_code}</div>}
+      </div>
+
+      <div className="field">
+        <label className="label">Action *</label>
+        <select value={action} onChange={(e) => setAction(e.target.value)}>
+          <option value="paid">Mark as Paid (transfer complete)</option>
+          <option value="approve">Approve (payment pending)</option>
+          <option value="reject">Reject (refund wallet)</option>
+        </select>
+      </div>
+
+      <div className="field">
+        <label className="label">Admin notes</label>
+        <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional notes for the fleet owner" />
+      </div>
+
+      <div className="row">
+        <button
+          className={`btn${action === 'reject' ? ' btn-secondary' : ''}`}
+          onClick={submit}
+          disabled={busy}
+          style={action === 'reject' ? { borderColor: 'var(--danger)', color: 'var(--danger)' } : {}}
+        >
+          {busy ? 'Processing…' : action === 'paid' ? 'Mark as Paid' : action === 'approve' ? 'Approve' : 'Reject & Refund'}
+        </button>
+        <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+      </div>
+    </Modal>
   );
 }
 

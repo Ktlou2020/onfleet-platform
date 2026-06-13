@@ -138,6 +138,25 @@ export default function AdminApplications() {
     setShowBulkApprove(true);
   };
 
+  const autoAssignBikes = () => {
+    const availableBikes = bikes.filter((bike) => bike.status === 'ready_to_go' || !bike.status);
+    const updatedAssignments = { ...bulkAssignments };
+    const usedBikeIds = new Set(Object.values(updatedAssignments).map((a) => a.bike_id).filter(Boolean));
+    for (const application of selectedApplications) {
+      if (updatedAssignments[application.id]?.bike_id) continue;
+      const nextBike = availableBikes.find((bike) => !usedBikeIds.has(String(bike.id)));
+      if (!nextBike) break;
+      usedBikeIds.add(String(nextBike.id));
+      updatedAssignments[application.id] = {
+        bike_id: String(nextBike.id),
+        weekly_amount: nextBike.rental_weekly || '',
+        total_weeks: nextBike.total_weeks || 78,
+        start_date: updatedAssignments[application.id]?.start_date || today
+      };
+    }
+    setBulkAssignments(updatedAssignments);
+  };
+
   const bulkApprove = async () => {
     const approvals = selectedApplications.map((application) => ({
       application_id: application.id,
@@ -308,7 +327,10 @@ export default function AdminApplications() {
 
       {showBulkApprove && (
         <Modal title={`Bulk approve ${selectedApplications.length} applications`} onClose={() => setShowBulkApprove(false)}>
-          <div className="muted text-sm mb-3">Assign one ready to go bike to each selected rider. A bike can only be chosen once in this batch.</div>
+          <div className="row mb-3" style={{ justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+            <div className="muted text-sm">Assign one ready to go bike to each selected rider. A bike can only be chosen once in this batch.</div>
+            <button className="btn btn-sm btn-secondary" onClick={autoAssignBikes}>Auto-assign available bikes</button>
+          </div>
           <div style={{ display: 'grid', gap: 16, maxHeight: '60vh', overflowY: 'auto', paddingRight: 4 }}>
             {selectedApplications.map((application) => {
               const assignment = bulkAssignments[application.id] || { bike_id: '', weekly_amount: '', total_weeks: 78, start_date: today };

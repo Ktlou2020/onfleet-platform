@@ -549,4 +549,14 @@ router.post('/bulk-delete', authRequired, adminOnly, (req, res) => {
   });
 });
 
+router.post('/:id/reverse', authRequired, adminOnly, (req, res) => {
+  const payment = db.prepare('SELECT * FROM payments WHERE id = ?').get(req.params.id);
+  if (!payment) return res.status(404).json({ error: 'Payment not found' });
+  if (payment.status === 'reversed') return res.status(400).json({ error: 'Payment is already reversed' });
+  db.prepare(`UPDATE payments SET status = 'reversed' WHERE id = ?`).run(payment.id);
+  rebuildScheduleAllocations(payment.agreement_id);
+  logAudit(req.user.id, 'payment.reversed', 'payments', payment.id, { original_status: payment.status, amount: payment.amount }, req.ip);
+  res.json({ ok: true });
+});
+
 module.exports = router;

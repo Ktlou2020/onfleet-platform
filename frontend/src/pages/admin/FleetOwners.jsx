@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import api from '../../api';
 import { useAuth } from '../../auth';
-import { Badge, CopyableContactValue, EmptyState, Loading, Pagination, SearchInput, Stat, fmtDate, fmtDateTime, matchesSearch, paginateItems } from '../../components/ui';
+import { Badge, CopyableContactValue, EmptyState, Loading, Modal, Pagination, SearchInput, Stat, fmtDate, fmtDateTime, matchesSearch, paginateItems } from '../../components/ui';
 import { getFleetRoleLabel } from '../fleet/access';
 import { Building2, ShieldCheck, Users, Wallet, Settings } from 'lucide-react';
 
@@ -50,47 +51,35 @@ function ChangePlanModal({ orgId, orgName, currentPlan, currentStatus, onClose, 
   };
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-      <div className="card" style={{ maxWidth: 440, width: '100%' }}>
-        <div className="flex-between" style={{ marginBottom: 20 }}>
-          <div>
-            <h3 style={{ margin: 0 }}>Change plan</h3>
-            <div className="muted text-sm">{orgName}</div>
-          </div>
-          <button className="btn btn-secondary btn-sm" onClick={onClose}>Close</button>
+    <Modal title="Change plan" onClose={onClose}>
+      <div className="muted text-sm mb-3">{orgName}</div>
+      <div className="field">
+        <label className="label">Plan</label>
+        <select value={selectedPlan} onChange={(e) => onPlanChange(e.target.value)}>
+          {PLAN_OPTIONS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+        </select>
+      </div>
+      <div className="field">
+        <label className="label">Status</label>
+        <select value={selectedStatus} onChange={(e) => setSelectedStatus(e.target.value)}>
+          {ORG_STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}
+        </select>
+      </div>
+      <div className="grid grid-2">
+        <div className="field">
+          <label className="label">Max bikes</label>
+          <input type="number" min="1" value={maxBikes} onChange={(e) => setMaxBikes(e.target.value)} />
         </div>
-
-        <div className="field" style={{ marginBottom: 14 }}>
-          <label className="label">Plan</label>
-          <select value={selectedPlan} onChange={(e) => onPlanChange(e.target.value)}>
-            {PLAN_OPTIONS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
-          </select>
-        </div>
-
-        <div className="field" style={{ marginBottom: 14 }}>
-          <label className="label">Status</label>
-          <select value={selectedStatus} onChange={(e) => setSelectedStatus(e.target.value)}>
-            {ORG_STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}
-          </select>
-        </div>
-
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
-          <div className="field">
-            <label className="label">Max bikes</label>
-            <input type="number" min="1" value={maxBikes} onChange={(e) => setMaxBikes(e.target.value)} />
-          </div>
-          <div className="field">
-            <label className="label">Max admin users</label>
-            <input type="number" min="1" value={maxAdmins} onChange={(e) => setMaxAdmins(e.target.value)} />
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', gap: 10 }}>
-          <button className="btn" onClick={submit} disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button>
-          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+        <div className="field">
+          <label className="label">Max admin users</label>
+          <input type="number" min="1" value={maxAdmins} onChange={(e) => setMaxAdmins(e.target.value)} />
         </div>
       </div>
-    </div>
+      <div className="row">
+        <button className="btn" onClick={submit} disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button>
+        <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+      </div>
+    </Modal>
   );
 }
 
@@ -98,10 +87,11 @@ const roleOptions = ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billin
 
 export default function AdminFleetOwners() {
   const { user } = useAuth();
+  const [urlParams] = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [organizations, setOrganizations] = useState([]);
   const [accounts, setAccounts] = useState([]);
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(urlParams.get('search') || '');
   const [organizationFilter, setOrganizationFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [roleFilter, setRoleFilter] = useState('all');

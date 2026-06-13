@@ -710,8 +710,18 @@ router.delete('/users/:id', superadminOnly, (req, res) => {
 });
 
 router.get('/audit-logs', (req, res) => {
-  const logs = db.prepare(`SELECT l.*, u.full_name FROM audit_logs l LEFT JOIN users u ON u.id = l.actor_id ORDER BY l.created_at DESC LIMIT 200`).all();
-  res.json({ logs });
+  const limit = Math.min(Number(req.query.limit || 500), 2000);
+  const { date_from, date_to, action, actor_id } = req.query;
+  const where = [];
+  const params = [];
+  if (date_from) { where.push(`l.created_at >= ?`); params.push(date_from); }
+  if (date_to) { where.push(`l.created_at <= ?`); params.push(date_to + 'T23:59:59'); }
+  if (action) { where.push(`l.action = ?`); params.push(action); }
+  if (actor_id) { where.push(`l.actor_id = ?`); params.push(Number(actor_id)); }
+  const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const logs = db.prepare(`SELECT l.*, u.full_name FROM audit_logs l LEFT JOIN users u ON u.id = l.actor_id ${whereClause} ORDER BY l.created_at DESC LIMIT ?`).all(...params, limit);
+  const actions = db.prepare(`SELECT DISTINCT action FROM audit_logs ORDER BY action`).all().map((r) => r.action);
+  res.json({ logs, actions });
 });
 
 // ---------- FLEET PAYOUT REQUESTS ----------

@@ -531,34 +531,35 @@ router.post('/login',
 router.post('/forgot-password',
   body('email').isEmail(),
   async (req, res) => {
-    const email = normalizeEmail(req.body.email);
-    const generic = { ok: true, message: 'If an account exists for that email, a reset link has been sent.' };
-    const user = db.prepare(`SELECT id, email, full_name, status FROM users WHERE email = ? AND deleted_at IS NULL`).get(email);
-
-    if (!user || user.status !== 'active') return res.json(generic);
-
-    const rawToken = crypto.randomBytes(32).toString('hex');
-    const tokenHash = hashResetToken(rawToken);
-    db.prepare(`UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE user_id = ? AND used_at IS NULL`).run(user.id);
-    db.prepare(`INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, requested_ip, user_agent)
-      VALUES (?,?,?,?,?)`).run(user.id, tokenHash, passwordResetExpiryIso(), req.ip || null, req.get('user-agent') || null);
-
-    const firstName = user.full_name?.split(' ')?.[0] || 'there';
-    const resetUrl = buildResetUrl(rawToken);
     try {
-      await sendNotification({
+      const email = normalizeEmail(req.body.email);
+      const generic = { ok: true, message: 'If an account exists for that email, a reset link has been sent.' };
+      const user = db.prepare(`SELECT id, email, full_name, status FROM users WHERE email = ? AND deleted_at IS NULL`).get(email);
+
+      if (!user || user.status !== 'active') return res.json(generic);
+
+      const rawToken = crypto.randomBytes(32).toString('hex');
+      const tokenHash = hashResetToken(rawToken);
+      db.prepare(`UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE user_id = ? AND used_at IS NULL`).run(user.id);
+      db.prepare(`INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, requested_ip, user_agent)
+        VALUES (?,?,?,?,?)`).run(user.id, tokenHash, passwordResetExpiryIso(), req.ip || null, req.get('user-agent') || null);
+
+      const firstName = user.full_name?.split(' ')?.[0] || 'there';
+      const resetUrl = buildResetUrl(rawToken);
+      sendNotification({
         userId: user.id,
         channel: 'email',
         type: 'password_reset',
         title: 'Reset your OnFleet password',
         message: `Hi ${firstName},\n\nWe received a request to reset your OnFleet password.\n\nReset link: ${resetUrl}\n\nThis link expires in ${readEnv('PASSWORD_RESET_TOKEN_TTL_MINUTES', '60') || 60} minutes. If you did not request this, you can ignore this email.\n\nKind Regards\nOnFleet Team`
-      });
-    } catch (emailErr) {
-      console.error('[forgot-password] email delivery failed:', emailErr.message);
-    }
+      }).catch((emailErr) => console.error('[forgot-password] email delivery failed:', emailErr.message));
 
-    logAudit(user.id, 'user.password_reset_requested', 'users', user.id, {}, req.ip);
-    res.json(generic);
+      logAudit(user.id, 'user.password_reset_requested', 'users', user.id, {}, req.ip);
+      return res.json(generic);
+    } catch (err) {
+      console.error('[forgot-password]', err.message);
+      return res.status(500).json({ error: 'Could not process password reset request' });
+    }
   });
 
 router.post('/reset-password',

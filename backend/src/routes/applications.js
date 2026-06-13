@@ -242,15 +242,19 @@ async function rejectApplication({ applicationId, reviewerId, reason }) {
 }
 
 router.post('/', authRequired, async (req, res) => {
-  const lastRejected = db.prepare(`SELECT retry_after_date FROM applications
-    WHERE user_id = ? AND status = 'rejected' AND retry_after_date IS NOT NULL
-    ORDER BY submitted_at DESC LIMIT 1`).get(req.user.id);
-  if (lastRejected?.retry_after_date && lastRejected.retry_after_date > new Date().toISOString().slice(0, 10)) {
-    return res.status(400).json({ error: `You can reapply after ${lastRejected.retry_after_date}` });
+  try {
+    const lastRejected = db.prepare(`SELECT retry_after_date FROM applications
+      WHERE user_id = ? AND status = 'rejected' AND retry_after_date IS NOT NULL
+      ORDER BY submitted_at DESC LIMIT 1`).get(req.user.id);
+    if (lastRejected?.retry_after_date && lastRejected.retry_after_date > new Date().toISOString().slice(0, 10)) {
+      return res.status(400).json({ error: `You can reapply after ${lastRejected.retry_after_date}` });
+    }
+    const id = createApplication(req.body, req.user, req.user.id);
+    res.json({ id });
+  } catch (err) {
+    console.error('[applications POST /]', err.message);
+    res.status(500).json({ error: err.message || 'Could not create application' });
   }
-
-  const id = createApplication(req.body, req.user, req.user.id);
-  res.json({ id });
 });
 
 router.post('/admin-create', authRequired, adminOnly, (req, res) => {

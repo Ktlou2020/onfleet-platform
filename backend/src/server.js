@@ -143,6 +143,15 @@ app.use((err, req, res, next) => {
   res.status(err.status || 500).json({ error: err.message || 'Server error' });
 });
 
+// Prevent unhandled rejections and uncaught exceptions from crashing the process.
+// Log them so they're visible in Railway logs, but keep the server up.
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[unhandledRejection]', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+});
+
 const superadminBootstrap = ensureSuperadminFromEnv();
 if (superadminBootstrap?.skipped) {
   console.log(`ℹ️  Superadmin bootstrap skipped: ${superadminBootstrap.reason}`);

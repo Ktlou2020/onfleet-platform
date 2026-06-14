@@ -5,6 +5,7 @@ const fs = require('fs');
 const db = require('../db');
 const { authRequired, adminOnly } = require('../middleware/auth');
 const { logAudit } = require('../utils/helpers');
+const { requireValidMime } = require('../utils/validateUpload');
 
 const router = express.Router();
 const { kyc: uploadDir } = require('../uploadPaths');
@@ -18,7 +19,7 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, limits: { fileSize: 8 * 1024 * 1024 } });
 
-router.post('/upload', authRequired, upload.single('file'), (req, res) => {
+router.post('/upload', authRequired, upload.single('file'), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file' });
   const { doc_type } = req.body;
   if (!['id_document','proof_of_address','drivers_license','bank_statement','selfie','other'].includes(doc_type))
@@ -39,12 +40,20 @@ router.get('/mine', authRequired, (req, res) => {
 router.get('/file/:id', authRequired, (req, res) => {
   const doc = db.prepare('SELECT * FROM kyc_documents WHERE id = ?').get(req.params.id);
   if (!doc) return res.status(404).end();
-  if (doc.user_id !== req.user.id && !['admin','superadmin'].includes(req.user.role))
+  if (doc.user_id !== req.user.id && !['admin', 'superadmin'].includes(req.user.role))
     return res.status(403).end();
-  if (String(doc.file_path || '').startsWith('/uploads/')) {
-    return res.sendFile(path.join(__dirname, '../../', doc.file_path.replace(/^\//, '')));
+
+  // Resolve to an absolute path and verify it stays within uploadDir
+  const normalized = path.normalize(doc.file_path || '');
+  if (!normalized || normalized.includes('..') || path.isAbsolute(normalized)) {
+    return res.status(400).end();
   }
-  res.sendFile(path.join(uploadDir, doc.file_path));
+  const absolute = path.join(uploadDir, normalized);
+  if (!absolute.startsWith(uploadDir + path.sep) && absolute !== uploadDir) {
+    return res.status(400).end();
+  }
+  if (!fs.existsSync(absolute)) return res.status(404).end();
+  res.sendFile(absolute);
 });
 
 // Admin

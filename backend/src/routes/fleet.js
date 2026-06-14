@@ -7,6 +7,7 @@ const path = require('path');
 const fs = require('fs');
 const db = require('../db');
 const { authRequired, fleetOwnerOnly, companyRoleAllowed } = require('../middleware/auth');
+const { requireValidMime } = require('../utils/validateUpload');
 const { logAudit, generateAgreementNo, buildPaymentSchedule, addDays, recalcScheduleStatuses } = require('../utils/helpers');
 const { setBikeStatus } = require('../utils/bikeStatus');
 const { discontinueAgreementForStolenBike, discontinueAgreement, reinstateDiscontinuedAgreement } = require('../services/agreementLifecycle');
@@ -472,7 +473,7 @@ router.post('/public/:slug/rider-application', riderApplicationUpload.fields([
   { name: 'payslip_1', maxCount: 1 },
   { name: 'payslip_2', maxCount: 1 },
   { name: 'payslip_3', maxCount: 1 }
-]), async (req, res) => {
+]), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
   try {
     const slug = String(req.params.slug || '').trim().toLowerCase();
     const organization = db.prepare(`SELECT * FROM organizations WHERE LOWER(slug) = ?`).get(slug);
@@ -1103,7 +1104,7 @@ router.post('/riders', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), 
   { name: 'payslip_1', maxCount: 1 },
   { name: 'payslip_2', maxCount: 1 },
   { name: 'payslip_3', maxCount: 1 }
-]), async (req, res) => {
+]), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
   try {
     const organization = getOrganizationOrThrow(req.user.organization_id);
     const email = String(req.body.email || '').trim().toLowerCase();
@@ -1240,7 +1241,7 @@ router.patch('/riders/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.mana
   }
 });
 
-router.post('/riders/:id/documents', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), riderApplicationUpload.single('file'), async (req, res) => {
+router.post('/riders/:id/documents', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), riderApplicationUpload.single('file'), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const organization = getOrganizationOrThrow(req.user.organization_id);

@@ -8,6 +8,7 @@ const db = require('../db');
 const { authRequired, adminOnly } = require('../middleware/auth');
 const { logAudit } = require('../utils/helpers');
 const { generateStrategicReport } = require('../services/strategicReport');
+const { requireValidMime } = require('../utils/validateUpload');
 const { sendNotification, detectEmailProvider } = require('../services/notifier');
 
 const router = express.Router();
@@ -277,7 +278,7 @@ router.get('/branding', superadminOnly, (req, res) => {
   res.json({ hero_image_url: getSetting('landing_hero_image_url') });
 });
 
-router.post('/branding/hero-image', superadminOnly, heroImageUpload.single('image'), (req, res) => {
+router.post('/branding/hero-image', superadminOnly, heroImageUpload.single('image'), requireValidMime(['image/jpeg', 'image/png', 'image/webp']), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Hero image file is required' });
   const publicPath = `/uploads/branding/${req.file.filename}`;
   setSetting('landing_hero_image_url', publicPath);

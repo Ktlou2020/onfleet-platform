@@ -8,6 +8,7 @@ const { logAudit, generateAgreementNo, buildPaymentSchedule, addDays } = require
 const { sendNotification } = require('../services/notifier');
 const { extractPayslipInsights } = require('../services/documentInsights');
 const { writeContractSnapshot } = require('../services/contracts');
+const { requireValidMime } = require('../utils/validateUpload');
 
 const router = express.Router();
 const { applications: uploadDir } = require('../uploadPaths');
@@ -264,7 +265,7 @@ router.post('/admin-create', authRequired, adminOnly, (req, res) => {
   res.json({ id });
 });
 
-router.post('/:id/documents', authRequired, upload.single('file'), async (req, res) => {
+router.post('/:id/documents', authRequired, upload.single('file'), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const { doc_type } = req.body;
   if (!['id_document', 'drivers_license', 'payslip', 'other'].includes(doc_type)) {

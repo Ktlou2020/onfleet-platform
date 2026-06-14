@@ -6,11 +6,37 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { body, validationResult } = require('express-validator');
+const rateLimit = require('express-rate-limit');
 const db = require('../db');
 const { authRequired } = require('../middleware/auth');
 const { logAudit, addDays } = require('../utils/helpers');
 const { extractPayslipInsights } = require('../services/documentInsights');
 const { sendNotification } = require('../services/notifier');
+const { requireValidMime } = require('../utils/validateUpload');
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many login attempts. Try again in 15 minutes.' }
+});
+
+const passwordResetLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many password reset requests. Try again in 15 minutes.' }
+});
+
+const signupLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many registration attempts. Try again later.' }
+});
 
 const router = express.Router();
 const { applications: uploadDir, profiles: profileUploadDir } = require('../uploadPaths');
@@ -274,6 +300,7 @@ async function recalcApplicationDecision(applicationId) {
 }
 
 router.post('/signup',
+  signupLimiter,
   body('email').isEmail(),
   body('password').isLength({ min: 6 }),
   body('full_name').notEmpty(),
@@ -443,6 +470,7 @@ router.post('/signup-complete', handleSignupUpload, async (req, res) => {
 });
 
 router.post('/fleet/signup',
+  signupLimiter,
   body('company_name').notEmpty(),
   body('full_name').notEmpty(),
   body('email').isEmail(),
@@ -513,6 +541,7 @@ router.post('/fleet/signup',
   });
 
 router.post('/login',
+  loginLimiter,
   body('email').isEmail(),
   body('password').notEmpty(),
   (req, res) => {
@@ -529,6 +558,7 @@ router.post('/login',
   });
 
 router.post('/forgot-password',
+  passwordResetLimiter,
   body('email').isEmail(),
   async (req, res) => {
     try {
@@ -537,6 +567,12 @@ router.post('/forgot-password',
       const user = db.prepare(`SELECT id, email, full_name, status FROM users WHERE email = ? AND deleted_at IS NULL`).get(email);
 
       if (!user || user.status !== 'active') return res.json(generic);
+
+      // Cooldown: max one reset request per 5 minutes per user
+      const recentToken = db.prepare(
+        `SELECT created_at FROM password_reset_tokens WHERE user_id = ? AND used_at IS NULL AND created_at > datetime('now', '-5 minutes') ORDER BY created_at DESC LIMIT 1`
+      ).get(user.id);
+      if (recentToken) return res.json(generic); // silently honour cooldown
 
       const rawToken = crypto.randomBytes(32).toString('hex');
       const tokenHash = hashResetToken(rawToken);
@@ -615,7 +651,7 @@ router.put('/me', authRequired, (req, res) => {
   res.json({ ok: true });
 });
 
-router.post('/me/selfie', authRequired, profileUpload.single('selfie'), (req, res) => {
+router.post('/me/selfie', authRequired, profileUpload.single('selfie'), requireValidMime(['image/jpeg', 'image/png', 'image/webp']), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Selfie image is required' });
   const avatarUrl = `/uploads/profiles/${req.file.filename}`;
   db.prepare(`UPDATE users SET avatar_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(avatarUrl, req.user.id);

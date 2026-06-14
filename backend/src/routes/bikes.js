@@ -8,6 +8,7 @@ const { logAudit, generateAgreementNo, buildPaymentSchedule, addDays } = require
 const { setBikeStatus } = require('../utils/bikeStatus');
 const { discontinueAgreementForStolenBike, discontinueAgreement } = require('../services/agreementLifecycle');
 const { extractLicenseDiscInsights } = require('../services/documentInsights');
+const { requireValidMime } = require('../utils/validateUpload');
 const { writeContractSnapshot } = require('../services/contracts');
 
 const router = express.Router();
@@ -298,7 +299,7 @@ router.get('/', authRequired, adminOnly, (req, res) => {
   res.json({ bikes });
 });
 
-router.post('/document-insights/license-disc', authRequired, adminOnly, bikeDocumentUpload.single('file'), async (req, res) => {
+router.post('/document-insights/license-disc', authRequired, adminOnly, bikeDocumentUpload.single('file'), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'A document file is required' });
   try {
     const extracted = await extractLicenseDiscInsights(req.file.path, req.file.mimetype);
@@ -623,7 +624,7 @@ router.delete('/:id', authRequired, adminOnly, (req, res) => {
   res.json({ ok: true });
 });
 
-router.post('/:id/image', authRequired, adminOnly, bikeImageUpload.single('image'), (req, res) => {
+router.post('/:id/image', authRequired, adminOnly, bikeImageUpload.single('image'), requireValidMime(['image/jpeg', 'image/png', 'image/webp']), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Image file is required' });
   const publicPath = `/uploads/bikes/${req.file.filename}`;
   db.prepare('UPDATE bikes SET image_url = ? WHERE id = ?').run(publicPath, req.params.id);
@@ -631,7 +632,7 @@ router.post('/:id/image', authRequired, adminOnly, bikeImageUpload.single('image
   res.json({ image_url: publicPath });
 });
 
-router.post('/:id/documents/:documentType', authRequired, adminOnly, bikeDocumentUpload.single('file'), async (req, res) => {
+router.post('/:id/documents/:documentType', authRequired, adminOnly, bikeDocumentUpload.single('file'), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'A document file is required' });
   const bike = db.prepare('SELECT id FROM bikes WHERE id = ?').get(req.params.id);
   if (!bike) return res.status(404).json({ error: 'Bike not found' });

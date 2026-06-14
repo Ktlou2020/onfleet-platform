@@ -83,7 +83,18 @@ function injectShareMeta(template, meta) {
 }
 
 app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: false, crossOriginEmbedderPolicy: false }));
-app.use(cors({ origin: '*', credentials: true }));
+
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || process.env.FRONTEND_URL || '')
+  .split(',').map((o) => o.trim()).filter(Boolean);
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    if (!ALLOWED_ORIGINS.length && /^https?:\/\/localhost(:\d+)?$/.test(origin)) return callback(null, true);
+    callback(new Error('CORS: origin not allowed'));
+  },
+  credentials: true
+}));
 app.use(morgan('dev'));
 // Webhook must receive the raw body for HMAC validation — register before express.json()
 app.use('/api/payments/paystack/webhook', express.raw({ type: 'application/json' }));

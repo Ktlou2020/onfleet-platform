@@ -204,6 +204,16 @@ router.get('/paystack/verify/:reference', authRequired, async (req, res) => {
     const data = resp.data.data;
     const payment = db.prepare('SELECT * FROM payments WHERE reference = ?').get(req.params.reference);
     if (!payment) return res.status(404).json({ error: 'Payment not found' });
+
+    // Ensure the payment belongs to the requesting user's agreement (or admin)
+    const isAdmin = ['admin', 'superadmin'].includes(req.user.role);
+    if (!isAdmin) {
+      const agreement = db.prepare('SELECT user_id FROM agreements WHERE id = ?').get(payment.agreement_id);
+      if (!agreement || agreement.user_id !== req.user.id) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+    }
+
     if (data.status === 'success' && payment.status !== 'success') {
       const grossAmount = data.amount / 100;
       const netAmount = payment.net_amount || grossAmount; // use stored net, fallback to gross if old record
@@ -226,13 +236,13 @@ router.get('/paystack/verify/:reference', authRequired, async (req, res) => {
 });
 
 router.post('/paystack/webhook', (req, res) => {
-  // Validate Paystack HMAC signature when present
+  // Always validate Paystack HMAC signature — reject if missing or invalid
   const sig = req.headers['x-paystack-signature'];
-  if (sig && process.env.PAYSTACK_SECRET_KEY) {
-    const expected = crypto.createHmac('sha512', process.env.PAYSTACK_SECRET_KEY)
-      .update(req.body)
-      .digest('hex');
-    if (expected !== sig) return res.sendStatus(401);
+  const secretKey = process.env.PAYSTACK_SECRET_KEY;
+  if (!sig || !secretKey) return res.sendStatus(401);
+  const expected = crypto.createHmac('sha512', secretKey).update(req.body).digest('hex');
+  if (!crypto.timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(sig, 'hex'))) {
+    return res.sendStatus(401);
   }
 
   let event;

@@ -85,7 +85,7 @@ function injectShareMeta(template, meta) {
 app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: false, crossOriginEmbedderPolicy: false }));
 
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || process.env.FRONTEND_URL || '')
-  .split(',').map((o) => o.trim()).filter(Boolean);
+  .split(',').map((o) => o.trim().replace(/\/+$/, '')).filter(Boolean);
 
 // Per-request cors so we can infer self-origin from Host when no allowlist is configured
 app.use((req, res, next) => {
@@ -107,8 +107,12 @@ app.use((req, res, next) => {
         } catch { /* invalid origin URL */ }
         // Allow localhost in development
         if (/^https?:\/\/localhost(:\d+)?$/.test(origin)) return cb(null, true);
-        // Log blocked origin so admins can diagnose and set ALLOWED_ORIGINS
-        console.warn(`[CORS] blocked origin="${origin}" proto="${proto}" host="${host}" — set ALLOWED_ORIGINS env var to fix`);
+      }
+      // Always log when blocking — runs even when ALLOWED_ORIGINS is set to a wrong value
+      {
+        const _proto = (req.headers['x-forwarded-proto'] || req.protocol || '?').split(',')[0].trim();
+        const _host = (req.headers['x-forwarded-host'] || req.headers.host || '?').split(',')[0].trim();
+        console.warn(`[CORS] blocked origin="${origin}" proto="${_proto}" host="${_host}" allowlist=[${ALLOWED_ORIGINS.join(', ')}] — update ALLOWED_ORIGINS env var`);
       }
       cb(new Error('CORS: origin not allowed'));
     },

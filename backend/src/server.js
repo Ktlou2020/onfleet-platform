@@ -94,12 +94,21 @@ app.use((req, res, next) => {
       if (!origin) return cb(null, true); // same-origin / server-to-server
       if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
       if (ALLOWED_ORIGINS.length === 0) {
-        // No explicit allowlist — allow the server's own host (monolithic deployment)
-        const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
-        const host = req.headers['x-forwarded-host'] || req.headers.host || '';
+        // No explicit allowlist — allow the server's own host (monolithic deployment).
+        // Take first value only in case proxy stacks multiple entries (e.g. "https,https").
+        const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
+        const host = (req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
         if (origin === `${proto}://${host}`) return cb(null, true);
-        // Also allow localhost in development
+        // Also compare just hostnames to tolerate internal port mismatches
+        try {
+          const originHostname = new URL(origin).hostname;
+          const serverHostname = host.split(':')[0];
+          if (originHostname && serverHostname && originHostname === serverHostname) return cb(null, true);
+        } catch { /* invalid origin URL */ }
+        // Allow localhost in development
         if (/^https?:\/\/localhost(:\d+)?$/.test(origin)) return cb(null, true);
+        // Log blocked origin so admins can diagnose and set ALLOWED_ORIGINS
+        console.warn(`[CORS] blocked origin="${origin}" proto="${proto}" host="${host}" — set ALLOWED_ORIGINS env var to fix`);
       }
       cb(new Error('CORS: origin not allowed'));
     },

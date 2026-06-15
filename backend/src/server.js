@@ -87,14 +87,25 @@ app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: false,
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || process.env.FRONTEND_URL || '')
   .split(',').map((o) => o.trim()).filter(Boolean);
 
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-    if (!ALLOWED_ORIGINS.length && /^https?:\/\/localhost(:\d+)?$/.test(origin)) return callback(null, true);
-    callback(new Error('CORS: origin not allowed'));
-  },
-  credentials: true
-}));
+// Per-request cors so we can infer self-origin from Host when no allowlist is configured
+app.use((req, res, next) => {
+  cors({
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true); // same-origin / server-to-server
+      if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+      if (ALLOWED_ORIGINS.length === 0) {
+        // No explicit allowlist — allow the server's own host (monolithic deployment)
+        const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+        const host = req.headers['x-forwarded-host'] || req.headers.host || '';
+        if (origin === `${proto}://${host}`) return cb(null, true);
+        // Also allow localhost in development
+        if (/^https?:\/\/localhost(:\d+)?$/.test(origin)) return cb(null, true);
+      }
+      cb(new Error('CORS: origin not allowed'));
+    },
+    credentials: true
+  })(req, res, next);
+});
 app.use(morgan('dev'));
 // Webhook must receive the raw body for HMAC validation — register before express.json()
 app.use('/api/payments/paystack/webhook', express.raw({ type: 'application/json' }));

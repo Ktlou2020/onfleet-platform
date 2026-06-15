@@ -26,7 +26,7 @@ const FLEET_TOUR_STEPS = [
     icon: <PiggyBank size={32} />,
     title: 'Collect payments automatically',
     description: "Open any approved rider's record and click '+ Setup weekly payment'. This generates a secure Paystack link. The rider enters their card once — Paystack handles the weekly debit every week after that.",
-    tip: "4 weekly plans available: R650, R700, R750, and R850. The right plan is matched automatically from the rider's agreement amount."
+    tip: "5 weekly plans available: R650, R700, R750, R800, and R850. The right plan is matched automatically from the rider's agreement amount."
   },
   {
     icon: <Wallet size={32} />,

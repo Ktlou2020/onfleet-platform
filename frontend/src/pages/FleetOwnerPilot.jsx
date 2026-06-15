@@ -187,7 +187,7 @@ export default function FleetOwnerPilot() {
             <div style={{ flex: 1, minWidth: 240 }}>
               <div style={{ fontWeight: 700, marginBottom: 8 }}>Available weekly plans</div>
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                {['R650 / week', 'R700 / week', 'R750 / week', 'R850 / week'].map((plan) => (
+                {['R650 / week', 'R700 / week', 'R750 / week', 'R800 / week', 'R850 / week'].map((plan) => (
                   <span key={plan} style={{
                     background: 'var(--primary)', color: '#fff',
                     borderRadius: 6, padding: '4px 12px', fontSize: 13, fontWeight: 600

@@ -153,6 +153,7 @@ export default function AdminAgreementDetail() {
               <option value="650">R650</option>
               <option value="700">R700</option>
               <option value="750">R750</option>
+              <option value="800">R800</option>
               <option value="850">R850</option>
             </select>
           </div>

@@ -386,7 +386,7 @@ function getKeyForPlanCode(planCode) {
   return null;
 }
 
-const RIDER_PLAN_AMOUNTS = [650, 700, 750, 850];
+const RIDER_PLAN_AMOUNTS = [650, 700, 750, 800, 850];
 
 function isRiderPlanCode(planCode) {
   return RIDER_PLAN_AMOUNTS.some((amt) => {

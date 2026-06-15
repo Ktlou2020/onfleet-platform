@@ -8,7 +8,7 @@ const { discontinueAgreement, reinstateDiscontinuedAgreement } = require('../ser
 
 const router = express.Router();
 const PAYSTACK_BASE = 'https://api.paystack.co';
-const RIDER_PLAN_AMOUNTS = [650, 700, 750, 850];
+const RIDER_PLAN_AMOUNTS = [650, 700, 750, 800, 850];
 
 function getRiderPlanCode(weeklyAmount) {
   const amount = Math.round(Number(weeklyAmount));

@@ -17,7 +17,7 @@ const { writeContractSnapshot } = require('../services/contracts');
 
 const router = express.Router();
 const PAYSTACK_BASE = 'https://api.paystack.co';
-const RIDER_PLAN_AMOUNTS = [650, 700, 750, 850];
+const RIDER_PLAN_AMOUNTS = [650, 700, 750, 800, 850];
 const FLEET_ROLE_VALUES = ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'];
 const MEMBER_STATUSES = ['active', 'suspended'];
 const OPEN_AGREEMENT_STATUSES = ['active', 'paused', 'defaulted'];
@@ -2285,7 +2285,7 @@ router.post('/riders/:id/subscription/init', companyRoleAllowed(FLEET_RESOURCE_A
     const planCode = getRiderPlanCode(weeklyAmount);
     if (!planCode) {
       return res.status(400).json({
-        error: `No payment plan configured for R${weeklyAmount}/week. Available amounts: R650, R700, R750, R850.`
+        error: `No payment plan configured for R${weeklyAmount}/week. Available amounts: R${RIDER_PLAN_AMOUNTS.join(', R')}.`
       });
     }
 

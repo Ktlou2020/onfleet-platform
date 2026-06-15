@@ -85,7 +85,7 @@ function injectShareMeta(template, meta) {
 app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: false, crossOriginEmbedderPolicy: false }));
 
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || process.env.FRONTEND_URL || '')
-  .split(',').map((o) => o.trim()).filter(Boolean);
+  .split(',').map((o) => o.trim().replace(/\/+$/, '')).filter(Boolean);
 
 // Per-request cors so we can infer self-origin from Host when no allowlist is configured
 app.use((req, res, next) => {

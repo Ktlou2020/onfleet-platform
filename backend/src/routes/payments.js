@@ -266,7 +266,7 @@ router.post('/paystack/webhook', (req, res) => {
         WHERE organization_id = ? AND rider_user_id = ? AND status = 'pending'`)
         .run(subscriptionCode || null, customerCode || null, orgId, riderId);
     }
-  // Rider charge.success — credit the fleet wallet
+  // Rider charge.success — credit the fleet wallet and record the payment
   } else if (event.event === 'charge.success' && isRiderEvent) {
     const subscriptionCode = event.data.subscription?.subscription_code;
     const customerCode = event.data.customer?.customer_code;
@@ -276,15 +276,26 @@ router.post('/paystack/webhook', (req, res) => {
 
     let orgId = Number(meta.organization_id);
     let riderId = Number(meta.rider_user_id);
+    let agreementId = Number(meta.agreement_id) || null;
 
     if (!orgId && subscriptionCode) {
       const sub = db.prepare(`SELECT * FROM rider_subscriptions WHERE paystack_subscription_code = ?`).get(subscriptionCode);
-      if (sub) { orgId = sub.organization_id; riderId = sub.rider_user_id; }
+      if (sub) { orgId = sub.organization_id; riderId = sub.rider_user_id; agreementId = agreementId || sub.agreement_id || null; }
     }
     if (!orgId && customerCode) {
       const user = db.prepare(`SELECT id, organization_id FROM users WHERE id IN (SELECT rider_user_id FROM rider_subscriptions WHERE paystack_customer_code = ?) LIMIT 1`)
         .get(customerCode);
       if (user) { orgId = user.organization_id; riderId = user.id; }
+    }
+    // Resolve agreement_id from rider_subscriptions if not yet found
+    if (!agreementId && riderId && orgId) {
+      const sub = db.prepare(`SELECT agreement_id FROM rider_subscriptions WHERE rider_user_id = ? AND organization_id = ? ORDER BY id DESC LIMIT 1`).get(riderId, orgId);
+      if (sub?.agreement_id) agreementId = sub.agreement_id;
+    }
+    // Fall back to the rider's active agreement for this org
+    if (!agreementId && riderId) {
+      const ag = db.prepare(`SELECT id FROM agreements WHERE user_id = ? AND status IN ('active','overdue') ORDER BY id DESC LIMIT 1`).get(riderId);
+      if (ag) agreementId = ag.id;
     }
 
     if (orgId && grossAmountZAR > 0) {
@@ -292,6 +303,18 @@ router.post('/paystack/webhook', (req, res) => {
       if (subscriptionCode) {
         db.prepare(`UPDATE rider_subscriptions SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE paystack_subscription_code = ? AND status != 'cancelled'`)
           .run(subscriptionCode);
+      }
+      // Record the payment and apply it to the agreement schedule
+      if (agreementId) {
+        const fee = +(grossAmountZAR * 0.015).toFixed(2);
+        const net = +(grossAmountZAR - fee).toFixed(2);
+        const alreadyRecorded = db.prepare(`SELECT id FROM payments WHERE paystack_reference = ? OR reference = ?`).get(reference, reference);
+        if (!alreadyRecorded) {
+          db.prepare(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, paystack_reference, status, fee_amount, net_amount, paid_at, notes)
+            VALUES (?,?,?,'ZAR','paystack',?,?,'success',?,?,CURRENT_TIMESTAMP,'Recurring subscription payment')`)
+            .run(agreementId, riderId || null, grossAmountZAR, reference, reference, fee, net);
+          try { applyPaymentToSchedule(agreementId, grossAmountZAR); } catch (_) { /* agreement may be completed */ }
+        }
       }
     }
   // Rider subscription.disable — cancel the rider subscription

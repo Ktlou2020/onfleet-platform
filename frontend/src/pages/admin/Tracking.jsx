@@ -3,7 +3,7 @@ import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { Wifi, WifiOff, Zap, ZapOff, Radio, Info, RefreshCw, Plus, Trash2, Settings, Terminal, CheckCircle, Clock, XCircle, AlertCircle } from 'lucide-react';
-import { api } from '../../api';
+import api from '../../api';
 import toast from 'react-hot-toast';
 import { Modal } from '../../components/ui';
 

@@ -50,6 +50,7 @@ import AdminImports from './pages/admin/Imports';
 import AdminFleetDashboard from './pages/admin/FleetDashboard';
 import AdminFleetOwners from './pages/admin/FleetOwners';
 import AdminFleetPayouts from './pages/admin/FleetPayouts';
+import AdminTracking from './pages/admin/Tracking';
 import FleetRiderApply from './pages/FleetRiderApply';
 import { canViewFleetSection, getDefaultFleetRoute, isAdminPortalRole } from './pages/fleet/access';
 
@@ -136,6 +137,7 @@ export default function App() {
           <Route path="fleet-owners" element={<AdminFleetOwners />} />
           <Route path="fleet-payouts" element={<AdminFleetPayouts />} />
           <Route path="pilot" element={<Navigate to="/admin/fleet-dashboard" replace />} />
+          <Route path="tracking" element={<AdminTracking />} />
           <Route path="users" element={<AdminUsers />} />
           <Route path="audit" element={<AdminAuditLogs />} />
         </Route>

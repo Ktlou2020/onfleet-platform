@@ -158,6 +158,7 @@ app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/pilot', require('./routes/pilot'));
 app.use('/api/fleet', require('./routes/fleet'));
 app.use('/api/v1', require('./routes/apiV1'));
+app.use('/api/tracking', require('./routes/tracking'));
 
 // Serve built frontend (production preview)
 const frontendDist = path.join(__dirname, '../../frontend/dist');
@@ -199,5 +200,7 @@ app.listen(PORT, () => {
   console.log(`🏍️  OnFleet API listening on :${PORT}`);
   if (process.env.NODE_ENV !== 'test') {
     require('./services/scheduler').start();
+    const TCP_PORT = Number(process.env.TELTONIKA_TCP_PORT || 5000);
+    require('./tcp/teltonikaServer').start(TCP_PORT);
   }
 });

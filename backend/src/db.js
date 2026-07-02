@@ -678,6 +678,35 @@ CREATE INDEX IF NOT EXISTS idx_collections_actions_agreement ON collections_acti
 CREATE INDEX IF NOT EXISTS idx_collections_actions_org ON collections_actions(organization_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_api_keys_org ON api_keys(organization_id);
 CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+
+CREATE TABLE IF NOT EXISTS tracking_devices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  imei TEXT UNIQUE NOT NULL,
+  model TEXT CHECK(model IN ('FMB920','FMB965','FMC920','other')) DEFAULT 'other',
+  bike_id INTEGER REFERENCES bikes(id) ON DELETE SET NULL,
+  label TEXT,
+  firmware_version TEXT,
+  connected INTEGER DEFAULT 0,
+  last_seen_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS tracking_commands (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id INTEGER NOT NULL REFERENCES tracking_devices(id) ON DELETE CASCADE,
+  command TEXT NOT NULL,
+  status TEXT CHECK(status IN ('pending','sent','delivered','failed')) DEFAULT 'pending',
+  response TEXT,
+  created_by INTEGER REFERENCES users(id),
+  sent_at DATETIME,
+  responded_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_tracking_devices_imei ON tracking_devices(imei);
+CREATE INDEX IF NOT EXISTS idx_tracking_devices_bike ON tracking_devices(bike_id);
+CREATE INDEX IF NOT EXISTS idx_tracking_commands_device ON tracking_commands(device_id, status);
 `);
 
 // ---------- LIGHTWEIGHT MIGRATIONS FOR EXISTING DEPLOYS ----------
@@ -719,6 +748,10 @@ ensureColumn('bikes', 'hub_id', 'INTEGER REFERENCES hubs(id)');
 ensureBikeStatusSchema();
 ensureAgreementStatusSchema();
 ensureUserRoleSchema();
+ensureColumn('gps_pings', 'satellites', 'INTEGER');
+ensureColumn('gps_pings', 'altitude', 'INTEGER');
+ensureColumn('gps_pings', 'ignition', 'INTEGER');
+ensureColumn('gps_pings', 'io_data', 'TEXT');
 
 if (tableHasColumn('users', 'organization_id')) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_users_org ON users(organization_id, role);`);

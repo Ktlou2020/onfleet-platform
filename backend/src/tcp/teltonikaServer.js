@@ -1,7 +1,11 @@
 'use strict';
 
 const net = require('net');
+const { EventEmitter } = require('events');
 const db = require('../db');
+
+const trackingEvents = new EventEmitter();
+trackingEvents.setMaxListeners(100);
 
 // Active TCP connections keyed by IMEI
 const connections = new Map();
@@ -136,6 +140,19 @@ function handlePacket(imei, packet) {
         db.prepare(
           `UPDATE bikes SET last_known_lat=?, last_known_lng=?, last_location_at=? WHERE id=?`
         ).run(latestRec.lat, latestRec.lng, new Date(latestRec.ts).toISOString(), device.bike_id);
+        trackingEvents.emit('ping', {
+          imei,
+          device_id: device.id,
+          bike_id: device.bike_id,
+          lat: latestRec.lat,
+          lng: latestRec.lng,
+          speed: latestRec.speed,
+          heading: latestRec.angle,
+          altitude: latestRec.altitude,
+          satellites: latestRec.satellites,
+          ignition: latestRec.io[239] !== undefined ? latestRec.io[239] : null,
+          ts: latestRec.ts,
+        });
       }
     }
 
@@ -262,4 +279,4 @@ function start(port) {
   return server;
 }
 
-module.exports = { start, sendCommand, getConnectedIMEIs };
+module.exports = { start, sendCommand, getConnectedIMEIs, trackingEvents };

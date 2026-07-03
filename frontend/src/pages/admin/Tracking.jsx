@@ -75,15 +75,14 @@ export default function Tracking() {
   const [sendingCmd, setSendingCmd] = useState(null);
   const refreshRef = useRef(null);
 
-  // Make .content a positioned container so the tracking layout can fill it absolutely
+  // Remove .content padding/scroll so the tracking layout fills edge-to-edge
   useEffect(() => {
     const el = document.querySelector('.content');
     if (!el) return;
-    const prev = { padding: el.style.padding, overflow: el.style.overflow, position: el.style.position };
+    const prev = { padding: el.style.padding, overflow: el.style.overflow };
     el.style.padding = '0';
     el.style.overflow = 'hidden';
-    el.style.position = 'relative';
-    return () => { el.style.padding = prev.padding; el.style.overflow = prev.overflow; el.style.position = prev.position; };
+    return () => { el.style.padding = prev.padding; el.style.overflow = prev.overflow; };
   }, []);
 
   const loadDevices = useCallback(async () => {
@@ -186,13 +185,13 @@ export default function Tracking() {
   const selectedMapDevice = mapDevices.find((d) => d.id === selected);
 
   if (loading) return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 'calc(100vh - 64px)' }}>
       <div style={{ color: 'var(--muted)', fontSize: 14 }}>Loading tracking…</div>
     </div>
   );
 
   return (
-    <div style={{ position: 'absolute', inset: 0, display: 'flex', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', height: 'calc(100vh - 64px)', overflow: 'hidden' }}>
       {/* Sidebar */}
       <div style={{ width: 280, minWidth: 280, overflowY: 'auto', borderRight: '1px solid var(--border)', background: 'var(--surface-2)', display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '14px 12px 10px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center', background: 'var(--surface)' }}>

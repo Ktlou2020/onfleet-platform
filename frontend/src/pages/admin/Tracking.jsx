@@ -400,7 +400,7 @@ export default function Tracking() {
       )}
 
       {/* ── Add device modal ─────────────────────────────────────────── */}
-      <Modal isOpen={showAdd} onClose={() => { setShowAdd(false); setAddForm(EMPTY_FORM); }} title="Register a GPS tracker">
+      {showAdd && <Modal onClose={() => { setShowAdd(false); setAddForm(EMPTY_FORM); }} title="Register a GPS tracker">
         <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 18, marginTop: -4, lineHeight: 1.5 }}>
           Enter the IMEI printed on the device label. Once registered, the tracker will automatically connect and appear on the map.
         </p>
@@ -456,7 +456,7 @@ export default function Tracking() {
           </button>
           <button className="btn btn-secondary" onClick={() => { setShowAdd(false); setAddForm(EMPTY_FORM); }}>Cancel</button>
         </div>
-      </Modal>
+      </Modal>}
     </div>
   );
 }

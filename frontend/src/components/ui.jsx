@@ -101,7 +101,8 @@ export function Loading() {
   return <div className="center-flex"><div className="spinner" /></div>;
 }
 
-export function Modal({ children, onClose, title }) {
+export function Modal({ children, onClose, title, isOpen = true }) {
+  if (!isOpen) return null;
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>

@@ -105,7 +105,18 @@ export function Modal({ children, onClose, title }) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
-        {title && <h2>{title}</h2>}
+        {title && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+            <h2 style={{ margin: 0 }}>{title}</h2>
+            <button
+              onClick={onClose}
+              style={{ background: 'transparent', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center', borderRadius: 6 }}
+              title="Close"
+            >
+              <X size={18} />
+            </button>
+          </div>
+        )}
         {children}
       </div>
     </div>

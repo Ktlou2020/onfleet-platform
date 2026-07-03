@@ -252,7 +252,7 @@ export default function Tracking() {
       </div>
 
       {/* Map */}
-      <div style={{ flex: 1, position: 'relative' }}>
+      <div style={{ flex: 1, position: 'relative', isolation: 'isolate' }}>
         <MapContainer
           center={[-26.2, 28.0]}
           zoom={10}

@@ -159,14 +159,39 @@ router.get('/map', authRequired, adminOnly, (req, res) => {
   const devices = db.prepare(`
     SELECT td.id, td.imei, td.model, td.label, td.last_seen_at,
            b.id AS bike_id, b.registration, b.make, b.model AS bike_model, b.status AS bike_status,
-           b.last_known_lat AS lat, b.last_known_lng AS lng, b.last_location_at
+           b.last_known_lat AS lat, b.last_known_lng AS lng, b.last_location_at,
+           gp.speed_kmh, gp.heading, gp.ignition, gp.satellites, gp.altitude
     FROM tracking_devices td
     JOIN bikes b ON b.id = td.bike_id
+    LEFT JOIN gps_pings gp ON gp.id = (
+      SELECT id FROM gps_pings WHERE bike_id = b.id ORDER BY recorded_at DESC LIMIT 1
+    )
     WHERE b.last_known_lat IS NOT NULL AND b.last_known_lng IS NOT NULL
     ORDER BY td.last_seen_at DESC
   `).all();
   for (const d of devices) d.connected = connected.includes(d.imei) ? 1 : 0;
   res.json(devices);
+});
+
+// GET /api/tracking/live — SSE stream of real-time GPS pings
+router.get('/live', authRequired, adminOnly, (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+
+  const onPing = (payload) => {
+    res.write(`event: ping\ndata: ${JSON.stringify(payload)}\n\n`);
+  };
+
+  teltonikaServer.trackingEvents.on('ping', onPing);
+  const hb = setInterval(() => res.write(': heartbeat\n\n'), 25_000);
+
+  req.on('close', () => {
+    teltonikaServer.trackingEvents.off('ping', onPing);
+    clearInterval(hb);
+  });
 });
 
 module.exports = router;

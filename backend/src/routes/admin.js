@@ -537,7 +537,7 @@ router.get('/users/:id', (req, res) => {
   res.json({ user, kyc_documents: docs, applications: apps, agreements: ags });
 });
 
-router.post('/users', superadminOnly, (req, res) => {
+router.post('/users', superadminOnly, async (req, res) => {
   const { email, password, full_name, phone, role } = req.body;
   if (!email || !password || !full_name || !['rider', 'admin', 'superadmin'].includes(role)) {
     return res.status(400).json({ error: 'email, password, full_name and valid role are required' });
@@ -545,7 +545,7 @@ router.post('/users', superadminOnly, (req, res) => {
   const normalizedEmail = String(email).trim().toLowerCase();
   const exists = db.prepare('SELECT id FROM users WHERE email = ? AND deleted_at IS NULL').get(normalizedEmail);
   if (exists) return res.status(409).json({ error: 'Email already exists' });
-  const hash = bcrypt.hashSync(password, 10);
+  const hash = await bcrypt.hash(password, 10);
   const info = db.prepare(`INSERT INTO users (email, password_hash, full_name, phone, role, status)
     VALUES (?,?,?,?,?, 'active')`).run(normalizedEmail, hash, full_name, phone || null, role);
   logAudit(req.user.id, 'user.create', 'users', info.lastInsertRowid, { role });
@@ -567,12 +567,13 @@ router.post('/users/bulk-email', async (req, res) => {
 
   if (!targets.length) return res.status(400).json({ error: 'No matching users found for this bulk email' });
 
+  const cappedTargets = targets.slice(0, 200);
   let emailSent = 0;
   let emailFailed = 0;
   let inAppSent = 0;
   const failures = [];
 
-  for (const target of targets) {
+  for (const target of cappedTargets) {
     try {
       await sendNotification({
         userId: target.id,
@@ -599,7 +600,7 @@ router.post('/users/bulk-email', async (req, res) => {
   }
 
   logAudit(req.user.id, 'users.bulk_email', 'users', null, {
-    targeted: targets.length,
+    targeted: cappedTargets.length,
     email_sent: emailSent,
     email_failed: emailFailed,
     include_in_app: includeInApp,
@@ -610,7 +611,7 @@ router.post('/users/bulk-email', async (req, res) => {
 
   res.json({
     ok: true,
-    targeted: targets.length,
+    targeted: cappedTargets.length,
     email_sent: emailSent,
     email_failed: emailFailed,
     in_app_sent: inAppSent,
@@ -680,6 +681,9 @@ router.post('/users/bulk-password-reset', async (req, res) => {
 router.post('/users/:id/status', (req, res) => {
   const { status } = req.body;
   if (!['active', 'suspended'].includes(status)) return res.status(400).json({ error: 'Invalid' });
+  const target = db.prepare('SELECT role FROM users WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  if (target.role === 'superadmin') return res.status(403).json({ error: 'Cannot change status of superadmin' });
   db.prepare(`UPDATE users SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL`).run(status, req.params.id);
   logAudit(req.user.id, 'user.status', 'users', Number(req.params.id), { status });
   res.json({ ok: true });

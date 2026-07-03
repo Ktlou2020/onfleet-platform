@@ -39,7 +39,7 @@ const RIDER_TOUR_STEPS = [
 ];
 
 const monthLabel = (monthKey) => new Date(`${monthKey}-01T00:00:00`).toLocaleDateString('en-ZA', { month: 'long', year: 'numeric' });
-const creditedAmount = (payment) => Number(payment?.net_amount || payment?.amount || 0);
+const creditedAmount = (payment) => Number(payment?.net_amount ?? payment?.amount ?? 0);
 
 export default function RiderDashboard() {
   const [data, setData] = useState(null);

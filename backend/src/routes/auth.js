@@ -304,7 +304,7 @@ router.post('/signup',
   body('email').isEmail(),
   body('password').isLength({ min: 6 }),
   body('full_name').notEmpty(),
-  (req, res) => {
+  async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
@@ -314,7 +314,7 @@ router.post('/signup',
     const existing = db.prepare('SELECT id FROM users WHERE email = ? AND deleted_at IS NULL').get(normalizeEmail(email));
     if (existing) return res.status(409).json({ error: 'Email already registered' });
 
-    const hash = bcrypt.hashSync(password, 10);
+    const hash = await bcrypt.hash(password, 10);
     const info = db.prepare(`INSERT INTO users
       (email, password_hash, full_name, phone, id_number, address, city, province, postal_code,
        date_of_birth, emergency_contact_name, emergency_contact_phone, country_of_origin, role)
@@ -409,7 +409,7 @@ router.post('/signup-complete', handleSignupUpload, async (req, res) => {
       ewallet_number: ewallet_number || null
     };
 
-    const hash = bcrypt.hashSync(password, 10);
+    const hash = await bcrypt.hash(password, 10);
     const created = db.transaction(() => {
       const userInfo = db.prepare(`INSERT INTO users
         (email, password_hash, full_name, phone, id_number, address, city, province, postal_code,
@@ -475,7 +475,7 @@ router.post('/fleet/signup',
   body('full_name').notEmpty(),
   body('email').isEmail(),
   body('password').isLength({ min: 6 }),
-  (req, res) => {
+  async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
@@ -499,7 +499,7 @@ router.post('/fleet/signup',
     }
 
     const entitlements = getFleetEntitlements(planKey);
-    const hash = bcrypt.hashSync(password, 10);
+    const hash = await bcrypt.hash(password, 10);
     const now = new Date();
     const trialEnds = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
 
@@ -544,13 +544,13 @@ router.post('/login',
   loginLimiter,
   body('email').isEmail(),
   body('password').notEmpty(),
-  (req, res) => {
+  async (req, res) => {
     const email = normalizeEmail(req.body.email);
     const { password } = req.body;
     const user = db.prepare('SELECT * FROM users WHERE email = ? AND deleted_at IS NULL').get(email);
     if (!user) return res.status(401).json({ error: 'Invalid credentials' });
     if (user.status !== 'active') return res.status(403).json({ error: 'Account suspended' });
-    if (!bcrypt.compareSync(password, user.password_hash)) return res.status(401).json({ error: 'Invalid credentials' });
+    if (!await bcrypt.compare(password, user.password_hash)) return res.status(401).json({ error: 'Invalid credentials' });
 
     logAudit(user.id, 'user.login', 'users', user.id, {}, req.ip);
     const safe = getSafeUser(user.id) || { id: user.id, email: user.email, full_name: user.full_name, role: user.role, organization_id: user.organization_id || null };
@@ -601,7 +601,7 @@ router.post('/forgot-password',
 router.post('/reset-password',
   body('token').notEmpty(),
   body('new_password').isLength({ min: 6 }),
-  (req, res) => {
+  async (req, res) => {
     const tokenHash = hashResetToken(req.body.token);
     const tokenRow = db.prepare(`SELECT prt.id, prt.user_id, u.email
       FROM password_reset_tokens prt
@@ -613,7 +613,7 @@ router.post('/reset-password',
 
     if (!tokenRow) return res.status(400).json({ error: 'Reset link is invalid or has expired' });
 
-    const passwordHash = bcrypt.hashSync(req.body.new_password, 10);
+    const passwordHash = await bcrypt.hash(req.body.new_password, 10);
     db.transaction(() => {
       db.prepare(`UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(passwordHash, tokenRow.user_id);
       db.prepare(`UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE user_id = ? AND used_at IS NULL`).run(tokenRow.user_id);

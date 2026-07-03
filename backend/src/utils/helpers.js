@@ -30,7 +30,7 @@ function buildPaymentSchedule(agreementId, weeklyAmount, totalWeeks, startDate) 
 
 function recalcScheduleStatuses(agreementId) {
   const today = new Date().toISOString().slice(0, 10);
-  const rows = db.prepare(`SELECT * FROM payment_schedules WHERE agreement_id = ?`).all(agreementId);
+  const rows = db.prepare(`SELECT * FROM payment_schedules WHERE agreement_id = ? AND status != 'waived'`).all(agreementId);
   const upd = db.prepare(`UPDATE payment_schedules SET status = ? WHERE id = ?`);
   for (const r of rows) {
     let status = r.status;

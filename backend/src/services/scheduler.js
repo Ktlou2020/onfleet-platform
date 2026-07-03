@@ -4,7 +4,7 @@ const { sendNotification } = require('./notifier');
 const { recalcScheduleStatuses } = require('../utils/helpers');
 
 function creditedAmount(payment) {
-  return Number(payment?.net_amount || payment?.amount || 0);
+  return Number(payment?.net_amount ?? payment?.amount ?? 0);
 }
 
 function startOfUtcDay(dateStr) {
@@ -162,9 +162,10 @@ async function runDailyReminders() {
     WHERE s.due_date = ? AND s.status IN ('pending','partial')`).all(tomorrow);
 
   for (const d of due) {
+    if (!d.amount_due || !Number.isFinite(Number(d.amount_due))) continue;
     const title = `Payment due tomorrow · ${d.agreement_no}`;
     if (notificationExistsToday(d.user_id, 'payment_reminder', title)) continue;
-    const msg = `Hi ${d.full_name.split(' ')[0]}, your weekly OnFleet payment of R${d.amount_due} for agreement ${d.agreement_no} is due tomorrow (${d.due_date}). Pay via the app to keep your rent-to-own on track.`;
+    const msg = `Hi ${d.full_name.split(' ')[0]}, your weekly OnFleet payment of R${Number(d.amount_due).toFixed(2)} for agreement ${d.agreement_no} is due tomorrow (${d.due_date}). Pay via the app to keep your rent-to-own on track.`;
     try {
       await sendNotification({ userId: d.user_id, channel: 'whatsapp', type: 'payment_reminder', title, message: msg });
       await sendNotification({ userId: d.user_id, channel: 'sms', type: 'payment_reminder', message: msg });

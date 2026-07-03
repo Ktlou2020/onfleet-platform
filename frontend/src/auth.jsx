@@ -9,14 +9,20 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => {
     try { return JSON.parse(localStorage.getItem('of_user')); } catch { return null; }
   });
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(!!localStorage.getItem('of_token'));
 
   useEffect(() => {
     if (localStorage.getItem('of_token') && !user) {
+      setLoading(true);
       api.get('/auth/me').then(r => {
         setUser(r.data.user);
         localStorage.setItem('of_user', JSON.stringify(r.data.user));
-      }).catch(() => {});
+      }).catch(() => {
+        localStorage.removeItem('of_token');
+        localStorage.removeItem('of_user');
+      }).finally(() => setLoading(false));
+    } else {
+      setLoading(false);
     }
   }, []);
 

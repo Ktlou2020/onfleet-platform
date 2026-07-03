@@ -81,7 +81,7 @@ function PayoutModal({ wallet, bankDetails, onClose, onSuccess }) {
   const submit = async () => {
     if (!parsedAmount || parsedAmount <= 0) return toast.error('Enter a valid amount');
     if (parsedAmount > balance) return toast.error('Amount exceeds wallet balance');
-    const bankToUse = overrideBankDetails || !hasSavedBankDetails ? form : form;
+    const bankToUse = overrideBankDetails || !hasSavedBankDetails ? form : bankDetails;
     if (!bankToUse.bank_account_name || !bankToUse.bank_name || !bankToUse.bank_account_number) {
       return toast.error('Bank account details are required');
     }

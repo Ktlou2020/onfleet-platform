@@ -8,7 +8,7 @@ function authRequired(req, res, next) {
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
   if (!token) return res.status(401).json({ error: 'Missing token' });
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    const payload = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
     const user = db.prepare(`SELECT u.id, u.email, u.full_name, u.role, u.status, u.organization_id,
       o.name organization_name, o.status organization_status, o.plan_key organization_plan_key,
       o.trial_ends_at organization_trial_ends_at

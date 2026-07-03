@@ -669,12 +669,12 @@ router.post('/me/selfie', authRequired, profileUpload.single('selfie'), requireV
 router.post('/change-password', authRequired,
   body('current_password').notEmpty(),
   body('new_password').isLength({ min: 6 }),
-  (req, res) => {
+  async (req, res) => {
     const u = db.prepare('SELECT password_hash FROM users WHERE id = ? AND deleted_at IS NULL').get(req.user.id);
-    if (!bcrypt.compareSync(req.body.current_password, u.password_hash)) {
+    if (!await bcrypt.compare(req.body.current_password, u.password_hash)) {
       return res.status(400).json({ error: 'Current password incorrect' });
     }
-    const hash = bcrypt.hashSync(req.body.new_password, 10);
+    const hash = await bcrypt.hash(req.body.new_password, 10);
     db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, req.user.id);
     res.json({ ok: true });
   });

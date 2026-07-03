@@ -75,7 +75,7 @@ export default function Tracking() {
   const [sendingCmd, setSendingCmd] = useState(null);
   const refreshRef = useRef(null);
 
-  // Strip .content padding so the map fills the full available area
+  // Remove .content padding/scroll so the tracking layout fills edge-to-edge
   useEffect(() => {
     const el = document.querySelector('.content');
     if (!el) return;
@@ -185,13 +185,13 @@ export default function Tracking() {
   const selectedMapDevice = mapDevices.find((d) => d.id === selected);
 
   if (loading) return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 'calc(100vh - 64px)' }}>
       <div style={{ color: 'var(--muted)', fontSize: 14 }}>Loading tracking…</div>
     </div>
   );
 
   return (
-    <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', height: 'calc(100vh - 64px)', overflow: 'hidden' }}>
       {/* Sidebar */}
       <div style={{ width: 280, minWidth: 280, overflowY: 'auto', borderRight: '1px solid var(--border)', background: 'var(--surface-2)', display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '14px 12px 10px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center', background: 'var(--surface)' }}>

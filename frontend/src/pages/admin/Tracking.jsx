@@ -53,10 +53,10 @@ const PRESETS = [
 const MODELS = ['FMB920', 'FMB965', 'FMC920', 'other'];
 
 const STATUS_ICON = {
-  pending: <Clock size={13} className="text-warning" />,
-  sent: <Clock size={13} className="text-info" />,
-  delivered: <CheckCircle size={13} className="text-success" />,
-  failed: <XCircle size={13} className="text-danger" />,
+  pending: <Clock size={13} style={{ color: '#f97316' }} />,
+  sent: <Clock size={13} style={{ color: '#4FA8E0' }} />,
+  delivered: <CheckCircle size={13} style={{ color: '#22c55e' }} />,
+  failed: <XCircle size={13} style={{ color: '#ef4444' }} />,
 };
 
 export default function Tracking() {
@@ -74,6 +74,16 @@ export default function Tracking() {
   const [addForm, setAddForm] = useState({ imei: '', model: 'FMB920', bike_id: '', label: '' });
   const [sendingCmd, setSendingCmd] = useState(null);
   const refreshRef = useRef(null);
+
+  // Strip .content padding so the map fills the full available area
+  useEffect(() => {
+    const el = document.querySelector('.content');
+    if (!el) return;
+    const prev = { padding: el.style.padding, overflow: el.style.overflow };
+    el.style.padding = '0';
+    el.style.overflow = 'hidden';
+    return () => { el.style.padding = prev.padding; el.style.overflow = prev.overflow; };
+  }, []);
 
   const loadDevices = useCallback(async () => {
     try {
@@ -174,21 +184,28 @@ export default function Tracking() {
   const selectedDevice = devices.find((d) => d.id === selected);
   const selectedMapDevice = mapDevices.find((d) => d.id === selected);
 
-  if (loading) return <div className="p-4">Loading tracking…</div>;
+  if (loading) return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+      <div style={{ color: 'var(--muted)', fontSize: 14 }}>Loading tracking…</div>
+    </div>
+  );
 
   return (
-    <div style={{ display: 'flex', height: 'calc(100vh - 56px)', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
       {/* Sidebar */}
-      <div style={{ width: 280, minWidth: 280, overflowY: 'auto', borderRight: '1px solid var(--border)', background: 'var(--surface)', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '12px 12px 8px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span style={{ fontWeight: 700, fontSize: 15, flex: 1 }}>Tracking devices</span>
-          <button className="btn btn-sm" title="Refresh" onClick={loadDevices}><RefreshCw size={13} /></button>
-          <button className="btn btn-sm btn-primary" onClick={() => setShowAdd(true)} title="Register device"><Plus size={13} /></button>
+      <div style={{ width: 280, minWidth: 280, overflowY: 'auto', borderRight: '1px solid var(--border)', background: 'var(--surface-2)', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: '14px 12px 10px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center', background: 'var(--surface)' }}>
+          <span style={{ fontWeight: 700, fontSize: 14, flex: 1, color: 'var(--text)' }}>GPS Devices</span>
+          <button className="btn btn-sm btn-secondary" title="Refresh" onClick={loadDevices}><RefreshCw size={13} /></button>
+          <button className="btn btn-sm btn-primary" onClick={() => setShowAdd(true)} title="Register device"><Plus size={13} /> Add</button>
         </div>
 
         {devices.length === 0 && (
-          <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13, textAlign: 'center' }}>
-            No devices registered.<br />Click + to add one.
+          <div style={{ padding: '32px 20px', textAlign: 'center' }}>
+            <div style={{ fontSize: 32, marginBottom: 12 }}>📡</div>
+            <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text)', marginBottom: 6 }}>No devices registered</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 16 }}>Add a Teltonika tracker to get started</div>
+            <button className="btn btn-sm btn-primary" onClick={() => setShowAdd(true)}><Plus size={12} /> Register device</button>
           </div>
         )}
 
@@ -201,7 +218,7 @@ export default function Tracking() {
               onClick={() => selectDevice(md || d)}
               style={{
                 padding: '10px 12px', cursor: 'pointer', borderBottom: '1px solid var(--border)',
-                background: isSelected ? 'var(--primary-dim, rgba(99,102,241,.1))' : 'transparent',
+                background: isSelected ? 'rgba(30,136,209,.12)' : 'transparent',
                 borderLeft: isSelected ? '3px solid var(--primary)' : '3px solid transparent',
               }}
             >
@@ -212,7 +229,7 @@ export default function Tracking() {
                 <span style={{ fontWeight: 600, fontSize: 13, flex: 1 }}>
                   {d.label || d.registration || d.imei}
                 </span>
-                <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace' }}>{d.model}</span>
+                <span style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'monospace' }}>{d.model}</span>
                 <button
                   className="btn btn-sm"
                   style={{ padding: '1px 4px', opacity: 0.6 }}
@@ -220,12 +237,12 @@ export default function Tracking() {
                   title="Remove device"
                 ><Trash2 size={11} /></button>
               </div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, paddingLeft: 19 }}>
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2, paddingLeft: 19 }}>
                 {d.registration && <span>{d.registration} · </span>}
                 {d.imei}
               </div>
               {d.last_seen_at && (
-                <div style={{ fontSize: 10, color: 'var(--text-muted)', paddingLeft: 19, marginTop: 1 }}>
+                <div style={{ fontSize: 10, color: 'var(--muted)', paddingLeft: 19, marginTop: 1 }}>
                   Last seen {new Date(d.last_seen_at).toLocaleString()}
                 </div>
               )}
@@ -304,7 +321,7 @@ export default function Tracking() {
 
       {/* Right panel — selected device */}
       {selectedDevice && (
-        <div style={{ width: 300, minWidth: 300, overflowY: 'auto', borderLeft: '1px solid var(--border)', background: 'var(--surface)', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ width: 300, minWidth: 300, overflowY: 'auto', borderLeft: '1px solid var(--border)', background: 'var(--surface-2)', display: 'flex', flexDirection: 'column' }}>
           <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
               {selectedDevice.connected
@@ -312,15 +329,15 @@ export default function Tracking() {
                 : <WifiOff size={14} color="#94a3b8" />}
               <span style={{ fontWeight: 700, fontSize: 14 }}>{selectedDevice.label || selectedDevice.registration || selectedDevice.imei}</span>
             </div>
-            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>
               {selectedDevice.model} · IMEI: {selectedDevice.imei}
             </div>
             {selectedDevice.registration && (
-              <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              <div style={{ fontSize: 12, color: 'var(--muted)' }}>
                 {selectedDevice.make} {selectedDevice.bike_model} · {selectedDevice.registration}
               </div>
             )}
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>
               {selectedDevice.connected ? '🟢 Connected' : `⚫ Last seen ${selectedDevice.last_seen_at ? new Date(selectedDevice.last_seen_at).toLocaleString() : 'never'}`}
             </div>
           </div>
@@ -362,20 +379,20 @@ export default function Tracking() {
               <Clock size={13} /> Command history
               <button className="btn btn-sm" style={{ padding: '1px 5px', marginLeft: 'auto' }} onClick={refreshCommands} title="Refresh"><RefreshCw size={11} /></button>
             </div>
-            {commands.length === 0 && <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>No commands yet.</div>}
+            {commands.length === 0 && <div style={{ fontSize: 12, color: 'var(--muted)' }}>No commands yet.</div>}
             {commands.map((c) => (
               <div key={c.id} style={{ marginBottom: 10, fontSize: 12 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                   {STATUS_ICON[c.status] || <AlertCircle size={13} />}
-                  <code style={{ fontSize: 11, background: 'var(--surface-alt)', padding: '1px 4px', borderRadius: 3 }}>{c.command}</code>
-                  <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 'auto' }}>{c.status}</span>
+                  <code style={{ fontSize: 11, background: 'var(--surface)', padding: '1px 4px', borderRadius: 3 }}>{c.command}</code>
+                  <span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 'auto' }}>{c.status}</span>
                 </div>
                 {c.response && (
-                  <div style={{ marginTop: 2, padding: '3px 6px', background: 'var(--surface-alt)', borderRadius: 4, fontSize: 11, fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                  <div style={{ marginTop: 2, padding: '3px 6px', background: 'var(--surface)', borderRadius: 4, fontSize: 11, fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
                     {c.response}
                   </div>
                 )}
-                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 1 }}>
+                <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>
                   {new Date(c.created_at).toLocaleString()}
                   {c.created_by_name && ` · ${c.created_by_name}`}
                 </div>
@@ -418,7 +435,7 @@ export default function Tracking() {
 
       {/* Custom command modal */}
       <Modal isOpen={showCmd} onClose={() => setShowCmd(false)} title="Send custom GPRS command">
-        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 10 }}>
+        <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
           Device: {selectedDevice?.label || selectedDevice?.imei}
         </div>
         <div className="field">

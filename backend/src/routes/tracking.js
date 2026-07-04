@@ -67,10 +67,12 @@ router.post('/devices', authRequired, adminOnly, (req, res) => {
 // PUT /api/tracking/devices/:id
 router.put('/devices/:id', authRequired, adminOnly, (req, res) => {
   const { model, bike_id, label } = req.body;
+  const validModels = ['FMB920', 'FMB965', 'FMC920', 'other'];
+  if (model !== undefined && !validModels.includes(model)) return res.status(400).json({ error: `Model must be one of: ${validModels.join(', ')}` });
   const device = db.prepare('SELECT id FROM tracking_devices WHERE id=?').get(req.params.id);
   if (!device) return res.status(404).json({ error: 'Device not found' });
   db.prepare(`UPDATE tracking_devices SET model=COALESCE(?,model), bike_id=?, label=COALESCE(?,label), updated_at=CURRENT_TIMESTAMP WHERE id=?`)
-    .run(model || null, bike_id !== undefined ? (bike_id || null) : undefined, label || null, device.id);
+    .run(model || null, bike_id !== undefined ? (bike_id || null) : null, label || null, device.id);
   res.json({ ok: true });
 });
 
@@ -182,11 +184,11 @@ router.get('/live', authRequired, adminOnly, (req, res) => {
   res.flushHeaders();
 
   const onPing = (payload) => {
-    res.write(`event: ping\ndata: ${JSON.stringify(payload)}\n\n`);
+    try { res.write(`event: ping\ndata: ${JSON.stringify(payload)}\n\n`); } catch (_) {}
   };
 
   teltonikaServer.trackingEvents.on('ping', onPing);
-  const hb = setInterval(() => res.write(': heartbeat\n\n'), 25_000);
+  const hb = setInterval(() => { try { res.write(': heartbeat\n\n'); } catch (_) {} }, 25_000);
 
   req.on('close', () => {
     teltonikaServer.trackingEvents.off('ping', onPing);

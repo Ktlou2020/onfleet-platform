@@ -263,8 +263,10 @@ function handleConnection(socket) {
 
   socket.on('close', () => {
     if (imei) {
-      connections.delete(imei);
-      try { db.prepare('UPDATE tracking_devices SET connected=0 WHERE imei=?').run(imei); } catch (_) {}
+      if (connections.get(imei) === socket) {
+        connections.delete(imei);
+        try { db.prepare('UPDATE tracking_devices SET connected=0 WHERE imei=?').run(imei); } catch (_) {}
+      }
       console.log(`[Teltonika] - ${imei}`);
     }
   });

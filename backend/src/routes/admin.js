@@ -634,12 +634,13 @@ router.post('/users/bulk-password-reset', async (req, res) => {
 
   if (!targets.length) return res.status(400).json({ error: 'No active users found for password reset' });
 
+  const cappedTargets = targets.slice(0, 200);
   const actorName = req.user.full_name || req.user.email || 'An OnFleet administrator';
   let emailed = 0;
   let failed = 0;
   const failures = [];
 
-  for (const target of targets) {
+  for (const target of cappedTargets) {
     try {
       const resetUrl = issuePasswordResetToken(target.id, req);
       await sendNotification({
@@ -657,7 +658,7 @@ router.post('/users/bulk-password-reset', async (req, res) => {
   }
 
   logAudit(req.user.id, 'users.bulk_password_reset', 'users', null, {
-    targeted: targets.length,
+    targeted: cappedTargets.length,
     emailed,
     failed,
     scope_role: req.body.role || null,
@@ -667,7 +668,7 @@ router.post('/users/bulk-password-reset', async (req, res) => {
 
   res.json({
     ok: true,
-    targeted: targets.length,
+    targeted: cappedTargets.length,
     emailed,
     failed,
     failures: failures.slice(0, 20)

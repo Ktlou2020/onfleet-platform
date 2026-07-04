@@ -316,7 +316,7 @@ router.post('/paystack/webhook', (req, res) => {
           db.prepare(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, paystack_reference, status, fee_amount, net_amount, paid_at, notes)
             VALUES (?,?,?,'ZAR','paystack',?,?,'success',?,?,CURRENT_TIMESTAMP,'Recurring subscription payment')`)
             .run(agreementId, riderId || null, grossAmountZAR, reference, reference, fee, net);
-          try { applyPaymentToSchedule(agreementId, net); } catch (_) { /* agreement may be completed */ }
+          try { applyPaymentToSchedule(agreementId, grossAmountZAR); } catch (_) { /* agreement may be completed */ }
         }
       }
     }

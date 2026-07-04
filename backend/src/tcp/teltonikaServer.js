@@ -116,7 +116,14 @@ function handlePacket(imei, packet) {
       return null;
     }
 
-    const { numData1, records } = parseAvl(packet.slice(8), codecId === 0x8e);
+    let parsed;
+    try {
+      parsed = parseAvl(packet.slice(8), codecId === 0x8e);
+    } catch (parseErr) {
+      console.warn(`[Teltonika] ${imei} AVL parse error:`, parseErr.message);
+      return null;
+    }
+    const { numData1, records } = parsed;
 
     const device = db.prepare('SELECT * FROM tracking_devices WHERE imei = ?').get(imei);
     if (device?.bike_id && records.length) {
@@ -209,6 +216,11 @@ function handleConnection(socket) {
 
   socket.on('data', (chunk) => {
     buf = Buffer.concat([buf, chunk]);
+    if (buf.length > 1024 * 1024) { // 1 MB max buffer — reject runaway connection
+      console.warn(`[Teltonika] ${imei || '?'} buffer overflow — disconnecting`);
+      socket.destroy();
+      return;
+    }
 
     if (!authed) {
       if (buf.length < 2) return;

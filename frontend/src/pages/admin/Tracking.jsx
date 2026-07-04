@@ -153,9 +153,12 @@ export default function Tracking() {
   const [address,      setAddress]      = useState(null);
   const [sseOnline,    setSseOnline]    = useState(false);
   const selectedRef = useRef(null);
+  const mountedRef = useRef(true);
+  const geocodeVersionRef = useRef(0);
 
   // Keep selectedRef in sync for SSE handler (avoids stale closure)
   useEffect(() => { selectedRef.current = selected; }, [selected]);
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
 
   // Remove .content padding for edge-to-edge layout
   useEffect(() => {
@@ -225,7 +228,7 @@ export default function Tracking() {
             if (!dataLines.length) continue;
             try {
               const p = JSON.parse(dataLines.join(''));
-              if (evtType === 'ping') {
+              if (evtType === 'ping' && mountedRef.current) {
                 setMapDevices(prev => {
                   const idx = prev.findIndex(d => d.id === p.device_id);
                   if (idx === -1) return prev;
@@ -244,10 +247,10 @@ export default function Tracking() {
             } catch { /* ignore parse errors */ }
           }
         }
-        setSseOnline(false);
+        if (mountedRef.current) setSseOnline(false);
         scheduleRetry();
       } catch (err) {
-        setSseOnline(false);
+        if (mountedRef.current) setSseOnline(false);
         if (err.name !== 'AbortError') scheduleRetry();
       }
     }
@@ -272,7 +275,10 @@ export default function Tracking() {
     setAddress(null);
     if (device.lat && device.lng) {
       setFlyTo([device.lat, device.lng]);
-      reverseGeocode(device.lat, device.lng).then(setAddress);
+      const version = ++geocodeVersionRef.current;
+      reverseGeocode(device.lat, device.lng).then(addr => {
+        if (mountedRef.current && geocodeVersionRef.current === version) setAddress(addr);
+      });
     }
     try {
       const [, { data: cmds }] = await Promise.all([

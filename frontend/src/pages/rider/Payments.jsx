@@ -7,7 +7,7 @@ import { CreditCard } from 'lucide-react';
 
 const calcFee = (amt) => +(Number(amt || 0) * 0.029 + 1).toFixed(2);
 const calcGross = (amt) => +(Number(amt || 0) + calcFee(amt)).toFixed(2);
-const creditedAmount = (payment) => Number(payment?.net_amount || payment?.amount || 0);
+const creditedAmount = (payment) => Number(payment?.net_amount ?? payment?.amount ?? 0);
 const feeAmount = (payment) => Number(payment?.fee_amount || 0);
 const grossAmount = (payment) => Number(payment?.amount || 0);
 

@@ -679,7 +679,7 @@ router.post('/:id/documents/:documentType', authRequired, adminOnly, bikeDocumen
   return res.status(400).json({ error: 'Unsupported document type' });
 });
 
-router.post('/:id/ping', (req, res) => {
+router.post('/:id/ping', authRequired, adminOnly, (req, res) => {
   const { lat, lng, speed_kmh, heading } = req.body;
   const bike = db.prepare('SELECT id FROM bikes WHERE id = ?').get(req.params.id);
   if (!bike) return res.status(404).end();

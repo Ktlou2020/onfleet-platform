@@ -22,7 +22,7 @@ function calcGrossAmount(amountZAR) {
   return +(amountZAR + fee).toFixed(2);
 }
 function creditedAmount(payment) {
-  return Number(payment?.net_amount || payment?.amount || 0);
+  return Number(payment?.net_amount ?? payment?.amount ?? 0);
 }
 
 function adminVisibleAgreementClause(aAlias = 'a', bAlias = 'b', uAlias = 'u') {
@@ -241,7 +241,10 @@ router.post('/paystack/webhook', (req, res) => {
   const secretKey = process.env.PAYSTACK_SECRET_KEY;
   if (!sig || !secretKey) return res.sendStatus(401);
   const expected = crypto.createHmac('sha512', secretKey).update(req.body).digest('hex');
-  if (!crypto.timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(sig, 'hex'))) {
+  const expectedBuf = Buffer.from(expected, 'hex');
+  let sigBuf;
+  try { sigBuf = Buffer.from(sig, 'hex'); } catch (_) { return res.sendStatus(401); }
+  if (expectedBuf.length !== sigBuf.length || !crypto.timingSafeEqual(expectedBuf, sigBuf)) {
     return res.sendStatus(401);
   }
 
@@ -313,7 +316,7 @@ router.post('/paystack/webhook', (req, res) => {
           db.prepare(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, paystack_reference, status, fee_amount, net_amount, paid_at, notes)
             VALUES (?,?,?,'ZAR','paystack',?,?,'success',?,?,CURRENT_TIMESTAMP,'Recurring subscription payment')`)
             .run(agreementId, riderId || null, grossAmountZAR, reference, reference, fee, net);
-          try { applyPaymentToSchedule(agreementId, grossAmountZAR); } catch (_) { /* agreement may be completed */ }
+          try { applyPaymentToSchedule(agreementId, net); } catch (_) { /* agreement may be completed */ }
         }
       }
     }
@@ -583,7 +586,11 @@ router.post('/bulk-delete', authRequired, adminOnly, (req, res) => {
 });
 
 router.post('/:id/reverse', authRequired, adminOnly, (req, res) => {
-  const payment = db.prepare('SELECT * FROM payments WHERE id = ?').get(req.params.id);
+  const payment = db.prepare(`SELECT p.* FROM payments p
+    JOIN agreements a ON a.id = p.agreement_id
+    JOIN bikes b ON b.id = a.bike_id
+    JOIN users u ON u.id = a.user_id
+    WHERE p.id = ? AND ${adminVisibleAgreementClause('a', 'b', 'u')}`).get(req.params.id);
   if (!payment) return res.status(404).json({ error: 'Payment not found' });
   if (payment.status === 'reversed') return res.status(400).json({ error: 'Payment is already reversed' });
   db.prepare(`UPDATE payments SET status = 'reversed' WHERE id = ?`).run(payment.id);

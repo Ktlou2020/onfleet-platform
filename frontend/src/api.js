@@ -30,7 +30,7 @@ api.interceptors.response.use(
 
       localStorage.removeItem('of_token');
       localStorage.removeItem('of_user');
-      if (!location.pathname.startsWith(redirectTo)) location.href = redirectTo;
+      if (location.pathname !== redirectTo && !location.pathname.startsWith(redirectTo + '/')) location.href = redirectTo;
     }
     return Promise.reject(err);
   }

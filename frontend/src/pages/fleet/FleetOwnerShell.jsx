@@ -65,7 +65,7 @@ export default function FleetOwnerShell() {
   useEffect(() => {
     api.get('/fleet/billing/status')
       .then((r) => { setOrgStatus(r.data.organization?.status ?? null); })
-      .catch(() => { setOrgStatus(null); })
+      .catch(() => { setOrgStatus('past_due'); })
       .finally(() => setStatusLoaded(true));
   }, [location.pathname]);
 

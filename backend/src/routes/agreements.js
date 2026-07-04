@@ -152,7 +152,7 @@ router.get('/:id', authRequired, (req, res) => {
     FROM application_documents WHERE application_id = ? ORDER BY uploaded_at DESC`).all(ag.application_id) : [];
 
   const successfulPayments = payments.filter((payment) => payment.status === 'success');
-  const creditedAmount = (payment) => Number(payment.net_amount || payment.amount || 0);
+  const creditedAmount = (payment) => Number(payment.net_amount ?? payment.amount ?? 0);
   const totalPaid = successfulPayments.reduce((sum, payment) => sum + creditedAmount(payment), 0);
   const remainingRaw = +(ag.total_amount - totalPaid).toFixed(2);
   const weeksPaid = schedule.filter((row) => row.status === 'paid').length;
@@ -185,8 +185,8 @@ router.post('/:id/sign', authRequired, (req, res) => {
   const signature = req.body.signature || `${req.user.full_name} · ${new Date().toLocaleString('en-ZA')}`;
   const signedContractPath = writeContractSnapshot({
     agreement: bundle.agreement,
-    rider: bundle.agreement,
-    bike: bundle.agreement,
+    rider: { ...bundle.agreement },
+    bike: { ...bundle.agreement },
     application: bundle.application,
     signatureData: signature,
     kind: 'signed'
@@ -233,6 +233,9 @@ router.post('/:id/status', authRequired, adminOnly, (req, res) => {
   db.prepare('UPDATE agreements SET status = ? WHERE id = ?').run(status, req.params.id);
   if (status === 'completed') db.prepare(`UPDATE bikes SET status = 'paid_off' WHERE id = ?`).run(agreement.bike_id);
   if (status === 'cancelled') db.prepare(`UPDATE bikes SET status = 'ready_to_go' WHERE id = ?`).run(agreement.bike_id);
+  if (status === 'discontinued') {
+    db.prepare(`UPDATE payment_schedules SET status = 'waived' WHERE agreement_id = ? AND status IN ('pending','upcoming')`).run(req.params.id);
+  }
   logAudit(req.user.id, 'agreement.status', 'agreements', Number(req.params.id), { previous_status: agreement.status, status });
   res.json({ ok: true });
 });

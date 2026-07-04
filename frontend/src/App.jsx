@@ -55,7 +55,8 @@ import FleetRiderApply from './pages/FleetRiderApply';
 import { canViewFleetSection, getDefaultFleetRoute, isAdminPortalRole } from './pages/fleet/access';
 
 function PrivateRoute({ children, role }) {
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
+  if (loading) return null;
   if (!user) return <Navigate to={role === 'fleet_owner' ? '/fleet/login' : '/login'} replace />;
   if (role === 'rider' && user.role !== 'rider') return <Navigate to={String(user.role || '').startsWith('fleet_owner_') ? '/fleet/app' : '/admin'} replace />;
   if (role === 'admin' && !['admin', 'superadmin'].includes(user.role)) return <Navigate to={String(user.role || '').startsWith('fleet_owner_') ? '/fleet/app' : '/dashboard'} replace />;
@@ -73,7 +74,8 @@ function FleetRouteGate({ section, children }) {
 }
 
 function HomeRoute() {
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
+  if (loading) return null;
   if (!user) return <Landing />;
   if (isAdminPortalRole(user.role)) return <Navigate to="/admin" replace />;
   if (String(user.role || '').startsWith('fleet_owner_')) return <Navigate to={getDefaultFleetRoute(user.role)} replace />;

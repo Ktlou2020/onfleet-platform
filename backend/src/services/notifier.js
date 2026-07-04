@@ -157,7 +157,7 @@ async function sendWithSmtp(to, subject, body) {
 }
 
 async function sendEmail(to, subject, body) {
-  const emailTo = String(to || '').trim();
+  const emailTo = String(to || '').trim().replace(/[\r\n]/g, '');
   if (!emailTo) return;
 
   const provider = detectEmailProvider();

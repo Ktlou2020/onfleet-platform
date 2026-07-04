@@ -68,8 +68,9 @@ router.get('/all', authRequired, adminOnly, (req, res) => {
 router.post('/:id/review', authRequired, adminOnly, (req, res) => {
   const { status, rejection_reason } = req.body;
   if (!['approved','rejected'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
-  db.prepare(`UPDATE kyc_documents SET status = ?, rejection_reason = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP
+  const info = db.prepare(`UPDATE kyc_documents SET status = ?, rejection_reason = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP
               WHERE id = ?`).run(status, rejection_reason || null, req.user.id, req.params.id);
+  if (info.changes === 0) return res.status(404).json({ error: 'Document not found' });
   logAudit(req.user.id, 'kyc.review', 'kyc_documents', +req.params.id, { status });
   res.json({ ok: true });
 });

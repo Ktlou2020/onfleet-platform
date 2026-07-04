@@ -5,6 +5,7 @@ const router = express.Router();
 const db = require('../db');
 const { authRequired, adminOnly } = require('../middleware/auth');
 const teltonikaServer = require('../tcp/teltonikaServer');
+const trackingEvents = require('../trackingEvents');
 
 // Engine cut/restore command per model
 const ENGINE_CUT_CMD = { FMB920: 'setdigout 1 1', FMC920: 'setdigout 1 1', FMB965: 'setdigout 2 1', other: 'setdigout 1 1' };
@@ -191,14 +192,126 @@ router.get('/live', authRequired, adminOnly, (req, res) => {
   const onPing = (payload) => {
     try { res.write(`event: ping\ndata: ${JSON.stringify(payload)}\n\n`); } catch (_) {}
   };
+  const onAlert = (payload) => {
+    try { res.write(`event: alert\ndata: ${JSON.stringify(payload)}\n\n`); } catch (_) {}
+  };
 
-  teltonikaServer.trackingEvents.on('ping', onPing);
+  trackingEvents.on('ping', onPing);
+  trackingEvents.on('alert', onAlert);
   const hb = setInterval(() => { try { res.write(': heartbeat\n\n'); } catch (_) {} }, 25_000);
 
   req.on('close', () => {
-    teltonikaServer.trackingEvents.off('ping', onPing);
+    trackingEvents.off('ping', onPing);
+    trackingEvents.off('alert', onAlert);
     clearInterval(hb);
   });
+});
+
+// ---------- Geofences ----------
+
+router.get('/geofences', authRequired, adminOnly, (req, res) => {
+  const rows = db.prepare(`
+    SELECT gf.*, b.registration AS bike_registration
+    FROM geofences gf LEFT JOIN bikes b ON b.id = gf.bike_id
+    ORDER BY gf.created_at DESC
+  `).all();
+  res.json(rows);
+});
+
+router.post('/geofences', authRequired, adminOnly, (req, res) => {
+  const { name, lat, lng, radius_m, bike_id } = req.body;
+  if (!name || lat == null || lng == null) return res.status(400).json({ error: 'name, lat and lng are required' });
+  const radius = Number(radius_m) || 500;
+  if (radius < 50 || radius > 50000) return res.status(400).json({ error: 'radius_m must be 50–50000' });
+  const info = db.prepare(
+    'INSERT INTO geofences (name, lat, lng, radius_m, bike_id, created_by) VALUES (?,?,?,?,?,?)'
+  ).run(name, Number(lat), Number(lng), radius, bike_id || null, req.user.id);
+  res.status(201).json({ id: info.lastInsertRowid });
+});
+
+router.put('/geofences/:id', authRequired, adminOnly, (req, res) => {
+  const gf = db.prepare('SELECT id FROM geofences WHERE id=?').get(req.params.id);
+  if (!gf) return res.status(404).json({ error: 'Geofence not found' });
+  const { name, lat, lng, radius_m, bike_id, active } = req.body;
+  db.prepare(`
+    UPDATE geofences SET
+      name    = COALESCE(?, name),
+      lat     = COALESCE(?, lat),
+      lng     = COALESCE(?, lng),
+      radius_m= COALESCE(?, radius_m),
+      bike_id = CASE WHEN ? THEN ? ELSE bike_id END,
+      active  = COALESCE(?, active)
+    WHERE id = ?
+  `).run(
+    name || null,
+    lat != null ? Number(lat) : null,
+    lng != null ? Number(lng) : null,
+    radius_m != null ? Number(radius_m) : null,
+    'bike_id' in req.body ? 1 : 0, bike_id || null,
+    active != null ? Number(active) : null,
+    gf.id,
+  );
+  res.json({ ok: true });
+});
+
+router.delete('/geofences/:id', authRequired, adminOnly, (req, res) => {
+  const gf = db.prepare('SELECT id FROM geofences WHERE id=?').get(req.params.id);
+  if (!gf) return res.status(404).json({ error: 'Geofence not found' });
+  db.prepare('DELETE FROM geofences WHERE id=?').run(gf.id);
+  res.json({ ok: true });
+});
+
+// ---------- Trips ----------
+
+router.get('/trips', authRequired, adminOnly, (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 50, 200);
+  const bikeId = req.query.bike_id ? Number(req.query.bike_id) : null;
+  let sql = `
+    SELECT t.*, b.registration AS bike_registration
+    FROM trips t LEFT JOIN bikes b ON b.id = t.bike_id
+    WHERE 1=1
+  `;
+  const params = [];
+  if (bikeId) { sql += ' AND t.bike_id = ?'; params.push(bikeId); }
+  sql += ' ORDER BY t.started_at DESC LIMIT ?';
+  params.push(limit);
+  res.json(db.prepare(sql).all(...params));
+});
+
+// ---------- Alerts ----------
+
+router.get('/alerts', authRequired, adminOnly, (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 100, 500);
+  const bikeId = req.query.bike_id ? Number(req.query.bike_id) : null;
+  const unackedOnly = req.query.unacked === '1';
+  let sql = `
+    SELECT ta.*, b.registration AS bike_registration
+    FROM tracking_alerts ta LEFT JOIN bikes b ON b.id = ta.bike_id
+    WHERE 1=1
+  `;
+  const params = [];
+  if (bikeId) { sql += ' AND ta.bike_id = ?'; params.push(bikeId); }
+  if (unackedOnly) sql += ' AND ta.acknowledged_at IS NULL';
+  sql += ' ORDER BY ta.created_at DESC LIMIT ?';
+  params.push(limit);
+  res.json(db.prepare(sql).all(...params));
+});
+
+router.put('/alerts/:id/acknowledge', authRequired, adminOnly, (req, res) => {
+  const alert = db.prepare('SELECT id FROM tracking_alerts WHERE id=?').get(req.params.id);
+  if (!alert) return res.status(404).json({ error: 'Alert not found' });
+  db.prepare('UPDATE tracking_alerts SET acknowledged_at=CURRENT_TIMESTAMP WHERE id=?').run(alert.id);
+  res.json({ ok: true });
+});
+
+router.post('/alerts/acknowledge-all', authRequired, adminOnly, (req, res) => {
+  const bikeId = req.body.bike_id ? Number(req.body.bike_id) : null;
+  if (bikeId) {
+    db.prepare('UPDATE tracking_alerts SET acknowledged_at=CURRENT_TIMESTAMP WHERE bike_id=? AND acknowledged_at IS NULL').run(bikeId);
+  } else {
+    db.prepare('UPDATE tracking_alerts SET acknowledged_at=CURRENT_TIMESTAMP WHERE acknowledged_at IS NULL').run();
+  }
+  res.json({ ok: true });
 });
 
 module.exports = router;

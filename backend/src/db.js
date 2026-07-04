@@ -753,6 +753,61 @@ ensureColumn('gps_pings', 'altitude', 'INTEGER');
 ensureColumn('gps_pings', 'ignition', 'INTEGER');
 ensureColumn('gps_pings', 'io_data', 'TEXT');
 
+db.exec(`
+CREATE TABLE IF NOT EXISTS geofences (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  lat REAL NOT NULL,
+  lng REAL NOT NULL,
+  radius_m INTEGER NOT NULL DEFAULT 500,
+  bike_id INTEGER REFERENCES bikes(id) ON DELETE CASCADE,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_by INTEGER REFERENCES users(id),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS trips (
+  id INTEGER PRIMARY KEY,
+  bike_id INTEGER NOT NULL REFERENCES bikes(id) ON DELETE CASCADE,
+  device_id INTEGER REFERENCES tracking_devices(id),
+  started_at DATETIME NOT NULL,
+  ended_at DATETIME,
+  start_lat REAL,
+  start_lng REAL,
+  end_lat REAL,
+  end_lng REAL,
+  distance_km REAL DEFAULT 0,
+  duration_sec INTEGER DEFAULT 0,
+  max_speed_kmh REAL DEFAULT 0,
+  avg_speed_kmh REAL DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS tracking_alerts (
+  id INTEGER PRIMARY KEY,
+  bike_id INTEGER REFERENCES bikes(id) ON DELETE CASCADE,
+  device_id INTEGER REFERENCES tracking_devices(id),
+  alert_type TEXT NOT NULL,
+  payload TEXT,
+  acknowledged_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS geofence_states (
+  bike_id INTEGER NOT NULL REFERENCES bikes(id) ON DELETE CASCADE,
+  geofence_id INTEGER NOT NULL REFERENCES geofences(id) ON DELETE CASCADE,
+  inside INTEGER NOT NULL DEFAULT 0,
+  updated_at DATETIME,
+  PRIMARY KEY (bike_id, geofence_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_trips_bike ON trips(bike_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_alerts_bike ON tracking_alerts(bike_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_alerts_unacked ON tracking_alerts(acknowledged_at, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_geofence_active ON geofences(active);
+CREATE INDEX IF NOT EXISTS idx_gps_pings_bike_time ON gps_pings(bike_id, recorded_at DESC);
+`);
+
 if (tableHasColumn('users', 'organization_id')) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_users_org ON users(organization_id, role);`);
 }

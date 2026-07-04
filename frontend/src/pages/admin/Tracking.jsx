@@ -248,10 +248,10 @@ export default function Tracking() {
           }
         }
         if (mountedRef.current) setSseOnline(false);
-        scheduleRetry();
+        if (mountedRef.current) scheduleRetry();
       } catch (err) {
         if (mountedRef.current) setSseOnline(false);
-        if (err.name !== 'AbortError') scheduleRetry();
+        if (err.name !== 'AbortError' && mountedRef.current) scheduleRetry();
       }
     }
 

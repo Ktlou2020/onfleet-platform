@@ -670,7 +670,10 @@ router.post('/change-password', authRequired,
   body('current_password').notEmpty(),
   body('new_password').isLength({ min: 6 }),
   async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
     const u = db.prepare('SELECT password_hash FROM users WHERE id = ? AND deleted_at IS NULL').get(req.user.id);
+    if (!u) return res.status(401).json({ error: 'User not found' });
     if (!await bcrypt.compare(req.body.current_password, u.password_hash)) {
       return res.status(400).json({ error: 'Current password incorrect' });
     }

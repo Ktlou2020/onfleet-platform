@@ -234,7 +234,8 @@ router.post('/:id/status', authRequired, adminOnly, (req, res) => {
   if (status === 'completed') db.prepare(`UPDATE bikes SET status = 'paid_off' WHERE id = ?`).run(agreement.bike_id);
   if (status === 'cancelled') db.prepare(`UPDATE bikes SET status = 'ready_to_go' WHERE id = ?`).run(agreement.bike_id);
   if (status === 'discontinued') {
-    db.prepare(`UPDATE payment_schedules SET status = 'waived' WHERE agreement_id = ? AND status IN ('pending','upcoming')`).run(req.params.id);
+    db.prepare(`UPDATE agreements SET discontinued_at = CURRENT_TIMESTAMP, discontinued_reason = 'admin_status_change' WHERE id = ? AND discontinued_reason IS NULL`).run(req.params.id);
+    db.prepare(`UPDATE payment_schedules SET status = 'waived' WHERE agreement_id = ? AND status IN ('pending','upcoming','overdue')`).run(req.params.id);
   }
   logAudit(req.user.id, 'agreement.status', 'agreements', Number(req.params.id), { previous_status: agreement.status, status });
   res.json({ ok: true });

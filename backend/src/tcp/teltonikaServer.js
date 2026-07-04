@@ -1,11 +1,10 @@
 'use strict';
 
 const net = require('net');
-const { EventEmitter } = require('events');
 const db = require('../db');
-
-const trackingEvents = new EventEmitter();
-trackingEvents.setMaxListeners(100);
+const trackingEvents = require('../trackingEvents');
+const geofenceService = require('../services/geofenceService');
+const tripService = require('../services/tripService');
 
 // Active TCP connections keyed by IMEI
 const connections = new Map();
@@ -134,14 +133,18 @@ function handlePacket(imei, packet) {
       let latestRec = null;
       for (const rec of records) {
         if (rec.satellites < 1) continue;
+        const recAt = new Date(rec.ts).toISOString();
+        const ignition = rec.io[239] !== undefined ? rec.io[239] : null;
         insertPing.run(
           device.bike_id, rec.lat, rec.lng, rec.speed, rec.angle,
-          new Date(rec.ts).toISOString(),
+          recAt,
           rec.satellites, rec.altitude,
-          rec.io[239] !== undefined ? rec.io[239] : null, // IO 239 = ignition
+          ignition,
           JSON.stringify(rec.io)
         );
         if (!latestRec || rec.ts > latestRec.ts) latestRec = rec;
+        try { tripService.processPing(device.bike_id, device.id, rec.lat, rec.lng, rec.speed, ignition ? 1 : 0, recAt, rec.io); } catch (e) { console.error('[Trip]', e.message); }
+        try { geofenceService.checkGeofences(device.bike_id, device.id, rec.lat, rec.lng, recAt); } catch (e) { console.error('[Geofence]', e.message); }
       }
       if (latestRec) {
         db.prepare(

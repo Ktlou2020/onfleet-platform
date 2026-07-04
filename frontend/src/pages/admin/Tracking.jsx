@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, Circle, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
   Wifi, WifiOff, Zap, ZapOff, Radio, Info, RefreshCw, Plus, Trash2,
   CheckCircle, Clock, XCircle, AlertCircle, X, Search, Layers,
   Maximize2, Navigation, Gauge, Mountain, MapPin, Activity,
+  Shield, Bell, Route, BellOff,
 } from 'lucide-react';
 import api from '../../api';
 import toast from 'react-hot-toast';
@@ -18,7 +19,6 @@ L.Icon.Default.mergeOptions({
   shadowUrl: new URL('leaflet/dist/images/marker-shadow.png', import.meta.url).href,
 });
 
-// Pulsing marker animation (injected once)
 let _pulseCSSInjected = false;
 function ensurePulseCSS() {
   if (_pulseCSSInjected) return;
@@ -71,6 +71,11 @@ function FitBounds({ trigger, positions }) {
   return null;
 }
 
+function MapClickHandler({ onMapClick }) {
+  useMapEvents({ click: (e) => onMapClick(e.latlng) });
+  return null;
+}
+
 function SpeedTrail({ positions }) {
   if (positions.length < 2) return null;
   const segments = [];
@@ -102,7 +107,7 @@ const TRAIL_RANGES = [
 ];
 
 const ENGINE_CMDS = [
-  { id: 'cut_engine',     label: 'Cut engine',     desc: 'Disable ignition',  icon: ZapOff, danger: true },
+  { id: 'cut_engine',     label: 'Cut engine',     desc: 'Disable ignition',   icon: ZapOff, danger: true },
   { id: 'restore_engine', label: 'Restore engine', desc: 'Re-enable ignition', icon: Zap,   danger: false },
 ];
 const DIAG_CMDS = [
@@ -123,7 +128,28 @@ const STATUS_ICON = {
   delivered: <CheckCircle size={12} style={{ color: '#22c55e' }} />,
   failed:    <XCircle size={12} style={{ color: '#ef4444' }} />,
 };
+
+const ALERT_LABELS = {
+  geofence_enter:   'Entered geofence',
+  geofence_exit:    'Left geofence',
+  harsh_brake:      'Harsh braking',
+  harsh_accel:      'Harsh acceleration',
+  harsh_cornering:  'Harsh cornering',
+  idle:             'Extended idle',
+  speeding:         'Speeding',
+};
+const ALERT_COLORS = {
+  geofence_enter:   '#22c55e',
+  geofence_exit:    '#f97316',
+  harsh_brake:      '#ef4444',
+  harsh_accel:      '#f97316',
+  harsh_cornering:  '#eab308',
+  idle:             '#94a3b8',
+  speeding:         '#ef4444',
+};
+
 const EMPTY_FORM = { imei: '', model: 'FMB920', bike_id: '', label: '' };
+const EMPTY_GEO  = { name: '', lat: '', lng: '', radius_m: 500, bike_id: '' };
 
 async function reverseGeocode(lat, lng) {
   try {
@@ -133,7 +159,16 @@ async function reverseGeocode(lat, lng) {
   } catch { return null; }
 }
 
+function fmtDuration(sec) {
+  if (!sec) return '—';
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m} min`;
+}
+
 export default function Tracking() {
+  // ── device list & selection ──────────────────────────────────────
   const [devices,      setDevices]      = useState([]);
   const [mapDevices,   setMapDevices]   = useState([]);
   const [selected,     setSelected]     = useState(null);
@@ -142,22 +177,42 @@ export default function Tracking() {
   const [flyTo,        setFlyTo]        = useState(null);
   const [fitTrigger,   setFitTrigger]   = useState(0);
   const [loading,      setLoading]      = useState(true);
-  const [showAdd,      setShowAdd]      = useState(false);
   const [bikes,        setBikes]        = useState([]);
-  const [addForm,      setAddForm]      = useState(EMPTY_FORM);
-  const [adding,       setAdding]       = useState(false);
-  const [sendingCmd,   setSendingCmd]   = useState(null);
   const [deviceSearch, setDeviceSearch] = useState('');
   const [tileMode,     setTileMode]     = useState('street');
   const [trailRange,   setTrailRange]   = useState('6h');
   const [address,      setAddress]      = useState(null);
   const [sseOnline,    setSseOnline]    = useState(false);
-  const selectedRef = useRef(null);
-  const mountedRef = useRef(true);
-  const geocodeVersionRef = useRef(0);
-  const selectVersionRef = useRef(0);
+  const [sendingCmd,   setSendingCmd]   = useState(null);
 
-  // Keep selectedRef in sync for SSE handler (avoids stale closure)
+  // ── add-device modal ─────────────────────────────────────────────
+  const [showAdd,  setShowAdd]  = useState(false);
+  const [addForm,  setAddForm]  = useState(EMPTY_FORM);
+  const [adding,   setAdding]   = useState(false);
+
+  // ── sidebar tabs ─────────────────────────────────────────────────
+  const [sideTab, setSideTab] = useState('devices');
+
+  // ── alerts ───────────────────────────────────────────────────────
+  const [alerts,       setAlerts]       = useState([]);
+  const [alertsUnread, setAlertsUnread] = useState(0);
+
+  // ── geofences ────────────────────────────────────────────────────
+  const [geofences,     setGeofences]     = useState([]);
+  const [showGeoForm,   setShowGeoForm]   = useState(false);
+  const [geoForm,       setGeoForm]       = useState(EMPTY_GEO);
+  const [geoSubmitting, setGeoSubmitting] = useState(false);
+  const [pickingCenter, setPickingCenter] = useState(false);
+
+  // ── detail panel tabs ─────────────────────────────────────────────
+  const [detailTab, setDetailTab] = useState('info');
+  const [trips,     setTrips]     = useState([]);
+
+  const selectedRef       = useRef(null);
+  const mountedRef        = useRef(true);
+  const geocodeVersionRef = useRef(0);
+  const selectVersionRef  = useRef(0);
+
   useEffect(() => { selectedRef.current = selected; }, [selected]);
   useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
 
@@ -170,6 +225,18 @@ export default function Tracking() {
     el.style.overflow = 'hidden';
     return () => { el.style.padding = prev.padding; el.style.overflow = prev.overflow; };
   }, []);
+
+  // Escape cancels center picking
+  useEffect(() => {
+    if (!pickingCenter) return;
+    const handler = (e) => {
+      if (e.key === 'Escape') { setPickingCenter(false); setShowGeoForm(true); }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [pickingCenter]);
+
+  // ── data loaders ─────────────────────────────────────────────────
 
   const loadDevices = useCallback(async () => {
     try {
@@ -189,12 +256,33 @@ export default function Tracking() {
     } catch { /* silent */ }
   }, []);
 
+  const loadGeofences = useCallback(async () => {
+    try {
+      const { data } = await api.get('/tracking/geofences');
+      setGeofences(data);
+    } catch { /* silent */ }
+  }, []);
+
+  const loadAlerts = useCallback(async () => {
+    try {
+      const { data } = await api.get('/tracking/alerts?limit=100');
+      setAlerts(data);
+    } catch { /* silent */ }
+  }, []);
+
+  const loadTrips = useCallback(async (bikeId) => {
+    try {
+      const { data } = await api.get(`/tracking/trips?bike_id=${bikeId}&limit=30`);
+      setTrips(data);
+    } catch { /* silent */ }
+  }, []);
+
   useEffect(() => {
     setLoading(true);
-    Promise.all([loadDevices(), loadBikes()]).finally(() => setLoading(false));
-  }, [loadDevices, loadBikes]);
+    Promise.all([loadDevices(), loadBikes(), loadGeofences()]).finally(() => setLoading(false));
+  }, [loadDevices, loadBikes, loadGeofences]);
 
-  // SSE real-time feed
+  // ── SSE real-time feed ───────────────────────────────────────────
   useEffect(() => {
     let abort = new AbortController();
     let retryTimer;
@@ -229,7 +317,9 @@ export default function Tracking() {
             if (!dataLines.length) continue;
             try {
               const p = JSON.parse(dataLines.join(''));
-              if (evtType === 'ping' && mountedRef.current) {
+              if (!mountedRef.current) continue;
+
+              if (evtType === 'ping') {
                 setMapDevices(prev => {
                   const idx = prev.findIndex(d => d.id === p.device_id);
                   if (idx === -1) return prev;
@@ -244,6 +334,9 @@ export default function Tracking() {
                     return [...t, pt];
                   });
                 }
+              } else if (evtType === 'alert') {
+                setAlertsUnread(n => n + 1);
+                setAlerts(prev => [p, ...prev].slice(0, 200));
               }
             } catch { /* ignore parse errors */ }
           }
@@ -257,10 +350,11 @@ export default function Tracking() {
     }
 
     function scheduleRetry() { retryTimer = setTimeout(connect, 5_000); }
-
     connect();
     return () => { abort.abort(); clearTimeout(retryTimer); setSseOnline(false); };
   }, []);
+
+  // ── trail ────────────────────────────────────────────────────────
 
   const loadTrail = useCallback(async (deviceId, range, version) => {
     const hours = TRAIL_RANGES.find(r => r.id === range)?.hours || 6;
@@ -276,6 +370,8 @@ export default function Tracking() {
   const selectDevice = useCallback(async (device) => {
     const version = ++selectVersionRef.current;
     setSelected(device.id);
+    setDetailTab('info');
+    setTrips([]);
     setAddress(null);
     if (device.lat && device.lng) {
       setFlyTo([device.lat, device.lng]);
@@ -293,7 +389,6 @@ export default function Tracking() {
     } catch { /* silent */ }
   }, [loadTrail, trailRange]);
 
-  // Reload trail when range changes (if a device is selected)
   useEffect(() => {
     if (selected) loadTrail(selected, trailRange);
   }, [trailRange, selected, loadTrail]);
@@ -305,6 +400,8 @@ export default function Tracking() {
       setCommands(data);
     } catch { /* silent */ }
   }, [selected]);
+
+  // ── commands ─────────────────────────────────────────────────────
 
   const sendPreset = useCallback(async (presetId) => {
     if (!selected) return;
@@ -323,6 +420,8 @@ export default function Tracking() {
       setSendingCmd(null);
     }
   }, [selected, devices, refreshCommands]);
+
+  // ── add device ───────────────────────────────────────────────────
 
   const addDevice = useCallback(async () => {
     const imei = addForm.imei.trim();
@@ -348,12 +447,73 @@ export default function Tracking() {
     if (!window.confirm(`Remove ${dev?.label || dev?.imei}?`)) return;
     try {
       await api.delete(`/tracking/devices/${id}`);
-      if (selected === id) { setSelected(null); setTrail([]); setCommands([]); setAddress(null); }
+      if (selected === id) { setSelected(null); setTrail([]); setCommands([]); setAddress(null); setTrips([]); }
       await loadDevices();
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed');
     }
   }, [selected, devices, loadDevices]);
+
+  // ── geofences ────────────────────────────────────────────────────
+
+  const saveGeofence = useCallback(async () => {
+    if (!geoForm.name.trim()) return toast.error('Name is required');
+    if (!geoForm.lat || !geoForm.lng) return toast.error('Pick a center on the map or enter coordinates');
+    setGeoSubmitting(true);
+    try {
+      await api.post('/tracking/geofences', {
+        name: geoForm.name.trim(),
+        lat: Number(geoForm.lat),
+        lng: Number(geoForm.lng),
+        radius_m: Number(geoForm.radius_m),
+        bike_id: geoForm.bike_id || null,
+      });
+      toast.success('Geofence created');
+      setShowGeoForm(false);
+      setGeoForm(EMPTY_GEO);
+      await loadGeofences();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed');
+    } finally {
+      setGeoSubmitting(false);
+    }
+  }, [geoForm, loadGeofences]);
+
+  const deleteGeofence = useCallback(async (id) => {
+    if (!window.confirm('Delete this geofence?')) return;
+    try {
+      await api.delete(`/tracking/geofences/${id}`);
+      setGeofences(prev => prev.filter(g => g.id !== id));
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed');
+    }
+  }, []);
+
+  const handleMapClick = useCallback((latlng) => {
+    if (!pickingCenter) return;
+    setGeoForm(f => ({ ...f, lat: latlng.lat.toFixed(6), lng: latlng.lng.toFixed(6) }));
+    setPickingCenter(false);
+    setShowGeoForm(true);
+  }, [pickingCenter]);
+
+  // ── alerts ───────────────────────────────────────────────────────
+
+  const acknowledgeAlert = useCallback(async (id) => {
+    try {
+      await api.put(`/tracking/alerts/${id}/acknowledge`);
+      setAlerts(prev => prev.map(a => a.id === id ? { ...a, acknowledged_at: new Date().toISOString() } : a));
+    } catch { toast.error('Failed'); }
+  }, []);
+
+  const acknowledgeAll = useCallback(async () => {
+    try {
+      await api.post('/tracking/alerts/acknowledge-all');
+      setAlerts(prev => prev.map(a => ({ ...a, acknowledged_at: a.acknowledged_at || new Date().toISOString() })));
+      setAlertsUnread(0);
+    } catch { toast.error('Failed'); }
+  }, []);
+
+  // ── derived ──────────────────────────────────────────────────────
 
   const selectedDevice    = devices.find(d => d.id === selected);
   const selectedMapDevice = mapDevices.find(d => d.id === selected);
@@ -369,111 +529,240 @@ export default function Tracking() {
     </div>
   );
 
+  // ── render ───────────────────────────────────────────────────────
+
   return (
     <div style={{ display: 'flex', height: 'calc(100vh - 64px)', overflow: 'hidden' }}>
 
-      {/* ── Device sidebar ──────────────────────────────────────────── */}
+      {/* ── Left sidebar ──────────────────────────────────────────── */}
       <div style={{ width: 272, minWidth: 272, display: 'flex', flexDirection: 'column', borderRight: '1px solid var(--border)', background: 'var(--surface-2)' }}>
 
         {/* Header */}
-        <div style={{ padding: '10px 12px 8px', borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}>
+        <div style={{ padding: '10px 12px 0', background: 'var(--surface)', borderBottom: '1px solid var(--border)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-            <span style={{ fontWeight: 700, fontSize: 13, flex: 1 }}>GPS Devices</span>
+            <span style={{ fontWeight: 700, fontSize: 13, flex: 1 }}>GPS Tracking</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <div style={{ width: 7, height: 7, borderRadius: '50%', background: sseOnline ? '#22c55e' : '#94a3b8', flexShrink: 0 }} title={sseOnline ? 'Live feed active' : 'Reconnecting…'} />
+              <div style={{ width: 7, height: 7, borderRadius: '50%', background: sseOnline ? '#22c55e' : '#94a3b8' }} title={sseOnline ? 'Live feed active' : 'Reconnecting…'} />
               <span style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 600 }}>{sseOnline ? 'LIVE' : 'offline'}</span>
             </div>
             <button className="btn btn-sm btn-secondary" title="Refresh" onClick={loadDevices}><RefreshCw size={12} /></button>
             <button className="btn btn-sm btn-primary" onClick={() => setShowAdd(true)}><Plus size={12} /> Add</button>
           </div>
-          <div style={{ position: 'relative' }}>
-            <Search size={12} style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: 'var(--muted)', pointerEvents: 'none' }} />
-            <input
-              value={deviceSearch}
-              onChange={e => setDeviceSearch(e.target.value)}
-              placeholder="Search devices…"
-              style={{ width: '100%', paddingLeft: 26, paddingRight: 8, fontSize: 12, height: 30, boxSizing: 'border-box' }}
-            />
+
+          {/* Tab bar */}
+          <div style={{ display: 'flex', marginBottom: 0 }}>
+            {[
+              ['devices',   'Devices',    null],
+              ['alerts',    'Alerts',     alertsUnread || null],
+              ['geofences', 'Geofences',  null],
+            ].map(([tab, label, badge]) => (
+              <button
+                key={tab}
+                onClick={() => {
+                  setSideTab(tab);
+                  if (tab === 'alerts') { setAlertsUnread(0); loadAlerts(); }
+                  if (tab === 'geofences') loadGeofences();
+                }}
+                style={{
+                  flex: 1, padding: '6px 2px 7px', fontSize: 11,
+                  fontWeight: sideTab === tab ? 700 : 400,
+                  color: sideTab === tab ? 'var(--primary)' : 'var(--muted)',
+                  background: 'none', border: 'none',
+                  borderBottom: sideTab === tab ? '2px solid var(--primary)' : '2px solid transparent',
+                  marginBottom: -1, cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
+                }}
+              >
+                {label}
+                {badge ? <span style={{ background: '#ef4444', color: '#fff', borderRadius: 8, fontSize: 9, padding: '0 4px', fontWeight: 700, lineHeight: '14px' }}>{badge}</span> : null}
+              </button>
+            ))}
           </div>
         </div>
 
-        {/* Device list */}
-        <div style={{ flex: 1, overflowY: 'auto' }}>
-          {filteredDevices.length === 0 ? (
-            <div style={{ padding: '40px 20px', textAlign: 'center' }}>
-              {devices.length === 0 ? (
-                <>
-                  <div style={{ fontSize: 36, marginBottom: 10 }}>📡</div>
-                  <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>No trackers yet</div>
-                  <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 16, lineHeight: 1.5 }}>Register a Teltonika device to start tracking bikes</div>
-                  <button className="btn btn-sm btn-primary" onClick={() => setShowAdd(true)}><Plus size={12} /> Register device</button>
-                </>
-              ) : (
-                <div style={{ fontSize: 12, color: 'var(--muted)' }}>No devices match "{deviceSearch}"</div>
-              )}
+        {/* ── Devices tab ─────────────────────────────────────────── */}
+        {sideTab === 'devices' && <>
+          <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)' }}>
+            <div style={{ position: 'relative' }}>
+              <Search size={12} style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: 'var(--muted)', pointerEvents: 'none' }} />
+              <input
+                value={deviceSearch}
+                onChange={e => setDeviceSearch(e.target.value)}
+                placeholder="Search devices…"
+                style={{ width: '100%', paddingLeft: 26, paddingRight: 8, fontSize: 12, height: 30, boxSizing: 'border-box' }}
+              />
             </div>
-          ) : filteredDevices.map(d => {
-            const isSelected = d.id === selected;
-            const mapD = mapDevices.find(m => m.id === d.id);
-            const kmh = Number(mapD?.speed_kmh) || 0;
-            return (
-              <div
-                key={d.id}
-                onClick={() => selectDevice(mapD || d)}
-                style={{
-                  padding: '10px 12px', cursor: 'pointer', borderBottom: '1px solid var(--border)',
-                  borderLeft: `3px solid ${isSelected ? 'var(--primary)' : 'transparent'}`,
-                  background: isSelected ? 'rgba(30,136,209,.08)' : 'transparent',
-                  transition: 'background 0.12s',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {d.connected ? <Wifi size={12} color="#22c55e" /> : <WifiOff size={12} color="#94a3b8" />}
-                  <span style={{ fontWeight: 600, fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {d.label || d.registration || d.imei}
-                  </span>
-                  {d.connected && kmh > 5 && (
-                    <span style={{ fontSize: 10, color: speedColor(kmh), fontWeight: 700, flexShrink: 0 }}>{Math.round(kmh)} km/h</span>
-                  )}
-                  {d.connected && kmh <= 5 && mapD?.ignition !== null && (
-                    <span style={{ fontSize: 10, color: mapD?.ignition ? '#22c55e' : 'var(--muted)', flexShrink: 0 }}>{mapD?.ignition ? 'IGN' : 'idle'}</span>
-                  )}
-                  <button className="btn btn-sm" style={{ padding: '2px 4px', opacity: 0.45, background: 'transparent', minWidth: 0 }}
-                    onClick={e => deleteDevice(e, d.id)} title="Remove"><Trash2 size={10} /></button>
-                </div>
-                <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2, paddingLeft: 18, fontFamily: 'monospace', letterSpacing: '.3px' }}>{d.imei}</div>
-                <div style={{ fontSize: 10, marginTop: 1, paddingLeft: 18 }}>
-                  {d.connected
-                    ? <span style={{ color: '#22c55e' }}>● Online · {d.model}</span>
-                    : <span style={{ color: 'var(--muted)' }}>Last seen {d.last_seen_at ? new Date(d.last_seen_at).toLocaleTimeString() : 'never'}</span>}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+          </div>
 
-        {/* Footer */}
-        <div style={{ padding: '7px 12px', borderTop: '1px solid var(--border)', background: 'var(--surface)', display: 'flex', gap: 12, fontSize: 11, color: 'var(--muted)' }}>
-          <span><span style={{ color: '#22c55e', fontWeight: 700 }}>{devices.filter(d => d.connected).length}</span> online</span>
-          <span><span style={{ color: 'var(--text)', fontWeight: 600 }}>{devices.length}</span> total</span>
-        </div>
+          <div style={{ flex: 1, overflowY: 'auto' }}>
+            {filteredDevices.length === 0 ? (
+              <div style={{ padding: '40px 20px', textAlign: 'center' }}>
+                {devices.length === 0 ? (
+                  <>
+                    <div style={{ fontSize: 36, marginBottom: 10 }}>📡</div>
+                    <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>No trackers yet</div>
+                    <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 16, lineHeight: 1.5 }}>Register a Teltonika device to start tracking bikes</div>
+                    <button className="btn btn-sm btn-primary" onClick={() => setShowAdd(true)}><Plus size={12} /> Register device</button>
+                  </>
+                ) : (
+                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>No devices match "{deviceSearch}"</div>
+                )}
+              </div>
+            ) : filteredDevices.map(d => {
+              const isSelected = d.id === selected;
+              const mapD = mapDevices.find(m => m.id === d.id);
+              const kmh = Number(mapD?.speed_kmh) || 0;
+              return (
+                <div
+                  key={d.id}
+                  onClick={() => selectDevice(mapD || d)}
+                  style={{
+                    padding: '10px 12px', cursor: 'pointer', borderBottom: '1px solid var(--border)',
+                    borderLeft: `3px solid ${isSelected ? 'var(--primary)' : 'transparent'}`,
+                    background: isSelected ? 'rgba(30,136,209,.08)' : 'transparent',
+                    transition: 'background 0.12s',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    {d.connected ? <Wifi size={12} color="#22c55e" /> : <WifiOff size={12} color="#94a3b8" />}
+                    <span style={{ fontWeight: 600, fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {d.label || d.registration || d.imei}
+                    </span>
+                    {d.connected && kmh > 5 && (
+                      <span style={{ fontSize: 10, color: speedColor(kmh), fontWeight: 700, flexShrink: 0 }}>{Math.round(kmh)} km/h</span>
+                    )}
+                    {d.connected && kmh <= 5 && mapD?.ignition !== null && (
+                      <span style={{ fontSize: 10, color: mapD?.ignition ? '#22c55e' : 'var(--muted)', flexShrink: 0 }}>{mapD?.ignition ? 'IGN' : 'idle'}</span>
+                    )}
+                    <button className="btn btn-sm" style={{ padding: '2px 4px', opacity: 0.45, background: 'transparent', minWidth: 0 }}
+                      onClick={e => deleteDevice(e, d.id)} title="Remove"><Trash2 size={10} /></button>
+                  </div>
+                  <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2, paddingLeft: 18, fontFamily: 'monospace', letterSpacing: '.3px' }}>{d.imei}</div>
+                  <div style={{ fontSize: 10, marginTop: 1, paddingLeft: 18 }}>
+                    {d.connected
+                      ? <span style={{ color: '#22c55e' }}>● Online · {d.model}</span>
+                      : <span style={{ color: 'var(--muted)' }}>Last seen {d.last_seen_at ? new Date(d.last_seen_at).toLocaleTimeString() : 'never'}</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div style={{ padding: '7px 12px', borderTop: '1px solid var(--border)', background: 'var(--surface)', display: 'flex', gap: 12, fontSize: 11, color: 'var(--muted)' }}>
+            <span><span style={{ color: '#22c55e', fontWeight: 700 }}>{devices.filter(d => d.connected).length}</span> online</span>
+            <span><span style={{ color: 'var(--text)', fontWeight: 600 }}>{devices.length}</span> total</span>
+          </div>
+        </>}
+
+        {/* ── Alerts tab ──────────────────────────────────────────── */}
+        {sideTab === 'alerts' && <>
+          <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: 11, color: 'var(--muted)', flex: 1 }}>Recent events</span>
+            <button className="btn btn-sm btn-secondary" onClick={loadAlerts}><RefreshCw size={11} /></button>
+            {alerts.some(a => !a.acknowledged_at) && (
+              <button className="btn btn-sm btn-secondary" style={{ fontSize: 11 }} onClick={acknowledgeAll}>Ack all</button>
+            )}
+          </div>
+          <div style={{ flex: 1, overflowY: 'auto' }}>
+            {alerts.length === 0 ? (
+              <div style={{ padding: '40px 20px', textAlign: 'center' }}>
+                <BellOff size={28} style={{ color: 'var(--muted)', marginBottom: 8 }} />
+                <div style={{ fontSize: 12, color: 'var(--muted)' }}>No alerts yet</div>
+              </div>
+            ) : alerts.map(a => {
+              let payload = {};
+              try { payload = JSON.parse(a.payload || '{}'); } catch { /* skip */ }
+              const isUnread = !a.acknowledged_at;
+              return (
+                <div key={a.id} style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', opacity: isUnread ? 1 : 0.55 }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: ALERT_COLORS[a.alert_type] || '#94a3b8', flexShrink: 0, marginTop: 3 }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: isUnread ? 700 : 400 }}>{ALERT_LABELS[a.alert_type] || a.alert_type}</div>
+                      <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>
+                        {a.bike_registration || `Bike #${a.bike_id}`} · {new Date(a.created_at).toLocaleTimeString()}
+                      </div>
+                      {payload.speed_kmh && <div style={{ fontSize: 10, color: ALERT_COLORS[a.alert_type], marginTop: 1 }}>{Math.round(payload.speed_kmh)} km/h</div>}
+                      {payload.geofence_name && <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>Zone: {payload.geofence_name}</div>}
+                      {payload.idle_sec && <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>Idle: {Math.round(payload.idle_sec / 60)} min</div>}
+                    </div>
+                    {isUnread && (
+                      <button className="btn btn-sm" style={{ padding: '2px 6px', fontSize: 10, flexShrink: 0 }} onClick={() => acknowledgeAlert(a.id)}>Ack</button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>}
+
+        {/* ── Geofences tab ────────────────────────────────────────── */}
+        {sideTab === 'geofences' && <>
+          <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: 11, color: 'var(--muted)', flex: 1 }}>{geofences.length} geofence{geofences.length !== 1 ? 's' : ''}</span>
+            <button className="btn btn-sm btn-secondary" onClick={loadGeofences}><RefreshCw size={11} /></button>
+            <button className="btn btn-sm btn-primary" onClick={() => setShowGeoForm(true)}><Plus size={11} /> Add</button>
+          </div>
+          <div style={{ flex: 1, overflowY: 'auto' }}>
+            {geofences.length === 0 ? (
+              <div style={{ padding: '40px 20px', textAlign: 'center' }}>
+                <Shield size={28} style={{ color: 'var(--muted)', marginBottom: 8 }} />
+                <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>No geofences</div>
+                <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 16, lineHeight: 1.5 }}>Add zones to get entry/exit alerts when bikes cross the boundary</div>
+                <button className="btn btn-sm btn-primary" onClick={() => setShowGeoForm(true)}><Plus size={11} /> Add geofence</button>
+              </div>
+            ) : geofences.map(gf => (
+              <div key={gf.id} style={{ padding: '9px 12px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 7 }}>
+                <div style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid #1E88D1', background: 'rgba(30,136,209,.12)', flexShrink: 0 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{gf.name}</div>
+                  <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>
+                    r={gf.radius_m}m{gf.bike_registration ? ` · ${gf.bike_registration}` : ' · all bikes'}
+                  </div>
+                </div>
+                <button className="btn btn-sm" style={{ padding: '2px 4px', opacity: 0.5, background: 'transparent', minWidth: 0 }}
+                  onClick={() => deleteGeofence(gf.id)} title="Delete"><Trash2 size={10} /></button>
+              </div>
+            ))}
+          </div>
+        </>}
       </div>
 
       {/* ── Map ────────────────────────────────────────────────────── */}
       <div style={{ flex: 1, position: 'relative', isolation: 'isolate' }}>
-        <MapContainer center={[-26.2, 28.0]} zoom={10} style={{ height: '100%', width: '100%' }}>
+
+        {pickingCenter && (
+          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 1100, background: '#1E88D1', color: '#fff', padding: '7px 14px', textAlign: 'center', fontSize: 12, fontWeight: 600 }}>
+            Click the map to set the geofence center &nbsp;·&nbsp; Press Esc to cancel
+          </div>
+        )}
+
+        <MapContainer center={[-26.2, 28.0]} zoom={10} style={{ height: '100%', width: '100%', cursor: pickingCenter ? 'crosshair' : undefined }}>
           <TileLayer key={tileMode} url={TILES[tileMode].url} attribution={TILES[tileMode].attribution} />
           {flyTo && <FlyTo position={flyTo} />}
           <FitBounds trigger={fitTrigger} positions={allPositions} />
+          {pickingCenter && <MapClickHandler onMapClick={handleMapClick} />}
 
+          {/* Geofence circles */}
+          {geofences.map(gf => gf.lat && gf.lng ? (
+            <Circle
+              key={gf.id}
+              center={[gf.lat, gf.lng]}
+              radius={gf.radius_m}
+              pathOptions={{ color: '#1E88D1', fillColor: '#1E88D1', fillOpacity: 0.07, weight: 2, dashArray: '6 4' }}
+            >
+              <Popup><strong>{gf.name}</strong><br />Radius: {gf.radius_m}m{gf.bike_registration ? `\nBike: ${gf.bike_registration}` : ''}</Popup>
+            </Circle>
+          ) : null)}
+
+          {/* Device markers */}
           {mapDevices.map(d => d.lat && d.lng ? (
             <Marker key={d.id} position={[d.lat, d.lng]} icon={deviceIcon(d)} eventHandlers={{ click: () => selectDevice(d) }}>
               <Popup>
                 <strong>{d.label || d.registration || d.imei}</strong><br />
                 {d.bike_model} {d.registration}<br />
                 {d.connected ? (
-                  <>🟢 Online<br />
-                  {Math.round(d.speed_kmh || 0)} km/h · {d.heading || 0}° · {d.satellites || '?'} sats</>
+                  <>🟢 Online<br />{Math.round(d.speed_kmh || 0)} km/h · {d.heading || 0}° · {d.satellites || '?'} sats</>
                 ) : '⚫ Offline'}<br />
                 {d.last_location_at ? new Date(d.last_location_at).toLocaleString() : '—'}
               </Popup>
@@ -499,20 +788,16 @@ export default function Tracking() {
             className="btn btn-sm btn-secondary"
             style={{ fontSize: 11, padding: '6px 10px', background: 'var(--surface)', border: '1px solid var(--border)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', gap: 6 }}
             onClick={() => setTileMode(m => m === 'street' ? 'satellite' : 'street')}
-            title="Toggle map layer"
           >
-            <Layers size={13} />
-            {tileMode === 'street' ? 'Satellite' : 'Street'}
+            <Layers size={13} />{tileMode === 'street' ? 'Satellite' : 'Street'}
           </button>
           {allPositions.length > 0 && (
             <button
               className="btn btn-sm btn-secondary"
               style={{ fontSize: 11, padding: '6px 10px', background: 'var(--surface)', border: '1px solid var(--border)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', gap: 6 }}
               onClick={() => setFitTrigger(t => t + 1)}
-              title="Fit all devices in view"
             >
-              <Maximize2 size={13} />
-              Fit all
+              <Maximize2 size={13} />Fit all
             </button>
           )}
         </div>
@@ -522,15 +807,13 @@ export default function Tracking() {
           <div style={{ fontWeight: 700, color: 'var(--muted)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 6 }}>Markers</div>
           {[['#22c55e', 'Online · ignition on'], ['#f97316', 'Online · idle'], ['#94a3b8', 'Offline']].map(([c, l]) => (
             <div key={l} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
-              <div style={{ width: 10, height: 10, borderRadius: '50%', background: c, flexShrink: 0 }} />
-              {l}
+              <div style={{ width: 10, height: 10, borderRadius: '50%', background: c, flexShrink: 0 }} />{l}
             </div>
           ))}
           <div style={{ fontWeight: 700, color: 'var(--muted)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.5px', marginTop: 8, marginBottom: 5 }}>Trail speed</div>
           {[['#94a3b8', '< 5 km/h'], ['#22c55e', '5–30'], ['#f97316', '30–70'], ['#ef4444', '> 70']].map(([c, l]) => (
             <div key={l} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
-              <div style={{ width: 18, height: 3, background: c, flexShrink: 0, borderRadius: 2 }} />
-              {l}
+              <div style={{ width: 18, height: 3, background: c, flexShrink: 0, borderRadius: 2 }} />{l}
             </div>
           ))}
         </div>
@@ -559,146 +842,212 @@ export default function Tracking() {
                 </div>
               </div>
               <button className="btn btn-sm btn-secondary" style={{ padding: '3px 6px', flexShrink: 0 }}
-                onClick={() => { setSelected(null); setTrail([]); setCommands([]); setAddress(null); }} title="Close">
+                onClick={() => { setSelected(null); setTrail([]); setCommands([]); setAddress(null); setTrips([]); }} title="Close">
                 <X size={12} />
               </button>
             </div>
+
+            {/* Detail tabs */}
+            <div style={{ display: 'flex', marginTop: 10, marginBottom: -14, marginLeft: -14, marginRight: -14, borderTop: '1px solid var(--border)', paddingTop: 2 }}>
+              {[['info', 'Info'], ['trips', 'Trips']].map(([tab, label]) => (
+                <button
+                  key={tab}
+                  onClick={() => {
+                    setDetailTab(tab);
+                    if (tab === 'trips' && selectedDevice.bike_id) loadTrips(selectedDevice.bike_id);
+                  }}
+                  style={{
+                    flex: 1, padding: '6px 8px 8px', fontSize: 11,
+                    fontWeight: detailTab === tab ? 700 : 400,
+                    color: detailTab === tab ? 'var(--primary)' : 'var(--muted)',
+                    background: 'none', border: 'none',
+                    borderBottom: detailTab === tab ? '2px solid var(--primary)' : '2px solid transparent',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {tab === 'trips' ? <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}><Route size={11} />{label}</span> : label}
+                </button>
+              ))}
+            </div>
           </div>
 
-          {/* Location */}
-          {selectedMapDevice?.lat && (
-            <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 6 }}>Location</div>
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
-                <MapPin size={12} style={{ color: 'var(--primary)', marginTop: 2, flexShrink: 0 }} />
-                <div>
-                  <div style={{ fontSize: 12, lineHeight: 1.4, color: address ? 'var(--text)' : 'var(--muted)' }}>
-                    {address || 'Resolving address…'}
-                  </div>
-                  <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2, fontFamily: 'monospace' }}>
-                    {selectedMapDevice.lat.toFixed(6)}, {selectedMapDevice.lng.toFixed(6)}
-                  </div>
-                  {selectedMapDevice.last_location_at && (
-                    <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>
-                      Updated {new Date(selectedMapDevice.last_location_at).toLocaleTimeString()}
+          {/* ── Info tab ─────────────────────────────────────────── */}
+          {detailTab === 'info' && <>
+
+            {/* Location */}
+            {selectedMapDevice?.lat && (
+              <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 6 }}>Location</div>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                  <MapPin size={12} style={{ color: 'var(--primary)', marginTop: 2, flexShrink: 0 }} />
+                  <div>
+                    <div style={{ fontSize: 12, lineHeight: 1.4, color: address ? 'var(--text)' : 'var(--muted)' }}>
+                      {address || 'Resolving address…'}
                     </div>
-                  )}
+                    <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2, fontFamily: 'monospace' }}>
+                      {selectedMapDevice.lat.toFixed(6)}, {selectedMapDevice.lng.toFixed(6)}
+                    </div>
+                    {selectedMapDevice.last_location_at && (
+                      <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>
+                        Updated {new Date(selectedMapDevice.last_location_at).toLocaleTimeString()}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* Live telemetry */}
-          {selectedDevice.connected && selectedMapDevice && (
-            <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8 }}>Live telemetry</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
-                {[
-                  { icon: <Gauge size={13} />,      label: 'Speed',      value: `${Math.round(selectedMapDevice.speed_kmh || 0)} km/h`, color: speedColor(selectedMapDevice.speed_kmh) },
-                  { icon: <Navigation size={13} />,  label: 'Heading',    value: `${selectedMapDevice.heading || 0}°`,                  color: 'var(--text)' },
-                  { icon: <Mountain size={13} />,    label: 'Altitude',   value: `${selectedMapDevice.altitude || 0} m`,                color: 'var(--text)' },
-                  { icon: <Activity size={13} />,    label: 'Satellites', value: `${selectedMapDevice.satellites || '?'}`,              color: (selectedMapDevice.satellites || 0) >= 6 ? '#22c55e' : '#f97316' },
-                ].map(({ icon, label, value, color }) => (
-                  <div key={label} style={{ background: 'var(--surface)', borderRadius: 8, padding: '8px 10px', border: '1px solid var(--border)' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--muted)', marginBottom: 4 }}>
-                      {icon}
-                      <span style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '.5px' }}>{label}</span>
+            {/* Live telemetry */}
+            {selectedDevice.connected && selectedMapDevice && (
+              <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8 }}>Live telemetry</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
+                  {[
+                    { icon: <Gauge size={13} />,      label: 'Speed',      value: `${Math.round(selectedMapDevice.speed_kmh || 0)} km/h`, color: speedColor(selectedMapDevice.speed_kmh) },
+                    { icon: <Navigation size={13} />,  label: 'Heading',    value: `${selectedMapDevice.heading || 0}°`,                  color: 'var(--text)' },
+                    { icon: <Mountain size={13} />,    label: 'Altitude',   value: `${selectedMapDevice.altitude || 0} m`,                color: 'var(--text)' },
+                    { icon: <Activity size={13} />,    label: 'Satellites', value: `${selectedMapDevice.satellites || '?'}`,              color: (selectedMapDevice.satellites || 0) >= 6 ? '#22c55e' : '#f97316' },
+                  ].map(({ icon, label, value, color }) => (
+                    <div key={label} style={{ background: 'var(--surface)', borderRadius: 8, padding: '8px 10px', border: '1px solid var(--border)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--muted)', marginBottom: 4 }}>
+                        {icon}
+                        <span style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '.5px' }}>{label}</span>
+                      </div>
+                      <div style={{ fontWeight: 700, fontSize: 16, color }}>{value}</div>
                     </div>
-                    <div style={{ fontWeight: 700, fontSize: 16, color }}>{value}</div>
-                  </div>
+                  ))}
+                </div>
+                <div style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {selectedMapDevice.ignition ? <Zap size={13} color="#22c55e" /> : <ZapOff size={13} color="var(--muted)" />}
+                  <span style={{ fontSize: 12, color: selectedMapDevice.ignition ? '#22c55e' : 'var(--muted)' }}>
+                    Ignition {selectedMapDevice.ignition ? 'ON' : 'OFF'}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Trail range */}
+            <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 6 }}>Trail history</div>
+              <div style={{ display: 'flex', gap: 4 }}>
+                {TRAIL_RANGES.map(r => (
+                  <button key={r.id} className={`btn btn-sm ${trailRange === r.id ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ fontSize: 11, padding: '3px 8px', flex: 1 }}
+                    onClick={() => setTrailRange(r.id)}>{r.label}</button>
                 ))}
               </div>
-              <div style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                {selectedMapDevice.ignition ? <Zap size={13} color="#22c55e" /> : <ZapOff size={13} color="var(--muted)" />}
-                <span style={{ fontSize: 12, color: selectedMapDevice.ignition ? '#22c55e' : 'var(--muted)' }}>
-                  Ignition {selectedMapDevice.ignition ? 'ON' : 'OFF'}
-                </span>
+              {trail.length > 0 && (
+                <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 5 }}>{trail.length} positions</div>
+              )}
+            </div>
+
+            {/* Engine control */}
+            <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8 }}>Engine control</div>
+              {!selectedDevice.connected && (
+                <div style={{ fontSize: 11, color: '#f97316', marginBottom: 8, padding: '6px 8px', background: 'rgba(249,115,22,.1)', borderRadius: 6, border: '1px solid rgba(249,115,22,.2)' }}>
+                  Offline — commands will be queued and sent when it reconnects
+                </div>
+              )}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                {ENGINE_CMDS.map(({ id, label, desc, icon: Icon, danger }) => (
+                  <button key={id} className={`btn btn-sm${danger ? ' btn-danger' : ' btn-secondary'}`}
+                    style={{ flexDirection: 'column', alignItems: 'center', gap: 4, padding: '10px 6px', height: 'auto' }}
+                    disabled={!!sendingCmd} onClick={() => sendPreset(id)}>
+                    <Icon size={16} />
+                    <span style={{ fontSize: 11, fontWeight: 600 }}>{sendingCmd === id ? '…' : label}</span>
+                    <span style={{ fontSize: 10, opacity: .7, fontWeight: 400 }}>{desc}</span>
+                  </button>
+                ))}
               </div>
+            </div>
+
+            {/* Diagnostics */}
+            <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8 }}>Diagnostics</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5 }}>
+                {DIAG_CMDS.map(({ id, label, icon: Icon }) => (
+                  <button key={id} className="btn btn-sm btn-secondary"
+                    style={{ justifyContent: 'center', gap: 5, fontSize: 11 }}
+                    disabled={!!sendingCmd} onClick={() => sendPreset(id)}>
+                    <Icon size={11} />{sendingCmd === id ? '…' : label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Command history */}
+            <div style={{ padding: '10px 14px' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8, display: 'flex', alignItems: 'center' }}>
+                Command history
+                <button className="btn btn-sm" style={{ padding: '1px 5px', marginLeft: 'auto', background: 'transparent' }}
+                  onClick={refreshCommands} title="Refresh"><RefreshCw size={10} /></button>
+              </div>
+              {commands.length === 0
+                ? <div style={{ fontSize: 12, color: 'var(--muted)' }}>No commands sent yet.</div>
+                : commands.map(c => (
+                  <div key={c.id} style={{ marginBottom: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                      {STATUS_ICON[c.status] || <AlertCircle size={12} />}
+                      <code style={{ fontSize: 10, background: 'var(--surface)', padding: '1px 5px', borderRadius: 3, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.command}</code>
+                      <span style={{ fontSize: 10, color: 'var(--muted)', flexShrink: 0 }}>{c.status}</span>
+                    </div>
+                    {c.response && (
+                      <div style={{ marginTop: 3, padding: '3px 6px', background: 'var(--surface)', borderRadius: 4, fontSize: 10, fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                        {c.response}
+                      </div>
+                    )}
+                    <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2 }}>
+                      {new Date(c.created_at).toLocaleString()}{c.created_by_name ? ` · ${c.created_by_name}` : ''}
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </>}
+
+          {/* ── Trips tab ────────────────────────────────────────── */}
+          {detailTab === 'trips' && (
+            <div style={{ padding: '10px 14px' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 10, display: 'flex', alignItems: 'center' }}>
+                Recent trips
+                <button className="btn btn-sm" style={{ padding: '1px 5px', marginLeft: 'auto', background: 'transparent' }}
+                  onClick={() => selectedDevice.bike_id && loadTrips(selectedDevice.bike_id)}><RefreshCw size={10} /></button>
+              </div>
+              {!selectedDevice.bike_id ? (
+                <div style={{ fontSize: 12, color: 'var(--muted)' }}>This device has no bike assigned. Assign a bike to record trips.</div>
+              ) : trips.length === 0 ? (
+                <div style={{ fontSize: 12, color: 'var(--muted)' }}>No trips recorded yet. Trips start when the ignition turns on and the bike moves.</div>
+              ) : trips.map(t => {
+                const dist = t.distance_km != null ? `${Number(t.distance_km).toFixed(1)} km` : '—';
+                const dur  = fmtDuration(t.duration_sec);
+                const maxS = t.max_speed_kmh != null ? `${Math.round(t.max_speed_kmh)} km/h` : '—';
+                const ongoing = !t.ended_at;
+                return (
+                  <div key={t.id} style={{ marginBottom: 8, padding: '9px 10px', background: 'var(--surface)', borderRadius: 8, border: '1px solid var(--border)', borderLeft: `3px solid ${ongoing ? '#22c55e' : 'var(--border)'}` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
+                      <span style={{ fontSize: 11, color: 'var(--muted)', flex: 1 }}>{new Date(t.started_at).toLocaleString()}</span>
+                      {ongoing && <span style={{ fontSize: 10, fontWeight: 700, color: '#22c55e', background: 'rgba(34,197,94,.12)', padding: '1px 6px', borderRadius: 8 }}>active</span>}
+                    </div>
+                    <div style={{ display: 'flex', gap: 10 }}>
+                      {[
+                        { icon: <Route size={11} />,  val: dist },
+                        { icon: <Clock size={11} />,  val: dur },
+                        { icon: <Gauge size={11} />,  val: `max ${maxS}` },
+                      ].map(({ icon, val }) => (
+                        <span key={val} style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11, color: 'var(--muted)', fontWeight: 600 }}>
+                          {icon}{val}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
-
-          {/* Trail range */}
-          <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 6 }}>Trail history</div>
-            <div style={{ display: 'flex', gap: 4 }}>
-              {TRAIL_RANGES.map(r => (
-                <button key={r.id} className={`btn btn-sm ${trailRange === r.id ? 'btn-primary' : 'btn-secondary'}`}
-                  style={{ fontSize: 11, padding: '3px 8px', flex: 1 }}
-                  onClick={() => setTrailRange(r.id)}>{r.label}</button>
-              ))}
-            </div>
-            {trail.length > 0 && (
-              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 5 }}>{trail.length} positions</div>
-            )}
-          </div>
-
-          {/* Engine control */}
-          <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8 }}>Engine control</div>
-            {!selectedDevice.connected && (
-              <div style={{ fontSize: 11, color: '#f97316', marginBottom: 8, padding: '6px 8px', background: 'rgba(249,115,22,.1)', borderRadius: 6, border: '1px solid rgba(249,115,22,.2)' }}>
-                Offline — commands will be queued and sent when it reconnects
-              </div>
-            )}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-              {ENGINE_CMDS.map(({ id, label, desc, icon: Icon, danger }) => (
-                <button key={id} className={`btn btn-sm${danger ? ' btn-danger' : ' btn-secondary'}`}
-                  style={{ flexDirection: 'column', alignItems: 'center', gap: 4, padding: '10px 6px', height: 'auto' }}
-                  disabled={!!sendingCmd} onClick={() => sendPreset(id)}>
-                  <Icon size={16} />
-                  <span style={{ fontSize: 11, fontWeight: 600 }}>{sendingCmd === id ? '…' : label}</span>
-                  <span style={{ fontSize: 10, opacity: .7, fontWeight: 400 }}>{desc}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Diagnostics */}
-          <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8 }}>Diagnostics</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5 }}>
-              {DIAG_CMDS.map(({ id, label, icon: Icon }) => (
-                <button key={id} className="btn btn-sm btn-secondary"
-                  style={{ justifyContent: 'center', gap: 5, fontSize: 11 }}
-                  disabled={!!sendingCmd} onClick={() => sendPreset(id)}>
-                  <Icon size={11} />
-                  {sendingCmd === id ? '…' : label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Command history */}
-          <div style={{ padding: '10px 14px' }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8, display: 'flex', alignItems: 'center' }}>
-              Command history
-              <button className="btn btn-sm" style={{ padding: '1px 5px', marginLeft: 'auto', background: 'transparent' }}
-                onClick={refreshCommands} title="Refresh"><RefreshCw size={10} /></button>
-            </div>
-            {commands.length === 0
-              ? <div style={{ fontSize: 12, color: 'var(--muted)' }}>No commands sent yet.</div>
-              : commands.map(c => (
-                <div key={c.id} style={{ marginBottom: 10 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                    {STATUS_ICON[c.status] || <AlertCircle size={12} />}
-                    <code style={{ fontSize: 10, background: 'var(--surface)', padding: '1px 5px', borderRadius: 3, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.command}</code>
-                    <span style={{ fontSize: 10, color: 'var(--muted)', flexShrink: 0 }}>{c.status}</span>
-                  </div>
-                  {c.response && (
-                    <div style={{ marginTop: 3, padding: '3px 6px', background: 'var(--surface)', borderRadius: 4, fontSize: 10, fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                      {c.response}
-                    </div>
-                  )}
-                  <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2 }}>
-                    {new Date(c.created_at).toLocaleString()}{c.created_by_name ? ` · ${c.created_by_name}` : ''}
-                  </div>
-                </div>
-              ))}
-          </div>
         </div>
       )}
 
-      {/* ── Add device modal ─────────────────────────────────────────── */}
+      {/* ── Add device modal ──────────────────────────────────────── */}
       {showAdd && (
         <Modal onClose={() => { setShowAdd(false); setAddForm(EMPTY_FORM); }} title="Register a GPS tracker">
           <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 18, marginTop: -4, lineHeight: 1.5 }}>
@@ -747,6 +1096,72 @@ export default function Tracking() {
               {adding ? 'Registering…' : 'Register device'}
             </button>
             <button className="btn btn-secondary" onClick={() => { setShowAdd(false); setAddForm(EMPTY_FORM); }}>Cancel</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── Add geofence modal ───────────────────────────────────── */}
+      {showGeoForm && (
+        <Modal onClose={() => { setShowGeoForm(false); setGeoForm(EMPTY_GEO); }} title="Add geofence">
+          <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16, marginTop: -4, lineHeight: 1.5 }}>
+            Define a zone. You will get an alert whenever a bike enters or exits the boundary.
+          </p>
+
+          <div className="field">
+            <label className="label">Zone name <span style={{ color: 'var(--danger)' }}>*</span></label>
+            <input className="input" placeholder="e.g. Depot, School zone, Client site" value={geoForm.name}
+              onChange={e => setGeoForm(f => ({ ...f, name: e.target.value }))} autoFocus />
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            <div className="field">
+              <label className="label">Latitude</label>
+              <input className="input" value={geoForm.lat} placeholder="-26.2044"
+                onChange={e => setGeoForm(f => ({ ...f, lat: e.target.value }))} />
+            </div>
+            <div className="field">
+              <label className="label">Longitude</label>
+              <input className="input" value={geoForm.lng} placeholder="28.0456"
+                onChange={e => setGeoForm(f => ({ ...f, lng: e.target.value }))} />
+            </div>
+          </div>
+
+          <div style={{ marginBottom: 14 }}>
+            <button
+              className="btn btn-sm btn-secondary"
+              style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11 }}
+              onClick={() => { setShowGeoForm(false); setPickingCenter(true); setSideTab('geofences'); }}
+            >
+              <MapPin size={11} />Pick center from map
+            </button>
+            {geoForm.lat && geoForm.lng && (
+              <div style={{ fontSize: 10, color: '#22c55e', marginTop: 4 }}>Center set: {Number(geoForm.lat).toFixed(5)}, {Number(geoForm.lng).toFixed(5)}</div>
+            )}
+          </div>
+
+          <div className="field">
+            <label className="label">Radius: {geoForm.radius_m >= 1000 ? `${(geoForm.radius_m / 1000).toFixed(1)} km` : `${geoForm.radius_m} m`}</label>
+            <input type="range" min={50} max={10000} step={50} value={geoForm.radius_m}
+              onChange={e => setGeoForm(f => ({ ...f, radius_m: Number(e.target.value) }))}
+              style={{ width: '100%' }} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--muted)', marginTop: 2 }}>
+              <span>50 m</span><span>10 km</span>
+            </div>
+          </div>
+
+          <div className="field">
+            <label className="label">Scope to bike <span style={{ color: 'var(--muted)', fontWeight: 400 }}>(optional)</span></label>
+            <select className="input" value={geoForm.bike_id} onChange={e => setGeoForm(f => ({ ...f, bike_id: e.target.value }))}>
+              <option value="">All bikes</option>
+              {bikes.map(b => <option key={b.id} value={b.id}>{b.registration} — {b.make} {b.model}</option>)}
+            </select>
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, marginTop: 18 }}>
+            <button className="btn btn-primary" onClick={saveGeofence} disabled={geoSubmitting}>
+              {geoSubmitting ? 'Saving…' : 'Save geofence'}
+            </button>
+            <button className="btn btn-secondary" onClick={() => { setShowGeoForm(false); setGeoForm(EMPTY_GEO); }}>Cancel</button>
           </div>
         </Modal>
       )}

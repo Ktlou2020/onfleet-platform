@@ -66,13 +66,18 @@ router.post('/devices', authRequired, adminOnly, (req, res) => {
 
 // PUT /api/tracking/devices/:id
 router.put('/devices/:id', authRequired, adminOnly, (req, res) => {
-  const { model, bike_id, label } = req.body;
+  const { model, label } = req.body;
   const validModels = ['FMB920', 'FMB965', 'FMC920', 'other'];
   if (model !== undefined && !validModels.includes(model)) return res.status(400).json({ error: `Model must be one of: ${validModels.join(', ')}` });
   const device = db.prepare('SELECT id FROM tracking_devices WHERE id=?').get(req.params.id);
   if (!device) return res.status(404).json({ error: 'Device not found' });
-  db.prepare(`UPDATE tracking_devices SET model=COALESCE(?,model), bike_id=?, label=COALESCE(?,label), updated_at=CURRENT_TIMESTAMP WHERE id=?`)
-    .run(model || null, bike_id !== undefined ? (bike_id || null) : null, label || null, device.id);
+  if ('bike_id' in req.body) {
+    db.prepare(`UPDATE tracking_devices SET model=COALESCE(?,model), bike_id=?, label=COALESCE(?,label), updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+      .run(model || null, req.body.bike_id || null, label || null, device.id);
+  } else {
+    db.prepare(`UPDATE tracking_devices SET model=COALESCE(?,model), label=COALESCE(?,label), updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+      .run(model || null, label || null, device.id);
+  }
   res.json({ ok: true });
 });
 

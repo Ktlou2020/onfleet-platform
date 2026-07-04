@@ -84,8 +84,9 @@ function discontinueAgreementForStolenBike({ bikeId, actorId = null, ip = null }
 function reinstateDiscontinuedAgreement({ agreementId, actorId = null, ip = null }) {
   const agreement = getAgreementForDiscontinuation(agreementId);
   if (!agreement) throw new Error('Agreement not found');
-  if (agreement.status !== 'discontinued' || agreement.discontinued_reason !== 'bike_stolen') {
-    throw new Error('Only theft-discontinued agreements can be reinstated');
+  const allowedReasons = ['bike_stolen', 'admin_status_change'];
+  if (agreement.status !== 'discontinued' || !allowedReasons.includes(agreement.discontinued_reason)) {
+    throw new Error('Only discontinued agreements can be reinstated');
   }
   if (agreement.bike_status === 'stolen') {
     throw new Error('Recover the bike from stolen status before reinstating the agreement');

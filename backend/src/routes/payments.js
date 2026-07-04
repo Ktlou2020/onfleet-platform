@@ -32,7 +32,7 @@ function adminVisibleAgreementClause(aAlias = 'a', bAlias = 'b', uAlias = 'u') {
 function applyPaymentToSchedule(agreementId, amountZAR) {
   const agreement = db.prepare('SELECT status FROM agreements WHERE id = ?').get(agreementId);
   if (!agreement) throw new Error('Agreement not found');
-  if (agreement.status === 'discontinued') throw new Error('This agreement has been discontinued because the bike was stolen');
+  if (agreement.status === 'discontinued') throw new Error('This agreement has been discontinued');
   const schedule = db.prepare(`SELECT * FROM payment_schedules WHERE agreement_id = ?
     AND status != 'paid' AND status != 'waived' ORDER BY week_number ASC`).all(agreementId);
   let remaining = amountZAR;
@@ -94,7 +94,7 @@ function buildBulkPaymentReference(row, fallbackPrefix = 'CSV') {
 function recordManualPayment({ agreement_id, amount, method, reference, paid_at, notes, recorded_by }) {
   const agreement = db.prepare('SELECT * FROM agreements WHERE id = ?').get(agreement_id);
   if (!agreement) throw new Error('Agreement not found');
-  if (agreement.status === 'discontinued') throw new Error('This agreement has been discontinued because the bike was stolen');
+  if (agreement.status === 'discontinued') throw new Error('This agreement has been discontinued');
   const ref = reference || `MAN-${uuid().slice(0, 10)}`;
   const info = db.prepare(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, status, paid_at, recorded_by, notes, fee_amount, net_amount)
     VALUES (?,?,?,?, ?, ?, 'success', ?, ?, ?, ?, ?)`).run(
@@ -430,6 +430,10 @@ function creditFleetWalletFromWebhook(organizationId, grossAmountZAR, riderId, r
   const net = +(grossAmountZAR - fee).toFixed(2);
   ensureFleetWallet(organizationId);
   db.transaction(() => {
+    if (reference) {
+      const dup = db.prepare(`SELECT id FROM fleet_wallet_transactions WHERE paystack_reference = ? AND organization_id = ?`).get(reference, organizationId);
+      if (dup) return;
+    }
     db.prepare(`UPDATE fleet_wallets SET balance = balance + ?, total_collected = total_collected + ?, updated_at = CURRENT_TIMESTAMP WHERE organization_id = ?`)
       .run(net, net, organizationId);
     db.prepare(`INSERT INTO fleet_wallet_transactions (organization_id, type, amount, fee_amount, net_amount, description, paystack_reference, rider_user_id)

@@ -155,6 +155,7 @@ export default function Tracking() {
   const selectedRef = useRef(null);
   const mountedRef = useRef(true);
   const geocodeVersionRef = useRef(0);
+  const selectVersionRef = useRef(0);
 
   // Keep selectedRef in sync for SSE handler (avoids stale closure)
   useEffect(() => { selectedRef.current = selected; }, [selected]);
@@ -261,31 +262,34 @@ export default function Tracking() {
     return () => { abort.abort(); clearTimeout(retryTimer); setSseOnline(false); };
   }, []);
 
-  const loadTrail = useCallback(async (deviceId, range) => {
+  const loadTrail = useCallback(async (deviceId, range, version) => {
     const hours = TRAIL_RANGES.find(r => r.id === range)?.hours || 6;
     const from = new Date(Date.now() - hours * 3_600_000).toISOString();
     try {
       const { data } = await api.get(`/tracking/devices/${deviceId}/positions?limit=500&from=${encodeURIComponent(from)}`);
-      setTrail(data.map(p => ({ lat: p.lat, lng: p.lng, speed_kmh: p.speed_kmh })));
+      if (version === undefined || selectVersionRef.current === version) {
+        setTrail(data.map(p => ({ lat: p.lat, lng: p.lng, speed_kmh: p.speed_kmh })));
+      }
     } catch { /* silent */ }
   }, []);
 
   const selectDevice = useCallback(async (device) => {
+    const version = ++selectVersionRef.current;
     setSelected(device.id);
     setAddress(null);
     if (device.lat && device.lng) {
       setFlyTo([device.lat, device.lng]);
-      const version = ++geocodeVersionRef.current;
+      const geocodeVersion = ++geocodeVersionRef.current;
       reverseGeocode(device.lat, device.lng).then(addr => {
-        if (mountedRef.current && geocodeVersionRef.current === version) setAddress(addr);
+        if (mountedRef.current && geocodeVersionRef.current === geocodeVersion) setAddress(addr);
       });
     }
     try {
       const [, { data: cmds }] = await Promise.all([
-        loadTrail(device.id, trailRange),
+        loadTrail(device.id, trailRange, version),
         api.get(`/tracking/devices/${device.id}/commands`),
       ]);
-      setCommands(cmds);
+      if (mountedRef.current && selectVersionRef.current === version) setCommands(cmds);
     } catch { /* silent */ }
   }, [loadTrail, trailRange]);
 

@@ -550,7 +550,7 @@ router.post('/login',
     const user = db.prepare('SELECT * FROM users WHERE email = ? AND deleted_at IS NULL').get(email);
     if (!user) return res.status(401).json({ error: 'Invalid credentials' });
     if (user.status !== 'active') return res.status(403).json({ error: 'Account suspended' });
-    if (!await bcrypt.compare(password, user.password_hash)) return res.status(401).json({ error: 'Invalid credentials' });
+    if (!user.password_hash || !await bcrypt.compare(password, user.password_hash)) return res.status(401).json({ error: 'Invalid credentials' });
 
     logAudit(user.id, 'user.login', 'users', user.id, {}, req.ip);
     const safe = getSafeUser(user.id) || { id: user.id, email: user.email, full_name: user.full_name, role: user.role, organization_id: user.organization_id || null };
@@ -673,7 +673,7 @@ router.post('/change-password', authRequired,
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
     const u = db.prepare('SELECT password_hash FROM users WHERE id = ? AND deleted_at IS NULL').get(req.user.id);
-    if (!u) return res.status(401).json({ error: 'User not found' });
+    if (!u) return res.status(403).json({ error: 'User not found' });
     if (!await bcrypt.compare(req.body.current_password, u.password_hash)) {
       return res.status(400).json({ error: 'Current password incorrect' });
     }

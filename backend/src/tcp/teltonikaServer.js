@@ -87,7 +87,7 @@ function parseAvl(buf, extended) {
       const xCnt = buf.readUInt16BE(o); o += 2;
       for (let i = 0; i < xCnt; i++) {
         const id = buf.readUInt16BE(o); o += 2;
-        const xLen = buf.readUInt32BE(o); o += 4;
+        const xLen = buf.readUInt16BE(o); o += 2;
         io[id] = buf.slice(o, o + xLen).toString('hex');
         o += xLen;
       }
@@ -241,17 +241,19 @@ function handleConnection(socket) {
           `SELECT * FROM tracking_commands WHERE device_id=? AND status='pending' ORDER BY created_at ASC`
         ).all(device.id);
         for (const cmd of pending) dispatchCommand(socket, imei, cmd.id, cmd.command);
+        // Fall through to packet-consuming loop — device may have sent AVL data
+        // in the same TCP segment as the IMEI handshake
       } else {
         socket.write(Buffer.from([0x00]));
         console.log(`[Teltonika] rejected unknown IMEI ${imei}`);
         socket.end();
+        return;
       }
-      return;
     }
 
     // Consume complete packets from buffer
     while (buf.length >= 12) {
-      if (buf.readUInt32BE(0) !== 0) { buf = Buffer.alloc(0); break; }
+      if (buf.readUInt32BE(0) !== 0) { console.warn(`[Teltonika] ${imei} bad preamble — disconnecting`); socket.destroy(); return; }
       const dataLen = buf.readUInt32BE(4);
       const total = 4 + 4 + dataLen + 4;
       if (buf.length < total) break;

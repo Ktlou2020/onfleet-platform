@@ -494,7 +494,7 @@ export default function Tracking() {
           return { ...incoming, lat: live.lat ?? incoming.lat, lng: live.lng ?? incoming.lng, speed_kmh: live.speed_kmh ?? incoming.speed_kmh, heading: live.heading ?? incoming.heading, satellites: live.satellites ?? incoming.satellites, ignition: live.ignition ?? incoming.ignition, gsm_signal: live.gsm_signal ?? incoming.gsm_signal, battery_mv: live.battery_mv ?? incoming.battery_mv, ext_voltage_mv: live.ext_voltage_mv ?? incoming.ext_voltage_mv };
         }));
       } catch { /* silent */ }
-    }, 3000);
+    }, 10000);
     return () => clearInterval(tick);
   }, []);
 

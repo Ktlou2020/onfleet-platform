@@ -7,6 +7,8 @@ import {
   CheckCircle, Clock, XCircle, AlertCircle, X, Search, Layers,
   Maximize2, Navigation, Gauge, Mountain, MapPin, Activity,
   Shield, Bell, Route, BellOff,
+  Battery, BatteryLow, BatteryMedium, BatteryFull, BatteryCharging,
+  Signal, SignalZero, SignalLow, SignalMedium, SignalHigh, Satellite,
 } from 'lucide-react';
 import api from '../../api';
 import toast from 'react-hot-toast';
@@ -167,6 +169,124 @@ function fmtDuration(sec) {
   return `${m} min`;
 }
 
+// ── SAST time formatting (Africa/Johannesburg = UTC+2, no DST) ───────────────
+const SAST = { timeZone: 'Africa/Johannesburg' };
+const fmtSASTtime = (d) => d ? new Date(d).toLocaleTimeString('en-ZA', { ...SAST, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '—';
+const fmtSAST     = (d) => d ? new Date(d).toLocaleString('en-ZA',     { ...SAST, day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '—';
+const fmtSASTshort = (d) => d ? new Date(d).toLocaleString('en-ZA',    { ...SAST, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }) : '—';
+
+// ── Parse Teltonika IO data JSON to useful values ─────────────────────────────
+function parseIo(ioData) {
+  try {
+    const io = typeof ioData === 'string' ? JSON.parse(ioData) : (ioData || {});
+    return {
+      gsm:    io[21] != null ? Number(io[21]) : null,   // 0–5 signal level
+      battMv: io[66] != null ? Number(io[66]) : null,   // internal battery mV
+      extMv:  io[67] != null ? Number(io[67]) : null,   // external power mV
+    };
+  } catch { return { gsm: null, battMv: null, extMv: null }; }
+}
+
+// Battery % from mV (3200 mV = 0 %, 4200 mV = 100 %)
+function battPct(mv) { return Math.min(100, Math.max(0, Math.round((mv - 3200) / 10))); }
+
+function DeviceBatteryIcon({ battMv, extMv, size = 12 }) {
+  if (extMv != null && extMv > 9000) return <BatteryCharging size={size} color="#22c55e" title={`External power: ${(extMv / 1000).toFixed(1)} V`} />;
+  if (battMv == null) return <Battery size={size} color="var(--muted)" title="No battery data" />;
+  const pct = battPct(battMv);
+  if (pct <= 20) return <BatteryLow   size={size} color="#ef4444" title={`Battery: ${pct}%`} />;
+  if (pct <= 50) return <BatteryMedium size={size} color="#f97316" title={`Battery: ${pct}%`} />;
+  if (pct <= 80) return <BatteryFull   size={size} color="#eab308" title={`Battery: ${pct}%`} />;
+  return <BatteryCharging size={size} color="#22c55e" title={`Battery: ${pct}%`} />;
+}
+
+function DeviceSignalIcon({ gsm, size = 12 }) {
+  if (gsm == null) return <SignalZero size={size} color="var(--muted)" title="No signal data" />;
+  if (gsm === 0)   return <SignalZero size={size} color="#ef4444"      title="No signal" />;
+  if (gsm <= 1)    return <SignalLow    size={size} color="#ef4444"    title={`Signal: ${gsm}/5`} />;
+  if (gsm <= 2)    return <SignalMedium size={size} color="#f97316"    title={`Signal: ${gsm}/5`} />;
+  if (gsm <= 3)    return <SignalMedium size={size} color="#eab308"    title={`Signal: ${gsm}/5`} />;
+  return <SignalHigh size={size} color="#22c55e" title={`Signal: ${gsm}/5`} />;
+}
+
+// ── Command label mapping ─────────────────────────────────────────────────────
+const CMD_LABEL_MAP = {
+  'fota connect':   'FOTA Update',
+  'getinfo':        'Device Info',
+  'getstatus':      'Connection Status',
+  'getver':         'Firmware Version',
+  'getparam 2001':  'Server IP',
+  'setdigout 1 1':  'Cut Engine',
+  'setdigout 1 0':  'Restore Engine',
+  'setdigout 2 1':  'Cut Engine',
+  'setdigout 2 0':  'Restore Engine',
+};
+function getCmdLabel(raw) { return CMD_LABEL_MAP[String(raw || '').trim()] || raw || '—'; }
+
+// ── Parse raw Teltonika command responses into readable key-value rows ─────────
+function parseCommandResponse(command, raw) {
+  if (!raw) return null;
+  const r = raw.trim();
+
+  // Error responses
+  if (/unknown command|invalid format|invalid command/i.test(r)) {
+    return [{ label: 'Error', value: r, error: true }];
+  }
+
+  // getver — "Ver:04.00.00_13 GPS:AXN_5.1.9 Hw:FMB920 Md:13 IMEI:... Uptime:21846 ..."
+  if (r.startsWith('Ver:')) {
+    const v   = r.match(/Ver:([\S]+)/)?.[1];
+    const gps = r.match(/GPS:([\S]+)/)?.[1];
+    const hw  = r.match(/Hw:([\S]+)/)?.[1];
+    const ut  = r.match(/Uptime:(\d+)/)?.[1];
+    const bl  = r.match(/BL:([\S]+)/)?.[1];
+    const rows = [];
+    if (hw)  rows.push({ label: 'Hardware',  value: hw });
+    if (v)   rows.push({ label: 'Firmware',  value: v });
+    if (gps) rows.push({ label: 'GPS chip',  value: gps });
+    if (bl)  rows.push({ label: 'Bootloader', value: bl });
+    if (ut)  { const s = Number(ut); rows.push({ label: 'Uptime', value: `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m` }); }
+    return rows.length ? rows : null;
+  }
+
+  // getinfo — "RTC:... UpTime:21816s PWR:SoftReset RST:0 GPS:3 SAT:17 TTFF:8 ..."
+  if (r.startsWith('RTC:') || /UpTime:/i.test(r)) {
+    const ut   = r.match(/UpTime:(\d+)/i)?.[1];
+    const sat  = r.match(/SAT:(\d+)/)?.[1];
+    const fix  = r.match(/GPS:(\d+)/)?.[1];
+    const rec  = r.match(/REC:(\d+)/)?.[1];
+    const pwr  = r.match(/PWR:([\S]+)/)?.[1];
+    const rows = [];
+    if (ut)  { const s = Number(ut); rows.push({ label: 'Uptime', value: `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m` }); }
+    if (fix) rows.push({ label: 'GPS fix',    value: fix === '3' ? '3D (good)' : fix === '2' ? '2D (weak)' : 'No fix', warn: fix !== '3' });
+    if (sat) rows.push({ label: 'Satellites', value: `${sat} visible` });
+    if (pwr) rows.push({ label: 'Last reset', value: pwr });
+    if (rec) rows.push({ label: 'Records queued', value: rec });
+    return rows.length ? rows : null;
+  }
+
+  // getstatus — "Data Link: 1 GPRS: 1 Phone: 0 SIM: 0 OP: 6 5501 Signal: 3 ..."
+  if (/Data Link:|GPRS:|Signal:/i.test(r)) {
+    const gprs   = r.match(/GPRS:\s*(\d+)/)?.[1];
+    const signal = r.match(/Signal:\s*(\d+)/)?.[1];
+    const sim    = r.match(/SIM:\s*(\d+)/)?.[1];
+    const roam   = r.match(/Roaming:\s*(\d+)/)?.[1];
+    const rows = [];
+    if (gprs)   rows.push({ label: 'GPRS data',  value: gprs === '1'   ? 'Connected' : 'Disconnected', warn: gprs !== '1' });
+    if (signal) rows.push({ label: 'GSM signal', value: `${signal} / 5`, warn: Number(signal) < 2 });
+    if (sim)    rows.push({ label: 'SIM',        value: sim === '1' ? 'Ready' : 'Not ready', warn: sim !== '1' });
+    if (roam)   rows.push({ label: 'Roaming',    value: roam === '1' ? 'Yes' : 'No' });
+    return rows.length ? rows : null;
+  }
+
+  // setdigout (engine cut/restore) — no meaningful response body
+  if (/setdigout/.test(String(command))) {
+    return [{ label: 'Result', value: r || 'Command applied' }];
+  }
+
+  return null; // fall back to raw monospace display
+}
+
 export default function Tracking() {
   // ── device list & selection ──────────────────────────────────────
   const [devices,      setDevices]      = useState([]);
@@ -324,7 +444,7 @@ export default function Tracking() {
                   const idx = prev.findIndex(d => d.id === p.device_id);
                   if (idx === -1) return prev;
                   const next = [...prev];
-                  next[idx] = { ...next[idx], lat: p.lat, lng: p.lng, speed_kmh: p.speed, heading: p.heading, altitude: p.altitude, satellites: p.satellites, ignition: p.ignition, last_location_at: new Date(p.ts).toISOString(), connected: 1 };
+                  next[idx] = { ...next[idx], lat: p.lat, lng: p.lng, speed_kmh: p.speed, heading: p.heading, altitude: p.altitude, satellites: p.satellites, ignition: p.ignition, last_location_at: new Date(p.ts).toISOString(), connected: 1, gsm_signal: p.gsm_signal, battery_mv: p.battery_mv, ext_voltage_mv: p.ext_voltage_mv };
                   return next;
                 });
                 if (selectedRef.current === p.device_id) {
@@ -638,10 +758,21 @@ export default function Tracking() {
                       onClick={e => deleteDevice(e, d.id)} title="Remove"><Trash2 size={10} /></button>
                   </div>
                   <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2, paddingLeft: 18, fontFamily: 'monospace', letterSpacing: '.3px' }}>{d.imei}</div>
-                  <div style={{ fontSize: 10, marginTop: 1, paddingLeft: 18 }}>
-                    {d.connected
-                      ? <span style={{ color: '#22c55e' }}>● Online · {d.model}</span>
-                      : <span style={{ color: 'var(--muted)' }}>Last seen {d.last_seen_at ? new Date(d.last_seen_at).toLocaleTimeString() : 'never'}</span>}
+                  <div style={{ fontSize: 10, marginTop: 2, paddingLeft: 18, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    {d.connected ? (
+                      <>
+                        <span style={{ color: '#22c55e' }}>● Online · {d.model}</span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 2 }}>
+                          {(() => { const io = parseIo(mapD?.io_data); return (<>
+                            <DeviceSignalIcon gsm={mapD?.gsm_signal ?? io.gsm} size={11} />
+                            <DeviceBatteryIcon battMv={mapD?.battery_mv ?? io.battMv} extMv={mapD?.ext_voltage_mv ?? io.extMv} size={11} />
+                            {(mapD?.satellites ?? 0) > 0 && <span style={{ display: 'flex', alignItems: 'center', gap: 2, color: (mapD?.satellites || 0) >= 6 ? '#22c55e' : '#f97316' }}><Satellite size={10} /><span style={{ fontSize: 9 }}>{mapD.satellites}</span></span>}
+                          </>); })()}
+                        </span>
+                      </>
+                    ) : (
+                      <span style={{ color: 'var(--muted)' }}>Last seen {d.last_seen_at ? fmtSASTshort(d.last_seen_at) : 'never'}</span>
+                    )}
                   </div>
                 </div>
               );
@@ -680,7 +811,7 @@ export default function Tracking() {
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 12, fontWeight: isUnread ? 700 : 400 }}>{ALERT_LABELS[a.alert_type] || a.alert_type}</div>
                       <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>
-                        {a.bike_registration || `Bike #${a.bike_id}`} · {new Date(a.created_at).toLocaleTimeString()}
+                        {a.bike_registration || `Bike #${a.bike_id}`} · {fmtSASTtime(a.created_at)}
                       </div>
                       {payload.speed_kmh && <div style={{ fontSize: 10, color: ALERT_COLORS[a.alert_type], marginTop: 1 }}>{Math.round(payload.speed_kmh)} km/h</div>}
                       {payload.geofence_name && <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>Zone: {payload.geofence_name}</div>}
@@ -764,7 +895,7 @@ export default function Tracking() {
                 {d.connected ? (
                   <>🟢 Online<br />{Math.round(d.speed_kmh || 0)} km/h · {d.heading || 0}° · {d.satellites || '?'} sats</>
                 ) : '⚫ Offline'}<br />
-                {d.last_location_at ? new Date(d.last_location_at).toLocaleString() : '—'}
+                {d.last_location_at ? fmtSAST(d.last_location_at) : '—'}
               </Popup>
             </Marker>
           ) : null)}
@@ -838,7 +969,7 @@ export default function Tracking() {
                 <div style={{ fontSize: 11, marginTop: 4 }}>
                   {selectedDevice.connected
                     ? <span style={{ color: '#22c55e', fontWeight: 600 }}>● Online</span>
-                    : <span style={{ color: 'var(--muted)' }}>Last seen {selectedDevice.last_seen_at ? new Date(selectedDevice.last_seen_at).toLocaleString() : 'never'}</span>}
+                    : <span style={{ color: 'var(--muted)' }}>Last seen {selectedDevice.last_seen_at ? fmtSAST(selectedDevice.last_seen_at) : 'never'}</span>}
                 </div>
               </div>
               <button className="btn btn-sm btn-secondary" style={{ padding: '3px 6px', flexShrink: 0 }}
@@ -889,7 +1020,7 @@ export default function Tracking() {
                     </div>
                     {selectedMapDevice.last_location_at && (
                       <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>
-                        Updated {new Date(selectedMapDevice.last_location_at).toLocaleTimeString()}
+                        Updated {fmtSASTtime(selectedMapDevice.last_location_at)}
                       </div>
                     )}
                   </div>
@@ -906,7 +1037,7 @@ export default function Tracking() {
                     { icon: <Gauge size={13} />,      label: 'Speed',      value: `${Math.round(selectedMapDevice.speed_kmh || 0)} km/h`, color: speedColor(selectedMapDevice.speed_kmh) },
                     { icon: <Navigation size={13} />,  label: 'Heading',    value: `${selectedMapDevice.heading || 0}°`,                  color: 'var(--text)' },
                     { icon: <Mountain size={13} />,    label: 'Altitude',   value: `${selectedMapDevice.altitude || 0} m`,                color: 'var(--text)' },
-                    { icon: <Activity size={13} />,    label: 'Satellites', value: `${selectedMapDevice.satellites || '?'}`,              color: (selectedMapDevice.satellites || 0) >= 6 ? '#22c55e' : '#f97316' },
+                    { icon: <Satellite size={13} />,   label: 'Satellites', value: `${selectedMapDevice.satellites || '?'}`,              color: (selectedMapDevice.satellites || 0) >= 6 ? '#22c55e' : '#f97316' },
                   ].map(({ icon, label, value, color }) => (
                     <div key={label} style={{ background: 'var(--surface)', borderRadius: 8, padding: '8px 10px', border: '1px solid var(--border)' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--muted)', marginBottom: 4 }}>
@@ -917,6 +1048,41 @@ export default function Tracking() {
                     </div>
                   ))}
                 </div>
+                {/* Signal / battery row */}
+                {(() => {
+                  const io = parseIo(selectedMapDevice.io_data);
+                  const gsm    = selectedMapDevice.gsm_signal    ?? io.gsm;
+                  const battMv = selectedMapDevice.battery_mv    ?? io.battMv;
+                  const extMv  = selectedMapDevice.ext_voltage_mv ?? io.extMv;
+                  const hasBatt = battMv != null || extMv != null;
+                  const hasGsm  = gsm != null;
+                  if (!hasBatt && !hasGsm) return null;
+                  const battLabel = extMv != null && extMv > 9000
+                    ? `External power (${(extMv/1000).toFixed(1)} V)`
+                    : battMv != null ? `Battery ${battPct(battMv)}%` : null;
+                  return (
+                    <div style={{ display: 'grid', gridTemplateColumns: hasGsm && hasBatt ? '1fr 1fr' : '1fr', gap: 8, marginBottom: 8 }}>
+                      {hasGsm && (
+                        <div style={{ background: 'var(--surface)', borderRadius: 8, padding: '8px 10px', border: '1px solid var(--border)' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--muted)', marginBottom: 4 }}>
+                            <DeviceSignalIcon gsm={gsm} size={13} />
+                            <span style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '.5px' }}>GSM signal</span>
+                          </div>
+                          <div style={{ fontWeight: 700, fontSize: 16, color: gsm >= 3 ? '#22c55e' : gsm >= 2 ? '#eab308' : '#ef4444' }}>{gsm} / 5</div>
+                        </div>
+                      )}
+                      {hasBatt && (
+                        <div style={{ background: 'var(--surface)', borderRadius: 8, padding: '8px 10px', border: '1px solid var(--border)' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--muted)', marginBottom: 4 }}>
+                            <DeviceBatteryIcon battMv={battMv} extMv={extMv} size={13} />
+                            <span style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '.5px' }}>Power</span>
+                          </div>
+                          <div style={{ fontWeight: 700, fontSize: 14, color: extMv != null && extMv > 9000 ? '#22c55e' : battMv != null && battPct(battMv) <= 20 ? '#ef4444' : 'var(--text)' }}>{battLabel}</div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
                 <div style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', display: 'flex', alignItems: 'center', gap: 6 }}>
                   {selectedMapDevice.ignition ? <Zap size={13} color="#22c55e" /> : <ZapOff size={13} color="var(--muted)" />}
                   <span style={{ fontSize: 12, color: selectedMapDevice.ignition ? '#22c55e' : 'var(--muted)' }}>
@@ -985,23 +1151,39 @@ export default function Tracking() {
               </div>
               {commands.length === 0
                 ? <div style={{ fontSize: 12, color: 'var(--muted)' }}>No commands sent yet.</div>
-                : commands.map(c => (
-                  <div key={c.id} style={{ marginBottom: 10 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                      {STATUS_ICON[c.status] || <AlertCircle size={12} />}
-                      <code style={{ fontSize: 10, background: 'var(--surface)', padding: '1px 5px', borderRadius: 3, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.command}</code>
-                      <span style={{ fontSize: 10, color: 'var(--muted)', flexShrink: 0 }}>{c.status}</span>
-                    </div>
-                    {c.response && (
-                      <div style={{ marginTop: 3, padding: '3px 6px', background: 'var(--surface)', borderRadius: 4, fontSize: 10, fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                        {c.response}
+                : commands.map(c => {
+                  const parsed = parseCommandResponse(c.command, c.response);
+                  return (
+                    <div key={c.id} style={{ marginBottom: 12, padding: '8px 10px', background: 'var(--surface)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 4 }}>
+                        {STATUS_ICON[c.status] || <AlertCircle size={12} />}
+                        <span style={{ fontSize: 12, fontWeight: 600, flex: 1 }}>{getCmdLabel(c.command)}</span>
+                        <span style={{ fontSize: 10, color: c.status === 'delivered' ? '#22c55e' : c.status === 'failed' ? '#ef4444' : 'var(--muted)', fontWeight: 600, flexShrink: 0 }}>
+                          {c.status === 'delivered' ? 'Delivered' : c.status === 'sent' ? 'Sent' : c.status === 'pending' ? 'Queued' : 'Failed'}
+                        </span>
                       </div>
-                    )}
-                    <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2 }}>
-                      {new Date(c.created_at).toLocaleString()}{c.created_by_name ? ` · ${c.created_by_name}` : ''}
+                      {c.response && (
+                        parsed ? (
+                          <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                            {parsed.map((row, i) => (
+                              <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                                <span style={{ fontSize: 10, color: 'var(--muted)', minWidth: 80, flexShrink: 0 }}>{row.label}</span>
+                                <span style={{ fontSize: 11, fontWeight: 600, color: row.error ? '#ef4444' : row.warn ? '#f97316' : 'var(--text)' }}>{row.value}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div style={{ marginTop: 4, padding: '3px 6px', background: 'rgba(0,0,0,.04)', borderRadius: 4, fontSize: 10, fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all', color: 'var(--muted)' }}>
+                            {c.response}
+                          </div>
+                        )
+                      )}
+                      <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 5 }}>
+                        {fmtSAST(c.created_at)}{c.created_by_name ? ` · ${c.created_by_name}` : ''}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
             </div>
           </>}
 
@@ -1025,7 +1207,7 @@ export default function Tracking() {
                 return (
                   <div key={t.id} style={{ marginBottom: 8, padding: '9px 10px', background: 'var(--surface)', borderRadius: 8, border: '1px solid var(--border)', borderLeft: `3px solid ${ongoing ? '#22c55e' : 'var(--border)'}` }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
-                      <span style={{ fontSize: 11, color: 'var(--muted)', flex: 1 }}>{new Date(t.started_at).toLocaleString()}</span>
+                      <span style={{ fontSize: 11, color: 'var(--muted)', flex: 1 }}>{fmtSAST(t.started_at)}</span>
                       {ongoing && <span style={{ fontSize: 10, fontWeight: 700, color: '#22c55e', background: 'rgba(34,197,94,.12)', padding: '1px 6px', borderRadius: 8 }}>active</span>}
                     </div>
                     <div style={{ display: 'flex', gap: 10 }}>

@@ -58,27 +58,27 @@ function buildInitialForm() {
 
 function buildEditForm(bike) {
   return {
-    make: bike.make || '',
-    model: bike.model || '',
-    year: bike.year || '',
-    engine_cc: bike.engine_cc || '',
-    color: bike.color || '',
-    condition: bike.condition || 'new',
-    registration: bike.registration || '',
-    fleet: bike.fleet || '',
-    rental_weekly: bike.rental_weekly || '',
-    total_weeks: bike.total_weeks || 78,
-    purchase_price: bike.purchase_price || '',
-    license_disc_no: bike.license_disc_no || '',
-    license_disc_expiry: bike.license_disc_expiry || '',
-    insurance_provider: bike.insurance_provider || '',
-    insurance_policy_no: bike.insurance_policy_no || '',
-    insurance_expiry: bike.insurance_expiry || '',
-    odometer_km: bike.odometer_km || 0,
-    next_service_date: bike.next_service_date || '',
-    next_service_km: bike.next_service_km || '',
-    notes: bike.notes || '',
-    image_url: bike.image_url || '',
+    make: bike.make ?? '',
+    model: bike.model ?? '',
+    year: bike.year != null ? bike.year : '',
+    engine_cc: bike.engine_cc != null ? bike.engine_cc : '',
+    color: bike.color ?? '',
+    condition: bike.condition ?? 'new',
+    registration: bike.registration ?? '',
+    fleet: bike.fleet ?? '',
+    rental_weekly: bike.rental_weekly != null ? bike.rental_weekly : '',
+    total_weeks: bike.total_weeks ?? 78,
+    purchase_price: bike.purchase_price != null ? bike.purchase_price : '',
+    license_disc_no: bike.license_disc_no ?? '',
+    license_disc_expiry: bike.license_disc_expiry ?? '',
+    insurance_provider: bike.insurance_provider ?? '',
+    insurance_policy_no: bike.insurance_policy_no ?? '',
+    insurance_expiry: bike.insurance_expiry ?? '',
+    odometer_km: bike.odometer_km ?? 0,
+    next_service_date: bike.next_service_date ?? '',
+    next_service_km: bike.next_service_km != null ? bike.next_service_km : '',
+    notes: bike.notes ?? '',
+    image_url: bike.image_url ?? '',
   };
 }
 
@@ -311,17 +311,35 @@ export default function AdminBikes() {
   };
 
   const saveEdit = async () => {
+    if (!editForm.make?.trim()) return toast.error('Make is required');
+    if (!editForm.model?.trim()) return toast.error('Model is required');
+    const rentalWeekly = Number(editForm.rental_weekly);
+    if (!editForm.rental_weekly && editForm.rental_weekly !== 0) return toast.error('Weekly rental is required');
+    if (!Number.isFinite(rentalWeekly) || rentalWeekly < 0) return toast.error('Weekly rental must be a valid number');
     setSaving(true);
     try {
       await api.put(`/bikes/${editBike.id}`, {
-        ...editForm,
-        year: editForm.year ? Number(editForm.year) : null,
-        engine_cc: editForm.engine_cc ? Number(editForm.engine_cc) : null,
+        make: editForm.make.trim(),
+        model: editForm.model.trim(),
+        year: editForm.year !== '' ? Number(editForm.year) : null,
+        engine_cc: editForm.engine_cc !== '' ? Number(editForm.engine_cc) : null,
+        color: editForm.color || null,
+        condition: editForm.condition,
+        registration: editForm.registration || null,
+        fleet: editForm.fleet || null,
+        rental_weekly: rentalWeekly,
+        total_weeks: Number(editForm.total_weeks) || 78,
         purchase_price: editForm.purchase_price !== '' ? Number(editForm.purchase_price) : null,
-        rental_weekly: Number(editForm.rental_weekly),
-        total_weeks: Number(editForm.total_weeks),
+        license_disc_no: editForm.license_disc_no || null,
+        license_disc_expiry: editForm.license_disc_expiry || null,
+        insurance_provider: editForm.insurance_provider || null,
+        insurance_policy_no: editForm.insurance_policy_no || null,
+        insurance_expiry: editForm.insurance_expiry || null,
         odometer_km: Number(editForm.odometer_km) || 0,
+        next_service_date: editForm.next_service_date || null,
         next_service_km: editForm.next_service_km !== '' ? Number(editForm.next_service_km) : null,
+        notes: editForm.notes || null,
+        image_url: editForm.image_url || null,
       });
       toast.success('Bike details saved');
       closeEdit();
@@ -407,7 +425,7 @@ export default function AdminBikes() {
                     <button className={`btn btn-sm ${changed ? '' : 'btn-secondary'}`} onClick={() => saveBikeStatus(bike)} disabled={savingStatusId === bike.id || !changed}>
                       {savingStatusId === bike.id ? 'Saving…' : 'Save status'}
                     </button>
-                    <button className="btn btn-sm btn-secondary" onClick={() => openEdit(bike)} title="Edit bike details"><Pencil size={13} /></button>
+                    <button className="btn btn-sm btn-secondary" onClick={() => openEdit(bike)}><Pencil size={13} /> Edit</button>
                     <Link to={`/admin/bikes/${bike.id}`} className="btn btn-sm btn-secondary">Open</Link>
                   </div>
                 </div>

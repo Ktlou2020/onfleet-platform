@@ -215,7 +215,7 @@ const CMD_LABEL_MAP = {
   'getinfo':        'Device Info',
   'getstatus':      'Connection Status',
   'getver':         'Firmware Version',
-  'getparam 2001':  'Server IP',
+  'getparam 2004':  'Server Domain',
   'setdigout 1 1':  'Cut Engine',
   'setdigout 1 0':  'Restore Engine',
   'setdigout 2 1':  'Cut Engine',
@@ -478,6 +478,7 @@ export default function Tracking() {
   useEffect(() => {
     const tick = setInterval(async () => {
       if (!mountedRef.current) return;
+      if (document.hidden) return; // don't poll when tab is not visible
       try {
         const [{ data: devs }, { data: map }] = await Promise.all([
           api.get('/tracking/devices'),
@@ -493,7 +494,7 @@ export default function Tracking() {
           return { ...incoming, lat: live.lat ?? incoming.lat, lng: live.lng ?? incoming.lng, speed_kmh: live.speed_kmh ?? incoming.speed_kmh, heading: live.heading ?? incoming.heading, satellites: live.satellites ?? incoming.satellites, ignition: live.ignition ?? incoming.ignition, gsm_signal: live.gsm_signal ?? incoming.gsm_signal, battery_mv: live.battery_mv ?? incoming.battery_mv, ext_voltage_mv: live.ext_voltage_mv ?? incoming.ext_voltage_mv };
         }));
       } catch { /* silent */ }
-    }, 3000);
+    }, 10000);
     return () => clearInterval(tick);
   }, []);
 

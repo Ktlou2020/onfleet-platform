@@ -215,7 +215,7 @@ const CMD_LABEL_MAP = {
   'getinfo':        'Device Info',
   'getstatus':      'Connection Status',
   'getver':         'Firmware Version',
-  'getparam 2001':  'Server IP',
+  'getparam 2004':  'Server Domain',
   'setdigout 1 1':  'Cut Engine',
   'setdigout 1 0':  'Restore Engine',
   'setdigout 2 1':  'Cut Engine',

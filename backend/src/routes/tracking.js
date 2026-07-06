@@ -17,7 +17,7 @@ const PRESET_COMMANDS = {
   get_info: () => 'getinfo',
   get_status: () => 'getstatus',
   get_ver: () => 'getver',
-  get_param: () => 'getparam 2001', // server IP
+  get_param: () => 'getparam 2004', // server domain (2001 = APN, 2004 = server)
 };
 
 // ---------- Devices ----------

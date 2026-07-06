@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../api';
 import toast from 'react-hot-toast';
-import { Loading, Badge, Modal, Pagination, SearchInput, fmt, fmtDate, matchesSearch, paginateItems, CopyableContactValue } from '../../components/ui';
+import { Loading, Badge, Modal, Pagination, SearchInput, fmt, fmtDate, matchesSearch, paginateItems } from '../../components/ui';
 import { sortNewestFirst } from '../../utils/sortNewestFirst';
 import { Plus, Pencil } from 'lucide-react';
 import { useAuth } from '../../auth';
@@ -82,29 +82,6 @@ function buildEditForm(bike) {
   };
 }
 
-function AllocationDetails({ bike }) {
-  if (!bike?.allocated_rider_name) return null;
-  const address = [bike.allocated_rider_address, bike.allocated_rider_city, bike.allocated_rider_province].filter(Boolean).join(', ');
-  return (
-    <div className="card mt-3" style={{ background: 'var(--surface-2)', padding: 12 }}>
-      <div className="text-xs muted">Allocated rider</div>
-      <div style={{ fontWeight: 700 }}>{bike.allocated_rider_name}</div>
-      {bike.allocated_rider_email && <div className="text-xs muted mt-1">{bike.allocated_rider_email}</div>}
-      <div className="mt-1"><CopyableContactValue value={bike.allocated_rider_phone} compact /></div>
-      {bike.allocated_rider_id_number && <div className="text-xs muted mt-1">ID / Passport / Asylum: {bike.allocated_rider_id_number}</div>}
-      {address && <div className="text-xs muted mt-1">{address}</div>}
-      {bike.allocated_rider_payout_preference && (
-        <div className="text-xs muted mt-1">
-          Payout: {bike.allocated_rider_payout_preference}{bike.allocated_rider_payout_preference === 'ewallet' && bike.allocated_rider_ewallet_number ? ` · ${bike.allocated_rider_ewallet_number}` : ''}
-        </div>
-      )}
-      <div className="row mt-2" style={{ gap: 8, flexWrap: 'wrap' }}>
-        <div className="text-xs muted">{bike.allocated_agreement_no || 'No agreement number'}</div>
-        {bike.allocated_agreement_id && <Link to={`/admin/agreements/${bike.allocated_agreement_id}`} className="btn btn-sm btn-secondary">Open agreement</Link>}
-      </div>
-    </div>
-  );
-}
 
 export default function AdminBikes() {
   const { user } = useAuth();
@@ -115,7 +92,7 @@ export default function AdminBikes() {
   const [search, setSearch] = useState('');
   const [fleetFilter, setFleetFilter] = useState('');
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(9);
+  const [pageSize, setPageSize] = useState(25);
   const [savingStatusId, setSavingStatusId] = useState(null);
   const [statusDrafts, setStatusDrafts] = useState({});
   const [editBike, setEditBike] = useState(null);
@@ -377,65 +354,86 @@ export default function AdminBikes() {
         ))}
       </div>
 
-      <div className="grid grid-3">
-        {pagination.items.map((bike) => {
-          const discMeta = getExpiryMeta(bike.license_disc_expiry);
-          const draftStatus = statusDrafts[bike.id] || bike.status;
-          const changed = draftStatus !== bike.status;
-          return (
-            <div key={bike.id} className="bike-card" style={{ color: 'var(--text)', display: 'block' }}>
-              <div className="img" style={{ height: 180, backgroundImage: bike.image_url ? `url("${bike.image_url}")` : 'none', backgroundSize: 'cover', backgroundPosition: 'center', backgroundColor: '#0a1219', position: 'relative' }}>
-                {bike.allocated_rider_name && (
-                  <div style={{ position: 'absolute', left: 12, right: 12, bottom: 12, display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 12, background: 'rgba(8,12,18,0.76)', backdropFilter: 'blur(8px)' }}>
-                    <div className="avatar" style={{ width: 36, height: 36, backgroundImage: bike.allocated_rider_avatar_url ? `url(${bike.allocated_rider_avatar_url})` : 'none', backgroundSize: 'cover', backgroundPosition: 'center', flexShrink: 0 }}>{bike.allocated_rider_avatar_url ? '' : bike.allocated_rider_name?.[0]}</div>
-                    <div style={{ minWidth: 0 }}>
-                      <div className="text-xs muted">Allocated rider</div>
-                      <div style={{ fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{bike.allocated_rider_name}</div>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <thead>
+            <tr style={{ borderBottom: '2px solid var(--border)' }}>
+              <th style={{ textAlign: 'left', padding: '8px 12px', fontWeight: 600, color: 'var(--muted)', whiteSpace: 'nowrap' }}>Bike</th>
+              <th style={{ textAlign: 'left', padding: '8px 12px', fontWeight: 600, color: 'var(--muted)', whiteSpace: 'nowrap' }}>Fleet</th>
+              <th style={{ textAlign: 'left', padding: '8px 12px', fontWeight: 600, color: 'var(--muted)', whiteSpace: 'nowrap' }}>Status</th>
+              <th style={{ textAlign: 'left', padding: '8px 12px', fontWeight: 600, color: 'var(--muted)', whiteSpace: 'nowrap' }}>Rider</th>
+              <th style={{ textAlign: 'right', padding: '8px 12px', fontWeight: 600, color: 'var(--muted)', whiteSpace: 'nowrap' }}>Weekly</th>
+              <th style={{ textAlign: 'right', padding: '8px 12px', fontWeight: 600, color: 'var(--muted)', whiteSpace: 'nowrap' }}>Odometer</th>
+              <th style={{ textAlign: 'left', padding: '8px 12px', fontWeight: 600, color: 'var(--muted)', whiteSpace: 'nowrap' }}>License disc</th>
+              <th style={{ textAlign: 'right', padding: '8px 12px', fontWeight: 600, color: 'var(--muted)', whiteSpace: 'nowrap' }}>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pagination.items.map((bike, idx) => {
+              const discMeta = getExpiryMeta(bike.license_disc_expiry);
+              const draftStatus = statusDrafts[bike.id] || bike.status;
+              const changed = draftStatus !== bike.status;
+              return (
+                <tr key={bike.id} style={{ borderBottom: '1px solid var(--border)', background: idx % 2 === 1 ? 'var(--surface-2)' : 'transparent' }}>
+                  <td style={{ padding: '10px 12px', verticalAlign: 'middle' }}>
+                    <div style={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{bike.registration || `Bike #${bike.id}`}</div>
+                    <div className="text-xs muted">{[bike.make, bike.model].filter(Boolean).join(' ') || '—'}</div>
+                    <div className="text-xs muted">{bike.year || '—'} · {bike.engine_cc ? `${bike.engine_cc}cc` : '—'} · {bike.color || '—'}</div>
+                  </td>
+                  <td style={{ padding: '10px 12px', verticalAlign: 'middle', whiteSpace: 'nowrap' }}>
+                    {bike.fleet ? <span className="admin-bike-fleet-badge">{bike.fleet}</span> : <span className="muted text-xs">—</span>}
+                  </td>
+                  <td style={{ padding: '10px 12px', verticalAlign: 'middle', whiteSpace: 'nowrap' }}>
+                    <Badge status={bike.status}>{getBikeStatusLabel(bike.status)}</Badge>
+                  </td>
+                  <td style={{ padding: '10px 12px', verticalAlign: 'middle' }}>
+                    {bike.allocated_rider_name ? (
+                      <div>
+                        <div style={{ fontWeight: 600 }}>{bike.allocated_rider_name}</div>
+                        {bike.allocated_agreement_no && (
+                          <div className="text-xs muted">{bike.allocated_agreement_no}</div>
+                        )}
+                        {bike.allocated_agreement_id && (
+                          <Link to={`/admin/agreements/${bike.allocated_agreement_id}`} className="text-xs" style={{ color: 'var(--primary-light)' }}>Agreement →</Link>
+                        )}
+                      </div>
+                    ) : <span className="muted text-xs">—</span>}
+                  </td>
+                  <td style={{ padding: '10px 12px', verticalAlign: 'middle', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                    <strong style={{ color: 'var(--primary-light)' }}>{fmt(bike.rental_weekly)}</strong>
+                  </td>
+                  <td style={{ padding: '10px 12px', verticalAlign: 'middle', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                    {bike.odometer_km || 0} km
+                  </td>
+                  <td style={{ padding: '10px 12px', verticalAlign: 'middle', whiteSpace: 'nowrap' }}>
+                    {discMeta ? (
+                      <span style={{ color: discMeta.tone, fontSize: 12 }}>{discMeta.label}</span>
+                    ) : (
+                      <span className="muted text-xs">{bike.license_disc_expiry ? fmtDate(bike.license_disc_expiry) : '—'}</span>
+                    )}
+                  </td>
+                  <td style={{ padding: '10px 12px', verticalAlign: 'middle', whiteSpace: 'nowrap' }}>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                      <select value={draftStatus} onChange={(e) => setStatusDrafts((current) => ({ ...current, [bike.id]: e.target.value }))} style={{ fontSize: 12, padding: '3px 6px' }}>
+                        {bikeStatusOptions.filter((option) => option.value).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                      </select>
+                      {changed && (
+                        <button className="btn btn-sm" onClick={() => saveBikeStatus(bike)} disabled={savingStatusId === bike.id} style={{ fontSize: 12, padding: '3px 8px' }}>
+                          {savingStatusId === bike.id ? '…' : 'Save'}
+                        </button>
+                      )}
+                      <button className="btn btn-sm btn-secondary" onClick={() => openEdit(bike)} style={{ fontSize: 12, padding: '3px 8px' }}><Pencil size={12} /> Edit</button>
+                      <Link to={`/admin/bikes/${bike.id}`} className="btn btn-sm btn-secondary" style={{ fontSize: 12, padding: '3px 8px' }}>Open</Link>
                     </div>
-                  </div>
-                )}
-              </div>
-              <div className="body admin-bike-card-body" style={{ padding: 16 }}>
-                <div className="flex-between mb-2" style={{ gap: 12, alignItems: 'flex-start' }}>
-                  <div>
-                    <div className="admin-bike-registration">{bike.registration || `Bike #${bike.id}`}</div>
-                    <div className="text-xs muted mt-1">Primary registration</div>
-                  </div>
-                  <Badge status={bike.status}>{getBikeStatusLabel(bike.status)}</Badge>
-                </div>
-                <div className="row mb-3 bike-card-meta-row" style={{ gap: 8, flexWrap: 'wrap' }}>
-                  <span className="admin-bike-fleet-badge">Fleet: {bike.fleet || 'Unassigned'}</span>
-                  <span className="badge badge-muted">{bike.year || '—'} · {bike.engine_cc || '—'}cc · {bike.color || '—'}</span>
-                </div>
-                <div className="text-xs muted">VIN: {bike.vin}</div>
-                <div className="admin-bike-model mt-1">{[bike.make, bike.model].filter(Boolean).join(' ') || '—'}</div>
-                <div className="flex-between mt-3 mb-1"><span className="muted text-sm">Weekly</span><strong style={{ color: 'var(--primary-light)' }}>{fmt(bike.rental_weekly)}</strong></div>
-                <div className="flex-between"><span className="muted text-sm">Odometer</span><span>{bike.odometer_km || 0} km</span></div>
-                {bike.next_service_date && <div className="flex-between"><span className="muted text-sm">Next service</span><span className="text-xs">{fmtDate(bike.next_service_date)}</span></div>}
-                <div className="flex-between"><span className="muted text-sm">License disc</span><span className="text-xs">{bike.license_disc_expiry ? fmtDate(bike.license_disc_expiry) : '—'}</span></div>
-                {discMeta && <div className="text-xs" style={{ marginTop: 8, color: discMeta.tone }}>{discMeta.label}</div>}
-                {bike.rc1_file_path && <div className="text-xs muted mt-2">RC1 on file</div>}
-                <AllocationDetails bike={bike} />
-                <div className="card mt-3" style={{ background: 'var(--surface-2)', padding: 12 }}>
-                  <div className="text-xs muted" style={{ marginBottom: 8 }}>Quick status update</div>
-                  <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <select value={draftStatus} onChange={(e) => setStatusDrafts((current) => ({ ...current, [bike.id]: e.target.value }))} style={{ flex: '1 1 190px' }}>
-                      {bikeStatusOptions.filter((option) => option.value).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                    </select>
-                    <button className={`btn btn-sm ${changed ? '' : 'btn-secondary'}`} onClick={() => saveBikeStatus(bike)} disabled={savingStatusId === bike.id || !changed}>
-                      {savingStatusId === bike.id ? 'Saving…' : 'Save status'}
-                    </button>
-                    <button className="btn btn-sm btn-secondary" onClick={() => openEdit(bike)}><Pencil size={13} /> Edit</button>
-                    <Link to={`/admin/bikes/${bike.id}`} className="btn btn-sm btn-secondary">Open</Link>
-                  </div>
-                </div>
-              </div>
-            </div>
-          );
-        })}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
 
-      {!pagination.items.length && <div className="card muted" style={{ textAlign: 'center' }}>{search ? 'No bikes match your search.' : 'No bikes found.'}</div>}
+      {!pagination.items.length && <div className="card muted" style={{ textAlign: 'center', marginTop: 16 }}>{search ? 'No bikes match your search.' : 'No bikes found.'}</div>}
       <Pagination page={pagination.currentPage} pageSize={pagination.pageSize} totalItems={pagination.totalItems} onPageChange={setPage} onPageSizeChange={setPageSize} label="bikes" />
 
       {editBike && (

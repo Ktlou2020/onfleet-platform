@@ -4,7 +4,7 @@ import api from '../../api';
 import toast from 'react-hot-toast';
 import { Loading, Badge, Modal, Pagination, SearchInput, fmt, fmtDate, matchesSearch, paginateItems, CopyableContactValue } from '../../components/ui';
 import { sortNewestFirst } from '../../utils/sortNewestFirst';
-import { Plus } from 'lucide-react';
+import { Plus, Pencil } from 'lucide-react';
 import { useAuth } from '../../auth';
 
 const bikeStatusOptions = [
@@ -56,6 +56,32 @@ function buildInitialForm() {
   };
 }
 
+function buildEditForm(bike) {
+  return {
+    make: bike.make || '',
+    model: bike.model || '',
+    year: bike.year || '',
+    engine_cc: bike.engine_cc || '',
+    color: bike.color || '',
+    condition: bike.condition || 'new',
+    registration: bike.registration || '',
+    fleet: bike.fleet || '',
+    rental_weekly: bike.rental_weekly || '',
+    total_weeks: bike.total_weeks || 78,
+    purchase_price: bike.purchase_price || '',
+    license_disc_no: bike.license_disc_no || '',
+    license_disc_expiry: bike.license_disc_expiry || '',
+    insurance_provider: bike.insurance_provider || '',
+    insurance_policy_no: bike.insurance_policy_no || '',
+    insurance_expiry: bike.insurance_expiry || '',
+    odometer_km: bike.odometer_km || 0,
+    next_service_date: bike.next_service_date || '',
+    next_service_km: bike.next_service_km || '',
+    notes: bike.notes || '',
+    image_url: bike.image_url || '',
+  };
+}
+
 function AllocationDetails({ bike }) {
   if (!bike?.allocated_rider_name) return null;
   const address = [bike.allocated_rider_address, bike.allocated_rider_city, bike.allocated_rider_province].filter(Boolean).join(', ');
@@ -92,6 +118,9 @@ export default function AdminBikes() {
   const [pageSize, setPageSize] = useState(9);
   const [savingStatusId, setSavingStatusId] = useState(null);
   const [statusDrafts, setStatusDrafts] = useState({});
+  const [editBike, setEditBike] = useState(null);
+  const [editForm, setEditForm] = useState({});
+  const [saving, setSaving] = useState(false);
   const [creating, setCreating] = useState(false);
   const [readingLicenseDisc, setReadingLicenseDisc] = useState(false);
   const [form, setForm] = useState(buildInitialForm());
@@ -270,6 +299,40 @@ export default function AdminBikes() {
     }
   };
 
+  const openEdit = (bike) => {
+    setEditBike(bike);
+    setEditForm(buildEditForm(bike));
+  };
+
+  const closeEdit = () => {
+    setEditBike(null);
+    setEditForm({});
+    setSaving(false);
+  };
+
+  const saveEdit = async () => {
+    setSaving(true);
+    try {
+      await api.put(`/bikes/${editBike.id}`, {
+        ...editForm,
+        year: editForm.year ? Number(editForm.year) : null,
+        engine_cc: editForm.engine_cc ? Number(editForm.engine_cc) : null,
+        purchase_price: editForm.purchase_price !== '' ? Number(editForm.purchase_price) : null,
+        rental_weekly: Number(editForm.rental_weekly),
+        total_weeks: Number(editForm.total_weeks),
+        odometer_km: Number(editForm.odometer_km) || 0,
+        next_service_km: editForm.next_service_km !== '' ? Number(editForm.next_service_km) : null,
+      });
+      toast.success('Bike details saved');
+      closeEdit();
+      await load();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   if (!bikes) return <Loading />;
   return (
     <>
@@ -344,6 +407,7 @@ export default function AdminBikes() {
                     <button className={`btn btn-sm ${changed ? '' : 'btn-secondary'}`} onClick={() => saveBikeStatus(bike)} disabled={savingStatusId === bike.id || !changed}>
                       {savingStatusId === bike.id ? 'Saving…' : 'Save status'}
                     </button>
+                    <button className="btn btn-sm btn-secondary" onClick={() => openEdit(bike)} title="Edit bike details"><Pencil size={13} /></button>
                     <Link to={`/admin/bikes/${bike.id}`} className="btn btn-sm btn-secondary">Open</Link>
                   </div>
                 </div>
@@ -355,6 +419,57 @@ export default function AdminBikes() {
 
       {!pagination.items.length && <div className="card muted" style={{ textAlign: 'center' }}>{search ? 'No bikes match your search.' : 'No bikes found.'}</div>}
       <Pagination page={pagination.currentPage} pageSize={pagination.pageSize} totalItems={pagination.totalItems} onPageChange={setPage} onPageSizeChange={setPageSize} label="bikes" />
+
+      {editBike && (
+        <Modal title={`Edit — ${editBike.registration || [editBike.make, editBike.model].filter(Boolean).join(' ') || `Bike #${editBike.id}`}`} onClose={closeEdit}>
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 10 }}>Identity</div>
+            <div className="grid grid-2">
+              <div className="field"><label className="label">Make *</label><input value={editForm.make} onChange={(e) => setEditForm((f) => ({ ...f, make: e.target.value }))} /></div>
+              <div className="field"><label className="label">Model *</label><input value={editForm.model} onChange={(e) => setEditForm((f) => ({ ...f, model: e.target.value }))} /></div>
+              <div className="field"><label className="label">Registration</label><input value={editForm.registration} onChange={(e) => setEditForm((f) => ({ ...f, registration: e.target.value }))} /></div>
+              <div className="field"><label className="label">Fleet</label><input value={editForm.fleet} onChange={(e) => setEditForm((f) => ({ ...f, fleet: e.target.value }))} placeholder="e.g. Uber JHB, Bolt CPT" /></div>
+              <div className="field"><label className="label">Year</label><input type="number" value={editForm.year} onChange={(e) => setEditForm((f) => ({ ...f, year: e.target.value }))} /></div>
+              <div className="field"><label className="label">Engine cc</label><input type="number" value={editForm.engine_cc} onChange={(e) => setEditForm((f) => ({ ...f, engine_cc: e.target.value }))} /></div>
+              <div className="field"><label className="label">Color</label><input value={editForm.color} onChange={(e) => setEditForm((f) => ({ ...f, color: e.target.value }))} /></div>
+              <div className="field"><label className="label">Condition</label><select value={editForm.condition} onChange={(e) => setEditForm((f) => ({ ...f, condition: e.target.value }))}><option value="new">New</option><option value="used">Used</option></select></div>
+            </div>
+          </div>
+
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 10 }}>Financial</div>
+            <div className="grid grid-2">
+              <div className="field"><label className="label">Weekly rental (R)</label><input type="number" value={editForm.rental_weekly} onChange={(e) => setEditForm((f) => ({ ...f, rental_weekly: e.target.value }))} /></div>
+              <div className="field"><label className="label">Total weeks</label><input type="number" value={editForm.total_weeks} onChange={(e) => setEditForm((f) => ({ ...f, total_weeks: e.target.value }))} /></div>
+              <div className="field"><label className="label">Purchase price (R)</label><input type="number" value={editForm.purchase_price} onChange={(e) => setEditForm((f) => ({ ...f, purchase_price: e.target.value }))} /></div>
+            </div>
+          </div>
+
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 10 }}>Compliance</div>
+            <div className="grid grid-2">
+              <div className="field"><label className="label">License disc no.</label><input value={editForm.license_disc_no} onChange={(e) => setEditForm((f) => ({ ...f, license_disc_no: e.target.value }))} /></div>
+              <div className="field"><label className="label">License disc expiry</label><input type="date" value={editForm.license_disc_expiry} onChange={(e) => setEditForm((f) => ({ ...f, license_disc_expiry: e.target.value }))} /></div>
+              <div className="field"><label className="label">Insurance provider</label><input value={editForm.insurance_provider} onChange={(e) => setEditForm((f) => ({ ...f, insurance_provider: e.target.value }))} /></div>
+              <div className="field"><label className="label">Insurance policy no.</label><input value={editForm.insurance_policy_no} onChange={(e) => setEditForm((f) => ({ ...f, insurance_policy_no: e.target.value }))} /></div>
+              <div className="field"><label className="label">Insurance expiry</label><input type="date" value={editForm.insurance_expiry} onChange={(e) => setEditForm((f) => ({ ...f, insurance_expiry: e.target.value }))} /></div>
+            </div>
+          </div>
+
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 10 }}>Operations</div>
+            <div className="grid grid-2">
+              <div className="field"><label className="label">Odometer (km)</label><input type="number" value={editForm.odometer_km} onChange={(e) => setEditForm((f) => ({ ...f, odometer_km: e.target.value }))} /></div>
+              <div className="field"><label className="label">Next service date</label><input type="date" value={editForm.next_service_date} onChange={(e) => setEditForm((f) => ({ ...f, next_service_date: e.target.value }))} /></div>
+              <div className="field"><label className="label">Next service km</label><input type="number" value={editForm.next_service_km} onChange={(e) => setEditForm((f) => ({ ...f, next_service_km: e.target.value }))} /></div>
+              <div className="field"><label className="label">Image URL</label><input value={editForm.image_url} onChange={(e) => setEditForm((f) => ({ ...f, image_url: e.target.value }))} placeholder="Optional remote image URL" /></div>
+            </div>
+            <div className="field"><label className="label">Notes</label><textarea rows={3} value={editForm.notes} onChange={(e) => setEditForm((f) => ({ ...f, notes: e.target.value }))} placeholder="Any internal notes about this bike" /></div>
+          </div>
+
+          <div className="row"><button className="btn" onClick={saveEdit} disabled={saving}>{saving ? 'Saving…' : 'Save changes'}</button><button className="btn btn-secondary" onClick={closeEdit} disabled={saving}>Cancel</button></div>
+        </Modal>
+      )}
 
       {showAdd && (
         <Modal title="Add new bike" onClose={closeAddModal}>

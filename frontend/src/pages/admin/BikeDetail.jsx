@@ -347,20 +347,42 @@ export default function AdminBikeDetail() {
           <h3 className="mb-3">Details</h3>
           {edit ? (
             <>
+                <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8 }}>Identity</div>
               <div className="grid grid-2">
-                <div className="field"><label className="label">Status</label><select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>{bikeStatusOptions.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}</select></div>
+                <div className="field"><label className="label">Make</label><input value={form.make || ''} onChange={(e) => setForm({ ...form, make: e.target.value })} /></div>
+                <div className="field"><label className="label">Model</label><input value={form.model || ''} onChange={(e) => setForm({ ...form, model: e.target.value })} /></div>
                 <div className="field"><label className="label">Registration</label><input value={form.registration || ''} onChange={(e) => setForm({ ...form, registration: e.target.value })} /></div>
                 <div className="field"><label className="label">Fleet</label><input value={form.fleet || ''} onChange={(e) => setForm({ ...form, fleet: e.target.value })} placeholder="e.g. Uber JHB, Bolt CPT" /></div>
+                <div className="field"><label className="label">Year</label><input type="number" value={form.year || ''} onChange={(e) => setForm({ ...form, year: Number(e.target.value) })} /></div>
+                <div className="field"><label className="label">Engine cc</label><input type="number" value={form.engine_cc || ''} onChange={(e) => setForm({ ...form, engine_cc: Number(e.target.value) })} /></div>
+                <div className="field"><label className="label">Color</label><input value={form.color || ''} onChange={(e) => setForm({ ...form, color: e.target.value })} /></div>
                 <div className="field"><label className="label">Condition</label><select value={form.condition || 'new'} onChange={(e) => setForm({ ...form, condition: e.target.value })}><option value="new">New</option><option value="used">Used</option></select></div>
-                <div className="field"><label className="label">Odometer (km)</label><input type="number" value={form.odometer_km || 0} onChange={(e) => setForm({ ...form, odometer_km: Number(e.target.value) })} /></div>
-                <div className="field"><label className="label">Weekly rental</label><input type="number" value={form.rental_weekly} onChange={(e) => setForm({ ...form, rental_weekly: Number(e.target.value) })} /></div>
-                <div className="field"><label className="label">Insurance provider</label><input value={form.insurance_provider || ''} onChange={(e) => setForm({ ...form, insurance_provider: e.target.value })} /></div>
-                <div className="field"><label className="label">Insurance expiry</label><input type="date" value={form.insurance_expiry || ''} onChange={(e) => setForm({ ...form, insurance_expiry: e.target.value })} /></div>
+                <div className="field"><label className="label">Status</label><select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>{bikeStatusOptions.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}</select></div>
+              </div>
+
+              <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', margin: '14px 0 8px' }}>Financial</div>
+              <div className="grid grid-2">
+                <div className="field"><label className="label">Weekly rental (R)</label><input type="number" value={form.rental_weekly || ''} onChange={(e) => setForm({ ...form, rental_weekly: Number(e.target.value) })} /></div>
+                <div className="field"><label className="label">Total weeks</label><input type="number" value={form.total_weeks || 78} onChange={(e) => setForm({ ...form, total_weeks: Number(e.target.value) })} /></div>
+                <div className="field"><label className="label">Purchase price (R)</label><input type="number" value={form.purchase_price || ''} onChange={(e) => setForm({ ...form, purchase_price: Number(e.target.value) })} /></div>
+              </div>
+
+              <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', margin: '14px 0 8px' }}>Compliance</div>
+              <div className="grid grid-2">
                 <div className="field"><label className="label">License disc no.</label><input value={form.license_disc_no || ''} onChange={(e) => setForm({ ...form, license_disc_no: e.target.value })} /></div>
                 <div className="field"><label className="label">License disc expiry</label><input type="date" value={form.license_disc_expiry || ''} onChange={(e) => setForm({ ...form, license_disc_expiry: e.target.value })} /></div>
+                <div className="field"><label className="label">Insurance provider</label><input value={form.insurance_provider || ''} onChange={(e) => setForm({ ...form, insurance_provider: e.target.value })} /></div>
+                <div className="field"><label className="label">Insurance policy no.</label><input value={form.insurance_policy_no || ''} onChange={(e) => setForm({ ...form, insurance_policy_no: e.target.value })} /></div>
+                <div className="field"><label className="label">Insurance expiry</label><input type="date" value={form.insurance_expiry || ''} onChange={(e) => setForm({ ...form, insurance_expiry: e.target.value })} /></div>
+              </div>
+
+              <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', margin: '14px 0 8px' }}>Operations</div>
+              <div className="grid grid-2">
+                <div className="field"><label className="label">Odometer (km)</label><input type="number" value={form.odometer_km || 0} onChange={(e) => setForm({ ...form, odometer_km: Number(e.target.value) })} /></div>
                 <div className="field"><label className="label">Next service date</label><input type="date" value={form.next_service_date || ''} onChange={(e) => setForm({ ...form, next_service_date: e.target.value })} /></div>
                 <div className="field"><label className="label">Next service km</label><input type="number" value={form.next_service_km || 0} onChange={(e) => setForm({ ...form, next_service_km: Number(e.target.value) })} /></div>
               </div>
+              <div className="field" style={{ marginTop: 4 }}><label className="label">Notes</label><textarea rows={3} value={form.notes || ''} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Any internal notes about this bike" /></div>
               <button className="btn" onClick={save}>Save changes</button>
             </>
           ) : (

@@ -325,7 +325,7 @@ export default function Tracking() {
   const [pickingCenter, setPickingCenter] = useState(false);
 
   // ── detail panel tabs ─────────────────────────────────────────────
-  const [detailTab, setDetailTab] = useState('info');
+  const [detailTab, setDetailTab] = useState('activity');
   const [trips,     setTrips]     = useState([]);
 
   const selectedRef       = useRef(null);
@@ -474,6 +474,29 @@ export default function Tracking() {
     return () => { abort.abort(); clearTimeout(retryTimer); setSseOnline(false); };
   }, []);
 
+  // ── 3-second device list refresh (connected status, io data) ────
+  useEffect(() => {
+    const tick = setInterval(async () => {
+      if (!mountedRef.current) return;
+      try {
+        const [{ data: devs }, { data: map }] = await Promise.all([
+          api.get('/tracking/devices'),
+          api.get('/tracking/map'),
+        ]);
+        if (!mountedRef.current) return;
+        setDevices(devs);
+        // Merge map refresh without overwriting SSE-written fields that are newer
+        setMapDevices(prev => map.map(incoming => {
+          const live = prev.find(p => p.id === incoming.id);
+          if (!live) return incoming;
+          // Keep SSE-pushed fields if they exist (SSE gives real-time; API gives stale lat/lng)
+          return { ...incoming, lat: live.lat ?? incoming.lat, lng: live.lng ?? incoming.lng, speed_kmh: live.speed_kmh ?? incoming.speed_kmh, heading: live.heading ?? incoming.heading, satellites: live.satellites ?? incoming.satellites, ignition: live.ignition ?? incoming.ignition, gsm_signal: live.gsm_signal ?? incoming.gsm_signal, battery_mv: live.battery_mv ?? incoming.battery_mv, ext_voltage_mv: live.ext_voltage_mv ?? incoming.ext_voltage_mv };
+        }));
+      } catch { /* silent */ }
+    }, 3000);
+    return () => clearInterval(tick);
+  }, []);
+
   // ── trail ────────────────────────────────────────────────────────
 
   const loadTrail = useCallback(async (deviceId, range, version) => {
@@ -490,7 +513,7 @@ export default function Tracking() {
   const selectDevice = useCallback(async (device) => {
     const version = ++selectVersionRef.current;
     setSelected(device.id);
-    setDetailTab('info');
+    setDetailTab('activity');
     setTrips([]);
     setAddress(null);
     if (device.lat && device.lng) {
@@ -501,11 +524,16 @@ export default function Tracking() {
       });
     }
     try {
-      const [, { data: cmds }] = await Promise.all([
+      const deviceBikeId = device.bike_id;
+      const [, { data: cmds }, tripsRes] = await Promise.all([
         loadTrail(device.id, trailRange, version),
         api.get(`/tracking/devices/${device.id}/commands`),
+        deviceBikeId ? api.get(`/tracking/trips?bike_id=${deviceBikeId}&limit=30`) : Promise.resolve({ data: [] }),
       ]);
-      if (mountedRef.current && selectVersionRef.current === version) setCommands(cmds);
+      if (mountedRef.current && selectVersionRef.current === version) {
+        setCommands(cmds);
+        setTrips(tripsRes.data);
+      }
     } catch { /* silent */ }
   }, [loadTrail, trailRange]);
 
@@ -980,7 +1008,7 @@ export default function Tracking() {
 
             {/* Detail tabs */}
             <div style={{ display: 'flex', marginTop: 10, marginBottom: -14, marginLeft: -14, marginRight: -14, borderTop: '1px solid var(--border)', paddingTop: 2 }}>
-              {[['info', 'Info'], ['trips', 'Trips']].map(([tab, label]) => (
+              {[['activity', 'Activity'], ['trips', 'Trips'], ['info', 'Controls']].map(([tab, label]) => (
                 <button
                   key={tab}
                   onClick={() => {
@@ -996,11 +1024,163 @@ export default function Tracking() {
                     cursor: 'pointer',
                   }}
                 >
-                  {tab === 'trips' ? <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}><Route size={11} />{label}</span> : label}
+                  {label}
                 </button>
               ))}
             </div>
           </div>
+
+          {/* ── Activity tab ─────────────────────────────────────── */}
+          {detailTab === 'activity' && (() => {
+            const io     = parseIo(selectedMapDevice?.io_data);
+            const gsm    = selectedMapDevice?.gsm_signal    ?? io.gsm;
+            const battMv = selectedMapDevice?.battery_mv    ?? io.battMv;
+            const extMv  = selectedMapDevice?.ext_voltage_mv ?? io.extMv;
+            const ts     = selectedMapDevice?.last_location_at;
+            const todayTrips = trips.filter(t => {
+              const d = new Date(t.started_at);
+              const now = new Date();
+              return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+            });
+            const todayKm   = todayTrips.reduce((s, t) => s + (t.distance_km || 0), 0);
+            const todaySec  = todayTrips.reduce((s, t) => s + (t.duration_sec || 0), 0);
+            const telemetryRows = [
+              {
+                icon: extMv != null && extMv > 9000
+                  ? <BatteryCharging size={18} color="#22c55e" />
+                  : battMv != null && battPct(battMv) <= 20
+                    ? <BatteryLow size={18} color="#ef4444" />
+                    : battMv != null && battPct(battMv) <= 50
+                      ? <BatteryMedium size={18} color="#f97316" />
+                      : <BatteryFull size={18} color="#22c55e" />,
+                value: extMv != null && extMv > 9000 ? `${(extMv / 1000).toFixed(0)}v` : null,
+                label: 'External Battery',
+                show: extMv != null,
+              },
+              {
+                icon: battMv != null && battPct(battMv) <= 20
+                  ? <BatteryLow size={18} color="#ef4444" />
+                  : battMv != null && battPct(battMv) <= 50
+                    ? <BatteryMedium size={18} color="#f97316" />
+                    : battMv != null && battPct(battMv) <= 80
+                      ? <BatteryFull size={18} color="#eab308" />
+                      : <BatteryFull size={18} color="#22c55e" />,
+                value: battMv != null ? `${battPct(battMv)}%` : null,
+                label: 'Internal Battery',
+                show: battMv != null,
+              },
+              {
+                icon: <Satellite size={18} color={(selectedMapDevice?.satellites || 0) >= 6 ? '#22c55e' : '#f97316'} />,
+                value: selectedMapDevice?.satellites ?? null,
+                label: 'Satellite Count',
+                show: selectedMapDevice?.satellites != null,
+              },
+              {
+                icon: <DeviceSignalIcon gsm={gsm} size={18} />,
+                value: gsm != null ? `${gsm}` : null,
+                label: 'GSM Signal Strength',
+                show: gsm != null,
+              },
+            ].filter(r => r.show);
+
+            return (
+              <div>
+                {/* Telemetry rows */}
+                <div style={{ borderBottom: '1px solid var(--border)' }}>
+                  {telemetryRows.length === 0 ? (
+                    <div style={{ padding: '16px 14px', fontSize: 12, color: 'var(--muted)' }}>
+                      No telemetry data yet — waiting for the device to send a ping.
+                    </div>
+                  ) : telemetryRows.map((row, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', borderBottom: i < telemetryRows.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                      <div style={{ width: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{row.icon}</div>
+                      <div style={{ width: 44, fontWeight: 700, fontSize: 15, flexShrink: 0 }}>{row.value}</div>
+                      <div style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{row.label}</div>
+                      <div style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0 }}>{ts ? fmtSASTtime(ts) : '—'}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Rider + location + odometer */}
+                <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 7 }}>
+                  {selectedMapDevice?.rider_name && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <Activity size={14} style={{ color: 'var(--primary)', flexShrink: 0 }} />
+                      <span style={{ fontSize: 13, fontWeight: 600 }}>{selectedMapDevice.rider_name}</span>
+                    </div>
+                  )}
+                  {ts && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <Clock size={14} style={{ color: 'var(--muted)', flexShrink: 0 }} />
+                      <span style={{ fontSize: 12, color: 'var(--muted)' }}>{fmtSAST(ts)}</span>
+                    </div>
+                  )}
+                  {(address || (selectedMapDevice?.lat && selectedMapDevice?.lng)) && (
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                      <MapPin size={14} style={{ color: 'var(--primary)', flexShrink: 0, marginTop: 2 }} />
+                      <div>
+                        <div style={{ fontSize: 12, lineHeight: 1.4 }}>{address || 'Resolving address…'}</div>
+                        {selectedMapDevice?.lat && (
+                          <div style={{ fontSize: 10, color: 'var(--muted)', fontFamily: 'monospace', marginTop: 2 }}>
+                            [{selectedMapDevice.lat.toFixed(4)}, {selectedMapDevice.lng.toFixed(4)}]
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  {selectedMapDevice?.odometer_km != null && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 2 }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600 }}>
+                        <Route size={13} style={{ color: 'var(--muted)' }} />{Number(selectedMapDevice.odometer_km).toLocaleString()} km
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Today's activity */}
+                <div style={{ padding: '10px 14px' }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    Today's activity
+                    <button className="btn btn-sm" style={{ padding: '1px 5px', marginLeft: 'auto', background: 'transparent' }}
+                      onClick={() => selectedDevice.bike_id && loadTrips(selectedDevice.bike_id)}><RefreshCw size={10} /></button>
+                  </div>
+                  {!selectedDevice.bike_id ? (
+                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>No bike assigned to this device.</div>
+                  ) : trips.length === 0 ? (
+                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>No trips loaded — select this device to load trips.</div>
+                  ) : todayTrips.length === 0 ? (
+                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>No trips recorded today.</div>
+                  ) : (
+                    <>
+                      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 700, color: '#22c55e' }}>
+                          <Route size={12} />{todayKm.toFixed(1)} km
+                        </span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 700, color: 'var(--muted)' }}>
+                          <Clock size={12} />{fmtDuration(todaySec)}
+                        </span>
+                        <span style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 600 }}>
+                          {todayTrips.length} trip{todayTrips.length !== 1 ? 's' : ''}
+                        </span>
+                      </div>
+                      {todayTrips.slice(0, 5).map(t => {
+                        const ongoing = !t.ended_at;
+                        return (
+                          <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', borderTop: '1px solid var(--border)', fontSize: 11 }}>
+                            <div style={{ width: 8, height: 8, borderRadius: '50%', background: ongoing ? '#22c55e' : 'var(--muted)', flexShrink: 0 }} />
+                            <span style={{ color: 'var(--muted)', minWidth: 42 }}>{fmtSASTtime(t.started_at)}</span>
+                            <span style={{ flex: 1, color: 'var(--text)', fontWeight: 600 }}>{t.distance_km != null ? `${Number(t.distance_km).toFixed(1)} km` : '—'}</span>
+                            <span style={{ color: 'var(--muted)' }}>{fmtDuration(t.duration_sec)}</span>
+                            {ongoing && <span style={{ fontSize: 9, fontWeight: 700, color: '#22c55e', background: 'rgba(34,197,94,.12)', padding: '1px 5px', borderRadius: 6 }}>live</span>}
+                          </div>
+                        );
+                      })}
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* ── Info tab ─────────────────────────────────────────── */}
           {detailTab === 'info' && <>

@@ -9,6 +9,7 @@ const { ensureSuperadminFromEnv } = require('./services/bootstrapSuperadmin');
 const { ensureContractSnapshotForRelativePath } = require('./services/contracts');
 
 const app = express();
+app.set('trust proxy', 1); // Railway reverse proxy: trust first hop for rate limiting and real IPs
 const UPLOAD_DIRS = require('./uploadPaths');
 const uploadRoots = [
   UPLOAD_DIRS.base,

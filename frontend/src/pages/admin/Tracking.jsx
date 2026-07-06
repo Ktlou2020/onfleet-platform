@@ -478,6 +478,7 @@ export default function Tracking() {
   useEffect(() => {
     const tick = setInterval(async () => {
       if (!mountedRef.current) return;
+      if (document.hidden) return; // don't poll when tab is not visible
       try {
         const [{ data: devs }, { data: map }] = await Promise.all([
           api.get('/tracking/devices'),

@@ -161,6 +161,9 @@ function handlePacket(imei, packet) {
           altitude: latestRec.altitude,
           satellites: latestRec.satellites,
           ignition: latestRec.io[239] !== undefined ? latestRec.io[239] : null,
+          gsm_signal: latestRec.io[21] != null ? Number(latestRec.io[21]) : null,
+          battery_mv: latestRec.io[66] != null ? Number(latestRec.io[66]) : null,
+          ext_voltage_mv: latestRec.io[67] != null ? Number(latestRec.io[67]) : null,
           ts: latestRec.ts,
         });
       }

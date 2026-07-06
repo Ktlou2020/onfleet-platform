@@ -168,7 +168,7 @@ router.get('/map', authRequired, adminOnly, (req, res) => {
     SELECT td.id, td.imei, td.model, td.label, td.last_seen_at,
            b.id AS bike_id, b.registration, b.make, b.model AS bike_model, b.status AS bike_status,
            b.last_known_lat AS lat, b.last_known_lng AS lng, b.last_location_at,
-           gp.speed_kmh, gp.heading, gp.ignition, gp.satellites, gp.altitude
+           gp.speed_kmh, gp.heading, gp.ignition, gp.satellites, gp.altitude, gp.io_data
     FROM tracking_devices td
     JOIN bikes b ON b.id = td.bike_id
     LEFT JOIN gps_pings gp ON gp.id = (

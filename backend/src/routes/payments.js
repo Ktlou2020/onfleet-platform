@@ -7,7 +7,7 @@ const db = require('../db');
 const { authRequired, adminOnly } = require('../middleware/auth');
 const { logAudit, recalcScheduleStatuses } = require('../utils/helpers');
 const { applyCsvMapping, previewImportCsv } = require('../services/csvPreview');
-const { resolveAgreementForPayment } = require('../services/csvImports');
+const { resolveAgreementForPayment, parseMoney, parseDateFlexible } = require('../services/csvImports');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 3 * 1024 * 1024 } });
@@ -490,7 +490,10 @@ router.post('/bulk-import', authRequired, adminOnly, upload.single('file'), (req
       if (!registration) throw new Error('Bike registration is required');
       const agreement = resolveAgreementForPayment(row);
       if (!agreement) throw new Error(`Agreement not found for registration ${registration}`);
-      const reference = buildBulkPaymentReference(row);
+      const amount = parseMoney(row.amount);
+      if (!amount || amount <= 0) throw new Error(`Invalid or missing amount "${row.amount}"`);
+      const paidAt = parseDateFlexible(row.paid_at) || new Date().toISOString().slice(0, 10);
+      const reference = buildBulkPaymentReference({ ...row, paid_at: paidAt });
       const exists = db.prepare('SELECT id FROM payments WHERE reference = ?').get(reference);
       if (exists) {
         summary.skipped += 1;
@@ -498,10 +501,10 @@ router.post('/bulk-import', authRequired, adminOnly, upload.single('file'), (req
       }
       recordManualPayment({
         agreement_id: agreement.id,
-        amount: Number(row.amount),
+        amount,
         method: row.method || 'eft',
         reference,
-        paid_at: row.paid_at || new Date().toISOString(),
+        paid_at: paidAt,
         notes: row.notes || `Bulk CSV import for registration ${registration}`,
         recorded_by: req.user.id
       });

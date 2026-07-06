@@ -681,6 +681,8 @@ function importUserTagsCsv(buffer, { tag }) {
 
 module.exports = {
   africanCountries,
+  parseMoney,
+  parseDateFlexible,
   importRidersCsv,
   importBikesCsv,
   importAgreementsCsv,

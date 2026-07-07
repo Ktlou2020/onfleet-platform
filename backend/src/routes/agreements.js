@@ -2,7 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const db = require('../db');
 const { authRequired, adminOnly } = require('../middleware/auth');
-const { logAudit, recalcScheduleStatuses } = require('../utils/helpers');
+const { logAudit, addDays, recalcScheduleStatuses, updateAgreementBalance } = require('../utils/helpers');
 const { writeContractSnapshot } = require('../services/contracts');
 const { discontinueAgreement, reinstateDiscontinuedAgreement } = require('../services/agreementLifecycle');
 
@@ -254,6 +254,94 @@ router.post('/:id/reinstate', authRequired, adminOnly, (req, res) => {
     if (!agreement) return res.status(404).json({ error: 'Agreement not found' });
     const result = reinstateDiscontinuedAgreement({ agreementId: Number(req.params.id), actorId: req.user.id, ip: req.ip });
     res.json({ ok: true, ...result });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// PUT /:id/balance — admin manually sets the outstanding remaining balance
+router.put('/:id/balance', authRequired, adminOnly, (req, res) => {
+  try {
+    const agreement = db.prepare(`SELECT a.id
+      FROM agreements a
+      JOIN bikes b ON b.id = a.bike_id
+      JOIN users u ON u.id = a.user_id
+      WHERE a.id = ? AND ${adminVisibleAgreementClause('a', 'b', 'u')}`).get(req.params.id);
+    if (!agreement) return res.status(404).json({ error: 'Agreement not found' });
+    const result = updateAgreementBalance(Number(req.params.id), req.body.remaining_balance);
+    logAudit(req.user.id, 'admin.agreement_balance_edit', 'agreements', agreement.id, {
+      remaining_balance: result.remaining_balance,
+      total_amount: result.total_amount
+    }, req.ip);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// PUT /:id/schedule — admin changes the number of installments (total_weeks)
+router.put('/:id/schedule', authRequired, adminOnly, (req, res) => {
+  try {
+    const ag = db.prepare(`SELECT a.*
+      FROM agreements a
+      JOIN bikes b ON b.id = a.bike_id
+      JOIN users u ON u.id = a.user_id
+      WHERE a.id = ? AND ${adminVisibleAgreementClause('a', 'b', 'u')}`).get(req.params.id);
+    if (!ag) return res.status(404).json({ error: 'Agreement not found' });
+
+    const newTotalWeeks = Number(req.body.total_weeks);
+    if (!Number.isInteger(newTotalWeeks) || newTotalWeeks < 1 || newTotalWeeks > 520) {
+      return res.status(400).json({ error: 'total_weeks must be a whole number between 1 and 520' });
+    }
+
+    // Find the highest committed week (paid/partial/waived) — cannot go below this
+    const committed = db.prepare(
+      `SELECT COALESCE(MAX(week_number), 0) AS max_week FROM payment_schedules
+       WHERE agreement_id = ? AND status IN ('paid', 'partial', 'waived')`
+    ).get(ag.id);
+    const minWeeks = committed.max_week || 0;
+
+    if (newTotalWeeks < minWeeks) {
+      return res.status(400).json({
+        error: `Cannot reduce to ${newTotalWeeks} — week ${minWeeks} already has a payment recorded`
+      });
+    }
+
+    const weeklyAmount = Number(ag.weekly_amount);
+    const newTotalAmount = +(weeklyAmount * newTotalWeeks).toFixed(2);
+
+    db.transaction(() => {
+      // Remove all pending/overdue rows beyond the new total
+      db.prepare(
+        `DELETE FROM payment_schedules WHERE agreement_id = ? AND week_number > ? AND status NOT IN ('paid', 'partial', 'waived')`
+      ).run(ag.id, newTotalWeeks);
+
+      // Find the current highest week_number in the schedule
+      const currentMax = db.prepare(
+        `SELECT COALESCE(MAX(week_number), 0) AS max FROM payment_schedules WHERE agreement_id = ?`
+      ).get(ag.id).max;
+
+      // Insert any new rows needed
+      const insert = db.prepare(
+        `INSERT INTO payment_schedules (agreement_id, week_number, due_date, amount_due) VALUES (?,?,?,?)`
+      );
+      for (let w = currentMax + 1; w <= newTotalWeeks; w++) {
+        insert.run(ag.id, w, addDays(ag.start_date, (w - 1) * 7), weeklyAmount);
+      }
+
+      db.prepare(`UPDATE agreements SET total_weeks = ?, total_amount = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+        .run(newTotalWeeks, newTotalAmount, ag.id);
+    })();
+
+    recalcScheduleStatuses(ag.id);
+    logAudit(req.user.id, 'admin.agreement_schedule_edit', 'agreements', ag.id, {
+      old_total_weeks: ag.total_weeks,
+      new_total_weeks: newTotalWeeks,
+      weekly_amount: weeklyAmount,
+      new_total_amount: newTotalAmount
+    }, req.ip);
+
+    res.json({ ok: true, total_weeks: newTotalWeeks, total_amount: newTotalAmount, weekly_amount: weeklyAmount });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }

@@ -8,7 +8,7 @@ const fs = require('fs');
 const db = require('../db');
 const { authRequired, fleetOwnerOnly, companyRoleAllowed } = require('../middleware/auth');
 const { requireValidMime } = require('../utils/validateUpload');
-const { logAudit, generateAgreementNo, buildPaymentSchedule, addDays, recalcScheduleStatuses } = require('../utils/helpers');
+const { logAudit, generateAgreementNo, buildPaymentSchedule, addDays, recalcScheduleStatuses, rebuildScheduleAllocations, updateAgreementBalance } = require('../utils/helpers');
 const { setBikeStatus } = require('../utils/bikeStatus');
 const { discontinueAgreementForStolenBike, discontinueAgreement, reinstateDiscontinuedAgreement } = require('../services/agreementLifecycle');
 const { extractPayslipInsights } = require('../services/documentInsights');
@@ -873,102 +873,6 @@ function recordFleetManualPayment({ agreement_id, amount, method, reference, pai
     );
   applyPaymentToSchedule(agreement_id, Number(amount));
   return { id: info.lastInsertRowid, reference: ref };
-}
-
-function rebuildScheduleAllocations(agreementId) {
-  const today = todayIso();
-  const schedules = db.prepare(`SELECT * FROM payment_schedules WHERE agreement_id = ? ORDER BY week_number ASC`).all(agreementId);
-  if (!schedules.length) return;
-
-  const reset = db.prepare(`UPDATE payment_schedules SET amount_paid = ?, paid_at = ?, status = ? WHERE id = ?`);
-  for (const schedule of schedules) {
-    if (schedule.status === 'waived') {
-      reset.run(0, null, 'waived', schedule.id);
-    } else {
-      reset.run(0, null, schedule.due_date < today ? 'overdue' : 'pending', schedule.id);
-    }
-  }
-
-  const payments = db.prepare(`SELECT * FROM payments WHERE agreement_id = ? AND status = 'success' ORDER BY COALESCE(paid_at, created_at) ASC, id ASC`).all(agreementId);
-  const applicable = db.prepare(`SELECT * FROM payment_schedules WHERE agreement_id = ? AND status != 'waived' ORDER BY week_number ASC`).all(agreementId);
-  const updateApplied = db.prepare(`UPDATE payment_schedules SET amount_paid = ?, paid_at = ?, status = ? WHERE id = ?`);
-
-  for (const payment of payments) {
-    let remaining = creditedAmount(payment);
-    for (const schedule of applicable) {
-      if (remaining <= 0) break;
-      const owed = +(Number(schedule.amount_due) - Number(schedule.amount_paid || 0)).toFixed(2);
-      if (owed <= 0) continue;
-      const applied = Math.min(remaining, owed);
-      schedule.amount_paid = +(Number(schedule.amount_paid || 0) + applied).toFixed(2);
-      schedule.paid_at = schedule.paid_at || payment.paid_at || payment.created_at || null;
-      schedule.status = schedule.amount_paid >= Number(schedule.amount_due) ? 'paid' : 'partial';
-      updateApplied.run(schedule.amount_paid, schedule.paid_at, schedule.status, schedule.id);
-      remaining = +(remaining - applied).toFixed(2);
-    }
-  }
-
-  for (const schedule of applicable) {
-    let status = schedule.status;
-    if (Number(schedule.amount_paid || 0) >= Number(schedule.amount_due || 0)) status = 'paid';
-    else if (Number(schedule.amount_paid || 0) > 0 && schedule.due_date < today) status = 'overdue';
-    else if (Number(schedule.amount_paid || 0) > 0) status = 'partial';
-    else if (schedule.due_date < today) status = 'overdue';
-    else status = 'pending';
-    updateApplied.run(schedule.amount_paid || 0, schedule.paid_at || null, status, schedule.id);
-  }
-}
-
-function updateAgreementRemainingBalance(agreementId, remainingBalance) {
-  const targetRemaining = Number(remainingBalance);
-  if (!Number.isFinite(targetRemaining) || targetRemaining < 0) throw new Error('Remaining balance must be zero or greater');
-
-  const agreement = db.prepare('SELECT id, status, total_amount FROM agreements WHERE id = ?').get(agreementId);
-  if (!agreement) throw new Error('Agreement not found');
-  if (!['active', 'paused', 'defaulted'].includes(agreement.status)) {
-    throw new Error('Only active, paused, or defaulted agreements can be updated');
-  }
-
-  const paidTotal = Number(db.prepare(`SELECT COALESCE(SUM(COALESCE(NULLIF(net_amount, 0), amount)), 0) AS total
-    FROM payments WHERE agreement_id = ? AND status = 'success'`).get(agreementId).total || 0);
-  const schedules = db.prepare(`SELECT id, amount_due, amount_paid, status
-    FROM payment_schedules WHERE agreement_id = ? ORDER BY week_number ASC`).all(agreementId);
-  if (!schedules.length) throw new Error('Payment schedule not found');
-
-  const openSchedules = schedules.filter((row) => row.status !== 'waived' && Number(row.amount_due || 0) > Number(row.amount_paid || 0));
-  if (!openSchedules.length && targetRemaining > 0) {
-    throw new Error('No unpaid schedule rows remain for this agreement');
-  }
-
-  const currentOutstanding = openSchedules.reduce((sum, row) => sum + Math.max(Number(row.amount_due || 0) - Number(row.amount_paid || 0), 0), 0);
-  const targetTotalAmount = +(paidTotal + targetRemaining).toFixed(2);
-
-  db.transaction(() => {
-    if (openSchedules.length) {
-      let remainingToAllocate = +targetRemaining.toFixed(2);
-      openSchedules.forEach((row, index) => {
-        const currentOutstandingRow = Math.max(Number(row.amount_due || 0) - Number(row.amount_paid || 0), 0);
-        const isLast = index === openSchedules.length - 1;
-        const nextOutstanding = isLast
-          ? remainingToAllocate
-          : +(currentOutstanding > 0 ? (targetRemaining * currentOutstandingRow / currentOutstanding) : (targetRemaining / openSchedules.length)).toFixed(2);
-        const safeOutstanding = Math.max(nextOutstanding, 0);
-        const nextAmountDue = +(Number(row.amount_paid || 0) + safeOutstanding).toFixed(2);
-        db.prepare('UPDATE payment_schedules SET amount_due = ? WHERE id = ?').run(nextAmountDue, row.id);
-        remainingToAllocate = +(remainingToAllocate - safeOutstanding).toFixed(2);
-      });
-    }
-    db.prepare('UPDATE agreements SET total_amount = ? WHERE id = ?').run(targetTotalAmount, agreementId);
-  })();
-
-  rebuildScheduleAllocations(agreementId);
-
-  return {
-    agreement_id: agreementId,
-    total_amount: targetTotalAmount,
-    paid_total: +paidTotal.toFixed(2),
-    remaining_balance: +targetRemaining.toFixed(2)
-  };
 }
 
 function sanitizePortalDataForRole(role, portalData) {
@@ -1839,7 +1743,7 @@ router.patch('/agreements/:id/remaining-balance', companyRoleAllowed(FLEET_RESOU
     if (!agreement) return res.status(404).json({ error: 'Agreement not found in your fleet' });
 
     const remainingBalance = req.body.remaining_balance;
-    const result = updateAgreementRemainingBalance(agreementId, remainingBalance);
+    const result = updateAgreementBalance(agreementId, remainingBalance);
     logAudit(req.user.id, 'fleet_owner.agreement_remaining_balance', 'agreements', agreementId, {
       remaining_balance: result.remaining_balance,
       total_amount: result.total_amount

@@ -18,6 +18,8 @@ export default function AdminAgreementDetail() {
   const [subLink, setSubLink] = useState(null);
   const [showBalanceEdit, setShowBalanceEdit] = useState(false);
   const [newBalance, setNewBalance] = useState('');
+  const [showScheduleEdit, setShowScheduleEdit] = useState(false);
+  const [newTotalWeeks, setNewTotalWeeks] = useState('');
 
   const load = () => api.get(`/agreements/${id}`).then((response) => {
     setData(response.data);
@@ -79,6 +81,23 @@ export default function AdminAgreementDetail() {
       load();
     } catch (error) {
       toast.error(error.response?.data?.error || 'Could not reinstate this agreement');
+    } finally {
+      setBusyAction('');
+    }
+  };
+
+  const editSchedule = async () => {
+    const weeks = parseInt(newTotalWeeks, 10);
+    if (!Number.isInteger(weeks) || weeks < 1) return toast.error('Enter a valid number of payments (whole number, 1 or more)');
+    try {
+      setBusyAction('schedule');
+      await api.put(`/agreements/${id}/schedule`, { total_weeks: weeks });
+      toast.success('Payment schedule updated');
+      setShowScheduleEdit(false);
+      setNewTotalWeeks('');
+      load();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not update schedule');
     } finally {
       setBusyAction('');
     }
@@ -152,7 +171,16 @@ export default function AdminAgreementDetail() {
 
       <div className="card mb-4">
         <div className="flex-between mb-3" style={{ gap: 16, flexWrap: 'wrap' }}>
-          <h3>Progress to ownership · {summary.progress_pct}%</h3>
+          <div className="row" style={{ gap: 12, alignItems: 'center' }}>
+            <h3 style={{ margin: 0 }}>Progress to ownership · {summary.progress_pct}%</h3>
+            {!isDiscontinued && (
+              <button
+                className="btn btn-sm btn-secondary"
+                style={{ fontSize: 11, padding: '2px 8px' }}
+                onClick={() => { setNewTotalWeeks(agreement.total_weeks); setShowScheduleEdit(true); }}
+              >Edit payments</button>
+            )}
+          </div>
           <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
             {!isDiscontinued && <button className="btn btn-sm" onClick={() => setShowPay(true)}>+ Record manual payment</button>}
             {agreement.contract_file_path && <a className="btn btn-sm btn-secondary" href={agreement.contract_file_path} target="_blank" rel="noreferrer">Contract</a>}
@@ -163,6 +191,7 @@ export default function AdminAgreementDetail() {
             {agreement.status === 'active' && <button className="btn btn-sm btn-danger" onClick={() => updateStatus('defaulted')} disabled={busyAction === 'defaulted'}>Default</button>}
           </div>
         </div>
+
         <div className="progress-bar"><div className="progress-fill" style={{ width: `${summary.progress_pct}%` }} /></div>
         <div className="flex-between mt-3 text-sm muted">
           <div>Start {fmtDate(agreement.start_date)}</div>
@@ -271,6 +300,43 @@ export default function AdminAgreementDetail() {
           <div className="field"><label className="label">Reference</label><input value={pay.reference} onChange={(e) => setPay({ ...pay, reference: e.target.value })} /></div>
           <div className="field"><label className="label">Notes</label><textarea rows={3} value={pay.notes} onChange={(e) => setPay({ ...pay, notes: e.target.value })} /></div>
           <div className="row"><button className="btn" onClick={recordPayment}>Record</button><button className="btn btn-secondary" onClick={() => setShowPay(false)}>Cancel</button></div>
+        </Modal>
+      )}
+
+      {showScheduleEdit && (
+        <Modal title="Edit number of payments" onClose={() => { setShowScheduleEdit(false); setNewTotalWeeks(''); }}>
+          <p className="muted text-sm mb-3">
+            Changes how many weekly payments make up this contract. Unpaid rows beyond the new total are removed; new rows are added if you increase the count. Already-paid weeks cannot be removed.
+          </p>
+          <div className="grid grid-2">
+            <div className="field">
+              <label className="label">Number of payments (weeks)</label>
+              <input
+                type="number"
+                min="1"
+                step="1"
+                value={newTotalWeeks}
+                onChange={(e) => setNewTotalWeeks(e.target.value)}
+                autoFocus
+              />
+            </div>
+            <div className="field">
+              <label className="label">Weekly amount</label>
+              <input readOnly value={`R${agreement.weekly_amount}`} style={{ background: 'var(--surface-2)' }} />
+            </div>
+          </div>
+          <div className="muted text-sm mb-3">
+            Current: {agreement.total_weeks} payments · New total: {fmt((parseInt(newTotalWeeks, 10) || 0) * agreement.weekly_amount)}
+            {parseInt(newTotalWeeks, 10) > 0 && parseInt(newTotalWeeks, 10) !== agreement.total_weeks && (
+              <span style={{ marginLeft: 8, color: parseInt(newTotalWeeks, 10) > agreement.total_weeks ? 'var(--success)' : 'var(--danger)' }}>
+                ({parseInt(newTotalWeeks, 10) > agreement.total_weeks ? '+' : ''}{parseInt(newTotalWeeks, 10) - agreement.total_weeks} weeks)
+              </span>
+            )}
+          </div>
+          <div className="row">
+            <button className="btn" onClick={editSchedule} disabled={busyAction === 'schedule'}>{busyAction === 'schedule' ? 'Saving…' : 'Save'}</button>
+            <button className="btn btn-secondary" onClick={() => { setShowScheduleEdit(false); setNewTotalWeeks(''); }}>Cancel</button>
+          </div>
         </Modal>
       )}
 

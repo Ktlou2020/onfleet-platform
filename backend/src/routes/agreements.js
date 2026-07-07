@@ -2,7 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const db = require('../db');
 const { authRequired, adminOnly } = require('../middleware/auth');
-const { logAudit, recalcScheduleStatuses } = require('../utils/helpers');
+const { logAudit, recalcScheduleStatuses, updateAgreementBalance } = require('../utils/helpers');
 const { writeContractSnapshot } = require('../services/contracts');
 const { discontinueAgreement, reinstateDiscontinuedAgreement } = require('../services/agreementLifecycle');
 
@@ -253,6 +253,26 @@ router.post('/:id/reinstate', authRequired, adminOnly, (req, res) => {
       WHERE a.id = ? AND ${adminVisibleAgreementClause('a', 'b', 'u')}`).get(req.params.id);
     if (!agreement) return res.status(404).json({ error: 'Agreement not found' });
     const result = reinstateDiscontinuedAgreement({ agreementId: Number(req.params.id), actorId: req.user.id, ip: req.ip });
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// PUT /:id/balance — admin manually sets the outstanding remaining balance
+router.put('/:id/balance', authRequired, adminOnly, (req, res) => {
+  try {
+    const agreement = db.prepare(`SELECT a.id
+      FROM agreements a
+      JOIN bikes b ON b.id = a.bike_id
+      JOIN users u ON u.id = a.user_id
+      WHERE a.id = ? AND ${adminVisibleAgreementClause('a', 'b', 'u')}`).get(req.params.id);
+    if (!agreement) return res.status(404).json({ error: 'Agreement not found' });
+    const result = updateAgreementBalance(Number(req.params.id), req.body.remaining_balance);
+    logAudit(req.user.id, 'admin.agreement_balance_edit', 'agreements', agreement.id, {
+      remaining_balance: result.remaining_balance,
+      total_amount: result.total_amount
+    }, req.ip);
     res.json({ ok: true, ...result });
   } catch (error) {
     res.status(400).json({ error: error.message });

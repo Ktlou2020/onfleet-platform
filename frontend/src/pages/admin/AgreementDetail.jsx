@@ -16,6 +16,8 @@ export default function AdminAgreementDetail() {
   const [busyAction, setBusyAction] = useState('');
   const [subAmount, setSubAmount] = useState('');
   const [subLink, setSubLink] = useState(null);
+  const [showBalanceEdit, setShowBalanceEdit] = useState(false);
+  const [newBalance, setNewBalance] = useState('');
 
   const load = () => api.get(`/agreements/${id}`).then((response) => {
     setData(response.data);
@@ -82,6 +84,23 @@ export default function AdminAgreementDetail() {
     }
   };
 
+  const editBalance = async () => {
+    const val = parseFloat(String(newBalance).replace(/[^0-9.]/g, ''));
+    if (!Number.isFinite(val) || val < 0) return toast.error('Enter a valid balance amount (0 or greater)');
+    try {
+      setBusyAction('balance');
+      await api.put(`/agreements/${id}/balance`, { remaining_balance: val });
+      toast.success('Balance updated');
+      setShowBalanceEdit(false);
+      setNewBalance('');
+      load();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not update balance');
+    } finally {
+      setBusyAction('');
+    }
+  };
+
   return (
     <>
       <Link to="/admin/agreements" className="muted text-sm">← Back</Link>
@@ -118,7 +137,16 @@ export default function AdminAgreementDetail() {
       <div className="grid grid-4 mb-4">
         <Stat label="Total contract" value={fmt(agreement.total_amount)} />
         <Stat label="Received" value={fmt(summary.total_paid)} accent="var(--success)" />
-        <Stat label="Remaining" value={fmt(summary.remaining)} accent="var(--accent)" />
+        <div style={{ position: 'relative' }}>
+          <Stat label="Remaining" value={fmt(summary.remaining)} accent="var(--accent)" />
+          {!isDiscontinued && (
+            <button
+              className="btn btn-sm btn-secondary"
+              style={{ position: 'absolute', top: 8, right: 8, fontSize: 11, padding: '2px 8px' }}
+              onClick={() => { setNewBalance(summary.remaining ?? ''); setShowBalanceEdit(true); }}
+            >Edit</button>
+          )}
+        </div>
         <Stat label="Overdue" value={fmt(summary.overdue)} accent="var(--danger)" />
       </div>
 
@@ -243,6 +271,33 @@ export default function AdminAgreementDetail() {
           <div className="field"><label className="label">Reference</label><input value={pay.reference} onChange={(e) => setPay({ ...pay, reference: e.target.value })} /></div>
           <div className="field"><label className="label">Notes</label><textarea rows={3} value={pay.notes} onChange={(e) => setPay({ ...pay, notes: e.target.value })} /></div>
           <div className="row"><button className="btn" onClick={recordPayment}>Record</button><button className="btn btn-secondary" onClick={() => setShowPay(false)}>Cancel</button></div>
+        </Modal>
+      )}
+
+      {showBalanceEdit && (
+        <Modal title="Edit outstanding balance" onClose={() => { setShowBalanceEdit(false); setNewBalance(''); }}>
+          <p className="muted text-sm mb-3">
+            Sets the new remaining balance. The total contract value is adjusted to <strong>amount paid so far + new remaining</strong>, and the unpaid schedule rows are re-scaled proportionally.
+          </p>
+          <div className="field">
+            <label className="label">New remaining balance (ZAR)</label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={newBalance}
+              onChange={(e) => setNewBalance(e.target.value)}
+              placeholder={fmt(summary.remaining)}
+              autoFocus
+            />
+          </div>
+          <div className="muted text-sm mb-3">
+            Current: {fmt(summary.remaining)} · Paid: {fmt(summary.total_paid)} · New total: {fmt((summary.total_paid || 0) + (parseFloat(newBalance) || 0))}
+          </div>
+          <div className="row">
+            <button className="btn" onClick={editBalance} disabled={busyAction === 'balance'}>{busyAction === 'balance' ? 'Saving…' : 'Save balance'}</button>
+            <button className="btn btn-secondary" onClick={() => { setShowBalanceEdit(false); setNewBalance(''); }}>Cancel</button>
+          </div>
         </Modal>
       )}
     </>

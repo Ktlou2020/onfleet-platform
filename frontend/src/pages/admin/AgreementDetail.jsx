@@ -31,6 +31,8 @@ export default function AdminAgreementDetail() {
 
   const { agreement, schedule, payments, summary, application_documents: applicationDocuments = [] } = data;
   const isDiscontinued = agreement.status === 'discontinued';
+  const totalReceived = payments.filter(p => p.status === 'success').reduce((sum, p) => sum + creditedAmount(p), 0);
+  const remaining = Math.max(0, +(agreement.total_amount - totalReceived).toFixed(2));
   const canReinstate = isDiscontinued && agreement.discontinued_reason === 'bike_stolen';
   const bikeStillStolen = agreement.bike_status === 'stolen';
 
@@ -169,14 +171,14 @@ export default function AdminAgreementDetail() {
 
       <div className="grid grid-4 mb-4">
         <Stat label="Total contract" value={fmt(agreement.total_amount)} />
-        <Stat label="Received" value={fmt(summary.total_paid)} accent="var(--success)" />
+        <Stat label="Received" value={fmt(totalReceived)} accent="var(--success)" />
         <div style={{ position: 'relative' }}>
-          <Stat label="Remaining" value={fmt(summary.remaining)} accent="var(--accent)" />
+          <Stat label="Remaining" value={fmt(remaining)} accent="var(--accent)" />
           {!isDiscontinued && (
             <button
               className="btn btn-sm btn-secondary"
               style={{ position: 'absolute', top: 8, right: 8, fontSize: 11, padding: '2px 8px' }}
-              onClick={() => { setNewBalance(summary.remaining ?? ''); setShowBalanceEdit(true); }}
+              onClick={() => { setNewBalance(remaining ?? ''); setShowBalanceEdit(true); }}
             >Edit</button>
           )}
         </div>
@@ -374,12 +376,12 @@ export default function AdminAgreementDetail() {
               step="0.01"
               value={newBalance}
               onChange={(e) => setNewBalance(e.target.value)}
-              placeholder={fmt(summary.remaining)}
+              placeholder={fmt(remaining)}
               autoFocus
             />
           </div>
           <div className="muted text-sm mb-3">
-            Current: {fmt(summary.remaining)} · Paid: {fmt(summary.total_paid)} · New total: {fmt((summary.total_paid || 0) + (parseFloat(newBalance) || 0))}
+            Current: {fmt(remaining)} · Paid: {fmt(totalReceived)} · New total: {fmt((totalReceived || 0) + (parseFloat(newBalance) || 0))}
           </div>
           <div className="row">
             <button className="btn" onClick={editBalance} disabled={busyAction === 'balance'}>{busyAction === 'balance' ? 'Saving…' : 'Save balance'}</button>

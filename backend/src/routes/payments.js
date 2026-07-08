@@ -22,7 +22,7 @@ function calcGrossAmount(amountZAR) {
   return +(amountZAR + fee).toFixed(2);
 }
 function creditedAmount(payment) {
-  return Number(payment?.net_amount ?? payment?.amount ?? 0);
+  return Number(payment?.net_amount || payment?.amount || 0);
 }
 
 function adminVisibleAgreementClause(aAlias = 'a', bAlias = 'b', uAlias = 'u') {

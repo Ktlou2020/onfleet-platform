@@ -155,9 +155,17 @@ router.get('/:id', authRequired, (req, res) => {
   const creditedAmount = (payment) => Number(payment.net_amount ?? payment.amount ?? 0);
   const totalPaid = successfulPayments.reduce((sum, payment) => sum + creditedAmount(payment), 0);
   const remainingRaw = +(ag.total_amount - totalPaid).toFixed(2);
-  const weeksPaid = schedule.filter((row) => row.status === 'paid').length;
-  const overdueRaw = schedule.filter((row) => row.status === 'overdue').reduce((sum, row) => sum + (row.amount_due - row.amount_paid), 0);
-  const nextDueRaw = schedule.find((row) => row.status !== 'paid' && row.status !== 'waived');
+
+  // Derive weeks_paid, overdue, and next_due from payments (source of truth), not from
+  // potentially-stale payment_schedules rows. This means no rebuild click is needed.
+  const weeklyAmount = Number(ag.weekly_amount) || 0;
+  const weeksPaid = weeklyAmount > 0 ? Math.floor(+(totalPaid / weeklyAmount).toFixed(10)) : 0;
+  const today = new Date().toISOString().slice(0, 10);
+  const nonWaivedSchedule = schedule.filter((s) => s.status !== 'waived');
+  const weeksDueByToday = nonWaivedSchedule.filter((s) => s.due_date <= today).length;
+  const amountDueByToday = +(weeksDueByToday * weeklyAmount).toFixed(2);
+  const overdueRaw = Math.max(0, +(amountDueByToday - totalPaid).toFixed(2));
+  const nextDueRaw = nonWaivedSchedule[weeksPaid] || null;
   const progressPct = ag.total_amount ? +((totalPaid / ag.total_amount) * 100).toFixed(1) : 0;
   const isDiscontinued = ag.status === 'discontinued';
 

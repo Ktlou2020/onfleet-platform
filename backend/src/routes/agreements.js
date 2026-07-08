@@ -2,7 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const db = require('../db');
 const { authRequired, adminOnly } = require('../middleware/auth');
-const { logAudit, addDays, recalcScheduleStatuses, updateAgreementBalance } = require('../utils/helpers');
+const { logAudit, addDays, recalcScheduleStatuses, rebuildScheduleAllocations, updateAgreementBalance } = require('../utils/helpers');
 const { writeContractSnapshot } = require('../services/contracts');
 const { discontinueAgreement, reinstateDiscontinuedAgreement } = require('../services/agreementLifecycle');
 
@@ -257,6 +257,19 @@ router.post('/:id/reinstate', authRequired, adminOnly, (req, res) => {
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
+});
+
+// POST /:id/rebuild-schedule — resets payment schedule rows and replays all payments from the payments table
+router.post('/:id/rebuild-schedule', authRequired, adminOnly, (req, res) => {
+  const agreement = db.prepare(`SELECT a.id
+    FROM agreements a
+    JOIN bikes b ON b.id = a.bike_id
+    JOIN users u ON u.id = a.user_id
+    WHERE a.id = ? AND ${adminVisibleAgreementClause('a', 'b', 'u')}`).get(req.params.id);
+  if (!agreement) return res.status(404).json({ error: 'Agreement not found' });
+  rebuildScheduleAllocations(agreement.id);
+  logAudit(req.user.id, 'admin.agreement_schedule_rebuild', 'agreements', agreement.id, {}, req.ip);
+  res.json({ ok: true });
 });
 
 // PUT /:id/balance — admin manually sets the outstanding remaining balance

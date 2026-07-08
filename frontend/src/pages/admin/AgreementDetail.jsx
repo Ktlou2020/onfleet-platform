@@ -86,6 +86,20 @@ export default function AdminAgreementDetail() {
     }
   };
 
+  const rebuildSchedule = async () => {
+    if (!window.confirm('Rebuild the payment schedule from the recorded payments? This resets all week statuses and replays every payment in order.')) return;
+    try {
+      setBusyAction('rebuild');
+      await api.post(`/agreements/${id}/rebuild-schedule`);
+      toast.success('Schedule rebuilt from payment records');
+      load();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not rebuild schedule');
+    } finally {
+      setBusyAction('');
+    }
+  };
+
   const editSchedule = async () => {
     const weeks = parseInt(newTotalWeeks, 10);
     if (!Number.isInteger(weeks) || weeks < 1) return toast.error('Enter a valid number of payments (whole number, 1 or more)');
@@ -180,6 +194,13 @@ export default function AdminAgreementDetail() {
                 onClick={() => { setNewTotalWeeks(agreement.total_weeks); setShowScheduleEdit(true); }}
               >Edit payments</button>
             )}
+            <button
+              className="btn btn-sm btn-secondary"
+              style={{ fontSize: 11, padding: '2px 8px' }}
+              onClick={rebuildSchedule}
+              disabled={busyAction === 'rebuild'}
+              title="Sync week statuses to match actual payment records"
+            >{busyAction === 'rebuild' ? 'Rebuilding…' : 'Rebuild'}</button>
           </div>
           <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
             {!isDiscontinued && <button className="btn btn-sm" onClick={() => setShowPay(true)}>+ Record manual payment</button>}

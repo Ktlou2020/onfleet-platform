@@ -6,7 +6,7 @@ import {
   Wifi, WifiOff, Zap, ZapOff, Radio, Info, RefreshCw, Plus, Trash2,
   CheckCircle, Clock, XCircle, AlertCircle, X, Search, Layers,
   Maximize2, Navigation, Gauge, Mountain, MapPin, Activity,
-  Shield, Bell, Route, BellOff,
+  Shield, Bell, Route, BellOff, Pencil,
   Battery, BatteryLow, BatteryMedium, BatteryFull, BatteryCharging,
   Signal, SignalZero, SignalLow, SignalMedium, SignalHigh, Satellite,
 } from 'lucide-react';
@@ -152,6 +152,66 @@ const ALERT_COLORS = {
 
 const EMPTY_FORM = { imei: '', model: 'FMB920', bike_id: '', label: '' };
 const EMPTY_GEO  = { name: '', lat: '', lng: '', radius_m: 500, bike_id: '' };
+
+function BikeCombobox({ bikes, value, onChange }) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    const close = (e) => { if (containerRef.current && !containerRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, []);
+
+  const selected = value ? bikes.find(b => String(b.id) === String(value)) : null;
+  const inputDisplay = open ? query : (selected ? `${selected.registration} — ${selected.make} ${selected.model}` : '');
+
+  const filtered = bikes.filter(b => {
+    if (!query) return true;
+    const q = query.toLowerCase();
+    return [b.registration, b.make, b.model].some(v => v && String(v).toLowerCase().includes(q));
+  }).slice(0, 80);
+
+  return (
+    <div ref={containerRef} style={{ position: 'relative' }}>
+      <input
+        className="input"
+        placeholder="Search by registration, make or model…"
+        value={inputDisplay}
+        onChange={e => { setQuery(e.target.value); setOpen(true); }}
+        onFocus={() => { setQuery(''); setOpen(true); }}
+        onKeyDown={e => { if (e.key === 'Escape') setOpen(false); }}
+        autoComplete="off"
+      />
+      {open && (
+        <div style={{ position: 'absolute', zIndex: 9999, top: '100%', left: 0, right: 0, marginTop: 2, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, maxHeight: 220, overflowY: 'auto', boxShadow: '0 4px 16px rgba(0,0,0,.18)' }}>
+          <div
+            onMouseDown={e => { e.preventDefault(); onChange(null); setQuery(''); setOpen(false); }}
+            style={{ padding: '8px 12px', cursor: 'pointer', fontSize: 12, color: 'var(--muted)', borderBottom: '1px solid var(--border)', fontStyle: 'italic' }}
+          >— Not assigned —</div>
+          {filtered.length === 0
+            ? <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--muted)' }}>No bikes match "{query}"</div>
+            : filtered.map(b => (
+              <div
+                key={b.id}
+                onMouseDown={e => { e.preventDefault(); onChange(b.id); setQuery(''); setOpen(false); }}
+                style={{
+                  padding: '8px 12px', cursor: 'pointer', fontSize: 13,
+                  background: String(value) === String(b.id) ? 'var(--primary)' : 'transparent',
+                  color: String(value) === String(b.id) ? '#fff' : 'var(--text)',
+                }}
+              >
+                <strong>{b.registration}</strong>
+                <span style={{ opacity: .7, marginLeft: 6 }}>{b.make} {b.model}</span>
+              </div>
+            ))
+          }
+        </div>
+      )}
+    </div>
+  );
+}
 
 async function reverseGeocode(lat, lng) {
   try {
@@ -309,6 +369,11 @@ export default function Tracking() {
   const [showAdd,  setShowAdd]  = useState(false);
   const [addForm,  setAddForm]  = useState(EMPTY_FORM);
   const [adding,   setAdding]   = useState(false);
+
+  // ── edit-device modal ─────────────────────────────────────────────
+  const [showEditDevice, setShowEditDevice] = useState(false);
+  const [editDeviceForm, setEditDeviceForm] = useState({ model: 'FMB920', label: '', bike_id: null });
+  const [savingEdit, setSavingEdit] = useState(false);
 
   // ── sidebar tabs ─────────────────────────────────────────────────
   const [sideTab, setSideTab] = useState('devices');
@@ -589,6 +654,20 @@ export default function Tracking() {
       setAdding(false);
     }
   }, [addForm, loadDevices]);
+
+  const saveDeviceEdit = useCallback(async () => {
+    setSavingEdit(true);
+    try {
+      await api.put(`/tracking/devices/${selected}`, { ...editDeviceForm, bike_id: editDeviceForm.bike_id || null });
+      toast.success('Device updated');
+      setShowEditDevice(false);
+      await loadDevices();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Could not update device');
+    } finally {
+      setSavingEdit(false);
+    }
+  }, [selected, editDeviceForm, loadDevices]);
 
   const deleteDevice = useCallback(async (e, id) => {
     e.stopPropagation();
@@ -1002,6 +1081,14 @@ export default function Tracking() {
                     : <span style={{ color: 'var(--muted)' }}>Last seen {selectedDevice.last_seen_at ? fmtSAST(selectedDevice.last_seen_at) : 'never'}</span>}
                 </div>
               </div>
+              <button className="btn btn-sm btn-secondary" style={{ padding: '3px 6px', flexShrink: 0 }}
+                title="Edit device"
+                onClick={() => {
+                  setEditDeviceForm({ model: selectedDevice.model || 'FMB920', label: selectedDevice.label || '', bike_id: selectedDevice.bike_id || null });
+                  setShowEditDevice(true);
+                }}>
+                <Pencil size={12} />
+              </button>
               <button className="btn btn-sm btn-secondary" style={{ padding: '3px 6px', flexShrink: 0 }}
                 onClick={() => { setSelected(null); setTrail([]); setCommands([]); setAddress(null); setTrips([]); }} title="Close">
                 <X size={12} />
@@ -1443,10 +1530,7 @@ export default function Tracking() {
 
           <div className="field">
             <label className="label">Assign to bike <span style={{ color: 'var(--muted)', fontWeight: 400 }}>(optional)</span></label>
-            <select className="input" value={addForm.bike_id} onChange={e => setAddForm(f => ({ ...f, bike_id: e.target.value }))}>
-              <option value="">— not assigned yet —</option>
-              {bikes.map(b => <option key={b.id} value={b.id}>{b.registration} — {b.make} {b.model}</option>)}
-            </select>
+            <BikeCombobox bikes={bikes} value={addForm.bike_id} onChange={v => setAddForm(f => ({ ...f, bike_id: v }))} />
           </div>
 
           <div className="field">
@@ -1463,6 +1547,54 @@ export default function Tracking() {
           </div>
         </Modal>
       )}
+
+      {/* ── Edit device modal ────────────────────────────────────── */}
+      {showEditDevice && selected && (() => {
+        const dev = devices.find(d => d.id === selected);
+        return (
+          <Modal onClose={() => setShowEditDevice(false)} title={`Edit device · ${dev?.label || dev?.registration || dev?.imei}`}>
+            <div className="field">
+              <label className="label">Device model</label>
+              <select className="input" value={editDeviceForm.model} onChange={e => setEditDeviceForm(f => ({ ...f, model: e.target.value }))}>
+                {MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+              </select>
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>Determines which engine-cut command is used</div>
+            </div>
+
+            <div className="field">
+              <label className="label">Linked bike</label>
+              <BikeCombobox
+                bikes={bikes}
+                value={editDeviceForm.bike_id}
+                onChange={v => setEditDeviceForm(f => ({ ...f, bike_id: v }))}
+              />
+              {editDeviceForm.bike_id && (
+                <div style={{ fontSize: 11, color: '#22c55e', marginTop: 4 }}>
+                  ✓ Linked — GPS positions will be stored for this bike
+                </div>
+              )}
+              {!editDeviceForm.bike_id && (
+                <div style={{ fontSize: 11, color: '#f97316', marginTop: 4 }}>
+                  No bike linked — positions will not be stored until you assign one
+                </div>
+              )}
+            </div>
+
+            <div className="field">
+              <label className="label">Friendly name <span style={{ color: 'var(--muted)', fontWeight: 400 }}>(optional)</span></label>
+              <input className="input" placeholder="e.g. Sipho's Honda" value={editDeviceForm.label}
+                onChange={e => setEditDeviceForm(f => ({ ...f, label: e.target.value }))} />
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, marginTop: 20 }}>
+              <button className="btn btn-primary" onClick={saveDeviceEdit} disabled={savingEdit}>
+                {savingEdit ? 'Saving…' : 'Save changes'}
+              </button>
+              <button className="btn btn-secondary" onClick={() => setShowEditDevice(false)}>Cancel</button>
+            </div>
+          </Modal>
+        );
+      })()}
 
       {/* ── Add geofence modal ───────────────────────────────────── */}
       {showGeoForm && (

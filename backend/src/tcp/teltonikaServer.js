@@ -125,14 +125,19 @@ function handlePacket(imei, packet) {
     const { numData1, records } = parsed;
 
     const device = db.prepare('SELECT * FROM tracking_devices WHERE imei = ?').get(imei);
+    if (device && !device.bike_id && records.length) {
+      console.warn(`[Teltonika] ${imei} has ${records.length} record(s) but no bike linked — assign a bike to this device to store positions`);
+    }
     if (device?.bike_id && records.length) {
       const insertPing = db.prepare(
         `INSERT INTO gps_pings (bike_id, lat, lng, speed_kmh, heading, recorded_at, satellites, altitude, ignition, io_data)
          VALUES (?,?,?,?,?,?,?,?,?,?)`
       );
       let latestRec = null;
+      let stored = 0;
       for (const rec of records) {
-        if (rec.satellites < 1) continue;
+        // lat=0/lng=0 are already excluded by parseAvl; accept any valid coordinate
+        // regardless of satellite count (device may report 0 satellites but still have a fix)
         const recAt = new Date(rec.ts).toISOString();
         const ignition = rec.io[239] !== undefined ? rec.io[239] : null;
         insertPing.run(
@@ -143,8 +148,12 @@ function handlePacket(imei, packet) {
           JSON.stringify(rec.io)
         );
         if (!latestRec || rec.ts > latestRec.ts) latestRec = rec;
+        stored++;
         try { tripService.processPing(device.bike_id, device.id, rec.lat, rec.lng, rec.speed, ignition ? 1 : 0, recAt, rec.io); } catch (e) { console.error('[Trip]', e.message); }
         try { geofenceService.checkGeofences(device.bike_id, device.id, rec.lat, rec.lng, recAt); } catch (e) { console.error('[Geofence]', e.message); }
+      }
+      if (stored < records.length) {
+        console.warn(`[Teltonika] ${imei} ${records.length - stored}/${records.length} record(s) had lat=0/lng=0 and were skipped`);
       }
       if (latestRec) {
         db.prepare(

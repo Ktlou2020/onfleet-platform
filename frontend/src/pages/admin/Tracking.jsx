@@ -139,6 +139,12 @@ const ALERT_LABELS = {
   harsh_cornering:  'Harsh cornering',
   idle:             'Extended idle',
   speeding:         'Speeding',
+  panic:            'Panic / SOS',
+  power_disconnect: 'Power disconnected',
+  low_battery:      'Low battery',
+  movement:         'Unauthorized movement',
+  tamper:           'GPS tamper',
+  device_offline:   'Device offline',
 };
 const ALERT_COLORS = {
   geofence_enter:   '#22c55e',
@@ -148,7 +154,44 @@ const ALERT_COLORS = {
   harsh_cornering:  '#eab308',
   idle:             '#94a3b8',
   speeding:         '#ef4444',
+  panic:            '#dc2626',
+  power_disconnect: '#dc2626',
+  low_battery:      '#f97316',
+  movement:         '#dc2626',
+  tamper:           '#dc2626',
+  device_offline:   '#94a3b8',
 };
+const ALERT_SEVERITY = {
+  panic: 'critical', tamper: 'critical', power_disconnect: 'critical', movement: 'critical',
+  speeding: 'high', harsh_brake: 'high', geofence_exit: 'high',
+  harsh_accel: 'medium', harsh_cornering: 'medium', geofence_enter: 'medium', low_battery: 'medium',
+  idle: 'low', device_offline: 'low',
+};
+const ALERT_FILTER_GROUPS = [
+  { id: '',         label: 'All' },
+  { id: 'critical', label: 'Critical', types: ['panic','tamper','power_disconnect','movement'] },
+  { id: 'driving',  label: 'Driving',  types: ['speeding','harsh_brake','harsh_accel','harsh_cornering','idle'] },
+  { id: 'location', label: 'Location', types: ['geofence_enter','geofence_exit'] },
+  { id: 'vehicle',  label: 'Vehicle',  types: ['low_battery','device_offline'] },
+];
+const CRITICAL_ALERT_TYPES = new Set(['panic','tamper','power_disconnect','movement']);
+
+function playAlertBeep() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [0, 0.18, 0.36].forEach(t => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(880, ctx.currentTime + t);
+      gain.gain.setValueAtTime(0.22, ctx.currentTime + t);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + t + 0.14);
+      osc.start(ctx.currentTime + t);
+      osc.stop(ctx.currentTime + t + 0.14);
+    });
+  } catch { /* AudioContext may be blocked before user gesture */ }
+}
 
 const EMPTY_FORM = { imei: '', model: 'FMB920', bike_id: '', label: '' };
 const EMPTY_GEO  = { name: '', lat: '', lng: '', radius_m: 500, bike_id: '' };
@@ -372,15 +415,16 @@ export default function Tracking() {
 
   // ── edit-device modal ─────────────────────────────────────────────
   const [showEditDevice, setShowEditDevice] = useState(false);
-  const [editDeviceForm, setEditDeviceForm] = useState({ model: 'FMB920', label: '', bike_id: null });
+  const [editDeviceForm, setEditDeviceForm] = useState({ model: 'FMB920', label: '', bike_id: null, speed_limit_kmh: 120 });
   const [savingEdit, setSavingEdit] = useState(false);
 
   // ── sidebar tabs ─────────────────────────────────────────────────
   const [sideTab, setSideTab] = useState('devices');
 
   // ── alerts ───────────────────────────────────────────────────────
-  const [alerts,       setAlerts]       = useState([]);
-  const [alertsUnread, setAlertsUnread] = useState(0);
+  const [alerts,          setAlerts]          = useState([]);
+  const [alertsUnread,    setAlertsUnread]    = useState(0);
+  const [alertTypeFilter, setAlertTypeFilter] = useState('');
 
   // ── geofences ────────────────────────────────────────────────────
   const [geofences,     setGeofences]     = useState([]);
@@ -409,6 +453,11 @@ export default function Tracking() {
     el.style.padding = '0';
     el.style.overflow = 'hidden';
     return () => { el.style.padding = prev.padding; el.style.overflow = prev.overflow; };
+  }, []);
+
+  // Request browser notification permission once (silently — no prompt if already decided)
+  useEffect(() => {
+    if (Notification.permission === 'default') Notification.requestPermission().catch(() => {});
   }, []);
 
   // Escape cancels center picking
@@ -522,6 +571,14 @@ export default function Tracking() {
               } else if (evtType === 'alert') {
                 setAlertsUnread(n => n + 1);
                 setAlerts(prev => [p, ...prev].slice(0, 200));
+                if (CRITICAL_ALERT_TYPES.has(p.alert_type)) {
+                  playAlertBeep();
+                  const label = ALERT_LABELS[p.alert_type] || p.alert_type;
+                  const reg   = p.bike_registration || `Bike #${p.bike_id}`;
+                  if (Notification.permission === 'granted') {
+                    new Notification(`🚨 ${label}`, { body: reg, tag: `gps-${p.alert_type}`, silent: true });
+                  }
+                }
               }
             } catch { /* ignore parse errors */ }
           }
@@ -903,36 +960,77 @@ export default function Tracking() {
               <button className="btn btn-sm btn-secondary" style={{ fontSize: 11 }} onClick={acknowledgeAll}>Ack all</button>
             )}
           </div>
+          {/* Filter chips */}
+          <div style={{ padding: '6px 12px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            {ALERT_FILTER_GROUPS.map(g => (
+              <button
+                key={g.id}
+                onClick={() => setAlertTypeFilter(g.id)}
+                style={{
+                  fontSize: 10, padding: '2px 8px', borderRadius: 12, border: '1px solid var(--border)',
+                  fontWeight: alertTypeFilter === g.id ? 700 : 400,
+                  background: alertTypeFilter === g.id ? 'var(--primary)' : 'transparent',
+                  color: alertTypeFilter === g.id ? '#fff' : 'var(--muted)',
+                  cursor: 'pointer',
+                }}
+              >{g.label}</button>
+            ))}
+          </div>
           <div style={{ flex: 1, overflowY: 'auto' }}>
-            {alerts.length === 0 ? (
-              <div style={{ padding: '40px 20px', textAlign: 'center' }}>
-                <BellOff size={28} style={{ color: 'var(--muted)', marginBottom: 8 }} />
-                <div style={{ fontSize: 12, color: 'var(--muted)' }}>No alerts yet</div>
-              </div>
-            ) : alerts.map(a => {
-              let payload = {};
-              try { payload = JSON.parse(a.payload || '{}'); } catch { /* skip */ }
-              const isUnread = !a.acknowledged_at;
-              return (
-                <div key={a.id} style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', opacity: isUnread ? 1 : 0.55 }}>
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
-                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: ALERT_COLORS[a.alert_type] || '#94a3b8', flexShrink: 0, marginTop: 3 }} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 12, fontWeight: isUnread ? 700 : 400 }}>{ALERT_LABELS[a.alert_type] || a.alert_type}</div>
-                      <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>
-                        {a.bike_registration || `Bike #${a.bike_id}`} · {fmtSASTtime(a.created_at)}
-                      </div>
-                      {payload.speed_kmh && <div style={{ fontSize: 10, color: ALERT_COLORS[a.alert_type], marginTop: 1 }}>{Math.round(payload.speed_kmh)} km/h</div>}
-                      {payload.geofence_name && <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>Zone: {payload.geofence_name}</div>}
-                      {payload.idle_sec && <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>Idle: {Math.round(payload.idle_sec / 60)} min</div>}
-                    </div>
-                    {isUnread && (
-                      <button className="btn btn-sm" style={{ padding: '2px 6px', fontSize: 10, flexShrink: 0 }} onClick={() => acknowledgeAlert(a.id)}>Ack</button>
-                    )}
-                  </div>
+            {(() => {
+              const group = ALERT_FILTER_GROUPS.find(g => g.id === alertTypeFilter);
+              const visible = group?.types
+                ? alerts.filter(a => group.types.includes(a.alert_type))
+                : alerts;
+              if (visible.length === 0) return (
+                <div style={{ padding: '40px 20px', textAlign: 'center' }}>
+                  <BellOff size={28} style={{ color: 'var(--muted)', marginBottom: 8 }} />
+                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>{alerts.length === 0 ? 'No alerts yet' : 'No alerts in this category'}</div>
                 </div>
               );
-            })}
+              return visible.map(a => {
+                let payload = {};
+                try { payload = JSON.parse(a.payload || '{}'); } catch { /* skip */ }
+                const isUnread = !a.acknowledged_at;
+                const severity = ALERT_SEVERITY[a.alert_type];
+                const isCritical = severity === 'critical';
+                const hasLocation = payload.lat && payload.lng;
+                return (
+                  <div
+                    key={a.id}
+                    onClick={() => {
+                      if (hasLocation) setFlyTo([payload.lat, payload.lng]);
+                      if (a.device_id) {
+                        const dev = mapDevices.find(d => d.id === a.device_id);
+                        if (dev) { selectDevice(dev); setSideTab('devices'); }
+                      }
+                    }}
+                    style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', opacity: isUnread ? 1 : 0.55, cursor: hasLocation || a.device_id ? 'pointer' : 'default', borderLeft: `3px solid ${isCritical ? ALERT_COLORS[a.alert_type] : 'transparent'}` }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                      <div style={{ width: 8, height: 8, borderRadius: '50%', background: ALERT_COLORS[a.alert_type] || '#94a3b8', flexShrink: 0, marginTop: 3 }} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                          <span style={{ fontSize: 12, fontWeight: isUnread ? 700 : 400 }}>{ALERT_LABELS[a.alert_type] || a.alert_type}</span>
+                          {isCritical && <span style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: ALERT_COLORS[a.alert_type], padding: '0 4px', borderRadius: 4 }}>CRITICAL</span>}
+                        </div>
+                        <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>
+                          {a.bike_registration || `Bike #${a.bike_id}`} · {fmtSASTtime(a.created_at)}
+                        </div>
+                        {payload.speed_kmh && <div style={{ fontSize: 10, color: ALERT_COLORS[a.alert_type], marginTop: 1 }}>{Math.round(payload.speed_kmh)} km/h{payload.limit_kmh ? ` (limit ${payload.limit_kmh})` : ''}</div>}
+                        {payload.geofence_name && <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>Zone: {payload.geofence_name}</div>}
+                        {payload.idle_sec && <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>Idle: {Math.round(payload.idle_sec / 60)} min</div>}
+                        {payload.battery_mv && <div style={{ fontSize: 10, color: '#f97316', marginTop: 1 }}>{Math.round((payload.battery_mv - 3200) / 10)}% battery ({payload.battery_mv} mV)</div>}
+                        {hasLocation && <div style={{ fontSize: 9, color: 'var(--primary)', marginTop: 1 }}>Tap to view on map</div>}
+                      </div>
+                      {isUnread && (
+                        <button className="btn btn-sm" style={{ padding: '2px 6px', fontSize: 10, flexShrink: 0 }} onClick={e => { e.stopPropagation(); acknowledgeAlert(a.id); }}>Ack</button>
+                      )}
+                    </div>
+                  </div>
+                );
+              });
+            })()}
           </div>
         </>}
 
@@ -1084,7 +1182,7 @@ export default function Tracking() {
               <button className="btn btn-sm btn-secondary" style={{ padding: '3px 6px', flexShrink: 0 }}
                 title="Edit device"
                 onClick={() => {
-                  setEditDeviceForm({ model: selectedDevice.model || 'FMB920', label: selectedDevice.label || '', bike_id: selectedDevice.bike_id || null });
+                  setEditDeviceForm({ model: selectedDevice.model || 'FMB920', label: selectedDevice.label || '', bike_id: selectedDevice.bike_id || null, speed_limit_kmh: selectedDevice.speed_limit_kmh || 120 });
                   setShowEditDevice(true);
                 }}>
                 <Pencil size={12} />
@@ -1626,6 +1724,13 @@ export default function Tracking() {
                   No bike linked — positions will not be stored until you assign one
                 </div>
               )}
+            </div>
+
+            <div className="field">
+              <label className="label">Speed limit <span style={{ color: 'var(--muted)', fontWeight: 400 }}>(km/h)</span></label>
+              <input className="input" type="number" min={10} max={300} value={editDeviceForm.speed_limit_kmh || 120}
+                onChange={e => setEditDeviceForm(f => ({ ...f, speed_limit_kmh: Number(e.target.value) }))} />
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>Speeding alert fires when bike exceeds this speed</div>
             </div>
 
             <div className="field">

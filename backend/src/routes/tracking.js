@@ -75,14 +75,16 @@ router.put('/devices/:id', authRequired, adminOnly, (req, res) => {
   const { model, label } = req.body;
   const validModels = ['FMB920', 'FMB965', 'FMC920', 'other'];
   if (model !== undefined && !validModels.includes(model)) return res.status(400).json({ error: `Model must be one of: ${validModels.join(', ')}` });
+  const speedLimit = req.body.speed_limit_kmh != null ? Number(req.body.speed_limit_kmh) : null;
+  if (speedLimit !== null && (speedLimit < 10 || speedLimit > 300)) return res.status(400).json({ error: 'speed_limit_kmh must be 10–300' });
   const device = db.prepare('SELECT id FROM tracking_devices WHERE id=?').get(req.params.id);
   if (!device) return res.status(404).json({ error: 'Device not found' });
   if ('bike_id' in req.body) {
-    db.prepare(`UPDATE tracking_devices SET model=COALESCE(?,model), bike_id=?, label=COALESCE(?,label), updated_at=CURRENT_TIMESTAMP WHERE id=?`)
-      .run(model || null, req.body.bike_id || null, label || null, device.id);
+    db.prepare(`UPDATE tracking_devices SET model=COALESCE(?,model), bike_id=?, label=COALESCE(?,label), speed_limit_kmh=COALESCE(?,speed_limit_kmh), updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+      .run(model || null, req.body.bike_id || null, label || null, speedLimit, device.id);
   } else {
-    db.prepare(`UPDATE tracking_devices SET model=COALESCE(?,model), label=COALESCE(?,label), updated_at=CURRENT_TIMESTAMP WHERE id=?`)
-      .run(model || null, label || null, device.id);
+    db.prepare(`UPDATE tracking_devices SET model=COALESCE(?,model), label=COALESCE(?,label), speed_limit_kmh=COALESCE(?,speed_limit_kmh), updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+      .run(model || null, label || null, speedLimit, device.id);
   }
   res.json({ ok: true });
 });

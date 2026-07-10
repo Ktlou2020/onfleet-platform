@@ -752,6 +752,7 @@ ensureColumn('gps_pings', 'satellites', 'INTEGER');
 ensureColumn('gps_pings', 'altitude', 'INTEGER');
 ensureColumn('gps_pings', 'ignition', 'INTEGER');
 ensureColumn('gps_pings', 'io_data', 'TEXT');
+ensureColumn('tracking_devices', 'speed_limit_kmh', 'INTEGER DEFAULT 120');
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS geofences (

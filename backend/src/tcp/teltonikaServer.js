@@ -149,7 +149,7 @@ function handlePacket(imei, packet) {
         );
         if (!latestRec || rec.ts > latestRec.ts) latestRec = rec;
         stored++;
-        try { tripService.processPing(device.bike_id, device.id, rec.lat, rec.lng, rec.speed, ignition ? 1 : 0, recAt, rec.io); } catch (e) { console.error('[Trip]', e.message); }
+        try { tripService.processPing(device.bike_id, device.id, rec.lat, rec.lng, rec.speed, ignition ? 1 : 0, recAt, rec.io, device.speed_limit_kmh || 120); } catch (e) { console.error('[Trip]', e.message); }
         try { geofenceService.checkGeofences(device.bike_id, device.id, rec.lat, rec.lng, recAt); } catch (e) { console.error('[Geofence]', e.message); }
       }
       if (stored < records.length) {
@@ -309,5 +309,59 @@ function start(port) {
   server.on('error', (err) => console.error('[Teltonika] server error:', err));
   return server;
 }
+
+// ── Device-offline alert ─────────────────────────────────────────────────────
+// Fires once per hour per device when a bike-linked tracker hasn't reported in
+// more than 30 minutes and is not currently connected.
+const offlineAlertCooldowns = new Map(); // deviceId → last-alert epoch ms
+
+const findStaleDevices = db.prepare(`
+  SELECT td.id, td.imei, td.bike_id
+  FROM tracking_devices td
+  WHERE td.bike_id IS NOT NULL
+    AND td.last_seen_at IS NOT NULL
+    AND td.last_seen_at < ?
+`);
+const insertOfflineAlert = db.prepare(
+  `INSERT INTO tracking_alerts (bike_id, device_id, alert_type, payload, created_at) VALUES (?, ?, 'device_offline', ?, ?)`
+);
+const getBikeRegForOffline = db.prepare('SELECT registration FROM bikes WHERE id = ?');
+
+function checkOfflineDevices() {
+  try {
+    const threshold = new Date(Date.now() - 30 * 60_000).toISOString();
+    const stale = findStaleDevices.all(threshold);
+    const connectedSet = new Set(connections.keys());
+    const cooldownMs = 60 * 60_000; // re-alert at most once per hour per device
+    const now = Date.now();
+    const at = new Date().toISOString();
+
+    for (const dev of stale) {
+      if (connectedSet.has(dev.imei)) continue;
+      const last = offlineAlertCooldowns.get(dev.id);
+      if (last && now - last < cooldownMs) continue;
+      offlineAlertCooldowns.set(dev.id, now);
+
+      const payload = JSON.stringify({ imei: dev.imei });
+      const result = insertOfflineAlert.run(dev.bike_id, dev.id, payload, at);
+      const reg = getBikeRegForOffline.get(dev.bike_id)?.registration || null;
+      trackingEvents.emit('alert', {
+        id: result.lastInsertRowid,
+        bike_id: dev.bike_id,
+        device_id: dev.id,
+        alert_type: 'device_offline',
+        payload,
+        bike_registration: reg,
+        created_at: at,
+        acknowledged_at: null,
+      });
+      console.warn(`[Teltonika] Offline alert: ${dev.imei}`);
+    }
+  } catch (e) {
+    console.error('[Teltonika] offline check error:', e.message);
+  }
+}
+
+setInterval(checkOfflineDevices, 10 * 60_000); // check every 10 minutes
 
 module.exports = { start, sendCommand, getConnectedIMEIs, trackingEvents };

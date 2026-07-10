@@ -25,7 +25,12 @@ const PRESET_COMMANDS = {
 // GET /api/tracking/devices
 router.get('/devices', authRequired, adminOnly, (req, res) => {
   const devices = db.prepare(`
-    SELECT td.*, b.registration, b.make, b.model AS bike_model, b.last_known_lat, b.last_known_lng, b.last_location_at
+    SELECT td.*, b.registration, b.make, b.model AS bike_model, b.color AS bike_color, b.vin AS bike_vin, b.year AS bike_year,
+           b.last_known_lat, b.last_known_lng, b.last_location_at,
+           (SELECT u.full_name FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_name,
+           (SELECT u.phone    FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_phone,
+           (SELECT u.address  FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_address,
+           (SELECT u.city     FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_city
     FROM tracking_devices td
     LEFT JOIN bikes b ON b.id = td.bike_id
     ORDER BY td.connected DESC, td.last_seen_at DESC
@@ -167,12 +172,14 @@ router.get('/map', authRequired, adminOnly, (req, res) => {
   const devices = db.prepare(`
     SELECT td.id, td.imei, td.model, td.label, td.last_seen_at,
            b.id AS bike_id, b.registration, b.make, b.model AS bike_model, b.status AS bike_status,
+           b.color AS bike_color, b.vin AS bike_vin, b.year AS bike_year,
            b.last_known_lat AS lat, b.last_known_lng AS lng, b.last_location_at,
            b.odometer_km,
            gp.speed_kmh, gp.heading, gp.ignition, gp.satellites, gp.altitude, gp.io_data,
-           (SELECT u.full_name FROM agreements a JOIN users u ON u.id = a.user_id
-            WHERE a.bike_id = b.id AND a.status = 'active'
-            ORDER BY a.created_at DESC LIMIT 1) AS rider_name
+           (SELECT u.full_name FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_name,
+           (SELECT u.phone    FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_phone,
+           (SELECT u.address  FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_address,
+           (SELECT u.city     FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_city
     FROM tracking_devices td
     JOIN bikes b ON b.id = td.bike_id
     LEFT JOIN gps_pings gp ON gp.id = (

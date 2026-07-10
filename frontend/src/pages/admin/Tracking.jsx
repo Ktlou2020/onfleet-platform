@@ -1097,7 +1097,7 @@ export default function Tracking() {
 
             {/* Detail tabs */}
             <div style={{ display: 'flex', marginTop: 10, marginBottom: -14, marginLeft: -14, marginRight: -14, borderTop: '1px solid var(--border)', paddingTop: 2 }}>
-              {[['activity', 'Activity'], ['trips', 'Trips'], ['info', 'Controls']].map(([tab, label]) => (
+              {[['activity', 'Activity'], ['trips', 'Trips'], ['bike', 'Bike'], ['driver', 'Driver'], ['info', 'Controls']].map(([tab, label]) => (
                 <button
                   key={tab}
                   onClick={() => {
@@ -1270,6 +1270,54 @@ export default function Tracking() {
               </div>
             );
           })()}
+
+          {/* ── Bike tab ─────────────────────────────────────────── */}
+          {detailTab === 'bike' && (
+            <div style={{ padding: '14px' }}>
+              {!selectedDevice.bike_id ? (
+                <div style={{ fontSize: 13, color: 'var(--muted)' }}>No bike linked to this device.</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+                  {[
+                    { label: 'Registration', value: selectedDevice.registration },
+                    { label: 'Make', value: selectedDevice.make },
+                    { label: 'Model', value: selectedDevice.bike_model },
+                    { label: 'Year', value: selectedDevice.bike_year },
+                    { label: 'Colour', value: selectedDevice.bike_color },
+                    { label: 'VIN', value: selectedDevice.bike_vin, mono: true },
+                  ].map(({ label, value, mono }) => (
+                    <div key={label} style={{ display: 'flex', alignItems: 'baseline', padding: '10px 0', borderBottom: '1px solid var(--border)', gap: 12 }}>
+                      <span style={{ fontSize: 11, color: 'var(--muted)', width: 90, flexShrink: 0, textTransform: 'uppercase', letterSpacing: '.4px' }}>{label}</span>
+                      <span style={{ fontSize: 13, fontWeight: 600, fontFamily: mono ? 'monospace' : undefined, wordBreak: 'break-all' }}>{value || '—'}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Driver tab ───────────────────────────────────────── */}
+          {detailTab === 'driver' && (
+            <div style={{ padding: '14px' }}>
+              {!selectedDevice.rider_name ? (
+                <div style={{ fontSize: 13, color: 'var(--muted)' }}>No active rider assigned to this bike.</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+                  {[
+                    { label: 'Full name', value: selectedDevice.rider_name },
+                    { label: 'Phone', value: selectedDevice.rider_phone },
+                    { label: 'Address', value: selectedDevice.rider_address },
+                    { label: 'City', value: selectedDevice.rider_city },
+                  ].map(({ label, value }) => (
+                    <div key={label} style={{ display: 'flex', alignItems: 'flex-start', padding: '10px 0', borderBottom: '1px solid var(--border)', gap: 12 }}>
+                      <span style={{ fontSize: 11, color: 'var(--muted)', width: 90, flexShrink: 0, textTransform: 'uppercase', letterSpacing: '.4px', paddingTop: 1 }}>{label}</span>
+                      <span style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.4, wordBreak: 'break-word' }}>{value || '—'}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* ── Info tab ─────────────────────────────────────────── */}
           {detailTab === 'info' && <>

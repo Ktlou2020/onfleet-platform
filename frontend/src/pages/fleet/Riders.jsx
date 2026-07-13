@@ -550,6 +550,8 @@ export default function FleetOwnerRiders() {
                           <option value="750">R750 / week</option>
                           <option value="800">R800 / week</option>
                           <option value="850">R850 / week</option>
+                          <option value="1000">R1000 / week</option>
+                          <option value="1200">R1200 / week</option>
                         </select>
                         <button
                           className="btn btn-sm"

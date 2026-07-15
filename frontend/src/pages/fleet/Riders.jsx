@@ -545,6 +545,7 @@ export default function FleetOwnerRiders() {
                           style={{ minWidth: 140 }}
                           title="Weekly payment plan amount"
                         >
+                          <option value="500">R500 / week</option>
                           <option value="650">R650 / week</option>
                           <option value="700">R700 / week</option>
                           <option value="750">R750 / week</option>

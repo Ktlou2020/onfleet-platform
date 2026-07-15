@@ -230,6 +230,7 @@ export default function AdminAgreementDetail() {
             <label className="label">Weekly amount (ZAR)</label>
             <select value={subAmount} onChange={(e) => { setSubAmount(e.target.value); setSubLink(null); }}>
               <option value="">Use agreement default (R{agreement.weekly_amount})</option>
+              <option value="500">R500</option>
               <option value="650">R650</option>
               <option value="700">R700</option>
               <option value="750">R750</option>

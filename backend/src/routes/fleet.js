@@ -17,7 +17,7 @@ const { writeContractSnapshot } = require('../services/contracts');
 
 const router = express.Router();
 const PAYSTACK_BASE = 'https://api.paystack.co';
-const RIDER_PLAN_AMOUNTS = [650, 700, 750, 800, 850, 1000, 1200];
+const RIDER_PLAN_AMOUNTS = [500, 650, 700, 750, 800, 850, 1000, 1200];
 const FLEET_ROLE_VALUES = ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'];
 const MEMBER_STATUSES = ['active', 'suspended'];
 const OPEN_AGREEMENT_STATUSES = ['active', 'paused', 'defaulted'];

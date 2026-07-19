@@ -5,11 +5,17 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const path = require('path');
 const fs = require('fs');
-const { ensureSuperadminFromEnv } = require('./services/bootstrapSuperadmin');
-const { ensureContractSnapshotForRelativePath } = require('./services/contracts');
-
 const app = express();
-app.set('trust proxy', 1); // Railway reverse proxy: trust first hop for rate limiting and real IPs
+app.set('trust proxy', 1); // Fly.io / Railway reverse proxy: trust first hop for rate limiting and real IPs
+
+// Bind the port and register the health route BEFORE any heavy initialisation.
+// db.js, schema migrations, and route loading are synchronous and can take 10-30 s
+// on a cold shared-CPU container. Calling listen() first lets the OS buffer incoming
+// connections so health-check probes are queued and served the moment init finishes.
+app.get('/api/health', (req, res) => res.json({ ok: true, service: 'onfleet-api', time: new Date().toISOString() }));
+const PORT = process.env.PORT || 4000;
+app.listen(PORT, () => console.log(`🏍️  OnFleet API listening on :${PORT}`));
+
 const UPLOAD_DIRS = require('./uploadPaths');
 const uploadRoots = [
   UPLOAD_DIRS.base,
@@ -128,7 +134,7 @@ app.get(/^\/uploads\/(.+)$/, (req, res) => {
   const relativePath = String(req.params[0] || '');
   let absolutePath = resolveUploadPath(relativePath);
   if (!absolutePath) {
-    const regenerated = ensureContractSnapshotForRelativePath(relativePath);
+    const regenerated = require('./services/contracts').ensureContractSnapshotForRelativePath(relativePath);
     absolutePath = regenerated?.absolutePath || null;
   }
   if (!absolutePath) return sendMissingUpload(res, relativePath);
@@ -138,14 +144,12 @@ app.head(/^\/uploads\/(.+)$/, (req, res) => {
   const relativePath = String(req.params[0] || '');
   let absolutePath = resolveUploadPath(relativePath);
   if (!absolutePath) {
-    const regenerated = ensureContractSnapshotForRelativePath(relativePath);
+    const regenerated = require('./services/contracts').ensureContractSnapshotForRelativePath(relativePath);
     absolutePath = regenerated?.absolutePath || null;
   }
   if (!absolutePath) return sendMissingUpload(res, relativePath);
   return res.sendFile(absolutePath);
 });
-
-app.get('/api/health', (req, res) => res.json({ ok: true, service: 'onfleet-api', time: new Date().toISOString() }));
 
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/kyc', require('./routes/kyc'));
@@ -190,6 +194,7 @@ process.on('uncaughtException', (err) => {
   console.error('[uncaughtException]', err);
 });
 
+const { ensureSuperadminFromEnv } = require('./services/bootstrapSuperadmin');
 const superadminBootstrap = ensureSuperadminFromEnv();
 if (superadminBootstrap?.skipped) {
   console.log(`ℹ️  Superadmin bootstrap skipped: ${superadminBootstrap.reason}`);
@@ -197,12 +202,8 @@ if (superadminBootstrap?.skipped) {
   console.log(`🔐 Superadmin ${superadminBootstrap.created ? 'created' : 'updated'} for ${superadminBootstrap.email}`);
 }
 
-const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => {
-  console.log(`🏍️  OnFleet API listening on :${PORT}`);
-  if (process.env.NODE_ENV !== 'test') {
-    require('./services/scheduler').start();
-    const TCP_PORT = Number(process.env.TELTONIKA_TCP_PORT || 5000);
-    require('./tcp/teltonikaServer').start(TCP_PORT);
-  }
-});
+if (process.env.NODE_ENV !== 'test') {
+  require('./services/scheduler').start();
+  const TCP_PORT = Number(process.env.TELTONIKA_TCP_PORT || 5000);
+  require('./tcp/teltonikaServer').start(TCP_PORT);
+}

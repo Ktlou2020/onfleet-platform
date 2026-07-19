@@ -429,6 +429,11 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   border-radius: 50%; animation: spin 0.7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { animation: spin 0.7s linear infinite; display: inline-block; }
+.sidebar .nav-section-label {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--muted); opacity: 0.55; padding: 18px 12px 4px; margin-top: 2px;
+}
+@media (max-width: 1100px) { .sidebar .nav-section-label { display: none; } }
 .center-flex { display: flex; align-items: center; justify-content: center; min-height: 200px; }
 
 /* Fleet owner pilot */

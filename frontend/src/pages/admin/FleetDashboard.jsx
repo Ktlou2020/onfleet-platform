@@ -6,9 +6,18 @@ import toast from 'react-hot-toast';
 import { Briefcase, CreditCard, AlertTriangle, Wallet, Building2, Bike, FileText, Users, ExternalLink } from 'lucide-react';
 
 const payerFilterOptions = [
-  { value: 'all', label: 'All billing states' },
+  { value: 'all', label: 'All payer states' },
   { value: 'payer', label: 'Payers' },
   { value: 'non_payer', label: 'Non-payers' }
+];
+
+const subscriptionFilterOptions = [
+  { value: 'all', label: 'All subscription states' },
+  { value: 'trialing', label: 'Trialing' },
+  { value: 'active', label: 'Active' },
+  { value: 'past_due', label: 'Past due' },
+  { value: 'suspended', label: 'Suspended' },
+  { value: 'cancelled', label: 'Cancelled' }
 ];
 
 function payerStatusLabel(value) {
@@ -21,6 +30,7 @@ export default function AdminFleetDashboard() {
   const [organizations, setOrganizations] = useState([]);
   const [search, setSearch] = useState('');
   const [payerFilter, setPayerFilter] = useState('all');
+  const [subscriptionFilter, setSubscriptionFilter] = useState('all');
 
   const load = async () => {
     setLoading(true);
@@ -39,6 +49,7 @@ export default function AdminFleetDashboard() {
 
   const filtered = useMemo(() => organizations.filter((organization) => {
     if (payerFilter !== 'all' && organization.payer_status !== payerFilter) return false;
+    if (subscriptionFilter !== 'all' && organization.status !== subscriptionFilter) return false;
     return matchesSearch(
       search,
       organization.name,
@@ -53,7 +64,14 @@ export default function AdminFleetDashboard() {
       organization.member_count,
       organization.bike_count
     );
-  }), [organizations, payerFilter, search]);
+  }), [organizations, payerFilter, subscriptionFilter, search]);
+
+  const billingMix = useMemo(() => ({
+    trialing: filtered.filter((o) => o.status === 'trialing').length,
+    active: filtered.filter((o) => o.status === 'active').length,
+    past_due: filtered.filter((o) => o.status === 'past_due').length,
+    suspended: filtered.filter((o) => o.status === 'suspended').length,
+  }), [filtered]);
 
   const topNonPayers = useMemo(() => filtered
     .filter((organization) => organization.payer_status === 'non_payer')
@@ -95,6 +113,12 @@ export default function AdminFleetDashboard() {
           <div className="row" style={{ flexWrap: 'wrap', gap: 12 }}>
             <SearchInput value={search} onChange={setSearch} placeholder="Search company, city, plan or contact" style={{ minWidth: 280 }} />
             <div style={{ minWidth: 180 }}>
+              <label className="label">Subscription</label>
+              <select value={subscriptionFilter} onChange={(e) => setSubscriptionFilter(e.target.value)}>
+                {subscriptionFilterOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </div>
+            <div style={{ minWidth: 160 }}>
               <label className="label">Payer status</label>
               <select value={payerFilter} onChange={(e) => setPayerFilter(e.target.value)}>
                 {payerFilterOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
@@ -119,8 +143,9 @@ export default function AdminFleetDashboard() {
                   <th>Payer</th>
                   <th>Members</th>
                   <th>Bikes</th>
-                  <th>Open agreements</th>
+                  <th>Agreements</th>
                   <th>Revenue · 30d</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
@@ -140,6 +165,11 @@ export default function AdminFleetDashboard() {
                       <strong>{fmt(organization.revenue_30d || 0)}</strong>
                       <div className="text-xs muted">Last payment {fmtDateTime(organization.last_payment_at)}</div>
                     </td>
+                    <td>
+                      <Link to={`/admin/fleet-owners?org=${organization.id}`} className="btn btn-sm btn-secondary">
+                        Manage →
+                      </Link>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -148,23 +178,26 @@ export default function AdminFleetDashboard() {
 
           <div className="grid" style={{ gap: 16 }}>
             <div className="card">
-              <div className="card-title"><h3>Billing mix</h3><Badge status="info">Live</Badge></div>
+              <div className="card-title">
+                <h3>Billing mix</h3>
+                <Badge status="info">{filtered.length} org{filtered.length !== 1 ? 's' : ''}</Badge>
+              </div>
               <div className="grid grid-2">
                 <div>
                   <div className="label">Trialing</div>
-                  <div style={{ fontSize: 28, fontWeight: 700 }}>{summary?.trialing || 0}</div>
+                  <div style={{ fontSize: 28, fontWeight: 700 }}>{billingMix.trialing}</div>
                 </div>
                 <div>
                   <div className="label">Active</div>
-                  <div style={{ fontSize: 28, fontWeight: 700 }}>{summary?.active || 0}</div>
+                  <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--success)' }}>{billingMix.active}</div>
                 </div>
                 <div>
                   <div className="label">Past due</div>
-                  <div style={{ fontSize: 28, fontWeight: 700 }}>{summary?.past_due || 0}</div>
+                  <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--warning)' }}>{billingMix.past_due}</div>
                 </div>
                 <div>
                   <div className="label">Suspended</div>
-                  <div style={{ fontSize: 28, fontWeight: 700 }}>{summary?.suspended || 0}</div>
+                  <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--danger)' }}>{billingMix.suspended}</div>
                 </div>
               </div>
             </div>

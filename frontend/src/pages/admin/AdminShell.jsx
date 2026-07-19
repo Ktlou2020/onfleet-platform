@@ -15,10 +15,12 @@ const navItems = [
   { to: '/admin/notifications', label: 'Notifications', icon: Bell },
   { to: '/admin/imports', label: 'CSV Imports', icon: UploadCloud },
   { to: '/admin/strategy', label: 'AI Strategy', icon: BrainCircuit },
+  { section: 'Fleet owners' },
   { to: '/admin/leads', label: 'Pilot leads', icon: UserCheck },
-  { to: '/admin/fleet-dashboard', label: 'Fleet owner dashboard', icon: Briefcase },
-  { to: '/admin/fleet-owners', label: 'Manage fleet owners', icon: ShieldCheck, superadminOnly: true },
-  { to: '/admin/fleet-payouts', label: 'Fleet payout requests', icon: PiggyBank },
+  { to: '/admin/fleet-dashboard', label: 'Fleet dashboard', icon: Briefcase },
+  { to: '/admin/fleet-owners', label: 'Manage accounts', icon: ShieldCheck, superadminOnly: true },
+  { to: '/admin/fleet-payouts', label: 'Payout requests', icon: PiggyBank },
+  { section: 'System' },
   { to: '/admin/users', label: 'Users', icon: Users },
   { to: '/admin/audit', label: 'Audit Logs', icon: ClipboardList }
 ];
@@ -29,7 +31,7 @@ export default function AdminShell() {
   const [search, setSearch] = useState('');
 
   const allowedNav = useMemo(() => navItems.filter((item) => !item.superadminOnly || user?.role === 'superadmin'), [user?.role]);
-  const filteredNav = useMemo(() => allowedNav.filter((item) => matchesSearch(search, item.label, item.to)), [allowedNav, search]);
+  const filteredNav = useMemo(() => allowedNav.filter((item) => !item.section && matchesSearch(search, item.label, item.to)), [allowedNav, search]);
 
   const goToFirstMatch = (event) => {
     if (event.key === 'Enter' && filteredNav[0]) {
@@ -47,7 +49,8 @@ export default function AdminShell() {
           <span className="badge badge-info" style={{ fontSize: 9 }}>ADMIN</span>
         </div>
         <nav>
-          {allowedNav.map((item) => {
+          {allowedNav.map((item, i) => {
+            if (item.section) return <div key={`sec-${i}`} className="nav-section-label">{item.section}</div>;
             const Icon = item.icon;
             return <NavLink key={item.to} to={item.to} end={item.to === '/admin'}><Icon size={16} /> {item.label}</NavLink>;
           })}
@@ -62,7 +65,7 @@ export default function AdminShell() {
         </div>
       </aside>
       <nav className="mobile-bottom-nav">
-        {allowedNav.slice(0, 5).map((item) => {
+        {allowedNav.filter((item) => !item.section).slice(0, 5).map((item) => {
           const Icon = item.icon;
           return (
             <NavLink key={item.to} to={item.to} end={item.to === '/admin'}>

@@ -407,21 +407,27 @@ export default function AdminLeads() {
   const [err, setErr] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [selectedLead, setSelectedLead] = useState(null);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
 
   const load = useCallback(async () => {
     setLoading(true); setErr('');
     try {
       const params = {};
       if (statusFilter) params.status = statusFilter;
-      if (search) params.search = search;
+      if (debouncedSearch) params.search = debouncedSearch;
       const r = await api.get('/pilot/leads', { params });
       setLeads(r.data.leads || []);
       setStats(r.data.stats || {});
     } catch (e) {
       setErr(e.response?.data?.error || 'Could not load leads');
     } finally { setLoading(false); }
-  }, [statusFilter, search]);
+  }, [statusFilter, debouncedSearch]);
 
   useEffect(() => { load(); }, [load]);
 

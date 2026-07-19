@@ -1,4 +1,10 @@
 require('dotenv').config();
+
+if (process.env.NODE_ENV === 'production') {
+  console.log('🌱 Seed skipped in production');
+  process.exit(0);
+}
+
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');

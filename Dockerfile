@@ -20,4 +20,4 @@ RUN mkdir -p /app/backend/data /app/backend/uploads
 EXPOSE 4000
 WORKDIR /app/backend
 # Run seed once (idempotent — only seeds if DB is empty), then start
-CMD ["sh", "-c", "node src/seed.js 2>/dev/null || true; node src/server.js"]
+CMD ["node", "src/server.js"]

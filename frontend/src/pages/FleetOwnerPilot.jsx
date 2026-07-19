@@ -93,10 +93,15 @@ export default function FleetOwnerPilot() {
   const [form, setForm] = useState({ name: '', company: '', email: '', phone: '', bikes: '', message: '' });
   const [formState, setFormState] = useState('idle'); // idle | busy | success | error
   const [formError, setFormError] = useState('');
+  const [platformStats, setPlatformStats] = useState(null);
 
   useEffect(() => {
     document.title = 'OnFleet Fleet — Your riders pay, or the bike doesn\'t start';
     return () => { document.title = 'OnFleet Africa'; };
+  }, []);
+
+  useEffect(() => {
+    axios.get('/api/pilot/stats').then(r => setPlatformStats(r.data)).catch(() => {});
   }, []);
 
   function scrollTo(id) {
@@ -248,11 +253,25 @@ export default function FleetOwnerPilot() {
 
       {/* ── Proof strip ───────────────────────────────────────────── */}
       <section className="fleet-mkt-proof">
-        {/* TODO: Replace placeholder values with real numbers before launch */}
         {[
-          { value: '— bikes',  label: 'On the platform' },          // TODO: e.g. 120 bikes
-          { value: 'R—',       label: 'Collected for fleet owners' }, // TODO: e.g. R1.4m
-          { value: '—%',       label: 'Defaults recovered via immobilisation' }, // TODO: e.g. 94%
+          {
+            value: platformStats ? `${platformStats.bikes} bikes` : '— bikes',
+            label: 'On the platform'
+          },
+          {
+            value: platformStats
+              ? `R${platformStats.collected >= 1000000
+                  ? (platformStats.collected / 1000000).toFixed(1) + 'm'
+                  : platformStats.collected >= 1000
+                    ? Math.round(platformStats.collected / 1000) + 'k'
+                    : platformStats.collected.toLocaleString()}`
+              : 'R—',
+            label: 'Collected for fleet owners'
+          },
+          {
+            value: platformStats?.recovered_pct != null ? `${platformStats.recovered_pct}%` : '—%',
+            label: 'Defaults recovered via immobilisation'
+          },
         ].map((s) => (
           <div key={s.label} className="fleet-mkt-proof-stat">
             <div className="fleet-mkt-proof-value">{s.value}</div>

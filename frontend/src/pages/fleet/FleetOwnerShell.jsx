@@ -10,6 +10,7 @@ import api from '../../api';
 const navIconMap = {
   dashboard: LayoutDashboard,
   bikes: Bike,
+  tracking: MapPin,
   agreements: FileText,
   payments: CreditCard,
   riders: Users,

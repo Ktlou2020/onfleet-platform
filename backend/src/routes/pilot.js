@@ -78,6 +78,15 @@ const FLEET_PLAN_ENTITLEMENTS = {
   enterprise: { max_bikes: 9999, max_admin_users: 50 },
 };
 
+router.get('/stats', (req, res) => {
+  const bikes = db.prepare('SELECT COUNT(*) c FROM bikes').get().c;
+  const collected = db.prepare(`SELECT COALESCE(SUM(COALESCE(NULLIF(net_amount,0),amount)),0) c FROM payments WHERE status='success'`).get().c;
+  const cutCount = db.prepare(`SELECT COUNT(*) c FROM tracking_commands WHERE command LIKE 'setdigout%1'`).get().c;
+  const restoreCount = db.prepare(`SELECT COUNT(*) c FROM tracking_commands WHERE command LIKE 'setdigout%0'`).get().c;
+  const recoveredPct = cutCount > 0 ? Math.round((restoreCount / cutCount) * 100) : null;
+  res.json({ bikes, collected, recovered_pct: recoveredPct });
+});
+
 router.get('/plans', (req, res) => {
   res.json({
     plans: [

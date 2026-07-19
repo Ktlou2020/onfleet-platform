@@ -52,6 +52,8 @@ import AdminFleetOwners from './pages/admin/FleetOwners';
 import AdminFleetPayouts from './pages/admin/FleetPayouts';
 import AdminTracking from './pages/admin/Tracking';
 import FleetRiderApply from './pages/FleetRiderApply';
+import Privacy from './pages/Privacy';
+import Terms from './pages/Terms';
 import { canViewFleetSection, getDefaultFleetRoute, isAdminPortalRole } from './pages/fleet/access';
 
 function PrivateRoute({ children, role }) {
@@ -93,6 +95,8 @@ export default function App() {
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/reset-password" element={<ResetPassword />} />
         <Route path="/fleet" element={<FleetOwnerPilot />} />
+        <Route path="/privacy" element={<Privacy />} />
+        <Route path="/terms" element={<Terms />} />
         <Route path="/fleet/login" element={<FleetLogin />} />
         <Route path="/fleet/signup" element={<FleetSignup />} />
         <Route path="/fleet/workspace" element={<FleetOwnerWorkspace />} />

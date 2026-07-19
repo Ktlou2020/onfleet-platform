@@ -1,280 +1,404 @@
-import { useMemo, useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { CheckCircle2, ChevronRight, CreditCard, ShieldCheck, Users, Bike, BarChart3, Layers3, Briefcase, Clock3, Rocket, PiggyBank, ArrowRight, Smartphone, Banknote, Repeat } from 'lucide-react';
+import { CheckCircle2, Menu, X, Phone, MessageCircle } from 'lucide-react';
 import Logo from '../components/Logo';
-import { fmt } from '../components/ui';
+import axios from 'axios';
 
-const plans = [
+// TODO: Replace these with real contact details before going live
+const WHATSAPP_NUMBER = 'FILL_IN_WHATSAPP'; // e.g. 27821234567 (no + or spaces)
+const PHONE_DISPLAY   = 'FILL_IN_PHONE';    // e.g. +27 82 123 4567
+const PHONE_DIAL      = 'FILL_IN_PHONE';    // e.g. +27821234567
+
+const PROBLEMS = [
   {
-    key: 'trial',
-    name: '14-day trial',
-    price: 'Free',
-    cap: 'Up to 10 bikes',
-    summary: 'Best for validating the workflow with a live mini-fleet before going paid.',
-    cta: 'Start trial',
-    highlight: true,
-    features: ['2 admin users', 'Bike and agreement tracking', 'Payments dashboard', 'Collections visibility', 'Rider payment collection']
+    title: 'Chasing payments on WhatsApp',
+    text: 'You send a message. They say "tomorrow". Tomorrow comes and you send another one. The bike is still out there making someone else money.',
   },
   {
-    key: 'small',
-    name: 'Small fleet',
-    price: fmt(1499).replace('.00', ''),
-    cap: 'Up to 20 bikes',
-    summary: 'For early operators moving from spreadsheets to a daily operating system.',
-    cta: 'Choose Small',
-    features: ['3 admin users', 'CSV imports', 'Maintenance reminders', 'Fleet Wallet & payouts', 'Rider payment collection']
+    title: 'No record of who owes what',
+    text: 'A spreadsheet, maybe a notebook. Nobody's sure which version is right. A rider disputes a payment and you can't prove either way.',
   },
   {
-    key: 'medium',
-    name: 'Medium fleet',
-    price: fmt(3999).replace('.00', ''),
-    cap: 'Up to 60 bikes',
-    summary: 'For growing fleets that need bulk actions, reporting, and tighter control.',
-    cta: 'Choose Medium',
-    features: ['5 admin users', 'Advanced filters', 'Bulk contract actions', 'Performance reporting', 'Fleet Wallet & payouts']
+    title: 'A rider stops paying and disappears',
+    text: 'You don't know where the bike is. You can't immobilise it. You're chasing R15,000 worth of metal with no leverage.',
+  },
+];
+
+const STEPS = [
+  {
+    n: '01',
+    title: 'Add your bikes and riders',
+    text: 'Upload your fleet and link each bike to a rider. Takes less than five minutes per bike.',
   },
   {
-    key: 'large',
-    name: 'Large fleet',
-    price: fmt(6999).replace('.00', ''),
-    cap: 'Up to 100 bikes',
-    summary: 'For scaled operations running multiple teams, hubs, and field processes.',
-    cta: 'Choose Large',
-    features: ['10 admin users', 'Priority onboarding', 'Audit visibility', 'Fleet Wallet & payouts', 'Multi-branch readiness']
+    n: '02',
+    title: 'Set the agreement',
+    text: 'Choose a daily or weekly payment amount. The platform builds the payment schedule automatically.',
   },
   {
-    key: 'enterprise',
-    name: 'Enterprise+',
-    price: 'Custom',
-    cap: '100+ bikes',
-    summary: 'For enterprise rollouts needing custom onboarding, integrations, and support.',
-    cta: 'Talk to us',
-    features: ['Custom bike limits', 'Dedicated onboarding', 'API/webhook options', 'Fleet Wallet & payouts', 'Success support']
-  }
+    n: '03',
+    title: 'Payments collected and tracked automatically',
+    text: 'Paystack debits the rider\'s card each week. Funds land in your Fleet Wallet. You see every transaction.',
+  },
+  {
+    n: '04',
+    title: 'Falls behind? Immobilise in one tap',
+    text: 'Open the app, find the bike, tap Immobilise. The bike won\'t start until the rider is back on track.',
+  },
+];
+
+const FEATURES = [
+  {
+    title: 'Fleet dashboard',
+    text: 'All your bikes, riders, and money in one place. See what's standing, what's moving, and what's overdue.',
+  },
+  {
+    title: 'Rider agreements',
+    text: 'Each rider has a contract with a start date, weekly amount, and payment schedule. No more WhatsApp threads.',
+  },
+  {
+    title: 'Automatic payment collection',
+    text: 'Set up a Paystack debit order once. The weekly payment runs itself — you just watch the money come in.',
+  },
+  {
+    title: 'Remote immobilisation',
+    text: 'If a rider falls behind, cut the ignition from your phone. The bike won\'t start until they\'re up to date.',
+  },
+  {
+    title: 'Payment history per rider',
+    text: 'See exactly what each rider has paid, what they owe, and when it\'s due. No guesswork.',
+  },
+  {
+    title: 'Service records',
+    text: 'Log every service, note the mileage, and see when each bike is due for its next check.',
+  },
+];
+
+const PRICING_FEATURES = [
+  'Platform access for your whole team',
+  'Automatic payment collection from riders',
+  'Remote immobilisation — one tap',
+  'Scheduled servicing and workshop booking',
+  'Priority workshop bay access',
+  'Loan bike while yours is in for service',
+  'Rider pipeline to find new operators',
 ];
 
 export default function FleetOwnerPilot() {
-  const [selectedPlanKey, setSelectedPlanKey] = useState('trial');
-  const selectedPlan = useMemo(() => plans.find((plan) => plan.key === selectedPlanKey) || plans[0], [selectedPlanKey]);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [form, setForm] = useState({ name: '', company: '', phone: '', bikes: '', message: '' });
+  const [formState, setFormState] = useState('idle'); // idle | busy | success | error
+  const [formError, setFormError] = useState('');
+
+  useEffect(() => {
+    document.title = 'OnFleet Fleet — Your riders pay, or the bike doesn\'t start';
+    return () => { document.title = 'OnFleet Africa'; };
+  }, []);
+
+  function scrollTo(id) {
+    return (e) => {
+      e.preventDefault();
+      document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' });
+      setMenuOpen(false);
+    };
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (!form.name || !form.company || !form.phone) {
+      setFormError('Please fill in your name, company, and phone number.');
+      return;
+    }
+    setFormError('');
+    setFormState('busy');
+    try {
+      await axios.post('/api/pilot/leads', {
+        contact_name:  form.name,
+        company_name:  form.company,
+        phone:         form.phone,
+        fleet_size:    form.bikes ? Number(form.bikes) : undefined,
+        notes:         form.message || undefined,
+        wants_demo:    true,
+        source:        'fleet_landing_page',
+      });
+      setFormState('success');
+    } catch (err) {
+      if (err.response?.status === 409) {
+        setFormState('success'); // already submitted — treat as success
+      } else {
+        setFormError(err.response?.data?.error || 'Something went wrong. Please WhatsApp or call us directly.');
+        setFormState('error');
+      }
+    }
+  }
 
   return (
-    <div className="fleet-pilot-page">
-      <header className="navbar landing-navbar fleet-pilot-navbar">
-        <Logo />
-        <nav className="landing-nav fleet-pilot-nav-inline">
-          <a href="#plans">Plans</a>
-          <a href="#collect-payments">Collect payments</a>
-          <a href="#features">Features</a>
-          <Link to="/fleet/workspace">Preview workspace</Link>
-          <a href="#launch">Launch now</a>
-          <Link to="/fleet/login">Fleet sign in</Link>
-          <Link to="/fleet/signup" className="btn btn-secondary">Create company account</Link>
+    <div style={{ background: 'var(--bg)', color: 'var(--text)', minHeight: '100vh' }}>
+
+      {/* ── Navbar ────────────────────────────────────────────────── */}
+      <header className="fleet-mkt-nav">
+        <Link to="/fleet" className="fleet-mkt-nav-logo" aria-label="OnFleet Fleet">
+          <Logo />
+          <span style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Fleet</span>
+        </Link>
+
+        <nav className="fleet-mkt-links">
+          <a href="#how"     onClick={scrollTo('how')}>How it works</a>
+          <a href="#pricing" onClick={scrollTo('pricing')}>Pricing</a>
+          <a href="#contact" onClick={scrollTo('contact')}>Book a demo</a>
+          <Link to="/fleet/login" className="btn btn-secondary" style={{ padding: '6px 16px', fontSize: 13 }}>Sign in</Link>
         </nav>
+
+        <button
+          className="fleet-mkt-hamburger"
+          onClick={() => setMenuOpen(o => !o)}
+          aria-label={menuOpen ? 'Close menu' : 'Open menu'}
+        >
+          {menuOpen ? <X size={22} /> : <Menu size={22} />}
+        </button>
       </header>
 
-      <section className="fleet-pilot-hero">
-        <div className="fleet-pilot-copy">
-          <div className="hero-pill"><Briefcase size={14} /> Fleet-owner platform</div>
-          <h1>Let fleet owners run operations on <span>OnFleet</span>.</h1>
-          <p>The fleet-owner site is now live. Operators can launch a company account immediately, manage bikes and agreements, capture payments, and work from a production-ready workspace with billing controls in place.</p>
-          <div className="hero-cta">
-            <Link to="/fleet/signup" className="btn hero-cta-btn">Create company account</Link>
-            <Link to="/fleet/login" className="btn btn-secondary hero-cta-btn">Fleet sign in</Link>
-            <Link to="/fleet/workspace" className="btn btn-secondary hero-cta-btn">Preview workspace</Link>
-          </div>
-          <div className="hero-trust-list">
-            <div className="hero-trust-item"><Clock3 size={16} /> 14-day live trial</div>
-            <div className="hero-trust-item"><PiggyBank size={16} /> Collect weekly rider payments</div>
-            <div className="hero-trust-item"><CreditCard size={16} /> Fleet Wallet &amp; instant payouts</div>
-            <div className="hero-trust-item"><ShieldCheck size={16} /> Access blocks when billing fails</div>
-          </div>
+      {/* Mobile fullscreen menu */}
+      {menuOpen && (
+        <div className="fleet-mkt-mobile-menu" role="dialog" aria-modal="true">
+          <button className="fleet-mkt-mobile-close" onClick={() => setMenuOpen(false)} aria-label="Close menu">
+            <X size={24} />
+          </button>
+          <a href="#how"     onClick={scrollTo('how')}     className="fleet-mkt-mobile-link">How it works</a>
+          <a href="#pricing" onClick={scrollTo('pricing')} className="fleet-mkt-mobile-link">Pricing</a>
+          <a href="#contact" onClick={scrollTo('contact')} className="fleet-mkt-mobile-link">Book a demo</a>
+          <Link to="/fleet/login" className="btn" style={{ fontSize: 16, padding: '12px 40px' }} onClick={() => setMenuOpen(false)}>Sign in</Link>
         </div>
-        <div className="fleet-pilot-hero-card card">
-          <div className="badge badge-success">Production ready</div>
-          <h3 className="mt-3">What teams can manage</h3>
-          <div className="fleet-pilot-checks mt-4">
-            {[
-              'Daily bike, rider, and agreement operations',
-              'Collect weekly rental payments from riders via Paystack',
-              'Fleet Wallet — funds accumulate, request payout to your bank',
-              'Collections workflows and default handling',
-              'Bulk imports, filters, and contract actions',
-              'Role-based access and billing controls for live operations'
-            ].map((item) => (
-              <div className="fleet-pilot-check" key={item}><CheckCircle2 size={16} /> {item}</div>
+      )}
+
+      {/* ── Hero ──────────────────────────────────────────────────── */}
+      <section className="fleet-mkt-hero">
+        <div className="fleet-mkt-eyebrow">Fleet-owner platform</div>
+        <h1 className="fleet-mkt-h1">
+          Your riders pay,<br />or the bike doesn't start.
+        </h1>
+        <p className="fleet-mkt-sub">
+          OnFleet lets you manage your bikes, collect rider payments automatically,
+          and immobilise any bike that falls behind — from your phone.
+        </p>
+        <div className="fleet-mkt-hero-cta">
+          <a href="#contact" onClick={scrollTo('contact')} className="btn fleet-mkt-cta-primary">
+            Book a demo
+          </a>
+          <Link to="/fleet/login" className="btn btn-secondary fleet-mkt-cta-secondary">
+            Sign in
+          </Link>
+        </div>
+      </section>
+
+      {/* ── Problems ──────────────────────────────────────────────── */}
+      <section className="fleet-mkt-section">
+        <h2 className="fleet-mkt-section-title">Sound familiar?</h2>
+        <p className="fleet-mkt-section-sub">Most fleet owners deal with the same three problems.</p>
+        <div className="grid grid-3 fleet-mkt-grid">
+          {PROBLEMS.map((p) => (
+            <div key={p.title} className="card fleet-mkt-problem-card">
+              <h3 style={{ marginBottom: 10, fontSize: 16 }}>{p.title}</h3>
+              <p style={{ color: 'var(--muted)', fontSize: 14, lineHeight: 1.65, margin: 0 }}>{p.text}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* ── How it works ──────────────────────────────────────────── */}
+      <section id="how" className="fleet-mkt-section fleet-mkt-section-alt">
+        <div style={{ maxWidth: 1080, margin: '0 auto' }}>
+          <h2 className="fleet-mkt-section-title">How it works</h2>
+          <div className="grid grid-2 fleet-mkt-grid">
+            {STEPS.map((s) => (
+              <div key={s.n} style={{ display: 'flex', gap: 20, alignItems: 'flex-start' }}>
+                <div className="fleet-mkt-step-num">{s.n}</div>
+                <div>
+                  <h3 style={{ marginBottom: 8, fontSize: 17 }}>{s.title}</h3>
+                  <p style={{ color: 'var(--muted)', fontSize: 14, lineHeight: 1.65, margin: 0 }}>{s.text}</p>
+                </div>
+              </div>
             ))}
           </div>
         </div>
       </section>
 
-      <section id="plans" className="section fleet-pilot-section">
-        <div className="section-head">
-          <h2>Fleet plans</h2>
-          <div className="sub">Start with the trial, then move operators onto the right fleet size once they are active and billing through Paystack.</div>
-        </div>
-        <div className="fleet-plan-grid">
-          {plans.map((plan) => (
-            <button
-              key={plan.key}
-              type="button"
-              className={`card fleet-plan-card ${selectedPlan.key === plan.key ? 'selected' : ''} ${plan.highlight ? 'highlight' : ''}`}
-              onClick={() => setSelectedPlanKey(plan.key)}
-            >
-              <div className="flex-between gap-3" style={{ alignItems: 'flex-start' }}>
-                <div>
-                  <div className={`badge ${plan.highlight ? 'badge-success' : 'badge-info'}`}>{plan.name}</div>
-                  <h3 className="mt-3">{plan.price}{plan.key !== 'trial' && plan.key !== 'enterprise' ? <span className="muted text-sm"> / month</span> : null}</h3>
-                </div>
-                <div className="badge badge-muted">{plan.cap}</div>
-              </div>
-              <p className="muted mt-3">{plan.summary}</p>
-              <div className="fleet-plan-list mt-4">
-                {plan.features.map((feature) => <div key={feature}><CheckCircle2 size={14} /> {feature}</div>)}
-              </div>
-              <div className="fleet-plan-footer mt-4">
-                <span>{plan.cta}</span>
-                <ChevronRight size={16} />
-              </div>
-            </button>
+      {/* ── Features ──────────────────────────────────────────────── */}
+      <section className="fleet-mkt-section">
+        <h2 className="fleet-mkt-section-title">What you get</h2>
+        <p className="fleet-mkt-section-sub">Everything you need to run a paying fleet.</p>
+        <div className="grid grid-3 fleet-mkt-grid">
+          {FEATURES.map((f) => (
+            <div key={f.title} className="card">
+              <h3 style={{ marginBottom: 8, fontSize: 15 }}>{f.title}</h3>
+              <p style={{ color: 'var(--muted)', fontSize: 14, lineHeight: 1.65, margin: 0 }}>{f.text}</p>
+            </div>
           ))}
         </div>
       </section>
 
-      {/* Payment collection highlight section */}
-      <section id="collect-payments" className="section fleet-pilot-section" style={{ background: 'var(--surface-2)', borderRadius: 16, margin: '0 0 0 0' }}>
-        <div className="section-head">
-          <div className="hero-pill" style={{ margin: '0 auto 16px' }}><PiggyBank size={14} /> New — automatic payment collection</div>
-          <h2>Get paid weekly, automatically</h2>
-          <div className="sub">Set up a Paystack subscription for each rider and let the platform collect weekly rental payments on your behalf. Funds land in your Fleet Wallet and you can request a payout to your bank account at any time.</div>
-        </div>
-
-        <div className="grid grid-3 mt-4" style={{ gap: 20 }}>
-          {[
-            {
-              step: '1',
-              icon: <Smartphone size={28} />,
-              title: 'Rider authorises once',
-              text: 'Generate a secure Paystack checkout link from the Riders panel. The rider enters their card details once and the weekly debit is set up automatically — no manual payment needed each week.'
-            },
-            {
-              step: '2',
-              icon: <Repeat size={28} />,
-              title: 'Payments collected every week',
-              text: 'Paystack charges the agreed rental amount weekly. A 3.5% + R1 processing fee is deducted and the net amount is credited to your Fleet Wallet. You see every transaction in real time.'
-            },
-            {
-              step: '3',
-              icon: <Banknote size={28} />,
-              title: 'Withdraw to your bank anytime',
-              text: 'When you\'re ready, request a payout from your Fleet Wallet to your bank account. A 0.5% withdrawal fee applies on the net amount. OnFleet admin processes and transfers the funds within 1–2 business days.'
-            }
-          ].map((item) => (
-            <div className="card" key={item.step} style={{ position: 'relative', overflow: 'hidden' }}>
-              <div style={{
-                position: 'absolute', top: 12, right: 16,
-                fontSize: 48, fontWeight: 900, color: 'var(--border)',
-                lineHeight: 1, userSelect: 'none', fontFamily: "'Space Grotesk', sans-serif"
-              }}>{item.step}</div>
-              <div style={{ color: 'var(--primary-light)', marginBottom: 12 }}>{item.icon}</div>
-              <h3 style={{ marginBottom: 8 }}>{item.title}</h3>
-              <div className="muted text-sm" style={{ lineHeight: 1.6 }}>{item.text}</div>
-            </div>
-          ))}
-        </div>
-
-        <div className="card mt-4" style={{ background: 'rgba(30,136,209,0.08)', border: '1px solid rgba(30,136,209,0.25)' }}>
-          <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-            <div style={{ flex: 1, minWidth: 240 }}>
-              <div style={{ fontWeight: 700, marginBottom: 8 }}>Available weekly plans</div>
-              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                {['R650 / week', 'R700 / week', 'R750 / week', 'R800 / week', 'R850 / week'].map((plan) => (
-                  <span key={plan} style={{
-                    background: 'var(--primary)', color: '#fff',
-                    borderRadius: 6, padding: '4px 12px', fontSize: 13, fontWeight: 600
-                  }}>{plan}</span>
-                ))}
-              </div>
-              <div className="muted text-sm mt-3">Plans are matched automatically from the rider's agreement weekly amount.</div>
-            </div>
-            <div style={{ flex: 1, minWidth: 240 }}>
-              <div style={{ fontWeight: 700, marginBottom: 8 }}>Fee transparency</div>
-              <div className="muted text-sm" style={{ lineHeight: 1.7 }}>
-                Collection fee: <strong>3.5% + R1.00</strong> per weekly charge<br />
-                Withdrawal fee: <strong>0.5%</strong> when you request a payout<br />
-                What you see is what you keep — no hidden charges.
-              </div>
-            </div>
+      {/* ── Proof strip ───────────────────────────────────────────── */}
+      <section className="fleet-mkt-proof">
+        {/* TODO: Replace placeholder values with real numbers before launch */}
+        {[
+          { value: '— bikes',  label: 'On the platform' },          // TODO: e.g. 120 bikes
+          { value: 'R—',       label: 'Collected for fleet owners' }, // TODO: e.g. R1.4m
+          { value: '—%',       label: 'Defaults recovered via immobilisation' }, // TODO: e.g. 94%
+        ].map((s) => (
+          <div key={s.label} className="fleet-mkt-proof-stat">
+            <div className="fleet-mkt-proof-value">{s.value}</div>
+            <div className="fleet-mkt-proof-label">{s.label}</div>
           </div>
-        </div>
-
-        <div style={{ textAlign: 'center', marginTop: 28 }}>
-          <Link to="/fleet/signup" className="btn hero-cta-btn">
-            Start collecting payments <ArrowRight size={16} />
-          </Link>
-        </div>
+        ))}
       </section>
 
-      <section id="features" className="section fleet-pilot-section fleet-pilot-features">
-        <div className="section-head">
-          <h2>What the platform includes</h2>
-          <div className="sub">A commercial workspace focused on daily operations, billing discipline, and operator visibility.</div>
-        </div>
-        <div className="grid grid-4">
-          {[
-            { icon: <Bike />, title: 'Fleet operations', text: 'Manage bike statuses, allocations, service dates, and compliance documents from one place.' },
-            { icon: <PiggyBank />, title: 'Fleet Wallet', text: 'Rider payments land automatically in your wallet. Track every credit, fee, and payout in one place.' },
-            { icon: <Users />, title: 'Agreement control', text: 'Track rider contracts, outstanding balances, defaults, discontinuations, and reinstatements.' },
-            { icon: <BarChart3 />, title: 'Collections visibility', text: 'Spot overdue and defaulted agreements fast and route ops teams to the right follow-up.' },
-            { icon: <CreditCard />, title: 'Paystack billing', text: 'Both your platform subscription and rider payment collection run through Paystack — one trusted payment layer.' },
-            { icon: <Layers3 />, title: 'Plan-based rollout', text: 'Plan entitlements map naturally to Small, Medium, Large, and Enterprise commercial tiers.' }
-          ].map((item) => (
-            <div className="card landing-benefit-card" key={item.title}>
-              <div style={{ color: 'var(--primary-light)', marginBottom: 10 }}>{item.icon}</div>
-              <h3>{item.title}</h3>
-              <div className="muted text-sm mt-2">{item.text}</div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section id="launch" className="section fleet-pilot-section">
-        <div className="fleet-pilot-form-wrap">
-          <div className="card fleet-pilot-form-card">
-            <div className="page-title" style={{ marginBottom: 8 }}>Launch your fleet now</div>
-            <div className="page-sub" style={{ marginBottom: 18 }}>The public onboarding request form has been retired because the fleet-owner site is live. Create a company account and start operating immediately.</div>
-            <div className="grid grid-2">
-              <div className="card" style={{ background: 'var(--surface-2)' }}>
-                <div className="badge badge-success">Go live</div>
-                <h3 className="mt-3">Create a company account</h3>
-                <div className="muted mt-2">Set up the fleet, choose the right plan, and invite your first team member.</div>
-                <Link to="/fleet/signup" className="btn btn-block mt-4">Create account <Rocket size={16} /></Link>
+      {/* ── Pricing ───────────────────────────────────────────────── */}
+      <section id="pricing" className="fleet-mkt-section fleet-mkt-pricing-section">
+        <h2 className="fleet-mkt-section-title">Pricing</h2>
+        <p className="fleet-mkt-section-sub">One rate. No tiers to figure out.</p>
+        <div className="card fleet-mkt-pricing-card">
+          <div style={{ textAlign: 'center', marginBottom: 28 }}>
+            <div className="fleet-mkt-price">R750</div>
+            <div style={{ color: 'var(--muted)', fontSize: 15, marginTop: 6 }}>per bike, per month</div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 13, marginBottom: 28 }}>
+            {PRICING_FEATURES.map((feature) => (
+              <div key={feature} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <CheckCircle2 size={16} style={{ color: 'var(--success)', flexShrink: 0 }} />
+                <span style={{ fontSize: 14 }}>{feature}</span>
               </div>
-              <div className="card" style={{ background: 'var(--surface-2)' }}>
-                <div className="badge badge-info">Already registered</div>
-                <h3 className="mt-3">Sign in to the fleet portal</h3>
-                <div className="muted mt-2">Open the live workspace to manage bikes, agreements, and payments.</div>
-                <div className="row mt-4" style={{ flexWrap: 'wrap' }}>
-                  <Link to="/fleet/login" className="btn">Fleet sign in</Link>
-                  <Link to="/fleet/app" className="btn btn-secondary">Open portal</Link>
+            ))}
+          </div>
+          <div style={{ borderTop: '1px solid var(--border)', paddingTop: 20, marginBottom: 24 }}>
+            <div style={{ fontWeight: 600, color: 'var(--success)', fontSize: 15, marginBottom: 4 }}>First month free.</div>
+            <div style={{ color: 'var(--muted)', fontSize: 13 }}>No contract. Cancel any time.</div>
+          </div>
+          <a href="#contact" onClick={scrollTo('contact')} className="btn btn-block" style={{ textAlign: 'center' }}>
+            Book a demo
+          </a>
+        </div>
+      </section>
+
+      {/* ── Contact / Demo form ───────────────────────────────────── */}
+      <section id="contact" className="fleet-mkt-section fleet-mkt-section-alt">
+        <div style={{ maxWidth: 840, margin: '0 auto' }}>
+          <h2 className="fleet-mkt-section-title" style={{ textAlign: 'left' }}>Book a demo</h2>
+          <p style={{ color: 'var(--muted)', marginBottom: 36, fontSize: 15, lineHeight: 1.65, maxWidth: 520 }}>
+            Fill in the form and we'll call you back. We also do in-person demos at
+            our Kya Sand workshop — bring your list of bikes and we'll set you up on the spot.
+          </p>
+
+          <div className="fleet-mkt-contact-grid">
+            {/* Form */}
+            <div>
+              {formState === 'success' ? (
+                <div className="card" style={{ textAlign: 'center', padding: 40 }}>
+                  <CheckCircle2 size={40} style={{ color: 'var(--success)', margin: '0 auto 16px', display: 'block' }} />
+                  <h3 style={{ marginBottom: 8 }}>We'll be in touch</h3>
+                  <p style={{ color: 'var(--muted)', fontSize: 14, margin: 0 }}>
+                    Expect a call within one business day.
+                  </p>
+                </div>
+              ) : (
+                <form onSubmit={handleSubmit} noValidate style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  <div className="field">
+                    <label className="label" htmlFor="fm-name">Your name <span style={{ color: 'var(--danger)' }}>*</span></label>
+                    <input id="fm-name" className="input" placeholder="Sipho Dlamini"
+                      value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+                  </div>
+                  <div className="field">
+                    <label className="label" htmlFor="fm-company">Company <span style={{ color: 'var(--danger)' }}>*</span></label>
+                    <input id="fm-company" className="input" placeholder="Dlamini Fleet Pty Ltd"
+                      value={form.company} onChange={e => setForm(f => ({ ...f, company: e.target.value }))} />
+                  </div>
+                  <div className="field">
+                    <label className="label" htmlFor="fm-phone">Phone number <span style={{ color: 'var(--danger)' }}>*</span></label>
+                    <input id="fm-phone" className="input" type="tel" placeholder="+27 82 000 0000"
+                      value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} />
+                  </div>
+                  <div className="field">
+                    <label className="label" htmlFor="fm-bikes">How many bikes do you have?</label>
+                    <input id="fm-bikes" className="input" type="number" min="1" max="1000" placeholder="e.g. 8"
+                      value={form.bikes} onChange={e => setForm(f => ({ ...f, bikes: e.target.value }))} />
+                  </div>
+                  <div className="field">
+                    <label className="label" htmlFor="fm-message">Anything else we should know?</label>
+                    <textarea id="fm-message" className="input"
+                      placeholder="e.g. We run Hondas in Soweto and Midrand, looking to move off spreadsheets"
+                      value={form.message} onChange={e => setForm(f => ({ ...f, message: e.target.value }))}
+                      style={{ resize: 'vertical', minHeight: 80 }} />
+                  </div>
+                  {formError && (
+                    <div style={{ color: 'var(--danger)', fontSize: 13 }}>{formError}</div>
+                  )}
+                  <button type="submit" className="btn btn-block" disabled={formState === 'busy'}>
+                    {formState === 'busy' ? 'Sending…' : 'Send request'}
+                  </button>
+                </form>
+              )}
+            </div>
+
+            {/* Direct contact options */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div className="card">
+                <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+                  <MessageCircle size={22} style={{ color: '#25D366', flexShrink: 0, marginTop: 2 }} />
+                  <div>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>WhatsApp us</div>
+                    {/* TODO: Replace WHATSAPP_NUMBER at the top of this file */}
+                    <a
+                      href={WHATSAPP_NUMBER === 'FILL_IN_WHATSAPP' ? undefined : `https://wa.me/${WHATSAPP_NUMBER}`}
+                      style={{ color: 'var(--primary-light)', fontSize: 14, textDecoration: 'none' }}
+                    >
+                      {WHATSAPP_NUMBER === 'FILL_IN_WHATSAPP' ? 'Number coming soon' : `+${WHATSAPP_NUMBER}`}
+                    </a>
+                    <div style={{ color: 'var(--muted)', fontSize: 12, marginTop: 4 }}>Quickest response during business hours.</div>
+                  </div>
                 </div>
               </div>
-            </div>
-          </div>
 
-          <div className="card fleet-pilot-summary-card">
-            <div className="badge badge-info">Selected plan</div>
-            <h3 className="mt-3">{selectedPlan.name}</h3>
-            <div className="fleet-pilot-price mt-2">{selectedPlan.price}{selectedPlan.key !== 'trial' && selectedPlan.key !== 'enterprise' ? <span className="muted text-sm"> / month</span> : null}</div>
-            <div className="muted mt-2">{selectedPlan.cap}</div>
-            <div className="fleet-plan-list mt-4">
-              {selectedPlan.features.map((feature) => <div key={feature}><CheckCircle2 size={14} /> {feature}</div>)}
-            </div>
-            <div className="fleet-pilot-note mt-4">
-              <strong>Billing rule:</strong> access continues during trial or when the subscription is active. If payment fails after the grace window, the operator only keeps access to billing screens until they settle.
+              <div className="card">
+                <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+                  <Phone size={22} style={{ color: 'var(--primary-light)', flexShrink: 0, marginTop: 2 }} />
+                  <div>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>Call us</div>
+                    {/* TODO: Replace PHONE_DISPLAY and PHONE_DIAL at the top of this file */}
+                    <a
+                      href={PHONE_DIAL === 'FILL_IN_PHONE' ? undefined : `tel:${PHONE_DIAL}`}
+                      style={{ color: 'var(--primary-light)', fontSize: 14, textDecoration: 'none' }}
+                    >
+                      {PHONE_DISPLAY === 'FILL_IN_PHONE' ? 'Number coming soon' : PHONE_DISPLAY}
+                    </a>
+                    <div style={{ color: 'var(--muted)', fontSize: 12, marginTop: 4 }}>Monday–Friday, 8am–5pm.</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="card" style={{ background: 'rgba(30,136,209,0.07)', border: '1px solid rgba(30,136,209,0.2)' }}>
+                <div style={{ fontWeight: 600, marginBottom: 8 }}>In-person demo</div>
+                <div style={{ color: 'var(--muted)', fontSize: 14, lineHeight: 1.65 }}>
+                  Kya Sand, Johannesburg.<br />
+                  Bring your list of bikes. We'll get you set up on the spot.
+                </div>
+              </div>
             </div>
           </div>
         </div>
       </section>
+
+      {/* ── Footer ────────────────────────────────────────────────── */}
+      <footer className="fleet-mkt-footer">
+        <div>
+          <div style={{ fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>OnFleet Africa</div>
+          <div>Kya Sand, Johannesburg</div>
+        </div>
+        <div className="fleet-mkt-footer-links">
+          <Link to="/fleet/login">Sign in</Link>
+          <Link to="/privacy">Privacy policy</Link>
+          <Link to="/terms">Terms</Link>
+        </div>
+      </footer>
+
     </div>
   );
 }

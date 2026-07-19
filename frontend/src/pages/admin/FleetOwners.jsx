@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import api from '../../api';
 import { useAuth } from '../../auth';
-import { Badge, CopyableContactValue, EmptyState, Loading, Modal, Pagination, SearchInput, Stat, fmtDate, fmtDateTime, matchesSearch, paginateItems } from '../../components/ui';
+import { Badge, ConfirmModal, CopyableContactValue, EmptyState, Loading, Modal, Pagination, SearchInput, Stat, fmt, fmtDate, matchesSearch, paginateItems } from '../../components/ui';
 import { getFleetRoleLabel } from '../fleet/access';
-import { Building2, ShieldCheck, Users, Wallet, Settings } from 'lucide-react';
+import { Building2, ShieldCheck, Users, Wallet, Settings, ChevronDown, ChevronRight, Mail, MapPin, Bike, CreditCard, KeyRound } from 'lucide-react';
 
 const PLAN_OPTIONS = [
   { key: 'trial',      label: 'Trial',       defaultStatus: 'trialing', maxBikes: 10,  maxAdmins: 2  },
@@ -62,7 +62,7 @@ function ChangePlanModal({ orgId, orgName, currentPlan, currentStatus, onClose, 
       <div className="field">
         <label className="label">Status</label>
         <select value={selectedStatus} onChange={(e) => setSelectedStatus(e.target.value)}>
-          {ORG_STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}
+          {ORG_STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
         </select>
       </div>
       <div className="grid grid-2">
@@ -92,23 +92,36 @@ export default function AdminFleetOwners() {
   const [organizations, setOrganizations] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [search, setSearch] = useState(urlParams.get('search') || '');
-  const [organizationFilter, setOrganizationFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [roleFilter, setRoleFilter] = useState('all');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [busyKey, setBusyKey] = useState('');
   const [roleEdits, setRoleEdits] = useState({});
   const [planModal, setPlanModal] = useState(null);
+  const [expanded, setExpanded] = useState(new Set());
+  const [confirmModal, setConfirmModal] = useState(null);
+  const orgParamApplied = useRef(false);
 
   const load = async () => {
     setLoading(true);
     try {
       const { data } = await api.get('/admin/fleet-owners');
-      setOrganizations(Array.isArray(data?.organizations) ? data.organizations : []);
+      const orgs = Array.isArray(data?.organizations) ? data.organizations : [];
+      setOrganizations(orgs);
       const nextUsers = Array.isArray(data?.users) ? data.users : [];
       setAccounts(nextUsers);
-      setRoleEdits(Object.fromEntries(nextUsers.map((account) => [account.id, account.role])));
+      setRoleEdits(Object.fromEntries(nextUsers.map((a) => [a.id, a.role])));
+
+      // On first load: if ?org=<id> in URL, pre-fill search + expand that org
+      const orgId = urlParams.get('org');
+      if (orgId && !orgParamApplied.current) {
+        orgParamApplied.current = true;
+        const target = orgs.find((o) => String(o.id) === orgId);
+        if (target) {
+          setSearch(target.name);
+          setExpanded(new Set([target.id]));
+        }
+      }
     } catch (error) {
       toast.error(error.response?.data?.error || 'Could not load fleet owners');
     } finally {
@@ -121,35 +134,41 @@ export default function AdminFleetOwners() {
     else setLoading(false);
   }, [user?.role]);
 
-  useEffect(() => { setPage(1); }, [search, organizationFilter, statusFilter, roleFilter]);
+  useEffect(() => { setPage(1); }, [search, statusFilter]);
 
-  const filtered = useMemo(() => accounts.filter((account) => {
-    if (organizationFilter !== 'all' && String(account.organization_id) !== organizationFilter) return false;
-    if (statusFilter !== 'all' && account.status !== statusFilter) return false;
-    if (roleFilter !== 'all' && account.role !== roleFilter) return false;
-    return matchesSearch(
-      search,
-      account.full_name,
-      account.email,
-      account.phone,
-      account.city,
-      account.role,
-      account.status,
-      account.organization_name,
-      account.organization_status,
-      account.plan_key,
-      account.organization_payer_status
-    );
-  }), [accounts, organizationFilter, roleFilter, search, statusFilter]);
+  // Group accounts by organization
+  const byOrg = useMemo(() => {
+    const map = {};
+    for (const a of accounts) {
+      if (!map[a.organization_id]) map[a.organization_id] = [];
+      map[a.organization_id].push(a);
+    }
+    return map;
+  }, [accounts]);
 
-  const pagination = useMemo(() => paginateItems(filtered, page, pageSize), [filtered, page, pageSize]);
+  const filteredOrgs = useMemo(() => organizations.filter((org) => {
+    if (statusFilter !== 'all' && org.status !== statusFilter) return false;
+    const members = byOrg[org.id] || [];
+    const memberTerms = members.flatMap((m) => [m.full_name, m.email, m.phone, m.city]);
+    return matchesSearch(search, org.name, org.contact_email, org.contact_phone, org.city, org.plan_key, org.status, org.payer_status, ...memberTerms);
+  }), [organizations, byOrg, statusFilter, search]);
+
+  const pagination = useMemo(() => paginateItems(filteredOrgs, page, pageSize), [filteredOrgs, page, pageSize]);
 
   const stats = useMemo(() => ({
     organizations: organizations.length,
     accounts: accounts.length,
-    active: accounts.filter((account) => account.status === 'active').length,
-    nonPayers: organizations.filter((organization) => organization.payer_status === 'non_payer').length
+    active: organizations.filter((o) => o.status === 'active').length,
+    nonPayers: organizations.filter((o) => o.payer_status === 'non_payer').length
   }), [accounts, organizations]);
+
+  const toggleExpanded = (orgId) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(orgId) ? next.delete(orgId) : next.add(orgId);
+      return next;
+    });
+  };
 
   const saveRole = async (account) => {
     const nextRole = roleEdits[account.id];
@@ -157,93 +176,82 @@ export default function AdminFleetOwners() {
     setBusyKey(`role-${account.id}`);
     try {
       await api.post(`/admin/fleet-owners/${account.id}/role`, { role: nextRole });
-      toast.success('Fleet owner role updated');
+      toast.success('Role updated');
       await load();
     } catch (error) {
-      toast.error(error.response?.data?.error || 'Could not update fleet owner role');
+      toast.error(error.response?.data?.error || 'Could not update role');
     } finally {
       setBusyKey('');
     }
   };
 
-  const toggleStatus = async (account) => {
+  const toggleStatus = (account) => {
     const nextStatus = account.status === 'active' ? 'suspended' : 'active';
-    if (!window.confirm(`${nextStatus === 'active' ? 'Activate' : 'Suspend'} ${account.full_name}?`)) return;
-    setBusyKey(`status-${account.id}`);
-    try {
-      await api.post(`/admin/fleet-owners/${account.id}/status`, { status: nextStatus });
-      toast.success('Fleet owner status updated');
-      await load();
-    } catch (error) {
-      toast.error(error.response?.data?.error || 'Could not update fleet owner status');
-    } finally {
-      setBusyKey('');
-    }
+    setConfirmModal({
+      title: nextStatus === 'active' ? 'Activate account' : 'Suspend account',
+      body: nextStatus === 'active'
+        ? `Activate ${account.full_name}? They will regain access to the fleet portal.`
+        : `Suspend ${account.full_name}? They will immediately lose access to the fleet portal.`,
+      confirmLabel: nextStatus === 'active' ? 'Activate' : 'Suspend',
+      danger: nextStatus === 'suspended',
+      key: `status-${account.id}`,
+      onConfirm: async () => {
+        setBusyKey(`status-${account.id}`);
+        try {
+          await api.post(`/admin/fleet-owners/${account.id}/status`, { status: nextStatus });
+          toast.success('Account status updated');
+          await load();
+        } catch (error) {
+          toast.error(error.response?.data?.error || 'Could not update status');
+        } finally {
+          setBusyKey('');
+          setConfirmModal(null);
+        }
+      }
+    });
   };
 
-  const sendPasswordReset = async (account) => {
-    if (!window.confirm(`Send a password reset link to ${account.full_name}?`)) return;
-    setBusyKey(`reset-${account.id}`);
-    try {
-      await api.post(`/admin/fleet-owners/${account.id}/send-password-reset`);
-      toast.success('Password reset email sent');
-    } catch (error) {
-      toast.error(error.response?.data?.error || 'Could not send password reset');
-    } finally {
-      setBusyKey('');
-    }
+  const sendPasswordReset = (account) => {
+    setConfirmModal({
+      title: 'Send password reset',
+      body: `Send a secure password reset link to ${account.full_name} at ${account.email}? The link expires after 60 minutes.`,
+      confirmLabel: 'Send link',
+      danger: false,
+      key: `reset-${account.id}`,
+      onConfirm: async () => {
+        setBusyKey(`reset-${account.id}`);
+        try {
+          await api.post(`/admin/fleet-owners/${account.id}/send-password-reset`);
+          toast.success('Password reset email sent');
+          setConfirmModal(null);
+        } catch (error) {
+          toast.error(error.response?.data?.error || 'Could not send password reset');
+        } finally {
+          setBusyKey('');
+        }
+      }
+    });
   };
 
   if (loading) return <Loading />;
 
   if (user?.role !== 'superadmin') {
-    return <EmptyState title="Superadmin access required" sub="Only superadmins can manage fleet-owner accounts, change roles, suspend access, or send password reset links." />;
+    return <EmptyState title="Superadmin access required" sub="Only superadmins can manage fleet-owner accounts, change plans, adjust roles, and send password reset links." />;
   }
 
   return (
     <div>
-      <div className="flex-between mb-2" style={{ alignItems: 'flex-start', gap: 12 }}>
-        <div>
-          <h1 className="page-title">Fleet owner management</h1>
-          <p className="page-sub">Manage fleet-owner users across organizations, change their roles, suspend access, and send secure password reset links.</p>
-        </div>
-        <button className="btn btn-secondary btn-sm" onClick={load}>Refresh</button>
-      </div>
-
-      <div className="grid grid-4 mb-4">
-        <Stat label="Organizations" value={stats.organizations} icon={<Building2 size={16} />} />
-        <Stat label="Fleet owner users" value={stats.accounts} icon={<Users size={16} />} />
-        <Stat label="Active accounts" value={stats.active} icon={<ShieldCheck size={16} />} />
-        <Stat label="Non-payer orgs" value={stats.nonPayers} icon={<Wallet size={16} />} />
-      </div>
-
-      <div className="card mb-4">
-        <div className="row" style={{ flexWrap: 'wrap', gap: 12, alignItems: 'end' }}>
-          <SearchInput value={search} onChange={setSearch} placeholder="Search fleet owner, company, role, status or payer state" style={{ flex: '1 1 320px', maxWidth: 440 }} />
-          <div style={{ minWidth: 200 }}>
-            <label className="label">Organization</label>
-            <select value={organizationFilter} onChange={(e) => setOrganizationFilter(e.target.value)}>
-              <option value="all">All organizations</option>
-              {organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name}</option>)}
-            </select>
-          </div>
-          <div style={{ minWidth: 180 }}>
-            <label className="label">Status</label>
-            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-              <option value="all">All statuses</option>
-              <option value="active">Active</option>
-              <option value="suspended">Suspended</option>
-            </select>
-          </div>
-          <div style={{ minWidth: 180 }}>
-            <label className="label">Role</label>
-            <select value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}>
-              <option value="all">All roles</option>
-              {roleOptions.map((role) => <option key={role} value={role}>{getFleetRoleLabel(role)}</option>)}
-            </select>
-          </div>
-        </div>
-      </div>
+      {confirmModal && (
+        <ConfirmModal
+          title={confirmModal.title}
+          body={confirmModal.body}
+          confirmLabel={confirmModal.confirmLabel}
+          danger={confirmModal.danger}
+          busy={busyKey === confirmModal.key}
+          onConfirm={confirmModal.onConfirm}
+          onClose={() => setConfirmModal(null)}
+        />
+      )}
 
       {planModal && (
         <ChangePlanModal
@@ -256,86 +264,200 @@ export default function AdminFleetOwners() {
         />
       )}
 
-      {!filtered.length ? (
-        <EmptyState title="No fleet owners match this view" sub="Try a different organization, role, status, or search term." />
-      ) : (
-        <div className="card" style={{ padding: 0 }}>
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Fleet owner</th>
-                <th>Organization</th>
-                <th>Contact</th>
-                <th>Role</th>
-                <th>Status</th>
-                <th>Billing</th>
-                <th>Joined</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {pagination.items.map((account) => {
-                const nextRole = roleEdits[account.id] || account.role;
-                const changedRole = nextRole !== account.role;
-                return (
-                  <tr key={account.id}>
-                    <td>
-                      <div style={{ fontWeight: 600 }}>{account.full_name}</div>
-                      <div className="text-xs muted">{account.email}</div>
-                    </td>
-                    <td>
-                      <div style={{ fontWeight: 600 }}>{account.organization_name}</div>
-                      <div className="text-xs muted">{account.organization_bike_count} bikes · {account.organization_member_count} team members</div>
-                    </td>
-                    <td>
-                      <CopyableContactValue value={account.phone} compact />
-                      <div className="text-xs muted" style={{ marginTop: 6 }}>{account.city || '—'}</div>
-                    </td>
-                    <td style={{ minWidth: 210 }}>
-                      <select value={nextRole} onChange={(e) => setRoleEdits((prev) => ({ ...prev, [account.id]: e.target.value }))}>
-                        {roleOptions.map((role) => <option key={role} value={role}>{getFleetRoleLabel(role)}</option>)}
-                      </select>
-                      {changedRole && <div className="text-xs muted" style={{ marginTop: 6 }}>Unsaved role change</div>}
-                    </td>
-                    <td><Badge status={account.status}>{account.status}</Badge></td>
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                        <Badge status={account.organization_status}>{String(account.organization_status || 'trialing').replace(/_/g, ' ')}</Badge>
-                        <button
-                          className="btn btn-sm btn-secondary"
-                          style={{ padding: '2px 8px', fontSize: 11 }}
-                          onClick={() => setPlanModal({ orgId: account.organization_id, orgName: account.organization_name, currentPlan: account.plan_key, currentStatus: account.organization_status })}
-                          title="Change plan / status"
-                        >
-                          <Settings size={11} /> Change
-                        </button>
-                      </div>
-                      <div className="text-xs muted" style={{ marginTop: 6 }}>
-                        {String(account.plan_key || 'trial').replace(/_/g, ' ')} · {account.organization_payer_status === 'payer' ? 'payer' : 'non-payer'}
-                      </div>
-                      <div className="text-xs muted">Last payment {fmtDate(account.organization_last_payment_at)}</div>
-                    </td>
-                    <td>{fmtDateTime(account.created_at)}</td>
-                    <td>
-                      <div className="row" style={{ flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end' }}>
-                        <button className={`btn btn-sm ${changedRole ? '' : 'btn-secondary'}`} disabled={!changedRole || busyKey === `role-${account.id}`} onClick={() => saveRole(account)}>
-                          {busyKey === `role-${account.id}` ? 'Saving…' : 'Save role'}
-                        </button>
-                        <button className="btn btn-sm btn-secondary" disabled={account.status !== 'active' || busyKey === `reset-${account.id}`} onClick={() => sendPasswordReset(account)}>
-                          {busyKey === `reset-${account.id}` ? 'Sending…' : 'Send password'}
-                        </button>
-                        <button className={`btn btn-sm ${account.status === 'active' ? 'btn-danger' : 'btn-secondary'}`} disabled={busyKey === `status-${account.id}`} onClick={() => toggleStatus(account)}>
-                          {busyKey === `status-${account.id}` ? 'Saving…' : account.status === 'active' ? 'Suspend' : 'Activate'}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          <Pagination page={pagination.currentPage} pageSize={pagination.pageSize} totalItems={pagination.totalItems} onPageChange={setPage} onPageSizeChange={setPageSize} label="fleet owner users" />
+      <div className="flex-between mb-2" style={{ alignItems: 'flex-start', gap: 12 }}>
+        <div>
+          <h1 className="page-title">Fleet owner management</h1>
+          <p className="page-sub">Manage fleet-owner organizations — change plans, adjust team roles, and control account access.</p>
         </div>
+        <button className="btn btn-secondary btn-sm" onClick={load}>Refresh</button>
+      </div>
+
+      <div className="grid grid-4 mb-4">
+        <Stat label="Organizations" value={stats.organizations} icon={<Building2 size={16} />} />
+        <Stat label="Fleet owner users" value={stats.accounts} icon={<Users size={16} />} />
+        <Stat label="Active subscriptions" value={stats.active} icon={<ShieldCheck size={16} />} />
+        <Stat label="Non-payer orgs" value={stats.nonPayers} icon={<Wallet size={16} />} />
+      </div>
+
+      <div className="card mb-4">
+        <div className="row" style={{ flexWrap: 'wrap', gap: 12, alignItems: 'end' }}>
+          <SearchInput
+            value={search}
+            onChange={setSearch}
+            placeholder="Search company, contact, email, city, plan or billing status"
+            style={{ flex: '1 1 280px', maxWidth: 440 }}
+          />
+          <div style={{ minWidth: 200 }}>
+            <label className="label">Billing status</label>
+            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <option value="all">All billing states</option>
+              {ORG_STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
+            </select>
+          </div>
+          <div className="muted text-sm" style={{ alignSelf: 'center', paddingTop: 4 }}>
+            {filteredOrgs.length} of {organizations.length} organizations
+          </div>
+        </div>
+      </div>
+
+      {!filteredOrgs.length ? (
+        <EmptyState title="No organizations match this view" sub="Try a different billing status or search term." />
+      ) : (
+        <>
+          {pagination.items.map((org) => {
+            const members = byOrg[org.id] || [];
+            const isExpanded = expanded.has(org.id);
+            const estMonthly = (org.bike_count || 0) * 750;
+
+            return (
+              <div key={org.id} className="card mb-3" style={{ padding: 0, overflow: 'hidden' }}>
+                {/* Org summary row */}
+                <div style={{ padding: '16px 20px' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+                        <span style={{ fontWeight: 700, fontSize: 15 }}>{org.name}</span>
+                        <Badge status="active">{String(org.plan_key || 'trial').replace(/_/g, ' ')}</Badge>
+                        <Badge status={org.status}>{String(org.status || 'trialing').replace(/_/g, ' ')}</Badge>
+                        <Badge status={org.payer_status === 'payer' ? 'success' : 'overdue'}>
+                          {org.payer_status === 'payer' ? 'Payer' : 'Non-payer'}
+                        </Badge>
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 20px', color: 'var(--muted)', fontSize: 12 }}>
+                        {org.contact_email && (
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <Mail size={11} /> {org.contact_email}
+                          </span>
+                        )}
+                        {org.city && (
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <MapPin size={11} /> {org.city}
+                          </span>
+                        )}
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <Bike size={11} /> {org.active_bikes}/{org.bike_count} bikes active
+                        </span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <Users size={11} /> {org.active_member_count}/{org.member_count} members
+                        </span>
+                        {estMonthly > 0 && (
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <CreditCard size={11} /> {fmt(estMonthly)}/mo est.
+                          </span>
+                        )}
+                        {org.revenue_30d > 0 && <span>Rev 30d: {fmt(org.revenue_30d)}</span>}
+                        <span>Last payment: {fmtDate(org.last_payment_at)}</span>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                      <button
+                        className="btn btn-sm btn-secondary"
+                        onClick={() => setPlanModal({ orgId: org.id, orgName: org.name, currentPlan: org.plan_key, currentStatus: org.status })}
+                      >
+                        <Settings size={13} /> Change plan
+                      </button>
+                      <button
+                        className={`btn btn-sm ${isExpanded ? '' : 'btn-secondary'}`}
+                        onClick={() => toggleExpanded(org.id)}
+                      >
+                        {isExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />} Team ({members.length})
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Expanded: team member table */}
+                {isExpanded && (
+                  <div style={{ borderTop: '1px solid var(--border)' }}>
+                    {members.length === 0 ? (
+                      <div className="muted text-sm" style={{ padding: '12px 20px' }}>No team members in this organization.</div>
+                    ) : (
+                      <div style={{ overflowX: 'auto' }}>
+                        <table className="table">
+                          <thead>
+                            <tr>
+                              <th>Member</th>
+                              <th>Contact</th>
+                              <th>Role</th>
+                              <th>Status</th>
+                              <th>Joined</th>
+                              <th></th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {members.map((account) => {
+                              const nextRole = roleEdits[account.id] || account.role;
+                              const changedRole = nextRole !== account.role;
+                              return (
+                                <tr key={account.id}>
+                                  <td>
+                                    <div style={{ fontWeight: 600 }}>{account.full_name}</div>
+                                    <div className="text-xs muted">{account.email}</div>
+                                  </td>
+                                  <td>
+                                    <CopyableContactValue value={account.phone} compact />
+                                    {account.city && <div className="text-xs muted" style={{ marginTop: 4 }}>{account.city}</div>}
+                                  </td>
+                                  <td style={{ minWidth: 190 }}>
+                                    <select
+                                      value={nextRole}
+                                      onChange={(e) => setRoleEdits((prev) => ({ ...prev, [account.id]: e.target.value }))}
+                                    >
+                                      {roleOptions.map((r) => <option key={r} value={r}>{getFleetRoleLabel(r)}</option>)}
+                                    </select>
+                                    {changedRole && <div className="text-xs muted" style={{ marginTop: 4 }}>Unsaved change</div>}
+                                  </td>
+                                  <td><Badge status={account.status}>{account.status}</Badge></td>
+                                  <td className="text-xs muted">{fmtDate(account.created_at)}</td>
+                                  <td>
+                                    <div className="row" style={{ gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                                      {changedRole && (
+                                        <button
+                                          className="btn btn-sm"
+                                          disabled={busyKey === `role-${account.id}`}
+                                          onClick={() => saveRole(account)}
+                                        >
+                                          {busyKey === `role-${account.id}` ? 'Saving…' : 'Save role'}
+                                        </button>
+                                      )}
+                                      <button
+                                        className="btn btn-sm btn-secondary"
+                                        disabled={account.status !== 'active' || busyKey === `reset-${account.id}`}
+                                        onClick={() => sendPasswordReset(account)}
+                                        title="Send password reset link"
+                                      >
+                                        <KeyRound size={12} /> Reset password
+                                      </button>
+                                      <button
+                                        className={`btn btn-sm ${account.status === 'active' ? 'btn-danger' : 'btn-secondary'}`}
+                                        disabled={busyKey === `status-${account.id}`}
+                                        onClick={() => toggleStatus(account)}
+                                      >
+                                        {account.status === 'active' ? 'Suspend' : 'Activate'}
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          <Pagination
+            page={pagination.currentPage}
+            pageSize={pagination.pageSize}
+            totalItems={pagination.totalItems}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+            label="organizations"
+          />
+        </>
       )}
     </div>
   );

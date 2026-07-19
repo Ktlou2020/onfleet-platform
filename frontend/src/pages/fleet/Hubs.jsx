@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../../api';
 import { useAuth } from '../../auth';
-import { EmptyState, Loading, SearchInput, matchesSearch } from '../../components/ui';
+import { ConfirmModal, EmptyState, Loading, SearchInput, matchesSearch } from '../../components/ui';
 import { canManageFleetSection } from './access';
 
 function buildForm() {
@@ -19,6 +19,7 @@ export default function Hubs() {
   const [mode, setMode] = useState('');
   const [form, setForm] = useState(buildForm());
   const [editId, setEditId] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(null);
 
   const load = async ({ silent = false } = {}) => {
     if (!silent) setLoading(true);
@@ -75,10 +76,10 @@ export default function Hubs() {
   };
 
   const deleteHub = async (hub) => {
-    if (!window.confirm(`Delete hub "${hub.name}"? This cannot be undone.`)) return;
     try {
       await api.delete(`/fleet/hubs/${hub.id}`);
       toast.success('Hub deleted');
+      setConfirmDelete(null);
       await load({ silent: true });
     } catch (error) {
       toast.error(error.response?.data?.error || 'Could not delete hub');
@@ -131,7 +132,7 @@ export default function Hubs() {
               {canManage && (
                 <div className="row" style={{ gap: 6 }}>
                   <button className="btn btn-sm btn-secondary" onClick={() => openEdit(hub)}>Edit</button>
-                  <button className="btn btn-sm btn-danger" onClick={() => deleteHub(hub)}>Delete</button>
+                  <button className="btn btn-sm btn-danger" onClick={() => setConfirmDelete(hub)}>Delete</button>
                 </div>
               )}
             </div>
@@ -142,6 +143,17 @@ export default function Hubs() {
           </div>
         ))}
       </div>
+
+      {confirmDelete && (
+        <ConfirmModal
+          title="Delete hub"
+          body={`Delete "${confirmDelete.name}"? This cannot be undone.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => deleteHub(confirmDelete)}
+          onClose={() => setConfirmDelete(null)}
+        />
+      )}
     </>
   );
 }

@@ -898,11 +898,23 @@ function sanitizePortalDataForRole(role, portalData) {
   };
 }
 
+function getRevenue30d(org) {
+  const scope = getBikeScope(org, 'b');
+  const cutoff = addDays(todayIso(), -30);
+  const row = db.prepare(`SELECT COALESCE(SUM(COALESCE(p.net_amount, p.amount)), 0) AS total
+    FROM payments p
+    JOIN agreements a ON a.id = p.agreement_id
+    JOIN bikes b ON b.id = a.bike_id
+    WHERE p.status = 'success' AND ${scope.clause} AND COALESCE(p.paid_at, p.created_at) >= ?`).get(...scope.params, cutoff);
+  return +(Number(row?.total || 0).toFixed(2));
+}
+
 function getPortalData(org, role) {
   const members = getFleetMembers(org.id);
   const bikes = getFleetBikes(org);
   const agreements = getFleetAgreements(org);
   const recentServices = getRecentServices(org);
+  const revenue30d = getRevenue30d(org);
   const upcomingServices = bikes
     .filter((bike) => bike.next_service_date)
     .sort((a, b) => String(a.next_service_date).localeCompare(String(b.next_service_date)))
@@ -927,7 +939,7 @@ function getPortalData(org, role) {
     upcoming_services: upcomingServices,
     rider_options: getRiderOptions(org),
     collections_queue: buildCollectionsQueue(agreements),
-    summary: buildSummary(bikes, agreements, members, recentServices),
+    summary: { ...buildSummary(bikes, agreements, members, recentServices), revenue_30d: revenue30d },
     live_updated_at: new Date().toISOString()
   });
 }

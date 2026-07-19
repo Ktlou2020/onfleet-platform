@@ -3,7 +3,7 @@ import toast from 'react-hot-toast';
 import { FleetHelpTip } from './helpSupport';
 import api from '../../api';
 import { useAuth } from '../../auth';
-import { Badge, EmptyState, Loading, Modal, Pagination, SearchInput, fmt, fmtDateTime, matchesSearch, paginateItems } from '../../components/ui';
+import { Badge, ConfirmModal, EmptyState, Loading, Modal, Pagination, SearchInput, fmt, fmtDateTime, matchesSearch, paginateItems } from '../../components/ui';
 import { canManageFleetSection } from './access';
 
 const METHOD_OPTIONS = ['eft', 'cash', 'card', 'other'];
@@ -39,7 +39,8 @@ export default function FleetOwnerPayments() {
   const [selectedIds, setSelectedIds] = useState([]);
   const [busy, setBusy] = useState(false);
   const [showPay, setShowPay] = useState(false);
-  const [pay, setPay] = useState({ agreement_id: '', amount: '', method: 'eft', reference: '', notes: '' });
+  const [pay, setPay] = useState({ agreement_id: '', amount: '', method: 'eft', reference: '', payment_date: '', notes: '' });
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const load = async () => {
     const [paymentsResponse, portalResponse] = await Promise.all([
@@ -81,10 +82,11 @@ export default function FleetOwnerPayments() {
   const recordPayment = async () => {
     try {
       setBusy(true);
-      await api.post('/fleet/payments/manual', { ...pay, agreement_id: Number(pay.agreement_id), amount: Number(pay.amount) });
+      const { payment_date, ...rest } = pay;
+      await api.post('/fleet/payments/manual', { ...rest, agreement_id: Number(pay.agreement_id), amount: Number(pay.amount), ...(payment_date ? { paid_at: payment_date } : {}) });
       toast.success('Payment recorded');
       setShowPay(false);
-      setPay({ agreement_id: '', amount: '', method: 'eft', reference: '', notes: '' });
+      setPay({ agreement_id: '', amount: '', method: 'eft', reference: '', payment_date: '', notes: '' });
       await load();
     } catch (error) {
       toast.error(error.response?.data?.error || 'Could not record payment');
@@ -94,19 +96,45 @@ export default function FleetOwnerPayments() {
   };
 
   const deleteSelected = async () => {
-    if (!selectedIds.length) return toast.error('Select at least one payment first');
-    if (!window.confirm(`Delete ${selectedIds.length} selected payment(s)? Payment schedules will be recalculated.`)) return;
     try {
       setBusy(true);
       const { data } = await api.post('/fleet/payments/bulk-delete', { payment_ids: selectedIds });
       toast.success(`Deleted ${data.deleted_count} payment(s)`);
       setSelectedIds([]);
+      setConfirmDelete(false);
       await load();
     } catch (error) {
       toast.error(error.response?.data?.error || 'Could not delete selected payments');
     } finally {
       setBusy(false);
     }
+  };
+
+  const exportCsv = () => {
+    const rows = [
+      ['Date', 'Rider', 'Email', 'Agreement', 'Bike', 'Method', 'Reference', 'Status', 'Rental', 'Fee', 'Gross'],
+      ...filtered.map((p) => [
+        p.paid_at || p.created_at,
+        p.full_name,
+        p.email,
+        p.agreement_no,
+        p.bike_registration || '',
+        p.method,
+        p.reference || '',
+        p.status,
+        creditedAmount(p),
+        feeAmount(p),
+        grossAmount(p)
+      ])
+    ];
+    const csv = rows.map((row) => row.map((cell) => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `payments-export.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   if (!payments) return <Loading />;
@@ -124,7 +152,8 @@ export default function FleetOwnerPayments() {
         </div>
         <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
           {canManage && <button className="btn btn-sm" onClick={() => setShowPay(true)} title="Record an EFT, cash, card, or other manual rental payment">+ Record payment</button>}
-          {canManage && <button className="btn btn-sm btn-danger" onClick={deleteSelected} disabled={!selectedIds.length || busy}>{busy ? 'Deleting…' : 'Delete selected'}</button>}
+          {canManage && <button className="btn btn-sm btn-danger" onClick={() => { if (!selectedIds.length) return toast.error('Select at least one payment first'); setConfirmDelete(true); }} disabled={busy}>{busy ? 'Deleting…' : 'Delete selected'}</button>}
+          <button className="btn btn-sm btn-secondary" onClick={exportCsv} disabled={!filtered.length} title="Export visible payments to CSV">Export CSV</button>
         </div>
       </div>
 
@@ -198,6 +227,18 @@ export default function FleetOwnerPayments() {
       </div>
       <Pagination page={pagination.currentPage} pageSize={pagination.pageSize} totalItems={pagination.totalItems} onPageChange={setPage} onPageSizeChange={setPageSize} label="payments" />
 
+      {confirmDelete && (
+        <ConfirmModal
+          title="Delete selected payments"
+          body={`Delete ${selectedIds.length} selected payment(s)? Payment schedules will be recalculated. This cannot be undone.`}
+          confirmLabel="Delete"
+          danger
+          busy={busy}
+          onConfirm={deleteSelected}
+          onClose={() => setConfirmDelete(false)}
+        />
+      )}
+
       {showPay && (
         <Modal title="Record manual payment" onClose={() => setShowPay(false)}>
           <div className="mb-3">
@@ -223,6 +264,7 @@ export default function FleetOwnerPayments() {
             </div>
           </div>
           <div className="field"><label className="label">Reference</label><input value={pay.reference} onChange={(e) => setPay({ ...pay, reference: e.target.value })} placeholder="Optional bank or cash reference" /></div>
+          <div className="field"><label className="label">Payment date</label><input type="date" value={pay.payment_date} onChange={(e) => setPay({ ...pay, payment_date: e.target.value })} /></div>
           <div className="field"><label className="label">Notes</label><textarea rows={3} value={pay.notes} onChange={(e) => setPay({ ...pay, notes: e.target.value })} /></div>
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <button className="btn btn-secondary" onClick={() => setShowPay(false)}>Cancel</button>

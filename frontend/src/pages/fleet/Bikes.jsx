@@ -74,6 +74,8 @@ function buildInitialForm() {
     image_url: '',
     license_disc_no: '',
     license_disc_expiry: '',
+    next_service_date: '',
+    next_service_km: '',
     notes: ''
   };
 }
@@ -160,6 +162,8 @@ export default function FleetOwnerBikes() {
       image_url: bike.image_url || '',
       license_disc_no: bike.license_disc_no || '',
       license_disc_expiry: bike.license_disc_expiry || '',
+      next_service_date: bike.next_service_date || '',
+      next_service_km: bike.next_service_km || '',
       notes: bike.notes || ''
     });
     setShowAdd(true);
@@ -335,6 +339,8 @@ export default function FleetOwnerBikes() {
             <div className="field"><label className="label">Image URL</label><input value={form.image_url} onChange={(e) => setForm({ ...form, image_url: e.target.value })} /></div>
             <div className="field"><label className="label">License disc no.</label><input value={form.license_disc_no} onChange={(e) => setForm({ ...form, license_disc_no: e.target.value })} /></div>
             <div className="field"><label className="label">License disc expiry</label><input type="date" value={form.license_disc_expiry} onChange={(e) => setForm({ ...form, license_disc_expiry: e.target.value })} /></div>
+            <div className="field"><label className="label">Next service date</label><input type="date" value={form.next_service_date} onChange={(e) => setForm({ ...form, next_service_date: e.target.value })} /></div>
+            <div className="field"><label className="label">Next service km</label><input type="number" value={form.next_service_km} onChange={(e) => setForm({ ...form, next_service_km: e.target.value })} placeholder="e.g. 12500" /></div>
             <div className="field" style={{ gridColumn: '1 / -1' }}><label className="label">Notes</label><textarea rows={3} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></div>
           </div>
           <div className="row" style={{ justifyContent: 'flex-end' }}>

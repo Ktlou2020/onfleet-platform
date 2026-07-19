@@ -225,6 +225,77 @@ async function runDailyReminders() {
   }
 
   runLicenseDiscAlerts().catch((error) => console.error('license disc alerts failed', error));
+  runFleetServiceReminders().catch((error) => console.error('fleet service reminders failed', error));
+}
+
+async function runFleetServiceReminders() {
+  const today = new Date().toISOString().slice(0, 10);
+  // Bikes owned by fleet organisations due for service within 30 days (or already overdue)
+  const bikes = db.prepare(`
+    SELECT b.id, b.registration, b.vin, b.make, b.model, b.next_service_date, b.status,
+           b.organization_id, o.name AS org_name
+    FROM bikes b
+    JOIN organizations o ON o.id = b.organization_id
+    WHERE b.organization_id IS NOT NULL
+      AND b.next_service_date IS NOT NULL
+      AND b.next_service_date <= date('now', '+30 days')
+      AND b.status NOT IN ('sold','written_off','stolen')
+  `).all();
+
+  if (!bikes.length) return;
+
+  // Group by organisation
+  const byOrg = {};
+  for (const bike of bikes) {
+    if (!byOrg[bike.organization_id]) byOrg[bike.organization_id] = [];
+    byOrg[bike.organization_id].push(bike);
+  }
+
+  for (const [orgId, orgBikes] of Object.entries(byOrg)) {
+    const orgName = orgBikes[0].org_name;
+    const admins = db.prepare(`
+      SELECT id, full_name, email FROM users
+      WHERE organization_id = ? AND role IN ('fleet_owner_admin','fleet_owner_ops')
+        AND status = 'active' AND deleted_at IS NULL
+    `).all(Number(orgId));
+
+    if (!admins.length) continue;
+
+    const overdue = orgBikes.filter((b) => b.next_service_date < today);
+    const upcoming = orgBikes.filter((b) => b.next_service_date >= today);
+    const title = `Service due — ${orgBikes.length} bike${orgBikes.length !== 1 ? 's' : ''} (${orgName})`;
+
+    const bikeLines = orgBikes.map((b) => {
+      const label = b.registration || b.vin || `Bike #${b.id}`;
+      const flag = b.next_service_date < today ? ' ⚠ OVERDUE' : '';
+      return `  • ${label} (${b.make} ${b.model}) — service date: ${b.next_service_date}${flag}`;
+    }).join('\n');
+
+    const body = `Hi [name],\n\n${orgName} has ${orgBikes.length} bike${orgBikes.length !== 1 ? 's' : ''} due for service${overdue.length ? ` (${overdue.length} overdue)` : ''}:\n\n${bikeLines}\n\nBasic service is R275 per bike. Please contact us to book your service appointments.\n\nOnFleet Africa Workshop`;
+
+    for (const admin of admins) {
+      if (notificationExistsToday(admin.id, 'fleet_service_reminder', title)) continue;
+      const personalised = body.replace('[name]', admin.full_name.split(' ')[0]);
+      try {
+        await sendNotification({
+          userId: admin.id,
+          channel: 'email',
+          type: 'fleet_service_reminder',
+          title,
+          message: personalised
+        });
+        await sendNotification({
+          userId: admin.id,
+          channel: 'in_app',
+          type: 'fleet_service_reminder',
+          title,
+          message: `${orgBikes.length} bike${orgBikes.length !== 1 ? 's' : ''} due for service${overdue.length ? ` (${overdue.length} overdue)` : ''}. Basic service R275.`
+        });
+      } catch (err) {
+        console.error(`[fleet-service-reminder] failed for ${orgName}:`, err.message);
+      }
+    }
+  }
 }
 
 function runScheduleRecalc() {
@@ -245,5 +316,6 @@ module.exports = {
   runScheduleRecalc,
   runMonthlyStatements,
   runLicenseDiscAlerts,
+  runFleetServiceReminders,
   buildAgreementStatementSnapshot
 };

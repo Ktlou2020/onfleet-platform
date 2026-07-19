@@ -136,6 +136,26 @@ router.post('/leads', async (req, res) => {
       await sendEmail(inbox, subject, body);
     }
 
+    // Confirmation email to the lead
+    if (email) {
+      const confirmSubject = 'Your OnFleet Fleet demo request';
+      const confirmBody = [
+        `Hi ${contact_name},`,
+        '',
+        `Thanks for getting in touch. We've received your demo request for OnFleet Fleet.`,
+        '',
+        `We'll give you a call within one business day to walk you through the platform.`,
+        '',
+        `If you'd like to chat in the meantime, WhatsApp us on 081 539 5612 — that's usually the quickest way to reach us.`,
+        '',
+        `We also do in-person demos at our Kya Sand workshop in Johannesburg. You're welcome to come in — just let us know when suits you.`,
+        '',
+        `The OnFleet Africa team`,
+        `Kya Sand, Johannesburg`,
+      ].join('\n');
+      await sendEmail(email, confirmSubject, confirmBody).catch(() => {});
+    }
+
     res.status(201).json({
       ok: true,
       lead: {

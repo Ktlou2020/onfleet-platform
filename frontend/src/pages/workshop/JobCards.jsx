@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import { Zap } from 'lucide-react';
 import api from '../../api';
 import { Badge, Loading, Modal, SearchInput, fmt, fmtDateTime, matchesSearch } from '../../components/ui';
+import { useAuth } from '../../auth';
 
 const STATUS_PILLS = ['all', 'open', 'in_progress', 'completed', 'cancelled'];
 const STATUS_COLOR = { open: 'info', in_progress: 'warning', completed: 'success', cancelled: '' };
-const PRIORITY_COLOR = { urgent: 'danger', high: 'warning', normal: 'info', low: '' };
+const PRIORITY_COLOR = { urgent: 'danger', high: 'warning', normal: '', low: '' };
+const PRIORITY_BG = { urgent: 'rgba(239,68,68,0.06)', high: 'rgba(249,115,22,0.05)', normal: '', low: '' };
 const JOB_TYPES = ['service', 'repair', 'inspection', 'tyres', 'brakes', 'electrical', 'bodywork', 'other'];
 const PRIORITIES = ['normal', 'high', 'urgent'];
 
@@ -16,10 +19,12 @@ const EMPTY_FORM = {
 };
 
 export default function WorkshopJobCards() {
+  const { user } = useAuth();
   const nav = useNavigate();
   const [jobs, setJobs] = useState(null);
   const [technicians, setTechnicians] = useState([]);
   const [statusFilter, setStatusFilter] = useState('all');
+  const [myJobsOnly, setMyJobsOnly] = useState(false);
   const [search, setSearch] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -28,6 +33,7 @@ export default function WorkshopJobCards() {
   const [selectedBike, setSelectedBike] = useState(null);
   const [useManual, setUseManual] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [startingId, setStartingId] = useState(null);
 
   const load = useCallback(async () => {
     const [jobsRes, techRes] = await Promise.all([
@@ -52,8 +58,9 @@ export default function WorkshopJobCards() {
 
   const filtered = useMemo(() => (jobs || []).filter((j) => {
     if (statusFilter !== 'all' && j.status !== statusFilter) return false;
+    if (myJobsOnly && j.technician_id !== user?.id) return false;
     return matchesSearch(search, j.display_registration, j.display_make, j.display_model, j.display_vin, j.technician_name, j.fleet_org_name, j.description);
-  }), [jobs, statusFilter, search]);
+  }), [jobs, statusFilter, myJobsOnly, search, user?.id]);
 
   const selectBike = (bike) => {
     setSelectedBike(bike);
@@ -63,10 +70,9 @@ export default function WorkshopJobCards() {
     setUseManual(false);
   };
 
-  const clearBike = () => {
-    setSelectedBike(null);
-    setForm((f) => ({ ...f, bike_id: '' }));
-  };
+  const clearBike = () => { setSelectedBike(null); setForm((f) => ({ ...f, bike_id: '' })); };
+
+  const closeCreate = () => { setShowCreate(false); setForm(EMPTY_FORM); setSelectedBike(null); setBikeSearch(''); setBikeResults([]); setUseManual(false); };
 
   const createJob = async () => {
     try {
@@ -77,11 +83,7 @@ export default function WorkshopJobCards() {
       }
       const { data } = await api.post('/workshop/job-cards', payload);
       toast.success('Job card created');
-      setShowCreate(false);
-      setForm(EMPTY_FORM);
-      setSelectedBike(null);
-      setBikeSearch('');
-      setUseManual(false);
+      closeCreate();
       nav(`/workshop/app/job-cards/${data.id}`);
     } catch (error) {
       toast.error(error.response?.data?.error || 'Could not create job card');
@@ -90,7 +92,24 @@ export default function WorkshopJobCards() {
     }
   };
 
+  const startJob = async (e, jobId) => {
+    e.stopPropagation();
+    try {
+      setStartingId(jobId);
+      await api.post(`/workshop/job-cards/${jobId}/start`);
+      toast.success('Job started');
+      await load();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not start job');
+    } finally {
+      setStartingId(null);
+    }
+  };
+
   const canCreate = form.bike_id || (form.vin && form.make && form.model);
+
+  const openCount = (jobs || []).filter((j) => j.status === 'open').length;
+  const inProgressCount = (jobs || []).filter((j) => j.status === 'in_progress').length;
 
   if (!jobs) return <Loading />;
 
@@ -99,13 +118,13 @@ export default function WorkshopJobCards() {
       <div className="flex-between mb-3" style={{ flexWrap: 'wrap', gap: 12 }}>
         <div>
           <h1 className="page-title">Job Cards</h1>
-          <p className="page-sub">{jobs.length} total · {jobs.filter((j) => j.status === 'open').length} open</p>
+          <p className="page-sub">{openCount} open · {inProgressCount} in progress · {jobs.length} total</p>
         </div>
         <button className="btn" onClick={() => setShowCreate(true)}>+ New job card</button>
       </div>
 
-      <div className="mb-3" style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
-        <SearchInput value={search} onChange={setSearch} placeholder="Search bike, VIN, technician…" style={{ flex: '1 1 260px', maxWidth: 380 }} />
+      <div className="mb-3" style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+        <SearchInput value={search} onChange={setSearch} placeholder="Search bike, VIN, technician, description…" style={{ flex: '1 1 260px', maxWidth: 360 }} />
         <div className="filter-pills">
           {STATUS_PILLS.map((s) => (
             <button key={s} className={`filter-pill ${statusFilter === s ? 'active' : ''}`} onClick={() => setStatusFilter(s)}>
@@ -113,6 +132,13 @@ export default function WorkshopJobCards() {
             </button>
           ))}
         </div>
+        <button
+          className={`filter-pill ${myJobsOnly ? 'active' : ''}`}
+          onClick={() => setMyJobsOnly((v) => !v)}
+          title="Show only jobs assigned to me"
+        >
+          My jobs
+        </button>
       </div>
 
       <div className="card table-wrap" style={{ padding: 0 }}>
@@ -127,43 +153,59 @@ export default function WorkshopJobCards() {
               <th>Fleet</th>
               <th style={{ textAlign: 'right' }}>Cost</th>
               <th>Created</th>
+              <th style={{ width: 80 }}></th>
             </tr>
           </thead>
           <tbody>
             {filtered.map((job) => (
-              <tr key={job.id} style={{ cursor: 'pointer' }} onClick={() => nav(`/workshop/app/job-cards/${job.id}`)}>
+              <tr
+                key={job.id}
+                style={{ cursor: 'pointer', background: PRIORITY_BG[job.priority] || undefined }}
+                onClick={() => nav(`/workshop/app/job-cards/${job.id}`)}
+              >
                 <td>
-                  <div style={{ fontWeight: 600 }}>{job.display_registration || '—'}</div>
+                  <div style={{ fontWeight: 700 }}>{job.display_registration || '—'}</div>
                   <div className="text-xs muted">{job.display_make} {job.display_model}</div>
                 </td>
-                <td>{job.job_type}</td>
-                <td>{job.priority !== 'normal' ? <Badge status={PRIORITY_COLOR[job.priority]}>{job.priority}</Badge> : <span className="muted text-xs">normal</span>}</td>
+                <td className="text-sm">{job.job_type}</td>
+                <td>
+                  {job.priority !== 'normal'
+                    ? <Badge status={PRIORITY_COLOR[job.priority]}>{job.priority}</Badge>
+                    : <span className="muted text-xs">normal</span>}
+                </td>
                 <td><Badge status={STATUS_COLOR[job.status]}>{job.status.replace('_', ' ')}</Badge></td>
                 <td className="text-sm">{job.technician_name || <span className="muted">—</span>}</td>
                 <td className="text-xs muted">{job.fleet_org_name || '—'}</td>
-                <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(job.total_cost)}</td>
+                <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(job.total_cost)}</td>
                 <td style={{ whiteSpace: 'nowrap' }} className="text-xs muted">{fmtDateTime(job.created_at)}</td>
+                <td onClick={(e) => e.stopPropagation()}>
+                  {job.status === 'open' && (
+                    <button className="btn btn-sm" disabled={startingId === job.id} onClick={(e) => startJob(e, job.id)} title="Start this job">
+                      <Zap size={12} /> {startingId === job.id ? '…' : 'Start'}
+                    </button>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
         {!filtered.length && (
           <div style={{ padding: 40, textAlign: 'center' }}>
-            <p className="muted">No job cards match your filter.</p>
+            <p className="muted">{search || statusFilter !== 'all' || myJobsOnly ? 'No job cards match your filters.' : 'No job cards yet.'}</p>
             <button className="btn" style={{ marginTop: 12 }} onClick={() => setShowCreate(true)}>Create first job card</button>
           </div>
         )}
       </div>
 
       {showCreate && (
-        <Modal title="New Job Card" onClose={() => { setShowCreate(false); setForm(EMPTY_FORM); setSelectedBike(null); setBikeSearch(''); setUseManual(false); }}>
+        <Modal title="New Job Card" onClose={closeCreate}>
           <div className="field">
             <label className="label">Bike</label>
             {selectedBike ? (
               <div className="card" style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div>
                   <div style={{ fontWeight: 600 }}>{selectedBike.registration || selectedBike.vin}</div>
-                  <div className="text-xs muted">{selectedBike.make} {selectedBike.model} {selectedBike.year ? `· ${selectedBike.year}` : ''}{selectedBike.org_name ? ` · ${selectedBike.org_name}` : ''}</div>
+                  <div className="text-xs muted">{selectedBike.make} {selectedBike.model}{selectedBike.year ? ` · ${selectedBike.year}` : ''}{selectedBike.org_name ? ` · ${selectedBike.org_name}` : ''}</div>
                 </div>
                 <button className="btn btn-sm btn-secondary" onClick={clearBike}>Change</button>
               </div>
@@ -232,7 +274,7 @@ export default function WorkshopJobCards() {
             <textarea rows={3} value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} placeholder="Describe the work needed…" />
           </div>
           <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
-            <button className="btn btn-secondary" onClick={() => { setShowCreate(false); setForm(EMPTY_FORM); setSelectedBike(null); setBikeSearch(''); setUseManual(false); }}>Cancel</button>
+            <button className="btn btn-secondary" onClick={closeCreate}>Cancel</button>
             <button className="btn" onClick={createJob} disabled={busy || !canCreate}>{busy ? 'Creating…' : 'Create job card'}</button>
           </div>
         </Modal>

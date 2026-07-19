@@ -1,95 +1,172 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import { Zap, Clock, CheckCircle, TrendingUp, AlertTriangle, ArrowRight } from 'lucide-react';
 import api from '../../api';
 import { Badge, Loading, fmt, fmtDateTime } from '../../components/ui';
+import { useAuth } from '../../auth';
 
-const PRIORITY_COLOR = { urgent: 'danger', high: 'warning', normal: 'info', low: '' };
+const PRIORITY_BORDER = { urgent: '#ef4444', high: '#f97316', normal: '#3b82f6', low: '#6b7280' };
 const STATUS_COLOR = { open: 'info', in_progress: 'warning', completed: 'success', cancelled: '' };
+const PRIORITY_COLOR = { urgent: 'danger', high: 'warning', normal: 'info', low: '' };
 
-function KPI({ label, value, sub }) {
+function elapsed(startedAt) {
+  if (!startedAt) return null;
+  const ms = Date.now() - new Date(startedAt).getTime();
+  const mins = Math.floor(ms / 60000);
+  if (mins < 60) return `${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ${mins % 60}m`;
+  return `${Math.floor(hrs / 24)}d ${hrs % 24}h`;
+}
+
+function KPI({ label, value, icon: Icon, accent }) {
   return (
-    <div className="stat">
-      <div className="stat-label">{label}</div>
+    <div className="stat" style={{ borderTop: `3px solid ${accent || 'var(--accent)'}` }}>
+      <div className="flex-between mb-1">
+        <div className="stat-label">{label}</div>
+        {Icon && <Icon size={16} style={{ color: accent || 'var(--accent)', opacity: 0.7 }} />}
+      </div>
       <div className="stat-value">{value}</div>
-      {sub ? <div className="text-xs muted" style={{ marginTop: 2 }}>{sub}</div> : null}
+    </div>
+  );
+}
+
+function JobCard({ job, onStart, busy }) {
+  const nav = useNavigate();
+  const elapsedTime = job.status === 'in_progress' ? elapsed(job.started_at) : null;
+  return (
+    <div
+      className="card"
+      style={{ padding: 0, cursor: 'pointer', overflow: 'hidden', borderLeft: `4px solid ${PRIORITY_BORDER[job.priority] || PRIORITY_BORDER.normal}` }}
+      onClick={() => nav(`/workshop/app/job-cards/${job.id}`)}
+    >
+      <div style={{ padding: '12px 14px' }}>
+        <div className="flex-between mb-2" style={{ gap: 6, flexWrap: 'wrap' }}>
+          <Badge status={STATUS_COLOR[job.status]}>{job.status.replace('_', ' ')}</Badge>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {job.priority !== 'normal' && <Badge status={PRIORITY_COLOR[job.priority]}>{job.priority}</Badge>}
+            {elapsedTime && (
+              <span style={{ fontSize: 11, color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: 3 }}>
+                <Clock size={11} /> {elapsedTime}
+              </span>
+            )}
+          </div>
+        </div>
+        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 2 }}>
+          {job.display_registration || job.display_make}
+        </div>
+        <div className="text-xs muted">
+          {job.display_make} {job.display_model} · {job.job_type}
+        </div>
+        {job.description ? (
+          <div className="text-xs" style={{ marginTop: 6, opacity: 0.7, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+            {job.description}
+          </div>
+        ) : null}
+        <div className="flex-between" style={{ marginTop: 10 }}>
+          <span className="text-xs muted">{fmtDateTime(job.created_at)}</span>
+          <span style={{ fontWeight: 700, fontSize: 13 }}>{fmt(job.total_cost)}</span>
+        </div>
+      </div>
+      {job.status === 'open' && (
+        <div
+          style={{ borderTop: '1px solid var(--border)', padding: '8px 14px', display: 'flex', justifyContent: 'flex-end' }}
+          onClick={(e) => { e.stopPropagation(); onStart(job.id); }}
+        >
+          <button className="btn btn-sm" disabled={busy}>
+            <Zap size={13} /> Start job
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
 export default function WorkshopDashboard() {
-  const [data, setData] = useState(null);
+  const { user } = useAuth();
   const nav = useNavigate();
+  const [data, setData] = useState(null);
+  const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
+  const load = () =>
     api.get('/workshop/dashboard')
       .then((r) => setData(r.data))
       .catch(() => toast.error('Could not load dashboard'));
-  }, []);
+
+  useEffect(() => { load(); }, []);
+
+  const startJob = async (id) => {
+    try {
+      setBusy(true);
+      await api.post(`/workshop/job-cards/${id}/start`);
+      toast.success('Job started');
+      await load();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not start job');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   if (!data) return <Loading />;
 
-  const { stats, active_jobs } = data;
+  const { stats, active_jobs, my_jobs } = data;
+  const myJobIds = new Set(my_jobs.map((j) => j.id));
+  const otherActive = active_jobs.filter((j) => !myJobIds.has(j.id));
 
   return (
     <>
       <div className="mb-4">
         <h1 className="page-title">Workshop Dashboard</h1>
-        <p className="page-sub">Live overview of all job cards and today's activity</p>
+        <p className="page-sub">Welcome back, {user?.full_name?.split(' ')[0]}. Here's your queue for today.</p>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 16, marginBottom: 32 }}>
-        <KPI label="Open" value={stats.open_count ?? 0} />
-        <KPI label="In Progress" value={stats.in_progress_count ?? 0} />
-        <KPI label="Completed today" value={stats.completed_today ?? 0} />
-        <KPI label="Total completed" value={stats.completed_count ?? 0} />
-        <KPI label="Revenue today" value={fmt(stats.revenue_today ?? 0)} />
-        <KPI label="Total revenue" value={fmt(stats.total_revenue ?? 0)} sub="completed jobs" />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 14, marginBottom: 32 }}>
+        <KPI label="Open jobs" value={stats.open_count ?? 0} icon={AlertTriangle} accent="#f97316" />
+        <KPI label="In progress" value={stats.in_progress_count ?? 0} icon={Clock} accent="#eab308" />
+        <KPI label="Done today" value={stats.completed_today ?? 0} icon={CheckCircle} accent="#22c55e" />
+        <KPI label="Revenue today" value={fmt(stats.revenue_today ?? 0)} icon={TrendingUp} accent="#6366f1" />
+        <KPI label="Total revenue" value={fmt(stats.total_revenue ?? 0)} icon={TrendingUp} accent="#8b5cf6" />
       </div>
 
+      {/* My Queue */}
       <div className="flex-between mb-3">
-        <h2 style={{ fontSize: 16, fontWeight: 600 }}>Active Jobs</h2>
-        <button className="btn btn-sm" onClick={() => nav('/workshop/app/job-cards')}>View all →</button>
+        <h2 style={{ fontSize: 16, fontWeight: 700 }}>My Queue</h2>
+        <button className="btn btn-sm btn-secondary" onClick={() => nav('/workshop/app/job-cards')}>
+          All job cards <ArrowRight size={13} />
+        </button>
       </div>
 
-      {active_jobs.length === 0 ? (
-        <div className="card" style={{ padding: 32, textAlign: 'center' }}>
-          <p className="muted">No open or in-progress jobs right now.</p>
-          <button className="btn" style={{ marginTop: 12 }} onClick={() => nav('/workshop/app/job-cards')}>Create job card</button>
+      {my_jobs.length === 0 ? (
+        <div className="card" style={{ padding: '28px 20px', textAlign: 'center', marginBottom: 28 }}>
+          <CheckCircle size={28} style={{ color: '#22c55e', marginBottom: 8 }} />
+          <p style={{ fontWeight: 600 }}>No jobs assigned to you right now.</p>
+          <p className="muted text-sm" style={{ marginTop: 4 }}>Create a job card or ask a supervisor to assign one to you.</p>
+          <button className="btn" style={{ marginTop: 12 }} onClick={() => nav('/workshop/app/job-cards')}>Browse all jobs</button>
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
-          {active_jobs.map((job) => (
-            <div
-              key={job.id}
-              className="card"
-              style={{ cursor: 'pointer', padding: 16 }}
-              onClick={() => nav(`/workshop/app/job-cards/${job.id}`)}
-            >
-              <div className="flex-between mb-2">
-                <Badge status={STATUS_COLOR[job.status]}>{job.status.replace('_', ' ')}</Badge>
-                {job.priority !== 'normal' && <Badge status={PRIORITY_COLOR[job.priority]}>{job.priority}</Badge>}
-              </div>
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>
-                {job.display_registration || job.display_make} {job.display_model}
-              </div>
-              {job.display_registration && (
-                <div className="text-xs muted">{job.display_make} {job.display_model}</div>
-              )}
-              <div className="text-xs muted" style={{ marginTop: 6 }}>
-                {job.job_type} · {job.technician_name || 'Unassigned'}
-              </div>
-              {job.description ? (
-                <div className="text-xs" style={{ marginTop: 6, color: 'var(--text)', opacity: 0.7, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
-                  {job.description}
-                </div>
-              ) : null}
-              <div className="flex-between" style={{ marginTop: 10 }}>
-                <span className="text-xs muted">{fmtDateTime(job.created_at)}</span>
-                <span className="text-sm" style={{ fontWeight: 600 }}>{fmt(job.total_cost)}</span>
-              </div>
-            </div>
-          ))}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 14, marginBottom: 28 }}>
+          {my_jobs.map((job) => <JobCard key={job.id} job={job} onStart={startJob} busy={busy} />)}
+        </div>
+      )}
+
+      {/* Other active jobs */}
+      {otherActive.length > 0 && (
+        <>
+          <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 12 }}>Other Active Jobs</h2>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 14 }}>
+            {otherActive.map((job) => <JobCard key={job.id} job={job} onStart={startJob} busy={busy} />)}
+          </div>
+        </>
+      )}
+
+      {my_jobs.length === 0 && otherActive.length === 0 && (
+        <div className="card" style={{ padding: '28px 20px', textAlign: 'center' }}>
+          <p className="muted">No open or in-progress jobs at the moment.</p>
+          <button className="btn" style={{ marginTop: 12 }} onClick={() => nav('/workshop/app/job-cards')}>
+            + Create job card
+          </button>
         </div>
       )}
     </>

@@ -748,6 +748,54 @@ ensureColumn('bikes', 'hub_id', 'INTEGER REFERENCES hubs(id)');
 ensureBikeStatusSchema();
 ensureAgreementStatusSchema();
 ensureUserRoleSchema();
+
+function ensureTechnicianRoleSchema() {
+  const schemaRow = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'`).get();
+  if (String(schemaRow?.sql || '').includes("'technician'")) return;
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    BEGIN TRANSACTION;
+    CREATE TABLE users_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT UNIQUE NOT NULL,
+      phone TEXT,
+      password_hash TEXT NOT NULL,
+      full_name TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'rider' CHECK(role IN ('rider','admin','superadmin','fleet_owner_admin','fleet_owner_ops','fleet_owner_billing','fleet_owner_viewer','technician')),
+      organization_id INTEGER,
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','suspended')),
+      id_number TEXT,
+      date_of_birth TEXT,
+      address TEXT,
+      city TEXT,
+      province TEXT,
+      postal_code TEXT,
+      emergency_contact_name TEXT,
+      emergency_contact_phone TEXT,
+      avatar_url TEXT,
+      country_of_origin TEXT,
+      user_tags TEXT,
+      deleted_at TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(organization_id) REFERENCES organizations(id)
+    );
+    INSERT INTO users_new (
+      id, email, phone, password_hash, full_name, role, organization_id, status, id_number, date_of_birth,
+      address, city, province, postal_code, emergency_contact_name, emergency_contact_phone,
+      avatar_url, country_of_origin, user_tags, deleted_at, created_at, updated_at
+    ) SELECT
+      id, email, phone, password_hash, full_name, role, organization_id, status, id_number, date_of_birth,
+      address, city, province, postal_code, emergency_contact_name, emergency_contact_phone,
+      avatar_url, country_of_origin, user_tags, deleted_at, created_at, updated_at
+    FROM users;
+    DROP TABLE users;
+    ALTER TABLE users_new RENAME TO users;
+    COMMIT;
+    PRAGMA foreign_keys = ON;
+  `);
+}
+ensureTechnicianRoleSchema();
 ensureColumn('gps_pings', 'satellites', 'INTEGER');
 ensureColumn('gps_pings', 'altitude', 'INTEGER');
 ensureColumn('gps_pings', 'ignition', 'INTEGER');
@@ -811,6 +859,52 @@ CREATE INDEX IF NOT EXISTS idx_alerts_unacked ON tracking_alerts(acknowledged_at
 CREATE INDEX IF NOT EXISTS idx_geofence_active ON geofences(active);
 CREATE INDEX IF NOT EXISTS idx_gps_pings_bike_time ON gps_pings(bike_id, recorded_at DESC);
 `);
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS job_cards (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  bike_id INTEGER REFERENCES bikes(id),
+  vin TEXT,
+  registration TEXT,
+  make TEXT,
+  model TEXT,
+  year INTEGER,
+  color TEXT,
+  engine_cc INTEGER,
+  fleet_owner_name TEXT,
+  fleet_org_id INTEGER,
+  job_type TEXT NOT NULL DEFAULT 'service' CHECK(job_type IN ('service','repair','inspection','other')),
+  description TEXT,
+  status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','in_progress','completed','cancelled')),
+  priority TEXT NOT NULL DEFAULT 'normal' CHECK(priority IN ('low','normal','high','urgent')),
+  technician_id INTEGER REFERENCES users(id),
+  created_by INTEGER REFERENCES users(id),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  started_at DATETIME,
+  completed_at DATETIME,
+  completion_notes TEXT,
+  odometer_km INTEGER,
+  next_service_date TEXT,
+  next_service_km INTEGER,
+  bike_status_after TEXT
+);
+
+CREATE TABLE IF NOT EXISTS job_card_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_card_id INTEGER NOT NULL REFERENCES job_cards(id) ON DELETE CASCADE,
+  item_type TEXT NOT NULL DEFAULT 'labor' CHECK(item_type IN ('labor','part','consumable','other')),
+  description TEXT NOT NULL,
+  quantity REAL NOT NULL DEFAULT 1,
+  unit_cost REAL NOT NULL DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_job_cards_status ON job_cards(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_job_cards_bike ON job_cards(bike_id);
+CREATE INDEX IF NOT EXISTS idx_job_card_items_card ON job_card_items(job_card_id);
+`);
+
+ensureColumn('service_records', 'job_card_id', 'INTEGER REFERENCES job_cards(id)');
 
 if (tableHasColumn('users', 'organization_id')) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_users_org ON users(organization_id, role);`);

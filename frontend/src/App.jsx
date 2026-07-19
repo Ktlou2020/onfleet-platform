@@ -53,10 +53,17 @@ import AdminFleetOwners from './pages/admin/FleetOwners';
 import AdminFleetPayouts from './pages/admin/FleetPayouts';
 import AdminTracking from './pages/admin/Tracking';
 import AdminLeads from './pages/admin/Leads';
+import AdminWorkshop from './pages/admin/Workshop';
+import WorkshopShell from './pages/workshop/WorkshopShell';
+import WorkshopDashboard from './pages/workshop/Dashboard';
+import WorkshopJobCards from './pages/workshop/JobCards';
+import WorkshopJobCard from './pages/workshop/JobCard';
 import FleetRiderApply from './pages/FleetRiderApply';
 import Privacy from './pages/Privacy';
 import Terms from './pages/Terms';
 import { canViewFleetSection, getDefaultFleetRoute, isAdminPortalRole } from './pages/fleet/access';
+
+const WORKSHOP_ROLES = ['technician', 'admin', 'superadmin'];
 
 function PrivateRoute({ children, role }) {
   const { user, loading } = useAuth();
@@ -65,6 +72,7 @@ function PrivateRoute({ children, role }) {
   if (role === 'rider' && user.role !== 'rider') return <Navigate to={String(user.role || '').startsWith('fleet_owner_') ? '/fleet/app' : '/admin'} replace />;
   if (role === 'admin' && !['admin', 'superadmin'].includes(user.role)) return <Navigate to={String(user.role || '').startsWith('fleet_owner_') ? '/fleet/app' : '/dashboard'} replace />;
   if (role === 'fleet_owner' && !String(user.role || '').startsWith('fleet_owner_')) return <Navigate to={['admin', 'superadmin'].includes(user.role) ? '/admin' : '/dashboard'} replace />;
+  if (role === 'workshop' && !WORKSHOP_ROLES.includes(user.role)) return <Navigate to="/login" replace />;
   return children;
 }
 
@@ -81,6 +89,7 @@ function HomeRoute() {
   const { user, loading } = useAuth();
   if (loading) return null;
   if (!user) return <Landing />;
+  if (user.role === 'technician') return <Navigate to="/workshop/app" replace />;
   if (isAdminPortalRole(user.role)) return <Navigate to="/admin" replace />;
   if (String(user.role || '').startsWith('fleet_owner_')) return <Navigate to={getDefaultFleetRoute(user.role)} replace />;
   return <Navigate to="/dashboard" replace />;
@@ -148,8 +157,15 @@ export default function App() {
           <Route path="pilot" element={<Navigate to="/admin/leads" replace />} />
           <Route path="leads" element={<AdminLeads />} />
           <Route path="tracking" element={<AdminTracking />} />
+          <Route path="workshop" element={<AdminWorkshop />} />
           <Route path="users" element={<AdminUsers />} />
           <Route path="audit" element={<AdminAuditLogs />} />
+        </Route>
+
+        <Route path="/workshop/app" element={<PrivateRoute role="workshop"><WorkshopShell /></PrivateRoute>}>
+          <Route index element={<WorkshopDashboard />} />
+          <Route path="job-cards" element={<WorkshopJobCards />} />
+          <Route path="job-cards/:id" element={<WorkshopJobCard />} />
         </Route>
       </Routes>
       <InstallPrompt />

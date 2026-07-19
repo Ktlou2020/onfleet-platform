@@ -174,6 +174,7 @@ export default function RiderDashboard() {
       <div className="grid grid-2">
         <div className="card">
           <h3 className="mb-3">Upcoming payments</h3>
+          <div className="table-wrap">
           <table className="table">
             <thead><tr><th>Week</th><th>Due date</th><th>Amount</th><th>Status</th></tr></thead>
             <tbody>
@@ -187,6 +188,7 @@ export default function RiderDashboard() {
               ))}
             </tbody>
           </table>
+          </div>
           {!upcoming.length && <div className="muted text-sm">No upcoming payments match your search.</div>}
         </div>
         <div className="card">

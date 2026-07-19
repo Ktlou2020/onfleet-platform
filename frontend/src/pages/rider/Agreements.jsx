@@ -40,6 +40,7 @@ export default function RiderAgreements() {
           <div className="muted text-sm">Showing {filtered.length} matching agreements</div>
         </div>
         <div className="card" style={{ padding: 0 }}>
+          <div className="table-wrap">
           <table className="table">
             <thead><tr><th>Agreement</th><th>Bike</th><th>Weekly</th><th>Total</th><th>Start</th><th>Status</th><th></th></tr></thead>
             <tbody>
@@ -56,6 +57,7 @@ export default function RiderAgreements() {
               ))}
             </tbody>
           </table>
+          </div>
           {!pagination.items.length && <div className="muted" style={{ padding: 24, textAlign: 'center' }}>{search ? 'No agreements match your search.' : 'No agreements yet.'}</div>}
         </div>
         <Pagination page={pagination.currentPage} pageSize={pagination.pageSize} totalItems={pagination.totalItems} onPageChange={setPage} onPageSizeChange={setPageSize} label="agreements" />

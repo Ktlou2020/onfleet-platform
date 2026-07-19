@@ -16,11 +16,11 @@ const PROBLEMS = [
   },
   {
     title: 'No record of who owes what',
-    text: 'A spreadsheet, maybe a notebook. Nobody's sure which version is right. A rider disputes a payment and you can't prove either way.',
+    text: "A spreadsheet, maybe a notebook. Nobody's sure which version is right. A rider disputes a payment and you can't prove either way.",
   },
   {
     title: 'A rider stops paying and disappears',
-    text: 'You don't know where the bike is. You can't immobilise it. You're chasing R15,000 worth of metal with no leverage.',
+    text: "You don't know where the bike is. You can't immobilise it. You're chasing R15,000 worth of metal with no leverage.",
   },
 ];
 
@@ -50,7 +50,7 @@ const STEPS = [
 const FEATURES = [
   {
     title: 'Fleet dashboard',
-    text: 'All your bikes, riders, and money in one place. See what's standing, what's moving, and what's overdue.',
+    text: "All your bikes, riders, and money in one place. See what's standing, what's moving, and what's overdue.",
   },
   {
     title: 'Rider agreements',

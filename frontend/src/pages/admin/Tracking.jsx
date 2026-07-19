@@ -923,6 +923,7 @@ export default function Tracking() {
                       onClick={e => deleteDevice(e, d.id)} title="Remove"><Trash2 size={10} /></button>
                   </div>
                   <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2, paddingLeft: 18, fontFamily: 'monospace', letterSpacing: '.3px' }}>{d.imei}</div>
+                  {d.organization_name && <div style={{ fontSize: 10, color: 'var(--primary)', marginTop: 2, paddingLeft: 18, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.organization_name}</div>}
                   {!d.bike_id && <div style={{ fontSize: 10, color: '#f97316', marginTop: 2, paddingLeft: 18 }}>⚠ No bike linked — positions not stored</div>}
                   <div style={{ fontSize: 10, marginTop: 2, paddingLeft: 18, display: 'flex', alignItems: 'center', gap: 6 }}>
                     {d.connected ? (
@@ -1098,6 +1099,7 @@ export default function Tracking() {
             <Marker key={d.id} position={[d.lat, d.lng]} icon={deviceIcon(d)} eventHandlers={{ click: () => selectDevice(d) }}>
               <Popup>
                 <strong>{d.label || d.registration || d.imei}</strong><br />
+                {d.organization_name && <><span style={{ color: '#1E88D1' }}>{d.organization_name}</span><br /></>}
                 {d.bike_model} {d.registration}<br />
                 {d.connected ? (
                   <>🟢 Online<br />{Math.round(d.speed_kmh || 0)} km/h · {d.heading || 0}° · {d.satellites || '?'} sats</>

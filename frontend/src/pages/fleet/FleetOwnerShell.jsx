@@ -10,6 +10,7 @@ import api from '../../api';
 const navIconMap = {
   dashboard: LayoutDashboard,
   bikes: Bike,
+  tracking: MapPin,
   agreements: FileText,
   payments: CreditCard,
   riders: Users,
@@ -25,7 +26,7 @@ const BLOCKED_STATUSES = ['past_due', 'suspended', 'cancelled'];
 
 function SubscriptionGate({ status, canOpenBilling, onGoToBilling }) {
   const messages = {
-    past_due: { heading: 'Trial ended — subscription required', body: 'Your free trial has expired. Choose a plan to keep accessing the fleet portal.' },
+    past_due: { heading: 'Trial ended — subscription required', body: 'Your free 1-month trial has expired. Choose a plan to keep accessing the fleet portal.' },
     suspended: { heading: 'Account suspended', body: 'Your subscription payment failed. Update your payment method to restore access.' },
     cancelled: { heading: 'Subscription cancelled', body: 'Your subscription has been cancelled. Choose a plan to regain access.' },
   };

@@ -66,6 +66,10 @@ const FLEET_RESOURCE_ACCESS = {
   api_keys: {
     view: ['fleet_owner_admin'],
     manage: ['fleet_owner_admin']
+  },
+  tracking: {
+    view: ['fleet_owner_admin', 'fleet_owner_ops'],
+    manage: ['fleet_owner_admin', 'fleet_owner_ops']
   }
 };
 
@@ -1865,10 +1869,12 @@ router.post('/payments/bulk-delete', companyRoleAllowed(FLEET_RESOURCE_ACCESS.pa
 
 const PAYSTACK_API = 'https://api.paystack.co';
 
+const FLEET_PRICE_PER_BIKE = 750;
+
 const FLEET_BILLING_PLANS = {
-  small:  { key: 'small',  name: 'Small Fleet',  price_zar: 1499, max_bikes: 20, max_admin_users: 3,  features: ['Up to 20 bikes', '3 admin users', 'CSV imports', 'Maintenance reminders', 'Standard support'] },
-  medium: { key: 'medium', name: 'Medium Fleet', price_zar: 3999, max_bikes: 60, max_admin_users: 5,  features: ['Up to 60 bikes', '5 admin users', 'Advanced filters', 'Bulk contract actions', 'Performance reporting'] },
-  large:  { key: 'large',  name: 'Large Fleet',  price_zar: 6999, max_bikes: 100, max_admin_users: 10, features: ['Up to 100 bikes', '10 admin users', 'Priority onboarding', 'Audit visibility', 'Multi-branch support'] }
+  small:  { key: 'small',  name: 'Small Fleet',  price_per_bike: FLEET_PRICE_PER_BIKE, max_bikes: 20,  max_admin_users: 3,  features: ['Up to 20 bikes', 'R750/bike/month', '3 admin users', 'CSV imports', 'Free monthly service per bike', 'Standard support'] },
+  medium: { key: 'medium', name: 'Medium Fleet', price_per_bike: FLEET_PRICE_PER_BIKE, max_bikes: 60,  max_admin_users: 5,  features: ['Up to 60 bikes', 'R750/bike/month', '5 admin users', 'Advanced filters', 'Free monthly service per bike', 'Performance reporting'] },
+  large:  { key: 'large',  name: 'Large Fleet',  price_per_bike: FLEET_PRICE_PER_BIKE, max_bikes: 100, max_admin_users: 10, features: ['Up to 100 bikes', 'R750/bike/month', '10 admin users', 'Free monthly service per bike', 'Priority onboarding', 'Multi-branch support'] }
 };
 
 function getPlanPaystackCode(planKey) {
@@ -1932,12 +1938,15 @@ router.get('/billing/status', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.v
     const trialDaysLeft = (org.status === 'trialing' && org.trial_ends_at)
       ? Math.max(0, Math.round((new Date(org.trial_ends_at) - new Date()) / 86400000))
       : null;
+    const bikeCount = db.prepare(`SELECT COUNT(*) c FROM bikes WHERE organization_id = ? AND status NOT IN ('retired','sold')`).get(org.id).c || 0;
+    const monthlyTotal = bikeCount * FLEET_PRICE_PER_BIKE;
     res.json({
       organization: {
         id: org.id, name: org.name, plan_key: org.plan_key, status: org.status,
         trial_ends_at: org.trial_ends_at, trial_days_left: trialDaysLeft,
         paystack_subscription_code: org.paystack_subscription_code,
-        max_bikes: org.max_bikes, max_admin_users: org.max_admin_users
+        max_bikes: org.max_bikes, max_admin_users: org.max_admin_users,
+        bike_count: bikeCount, monthly_total: monthlyTotal, price_per_bike: FLEET_PRICE_PER_BIKE
       },
       plans: Object.values(FLEET_BILLING_PLANS),
       can_subscribe: ['trialing', 'past_due', 'cancelled', 'suspended'].includes(org.status)
@@ -1963,8 +1972,9 @@ router.post('/billing/subscribe', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billi
       return res.status(400).json({ error: `The ${plan_key} plan is not yet linked to a Paystack plan code. Please set PAYSTACK_PLAN_${plan_key.toUpperCase()} in the server environment.` });
     }
 
+    const bikeCount = db.prepare(`SELECT COUNT(*) c FROM bikes WHERE organization_id = ? AND status NOT IN ('retired','sold')`).get(org.id).c || 1;
+    const amountCents = bikeCount * FLEET_PRICE_PER_BIKE * 100;
     const reference = `OF-SUB-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
-    const amountCents = FLEET_BILLING_PLANS[plan_key].price_zar * 100;
     const initResp = await axios.post(`${PAYSTACK_API}/transaction/initialize`,
       {
         email: req.user.email,
@@ -2442,6 +2452,188 @@ router.delete('/api-keys/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.api_keys
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Could not revoke API key' });
   }
+});
+
+// ─── Fleet Tracking (GPS) ────────────────────────────────────────────────────
+
+const teltonikaServer = require('../tcp/teltonikaServer');
+const trackingEvents  = require('../trackingEvents');
+
+const FLEET_ENGINE_CUT  = { FMB920: 'setdigout 1 1', FMC920: 'setdigout 1 1', FMB965: 'setdigout 2 1', other: 'setdigout 1 1' };
+const FLEET_ENGINE_REST = { FMB920: 'setdigout 1 0', FMC920: 'setdigout 1 0', FMB965: 'setdigout 2 0', other: 'setdigout 1 0' };
+const FLEET_TRACKING_PRESETS = {
+  cut_engine:     (model) => FLEET_ENGINE_CUT[model]  || FLEET_ENGINE_CUT.other,
+  restore_engine: (model) => FLEET_ENGINE_REST[model] || FLEET_ENGINE_REST.other,
+  get_info:   () => 'getinfo',
+  get_status: () => 'getstatus',
+};
+
+function getOrgBikeIds(organizationId) {
+  return db.prepare(`SELECT id FROM bikes WHERE organization_id = ?`).all(organizationId).map(r => r.id);
+}
+
+// GET /fleet/tracking/map
+router.get('/tracking/map', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.view), (req, res) => {
+  const orgId = req.user.organization_id;
+  const connected = teltonikaServer.getConnectedIMEIs();
+  const devices = db.prepare(`
+    SELECT td.id, td.imei, td.model, td.label, td.last_seen_at, td.speed_limit_kmh,
+           b.id AS bike_id, b.registration, b.make, b.model AS bike_model, b.status AS bike_status,
+           b.color AS bike_color, b.vin AS bike_vin, b.year AS bike_year,
+           b.last_known_lat AS lat, b.last_known_lng AS lng, b.last_location_at,
+           b.odometer_km,
+           gp.speed_kmh, gp.heading, gp.ignition, gp.satellites, gp.altitude, gp.io_data,
+           (SELECT u.full_name FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_name,
+           (SELECT u.phone    FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_phone
+    FROM tracking_devices td
+    JOIN bikes b ON b.id = td.bike_id AND b.organization_id = ?
+    LEFT JOIN gps_pings gp ON gp.id = (
+      SELECT id FROM gps_pings WHERE bike_id = b.id ORDER BY recorded_at DESC LIMIT 1
+    )
+    ORDER BY td.last_seen_at DESC
+  `).all(orgId);
+  for (const d of devices) d.connected = connected.includes(d.imei) ? 1 : 0;
+  res.json(devices);
+});
+
+// GET /fleet/tracking/devices
+router.get('/tracking/devices', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.view), (req, res) => {
+  const orgId = req.user.organization_id;
+  const connected = teltonikaServer.getConnectedIMEIs();
+  const devices = db.prepare(`
+    SELECT td.*, b.registration, b.make, b.model AS bike_model, b.color AS bike_color,
+           b.last_known_lat, b.last_known_lng, b.last_location_at,
+           (SELECT u.full_name FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_name,
+           (SELECT u.phone    FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_phone
+    FROM tracking_devices td
+    JOIN bikes b ON b.id = td.bike_id AND b.organization_id = ?
+    ORDER BY td.connected DESC, td.last_seen_at DESC
+  `).all(orgId);
+  for (const d of devices) d.connected = connected.includes(d.imei) ? 1 : 0;
+  res.json(devices);
+});
+
+// GET /fleet/tracking/devices/:id/positions
+router.get('/tracking/devices/:id/positions', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.view), (req, res) => {
+  const orgId = req.user.organization_id;
+  const device = db.prepare(`
+    SELECT td.*, b.organization_id FROM tracking_devices td
+    JOIN bikes b ON b.id = td.bike_id WHERE td.id = ?`).get(req.params.id);
+  if (!device || device.organization_id !== orgId) return res.status(404).json({ error: 'Device not found' });
+  const limit = Math.min(Number(req.query.limit) || 200, 1000);
+  const from = req.query.from || null;
+  const to = req.query.to || null;
+  let sql = `SELECT id, lat, lng, speed_kmh, heading, recorded_at, satellites, altitude, ignition FROM gps_pings WHERE bike_id = ?`;
+  const params = [device.bike_id];
+  if (from) { sql += ' AND recorded_at >= ?'; params.push(from); }
+  if (to) { sql += ' AND recorded_at <= ?'; params.push(to); }
+  sql += ' ORDER BY recorded_at DESC LIMIT ?';
+  params.push(limit);
+  res.json(db.prepare(sql).all(...params).reverse());
+});
+
+// POST /fleet/tracking/devices/:id/commands
+router.post('/tracking/devices/:id/commands', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.manage), async (req, res) => {
+  const orgId = req.user.organization_id;
+  const device = db.prepare(`
+    SELECT td.*, b.organization_id FROM tracking_devices td
+    JOIN bikes b ON b.id = td.bike_id WHERE td.id = ?`).get(req.params.id);
+  if (!device || device.organization_id !== orgId) return res.status(404).json({ error: 'Device not found' });
+
+  const { preset } = req.body;
+  if (!preset) return res.status(400).json({ error: 'Provide a preset command' });
+  const fn = FLEET_TRACKING_PRESETS[preset];
+  if (!fn) return res.status(400).json({ error: `Unknown preset. Available: ${Object.keys(FLEET_TRACKING_PRESETS).join(', ')}` });
+
+  const command = fn(device.model);
+  const info = db.prepare(`INSERT INTO tracking_commands (device_id, command, created_by) VALUES (?,?,?)`).run(device.id, command, req.user.id);
+  const sentNow = teltonikaServer.sendCommand(device.imei, info.lastInsertRowid, command);
+
+  logAudit(req.user.id, `fleet_tracking.${preset}`, 'tracking_devices', device.id, { preset, bike_id: device.bike_id }, req.ip);
+
+  res.json({
+    id: info.lastInsertRowid,
+    command,
+    status: sentNow ? 'sent' : 'pending',
+    note: sentNow ? 'Command sent to device' : 'Device offline — command queued for when it reconnects'
+  });
+});
+
+// GET /fleet/tracking/devices/:id/commands
+router.get('/tracking/devices/:id/commands', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.view), (req, res) => {
+  const orgId = req.user.organization_id;
+  const device = db.prepare(`
+    SELECT td.id, b.organization_id FROM tracking_devices td
+    JOIN bikes b ON b.id = td.bike_id WHERE td.id = ?`).get(req.params.id);
+  if (!device || device.organization_id !== orgId) return res.status(404).json({ error: 'Device not found' });
+  const commands = db.prepare(
+    `SELECT tc.*, u.full_name AS created_by_name FROM tracking_commands tc
+     LEFT JOIN users u ON u.id = tc.created_by
+     WHERE tc.device_id = ? ORDER BY tc.created_at DESC LIMIT 50`
+  ).all(device.id);
+  res.json(commands);
+});
+
+// GET /fleet/tracking/alerts
+router.get('/tracking/alerts', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.view), (req, res) => {
+  const orgId = req.user.organization_id;
+  const limit = Math.min(Number(req.query.limit) || 100, 500);
+  const unackedOnly = req.query.unacked === '1';
+  let sql = `SELECT ta.*, b.registration AS bike_registration FROM tracking_alerts ta
+    JOIN bikes b ON b.id = ta.bike_id AND b.organization_id = ? WHERE 1=1`;
+  const params = [orgId];
+  if (unackedOnly) sql += ' AND ta.acknowledged_at IS NULL';
+  sql += ' ORDER BY ta.created_at DESC LIMIT ?';
+  params.push(limit);
+  res.json(db.prepare(sql).all(...params));
+});
+
+// PUT /fleet/tracking/alerts/:id/acknowledge
+router.put('/tracking/alerts/:id/acknowledge', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.manage), (req, res) => {
+  const orgId = req.user.organization_id;
+  const alert = db.prepare(`SELECT ta.id FROM tracking_alerts ta JOIN bikes b ON b.id = ta.bike_id WHERE ta.id = ? AND b.organization_id = ?`).get(req.params.id, orgId);
+  if (!alert) return res.status(404).json({ error: 'Alert not found' });
+  db.prepare('UPDATE tracking_alerts SET acknowledged_at=CURRENT_TIMESTAMP WHERE id=?').run(alert.id);
+  res.json({ ok: true });
+});
+
+// POST /fleet/tracking/alerts/acknowledge-all
+router.post('/tracking/alerts/acknowledge-all', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.manage), (req, res) => {
+  const orgId = req.user.organization_id;
+  db.prepare(`UPDATE tracking_alerts SET acknowledged_at=CURRENT_TIMESTAMP
+    WHERE acknowledged_at IS NULL AND bike_id IN (SELECT id FROM bikes WHERE organization_id = ?)`).run(orgId);
+  res.json({ ok: true });
+});
+
+// GET /fleet/tracking/live — SSE stream filtered to org's bikes
+router.get('/tracking/live', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.view), (req, res) => {
+  const orgId = req.user.organization_id;
+  const bikeIds = new Set(getOrgBikeIds(orgId));
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+
+  const onPing = (payload) => {
+    if (!bikeIds.has(payload.bike_id)) return;
+    try { res.write(`event: ping\ndata: ${JSON.stringify(payload)}\n\n`); } catch (_) {}
+  };
+  const onAlert = (payload) => {
+    if (!bikeIds.has(payload.bike_id)) return;
+    try { res.write(`event: alert\ndata: ${JSON.stringify(payload)}\n\n`); } catch (_) {}
+  };
+
+  trackingEvents.on('ping', onPing);
+  trackingEvents.on('alert', onAlert);
+  const hb = setInterval(() => { try { res.write(': heartbeat\n\n'); } catch (_) {} }, 25_000);
+
+  req.on('close', () => {
+    trackingEvents.off('ping', onPing);
+    trackingEvents.off('alert', onAlert);
+    clearInterval(hb);
+  });
 });
 
 module.exports = router;

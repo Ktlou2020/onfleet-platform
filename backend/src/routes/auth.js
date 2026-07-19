@@ -501,7 +501,7 @@ router.post('/fleet/signup',
     const entitlements = getFleetEntitlements(planKey);
     const hash = await bcrypt.hash(password, 10);
     const now = new Date();
-    const trialEnds = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+    const trialEnds = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
 
     const created = db.transaction(() => {
       const orgInfo = db.prepare(`INSERT INTO organizations

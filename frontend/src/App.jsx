@@ -23,6 +23,7 @@ import FleetWallet from './pages/fleet/Wallet';
 import FleetCollections from './pages/fleet/Collections';
 import FleetHubs from './pages/fleet/Hubs';
 import FleetApiKeys from './pages/fleet/ApiKeys';
+import FleetTracking from './pages/fleet/Tracking';
 import RiderShell from './pages/rider/RiderShell';
 import RiderDashboard from './pages/rider/Dashboard';
 import RiderAgreements from './pages/rider/Agreements';
@@ -105,6 +106,7 @@ export default function App() {
         <Route path="/fleet/app" element={<PrivateRoute role="fleet_owner"><FleetOwnerShell /></PrivateRoute>}>
           <Route index element={<FleetRouteGate section="dashboard"><FleetDashboard /></FleetRouteGate>} />
           <Route path="bikes" element={<FleetRouteGate section="bikes"><FleetOwnerBikes /></FleetRouteGate>} />
+          <Route path="tracking" element={<FleetRouteGate section="tracking"><FleetTracking /></FleetRouteGate>} />
           <Route path="agreements" element={<FleetRouteGate section="agreements"><FleetOwnerAgreements /></FleetRouteGate>} />
           <Route path="payments" element={<FleetRouteGate section="payments"><FleetOwnerPayments /></FleetRouteGate>} />
           <Route path="riders" element={<FleetRouteGate section="riders"><FleetOwnerRiders /></FleetRouteGate>} />

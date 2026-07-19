@@ -52,12 +52,17 @@ export const FLEET_RESOURCE_ACCESS = {
   api_keys: {
     view: ['fleet_owner_admin'],
     manage: ['fleet_owner_admin']
+  },
+  tracking: {
+    view: ['fleet_owner_admin', 'fleet_owner_ops'],
+    manage: ['fleet_owner_admin', 'fleet_owner_ops']
   }
 };
 
 export const FLEET_NAV_ITEMS = [
   { key: 'dashboard', to: '/fleet/app', label: 'Dashboard' },
   { key: 'bikes', to: '/fleet/app/bikes', label: 'Bikes Fleet' },
+  { key: 'tracking', to: '/fleet/app/tracking', label: 'GPS Tracking' },
   { key: 'agreements', to: '/fleet/app/agreements', label: 'Agreements' },
   { key: 'payments', to: '/fleet/app/payments', label: 'Payments' },
   { key: 'riders', to: '/fleet/app/riders', label: 'Riders' },

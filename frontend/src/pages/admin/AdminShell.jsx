@@ -3,7 +3,7 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth';
 import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
-import { LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell, Briefcase, ShieldCheck, PiggyBank, MapPin } from 'lucide-react';
+import { LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell, Briefcase, ShieldCheck, PiggyBank, MapPin, UserCheck } from 'lucide-react';
 
 const navItems = [
   { to: '/admin', label: 'Dashboard', icon: LayoutDashboard },
@@ -15,6 +15,7 @@ const navItems = [
   { to: '/admin/notifications', label: 'Notifications', icon: Bell },
   { to: '/admin/imports', label: 'CSV Imports', icon: UploadCloud },
   { to: '/admin/strategy', label: 'AI Strategy', icon: BrainCircuit },
+  { to: '/admin/leads', label: 'Pilot leads', icon: UserCheck },
   { to: '/admin/fleet-dashboard', label: 'Fleet owner dashboard', icon: Briefcase },
   { to: '/admin/fleet-owners', label: 'Manage fleet owners', icon: ShieldCheck, superadminOnly: true },
   { to: '/admin/fleet-payouts', label: 'Fleet payout requests', icon: PiggyBank },

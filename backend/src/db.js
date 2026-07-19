@@ -753,6 +753,9 @@ ensureColumn('gps_pings', 'altitude', 'INTEGER');
 ensureColumn('gps_pings', 'ignition', 'INTEGER');
 ensureColumn('gps_pings', 'io_data', 'TEXT');
 ensureColumn('tracking_devices', 'speed_limit_kmh', 'INTEGER DEFAULT 120');
+ensureColumn('fleet_owner_pilot_leads', 'demo_at', 'DATETIME');
+ensureColumn('fleet_owner_pilot_leads', 'internal_notes', 'TEXT');
+ensureColumn('fleet_owner_pilot_leads', 'converted_org_id', 'INTEGER');
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS geofences (

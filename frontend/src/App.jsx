@@ -51,6 +51,7 @@ import AdminFleetDashboard from './pages/admin/FleetDashboard';
 import AdminFleetOwners from './pages/admin/FleetOwners';
 import AdminFleetPayouts from './pages/admin/FleetPayouts';
 import AdminTracking from './pages/admin/Tracking';
+import AdminLeads from './pages/admin/Leads';
 import FleetRiderApply from './pages/FleetRiderApply';
 import Privacy from './pages/Privacy';
 import Terms from './pages/Terms';
@@ -142,7 +143,8 @@ export default function App() {
           <Route path="fleet-dashboard" element={<AdminFleetDashboard />} />
           <Route path="fleet-owners" element={<AdminFleetOwners />} />
           <Route path="fleet-payouts" element={<AdminFleetPayouts />} />
-          <Route path="pilot" element={<Navigate to="/admin/fleet-dashboard" replace />} />
+          <Route path="pilot" element={<Navigate to="/admin/leads" replace />} />
+          <Route path="leads" element={<AdminLeads />} />
           <Route path="tracking" element={<AdminTracking />} />
           <Route path="users" element={<AdminUsers />} />
           <Route path="audit" element={<AdminAuditLogs />} />

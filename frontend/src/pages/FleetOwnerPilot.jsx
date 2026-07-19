@@ -71,12 +71,17 @@ const FEATURES = [
     title: 'Service records',
     text: 'Log every service, note the mileage, and see when each bike is due for its next check.',
   },
+  {
+    title: 'Free monthly basic service',
+    text: 'Every bike on the platform gets a free basic service each month — oil, filter, brakes, and chain. Done at our Kya Sand workshop, no admin required.',
+  },
 ];
 
 const PRICING_FEATURES = [
   'Platform access for your whole team',
   'Automatic payment collection from riders',
   'Remote immobilisation — one tap',
+  'Free monthly basic service per bike',
   'Scheduled servicing and workshop booking',
   'Priority workshop bay access',
   'Loan bike while yours is in for service',

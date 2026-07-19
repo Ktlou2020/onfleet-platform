@@ -3,6 +3,7 @@ import toast from 'react-hot-toast';
 import api from '../../api';
 import { useAuth } from '../../auth';
 import { Badge, EmptyState, Loading, SearchInput, fmt, fmtDate, matchesSearch } from '../../components/ui';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { canManageFleetSection } from './access';
 
 const STAGES = ['pending', 'contacted', 'notice_sent', 'recovery', 'resolved'];
@@ -26,6 +27,7 @@ export default function Collections() {
   const [loading, setLoading] = useState(true);
   const [collections, setCollections] = useState([]);
   const [search, setSearch] = useState('');
+  const [stageFilter, setStageFilter] = useState('');
   const [expanded, setExpanded] = useState(null);
   const [actions, setActions] = useState({});
   const [actionForm, setActionForm] = useState(buildActionForm());
@@ -46,7 +48,10 @@ export default function Collections() {
 
   useEffect(() => { load(); }, []);
 
-  const filtered = useMemo(() => collections.filter((item) => matchesSearch(search, item.rider_name, item.agreement_no, item.bike_registration, item.current_stage)), [collections, search]);
+  const filtered = useMemo(() => collections.filter((item) => {
+    if (stageFilter && item.current_stage !== stageFilter) return false;
+    return matchesSearch(search, item.rider_name, item.agreement_no, item.bike_registration, item.current_stage);
+  }), [collections, search, stageFilter]);
 
   const toggleExpand = async (id) => {
     if (expanded === id) {
@@ -95,6 +100,14 @@ export default function Collections() {
         </div>
         <SearchInput value={search} onChange={setSearch} placeholder="Search rider, agreement, registration" style={{ width: 320 }} />
       </div>
+      <div className="filter-pills mb-3">
+        <button className={`filter-pill ${stageFilter === '' ? 'active' : ''}`} onClick={() => setStageFilter('')}>All stages</button>
+        {STAGES.map((s) => (
+          <button key={s} className={`filter-pill ${stageFilter === s ? 'active' : ''}`} onClick={() => setStageFilter(s)} style={{ color: stageFilter === s ? undefined : STAGE_COLORS[s] }}>
+            {s.replace(/_/g, ' ')}
+          </button>
+        ))}
+      </div>
 
       {!filtered.length && <EmptyState title="No overdue agreements" sub="All agreements are current. Overdue and defaulted agreements will appear here." />}
 
@@ -124,6 +137,7 @@ export default function Collections() {
                     {item.current_stage.replace(/_/g, ' ')}
                   </span>
                   <Badge status={item.status} />
+                  {isExpanded ? <ChevronDown size={16} style={{ color: 'var(--muted)' }} /> : <ChevronRight size={16} style={{ color: 'var(--muted)' }} />}
                 </div>
               </div>
 
@@ -147,7 +161,7 @@ export default function Collections() {
                         </div>
                         <div className="field">
                           <label className="label">Notes</label>
-                          <input value={actionForm.notes} onChange={(e) => setActionForm((f) => ({ ...f, notes: e.target.value }))} placeholder="What happened?" />
+                          <textarea rows={3} value={actionForm.notes} onChange={(e) => setActionForm((f) => ({ ...f, notes: e.target.value }))} placeholder="What happened?" />
                         </div>
                         <div className="field">
                           <label className="label">Outcome</label>

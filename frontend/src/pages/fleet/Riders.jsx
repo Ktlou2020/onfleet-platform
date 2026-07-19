@@ -4,7 +4,7 @@ import { FleetHelpTip } from './helpSupport';
 import api from '../../api';
 import { useAuth } from '../../auth';
 import southAfricanCities from '../../constants/southAfricanCities';
-import { Badge, EmptyState, Loading, Pagination, SearchInput, fmt, fmtDate, matchesSearch, normalizePhoneInput, paginateItems } from '../../components/ui';
+import { Badge, ConfirmModal, EmptyState, Loading, Pagination, SearchInput, fmt, fmtDate, matchesSearch, normalizePhoneInput, paginateItems } from '../../components/ui';
 import { canManageFleetSection } from './access';
 
 const PLATFORMS = ['Uber Eats', 'Mr D', 'Bolt Food', 'Takealot', 'Checkers Sixty60', 'Other'];
@@ -75,6 +75,7 @@ export default function FleetOwnerRiders() {
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [riders, setRiders] = useState([]);
@@ -88,6 +89,7 @@ export default function FleetOwnerRiders() {
   const [createPayslipAmounts, setCreatePayslipAmounts] = useState({ payslip_1: '', payslip_2: '', payslip_3: '' });
   const [decisionForm, setDecisionForm] = useState(() => buildDecisionForm(null, []));
   const [decisionBusy, setDecisionBusy] = useState(false);
+  const [confirmReject, setConfirmReject] = useState(false);
   const [subscription, setSubscription] = useState(null);
   const [subBusy, setSubBusy] = useState(false);
   const [subPlanAmount, setSubPlanAmount] = useState('');
@@ -125,19 +127,22 @@ export default function FleetOwnerRiders() {
     return `${window.location.origin}${sharePath}`;
   }, [sharePath]);
 
-  const filtered = useMemo(() => riders.filter((item) => matchesSearch(
-    search,
-    item.id,
-    item.full_name,
-    item.email,
-    item.phone,
-    item.make,
-    item.model,
-    item.registration,
-    item.status,
-    item.auto_decision,
-    item.average_weekly_earnings
-  )), [riders, search]);
+  const filtered = useMemo(() => riders.filter((item) => {
+    if (statusFilter && item.status !== statusFilter) return false;
+    return matchesSearch(
+      search,
+      item.id,
+      item.full_name,
+      item.email,
+      item.phone,
+      item.make,
+      item.model,
+      item.registration,
+      item.status,
+      item.auto_decision,
+      item.average_weekly_earnings
+    );
+  }), [riders, search, statusFilter]);
   const pagination = useMemo(() => paginateItems(filtered, page, pageSize), [filtered, page, pageSize]);
 
   const togglePlatform = (platform) => setForm((current) => ({
@@ -386,9 +391,13 @@ export default function FleetOwnerRiders() {
     if (!detail?.application?.id) return;
     const reason = String(decisionForm.reason || '').trim();
     if (!reason) return toast.error('Decline reason is required');
-    if (!window.confirm('Decline this rider application?')) return;
+    setConfirmReject(true);
+  };
 
+  const confirmAndReject = async () => {
+    setConfirmReject(false);
     setDecisionBusy(true);
+    const reason = String(decisionForm.reason || '').trim();
     try {
       await api.post(`/fleet/riders/${detail.application.id}/reject`, { reason });
       toast.success('Application declined');
@@ -645,6 +654,14 @@ export default function FleetOwnerRiders() {
           </div>
           <SearchInput value={search} onChange={setSearch} placeholder="Search rider, email, bike, status" style={{ width: 320 }} />
         </div>
+        <div className="filter-pills" style={{ padding: '0 16px 12px' }}>
+          <button className={`filter-pill ${statusFilter === '' ? 'active' : ''}`} onClick={() => setStatusFilter('')}>All</button>
+          {['pending', 'pre_approved', 'approved', 'active', 'rejected', 'defaulted'].map((s) => (
+            <button key={s} className={`filter-pill ${statusFilter === s ? 'active' : ''}`} onClick={() => setStatusFilter(s)}>
+              {s.replace(/_/g, ' ')}
+            </button>
+          ))}
+        </div>
         <table className="table">
           <thead><tr><th>Rider</th><th>Bike</th><th>Status</th><th>Score</th><th>Avg weekly</th><th>Docs</th><th>Submitted</th><th></th></tr></thead>
           <tbody>
@@ -675,6 +692,18 @@ export default function FleetOwnerRiders() {
         {!pagination.items.length && <EmptyState title="No riders yet" sub="Create a rider application from the fleet console or share the public rider link above." action={canManage ? <button className="btn" onClick={openCreate}>Add rider</button> : null} />}
       </div>
       <Pagination page={pagination.currentPage} pageSize={pagination.pageSize} totalItems={pagination.totalItems} onPageChange={setPage} onPageSizeChange={setPageSize} label="riders" />
+
+      {confirmReject && (
+        <ConfirmModal
+          title="Decline application"
+          body="Decline this rider application? This will notify the rider and cannot be undone."
+          confirmLabel="Decline"
+          danger
+          busy={decisionBusy}
+          onConfirm={confirmAndReject}
+          onClose={() => setConfirmReject(false)}
+        />
+      )}
     </>
   );
 }

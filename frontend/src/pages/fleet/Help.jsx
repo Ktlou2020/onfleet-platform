@@ -9,9 +9,12 @@ import {
   FileText,
   HelpCircle,
   LayoutDashboard,
+  MapPin,
+  PiggyBank,
   Search,
   ShieldCheck,
   Users,
+  Wallet,
   Wrench
 } from 'lucide-react';
 import { Badge, EmptyState, SearchInput } from '../../components/ui';
@@ -129,6 +132,81 @@ const HELP_SECTIONS = [
       'Enter the agreement, amount, method, reference, and date, then save the payment.',
       'Review overdue and credited amounts regularly to keep collections current.',
       'If a payment was captured incorrectly, use the bulk delete tools carefully so the schedule can be recalculated.'
+    ]
+  },
+  {
+    id: 'collections',
+    title: 'Managing collections',
+    icon: FileText,
+    tone: 'warn',
+    summary: 'Track overdue agreements, log contact attempts, escalate recovery stages, and mark accounts resolved.',
+    keywords: ['collections', 'overdue', 'recovery', 'contact', 'stage', 'default', 'follow-up'],
+    quickLinks: [
+      { label: 'Open Collections', to: '/fleet/app/collections' }
+    ],
+    steps: [
+      'Go to Collections from the sidebar — it lists all overdue and defaulted agreements.',
+      'Use the stage filter chips to focus on a specific recovery stage (e.g. Recovery, Legal notice).',
+      'Click any collection row to expand it and see the full action history.',
+      'Use the Log action panel to record calls, SMS messages, visits, or legal notices with the outcome and next follow-up date.',
+      'Advance the stage as the situation escalates: pending → contacted → notice sent → recovery → resolved.',
+      'Mark an account as resolved once payment is collected or an arrangement is confirmed.'
+    ]
+  },
+  {
+    id: 'hubs',
+    title: 'Managing hubs',
+    icon: MapPin,
+    tone: 'info',
+    summary: 'Create branch locations to group bikes and simplify location-based reporting.',
+    keywords: ['hubs', 'branch', 'location', 'depot', 'assign hub'],
+    quickLinks: [
+      { label: 'Open Hubs', to: '/fleet/app/hubs' }
+    ],
+    steps: [
+      'Go to Hubs from the sidebar.',
+      'Use Add hub to create a branch location with a name, city, address, and contact details.',
+      'Add notes for access instructions, operating hours, or special requirements.',
+      'Edit a hub at any time to update its contact or address details.',
+      'Delete a hub only when the branch is permanently closed — this cannot be undone.'
+    ]
+  },
+  {
+    id: 'wallet',
+    title: 'Fleet Wallet & payouts',
+    icon: Wallet,
+    tone: 'success',
+    summary: 'Check your wallet balance, review incoming payments, and request a payout to your bank account.',
+    keywords: ['wallet', 'payout', 'balance', 'withdrawal', 'earnings', 'bank transfer'],
+    quickLinks: [
+      { label: 'Open Wallet', to: '/fleet/app/wallet' }
+    ],
+    steps: [
+      'Go to Wallet from the sidebar to see your available balance and full transaction history.',
+      'Every rider payment processed via Paystack lands in your wallet after the 3.5% + R1 processing fee is deducted.',
+      'Use Request payout when you want to transfer your balance to your registered bank account.',
+      'A 0.5% withdrawal fee applies on each payout request.',
+      'Payouts are reviewed and processed by OnFleet admin within 1–2 business days.',
+      'Check the transaction list to reconcile which rider payments have been credited and which payouts have been sent.'
+    ]
+  },
+  {
+    id: 'billing',
+    title: 'Subscription & billing',
+    icon: PiggyBank,
+    tone: 'info',
+    summary: 'Review your current plan, understand how fleet billing works, and subscribe or upgrade when your trial ends.',
+    keywords: ['billing', 'subscription', 'plan', 'trial', 'upgrade', 'invoice', 'payment'],
+    quickLinks: [
+      { label: 'Open Billing', to: '/fleet/app/billing' }
+    ],
+    steps: [
+      'Go to Billing from the sidebar to see your current subscription status and plan details.',
+      'During the trial period, full platform access is included at no charge.',
+      'Fleet billing is charged per active bike per month — the more bikes you have on active agreements, the higher the monthly charge.',
+      'When your trial ends, subscribe to a paid plan to keep full access to the platform.',
+      'If your account is suspended or past due, contact OnFleet support to resolve the balance and restore access.',
+      'Your plan details and billing cycle dates appear on the Billing page under your organization account.'
     ]
   },
   {

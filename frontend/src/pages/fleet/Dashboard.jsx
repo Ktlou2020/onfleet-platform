@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, Bike, CheckCircle2, Clock3, CreditCard, FileText, TrendingUp, Wrench, RefreshCw, PiggyBank, Users, LayoutDashboard, HelpCircle, Wallet } from 'lucide-react';
+import { AlertTriangle, Bike, Building2, CheckCircle2, Clock3, CreditCard, FileText, TrendingUp, Wrench, RefreshCw, PiggyBank, Users, LayoutDashboard, HelpCircle, Wallet } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../api';
 import { useAuth } from '../../auth';
@@ -235,7 +235,7 @@ export default function FleetDashboard() {
       )}
 
       {/* KPI row */}
-      <div className="grid grid-4 mb-4">
+      <div className="grid mb-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
         <div className="stat">
           <div className="flex-between">
             <div className="stat-label">Active bikes</div>
@@ -271,6 +271,14 @@ export default function FleetDashboard() {
           <div className="stat-value">{fmt(summary.overdue_amount || 0)}</div>
           <div className="stat-delta muted">{portal.collections_queue.length} collection{portal.collections_queue.length !== 1 ? 's' : ''} queued</div>
         </div>
+        <div className="stat">
+          <div className="flex-between">
+            <div className="stat-label">Revenue · 30 days</div>
+            <div style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--success)' }}><Wallet size={16} /></div>
+          </div>
+          <div className="stat-value">{fmt(summary.revenue_30d || 0)}</div>
+          <div className="stat-delta muted">Collected last 30 days</div>
+        </div>
       </div>
 
       {/* Main grid */}
@@ -285,7 +293,7 @@ export default function FleetDashboard() {
             <Badge status={organization.status === 'trialing' ? 'pending' : 'active'}>{organization.status || 'trialing'}</Badge>
           </div>
           <div className="fleet-demo-list">
-            <div className="fleet-demo-list-item"><Bike size={15} /> {organization.name || '—'}</div>
+            <div className="fleet-demo-list-item"><Building2 size={15} /> {organization.name || '—'}</div>
             <div className="fleet-demo-list-item"><CreditCard size={15} /> {String(organization.plan_key || 'trial').replace(/_/g, ' ')}</div>
             <div className="fleet-demo-list-item"><Clock3 size={15} /> Trial ends: {organization.trial_ends_at ? fmtDate(organization.trial_ends_at) : '—'}</div>
             <div className="fleet-demo-list-item"><CheckCircle2 size={15} /> {portal.members.length} team member{portal.members.length !== 1 ? 's' : ''}</div>
@@ -343,6 +351,11 @@ export default function FleetDashboard() {
                   </div>
                 </div>
               ))}
+              {canOpenBikes && (
+                <div className="muted text-xs" style={{ textAlign: 'center', paddingTop: 4 }}>
+                  <Link to="/fleet/app/bikes" style={{ color: 'var(--primary-light)' }}>View all bikes →</Link>
+                </div>
+              )}
             </div>
           ) : (
             <EmptyState title="No services scheduled" sub="Next service dates from your bikes page will show here." />
@@ -378,7 +391,7 @@ export default function FleetDashboard() {
               {portal.collections_queue.length > 6 && (
                 <div className="muted text-xs" style={{ textAlign: 'center', paddingTop: 4 }}>
                   +{portal.collections_queue.length - 6} more ·{' '}
-                  {canOpenPayments && <Link to="/fleet/app/payments" style={{ color: 'var(--primary-light)' }}>View all payments →</Link>}
+                  {canOpenPayments && <Link to="/fleet/app/collections" style={{ color: 'var(--primary-light)' }}>View all collections →</Link>}
                 </div>
               )}
             </div>
@@ -409,6 +422,11 @@ export default function FleetDashboard() {
                   </div>
                 </div>
               ))}
+              {canOpenBikes && (
+                <div className="muted text-xs" style={{ textAlign: 'center', paddingTop: 4 }}>
+                  <Link to="/fleet/app/bikes" style={{ color: 'var(--primary-light)' }}>View all bikes →</Link>
+                </div>
+              )}
             </div>
           ) : (
             <EmptyState title="No maintenance logs yet" sub="Scheduled and completed service history will appear here." />

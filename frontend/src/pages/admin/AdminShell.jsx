@@ -3,7 +3,7 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth';
 import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
-import { LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell, Briefcase, ShieldCheck, PiggyBank, MapPin, UserCheck } from 'lucide-react';
+import { LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell, Briefcase, ShieldCheck, PiggyBank, MapPin, UserCheck, Wrench } from 'lucide-react';
 
 const navItems = [
   { to: '/admin', label: 'Dashboard', icon: LayoutDashboard },
@@ -20,6 +20,8 @@ const navItems = [
   { to: '/admin/fleet-dashboard', label: 'Fleet dashboard', icon: Briefcase },
   { to: '/admin/fleet-owners', label: 'Manage accounts', icon: ShieldCheck, superadminOnly: true },
   { to: '/admin/fleet-payouts', label: 'Payout requests', icon: PiggyBank },
+  { section: 'Workshop' },
+  { to: '/admin/workshop', label: 'Workshop', icon: Wrench },
   { section: 'System' },
   { to: '/admin/users', label: 'Users', icon: Users },
   { to: '/admin/audit', label: 'Audit Logs', icon: ClipboardList }

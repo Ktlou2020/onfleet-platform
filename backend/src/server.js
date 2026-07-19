@@ -158,6 +158,7 @@ app.use('/api/imports', require('./routes/imports'));
 app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/pilot', require('./routes/pilot'));
 app.use('/api/fleet', require('./routes/fleet'));
+app.use('/api/workshop', require('./routes/workshop'));
 app.use('/api/v1', require('./routes/apiV1'));
 app.use('/api/tracking', require('./routes/tracking'));
 

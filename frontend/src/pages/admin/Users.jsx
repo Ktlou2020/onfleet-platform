@@ -397,7 +397,7 @@ export default function AdminUsers() {
             <div className="field"><label className="label">Email</label><input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></div>
             <div className="field"><label className="label">Phone</label><input type="tel" autoComplete="tel" inputMode="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: normalizePhoneInput(e.target.value) })} /></div>
             <div className="field"><label className="label">Password</label><input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></div>
-            <div className="field"><label className="label">Role</label><select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}><option value="rider">Rider</option><option value="admin">Admin</option>{user?.role === 'superadmin' && <option value="superadmin">Superadmin</option>}</select></div>
+            <div className="field"><label className="label">Role</label><select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}><option value="rider">Rider</option><option value="technician">Technician</option><option value="admin">Admin</option>{user?.role === 'superadmin' && <option value="superadmin">Superadmin</option>}</select></div>
           </div>
           <div className="row"><button className="btn" onClick={createUser}>Create</button><button className="btn btn-secondary" onClick={() => setShowCreate(false)}>Cancel</button></div>
         </Modal>

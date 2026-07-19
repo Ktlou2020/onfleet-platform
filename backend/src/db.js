@@ -939,6 +939,18 @@ function ensureJobTypeSchema() {
 }
 ensureJobTypeSchema();
 
+db.exec(`
+CREATE TABLE IF NOT EXISTS job_card_templates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  job_type TEXT NOT NULL DEFAULT 'service',
+  description TEXT,
+  items TEXT NOT NULL DEFAULT '[]',
+  created_by INTEGER REFERENCES users(id),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`);
+
 if (tableHasColumn('users', 'organization_id')) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_users_org ON users(organization_id, role);`);
 }

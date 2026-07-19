@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Zap, Clock, CheckCircle, TrendingUp, AlertTriangle, ArrowRight } from 'lucide-react';
+import { Zap, Clock, CheckCircle, TrendingUp, AlertTriangle, ArrowRight, CalendarClock } from 'lucide-react';
 import api from '../../api';
-import { Badge, Loading, fmt, fmtDateTime } from '../../components/ui';
+import { Badge, Loading, fmt, fmtDate, fmtDateTime } from '../../components/ui';
 import { useAuth } from '../../auth';
 
 const PRIORITY_BORDER = { urgent: '#ef4444', high: '#f97316', normal: '#3b82f6', low: '#6b7280' };
@@ -87,6 +87,7 @@ export default function WorkshopDashboard() {
   const { user } = useAuth();
   const nav = useNavigate();
   const [data, setData] = useState(null);
+  const [upcoming, setUpcoming] = useState([]);
   const [busy, setBusy] = useState(false);
 
   const load = () =>
@@ -94,7 +95,12 @@ export default function WorkshopDashboard() {
       .then((r) => setData(r.data))
       .catch(() => toast.error('Could not load dashboard'));
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    api.get('/workshop/upcoming-services', { params: { days: 30 } })
+      .then((r) => setUpcoming(r.data.bikes || []))
+      .catch(() => {});
+  }, []);
 
   const startJob = async (id) => {
     try {
@@ -167,6 +173,58 @@ export default function WorkshopDashboard() {
           <button className="btn" style={{ marginTop: 12 }} onClick={() => nav('/workshop/app/job-cards')}>
             + Create job card
           </button>
+        </div>
+      )}
+
+      {/* Upcoming services */}
+      {upcoming.length > 0 && (
+        <div style={{ marginTop: 32 }}>
+          <div className="flex-between mb-3">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <CalendarClock size={17} style={{ color: 'var(--accent)' }} />
+              <h2 style={{ fontSize: 16, fontWeight: 700 }}>Upcoming Services (30 days)</h2>
+            </div>
+          </div>
+          <div className="card table-wrap" style={{ padding: 0 }}>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Bike</th>
+                  <th>Fleet</th>
+                  <th>Next service</th>
+                  <th>Next service km</th>
+                  <th>Odometer</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {upcoming.map((bike) => (
+                  <tr key={bike.id}>
+                    <td>
+                      <div style={{ fontWeight: 600 }}>{bike.registration || bike.vin || '—'}</div>
+                      <div className="text-xs muted">{bike.make} {bike.model}</div>
+                    </td>
+                    <td className="text-xs muted">{bike.org_name || '—'}</td>
+                    <td style={{ color: bike.urgency === 'overdue' ? 'var(--danger)' : undefined, fontWeight: bike.urgency === 'overdue' ? 700 : undefined }}>
+                      {fmtDate(bike.next_service_date)}
+                      {bike.urgency === 'overdue' && <span className="text-xs" style={{ marginLeft: 6, color: 'var(--danger)' }}>OVERDUE</span>}
+                    </td>
+                    <td className="text-xs muted">{bike.next_service_km ? `${bike.next_service_km.toLocaleString()} km` : '—'}</td>
+                    <td className="text-xs muted">{bike.odometer_km ? `${bike.odometer_km.toLocaleString()} km` : '—'}</td>
+                    <td>
+                      {bike.active_job_id
+                        ? <Badge status="warning">In workshop</Badge>
+                        : (
+                          <button className="btn btn-sm btn-secondary" onClick={() => nav(`/workshop/app/job-cards?bike=${bike.id}`)}>
+                            Create job
+                          </button>
+                        )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </>

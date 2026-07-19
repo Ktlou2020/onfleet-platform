@@ -459,6 +459,89 @@ router.get('/parts-suggestions', authRequired, workshopOnly, (req, res) => {
   }
 });
 
+// Upcoming service schedule — bikes due within N days
+router.get('/upcoming-services', authRequired, workshopOnly, (req, res) => {
+  try {
+    const days = Math.min(Number(req.query.days) || 30, 90);
+    const bikes = db.prepare(`
+      SELECT b.id, b.registration, b.vin, b.make, b.model, b.next_service_date, b.next_service_km,
+        b.odometer_km, b.status, o.name AS org_name,
+        CASE WHEN b.next_service_date < date('now') THEN 'overdue' ELSE 'upcoming' END AS urgency,
+        (SELECT id FROM job_cards WHERE bike_id = b.id AND status NOT IN ('completed','cancelled') ORDER BY created_at DESC LIMIT 1) AS active_job_id
+      FROM bikes b
+      LEFT JOIN organizations o ON o.id = b.organization_id
+      WHERE b.next_service_date IS NOT NULL
+        AND b.next_service_date <= date('now', '+' || ? || ' days')
+        AND b.status NOT IN ('sold','paid_off','written_off')
+      ORDER BY b.next_service_date ASC
+      LIMIT 30
+    `).all(days);
+    res.json({ bikes });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Job card templates — list
+router.get('/templates', authRequired, workshopOnly, (req, res) => {
+  try {
+    const templates = db.prepare('SELECT * FROM job_card_templates ORDER BY name ASC').all();
+    res.json({ templates });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Job card templates — create from current job items or manual
+router.post('/templates', authRequired, workshopOnly, (req, res) => {
+  try {
+    const { name, job_type, description, items } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ error: 'Template name is required' });
+    if (!Array.isArray(items)) return res.status(400).json({ error: 'Items must be an array' });
+    const result = db.prepare(`
+      INSERT INTO job_card_templates (name, job_type, description, items, created_by)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(name.trim(), job_type || 'service', description || null, JSON.stringify(items), req.user.id);
+    res.json({ ok: true, template: db.prepare('SELECT * FROM job_card_templates WHERE id = ?').get(result.lastInsertRowid) });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Job card templates — delete
+router.delete('/templates/:id', authRequired, workshopOnly, (req, res) => {
+  try {
+    const id = toInt(req.params.id);
+    if (!db.prepare('SELECT id FROM job_card_templates WHERE id = ?').get(id)) return res.status(404).json({ error: 'Template not found' });
+    db.prepare('DELETE FROM job_card_templates WHERE id = ?').run(id);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Apply template to job card — adds template items to existing job
+router.post('/job-cards/:id/apply-template/:templateId', authRequired, workshopOnly, (req, res) => {
+  try {
+    const id = toInt(req.params.id);
+    const templateId = toInt(req.params.templateId);
+    const card = db.prepare('SELECT status FROM job_cards WHERE id = ?').get(id);
+    if (!card) return res.status(404).json({ error: 'Job card not found' });
+    if (card.status === 'completed') return res.status(400).json({ error: 'Cannot modify a completed job' });
+    const template = db.prepare('SELECT * FROM job_card_templates WHERE id = ?').get(templateId);
+    if (!template) return res.status(404).json({ error: 'Template not found' });
+
+    const items = JSON.parse(template.items || '[]');
+    const insertItem = db.prepare(`INSERT INTO job_card_items (job_card_id, item_type, description, quantity, unit_cost) VALUES (?, ?, ?, ?, ?)`);
+    for (const item of items) {
+      insertItem.run(id, item.item_type || 'labor', item.description, Number(item.quantity) || 1, Number(item.unit_cost) || 0);
+    }
+    res.json({ ok: true, job_card: getJobCard(id) });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // --- Admin endpoints ---
 
 // Admin stats endpoint — wider stats for the admin console overview

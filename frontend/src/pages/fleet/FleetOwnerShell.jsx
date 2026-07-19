@@ -104,6 +104,17 @@ export default function FleetOwnerShell() {
           <button onClick={() => { logout(); nav('/fleet/login'); }} title="Log out" style={{ background: 'transparent', color: 'var(--muted)', padding: 8, border: 'none' }}><LogOut size={16} /></button>
         </div>
       </aside>
+      <nav className="mobile-bottom-nav">
+        {allowedNav.slice(0, 5).map((item) => {
+          const Icon = navIconMap[item.key] || LayoutDashboard;
+          return (
+            <NavLink key={item.to} to={item.to} end={item.to === '/fleet/app'}>
+              <Icon size={20} />
+              <span>{item.label}</span>
+            </NavLink>
+          );
+        })}
+      </nav>
       <div className="main">
         <div className="topbar" style={{ gap: 16 }}>
           <div className="text-sm muted">Fleet Owner Console · OnFleet Africa</div>

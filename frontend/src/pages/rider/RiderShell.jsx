@@ -48,6 +48,17 @@ export default function RiderShell() {
           <button className="btn-ghost" onClick={() => { logout(); nav('/login'); }} title="Log out" style={{ background: 'transparent', color: 'var(--muted)', padding: 8 }}><LogOut size={16} /></button>
         </div>
       </aside>
+      <nav className="mobile-bottom-nav">
+        {navItems.map((item) => {
+          const Icon = item.icon;
+          return (
+            <NavLink key={item.to} to={item.to}>
+              <Icon size={20} />
+              <span>{item.label}</span>
+            </NavLink>
+          );
+        })}
+      </nav>
       <div className="main">
         <div className="topbar" style={{ gap: 16 }}>
           <div className="text-sm muted">Welcome back, {user?.full_name?.split(' ')[0]} 👋</div>

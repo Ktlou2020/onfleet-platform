@@ -136,7 +136,7 @@ export default function Landing() {
             <a href="#how" className="btn btn-secondary hero-cta-btn">How it works</a>
           </div>
 
-          <div className="hero-metrics" style={{ display: 'flex', gap: 28, marginTop: 28 }}>
+          <div className="hero-metrics" style={{ marginTop: 28 }}>
             {METRICS.map((m) => (
               <div key={m.label} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                 <div style={{ fontSize: '2rem', fontWeight: 800, lineHeight: 1, background: 'linear-gradient(135deg, #f97316, #fbbf24)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>
@@ -147,7 +147,7 @@ export default function Landing() {
             ))}
           </div>
 
-          <div className="hero-trust-list" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 20 }}>
+          <div className="hero-trust-list" style={{ marginTop: 20 }}>
             {TRUST_ITEMS.map((t) => (
               <div
                 key={t.label}

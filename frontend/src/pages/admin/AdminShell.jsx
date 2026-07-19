@@ -60,6 +60,17 @@ export default function AdminShell() {
           <button onClick={() => { logout(); nav('/login'); }} title="Log out" style={{ background: 'transparent', color: 'var(--muted)', padding: 8, border: 'none' }}><LogOut size={16} /></button>
         </div>
       </aside>
+      <nav className="mobile-bottom-nav">
+        {allowedNav.slice(0, 5).map((item) => {
+          const Icon = item.icon;
+          return (
+            <NavLink key={item.to} to={item.to} end={item.to === '/admin'}>
+              <Icon size={20} />
+              <span>{item.label}</span>
+            </NavLink>
+          );
+        })}
+      </nav>
       <div className="main">
         <div className="topbar" style={{ gap: 16 }}>
           <div className="text-sm muted">Admin Console · OnFleet Africa</div>

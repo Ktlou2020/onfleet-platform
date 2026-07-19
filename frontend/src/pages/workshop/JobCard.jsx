@@ -13,6 +13,9 @@ const BIKE_STATUSES = ['active', 'ready_to_go', 'repairs', 'not_available', 'sta
 
 const EMPTY_ITEM = { item_type: 'labor', description: '', quantity: '1', unit_cost: '' };
 const EMPTY_COMPLETE = { completion_notes: '', odometer_km: '', next_service_date: '', next_service_km: '', bike_status_after: 'active' };
+const QUICK_ITEMS = [
+  { label: 'Basic service · R275', item_type: 'labor', description: 'Basic service', unit_cost: '275', quantity: '1' },
+];
 
 function elapsed(startedAt) {
   if (!startedAt) return null;
@@ -625,6 +628,21 @@ export default function WorkshopJobCard() {
             <div className="field">
               <label className="label">Quantity</label>
               <input type="number" min="0.01" step="0.01" value={itemForm.quantity} onChange={(e) => setItemForm((f) => ({ ...f, quantity: e.target.value }))} />
+            </div>
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <div className="text-xs muted" style={{ marginBottom: 6 }}>Quick add</div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {QUICK_ITEMS.map((q) => (
+                <button
+                  key={q.label}
+                  type="button"
+                  className="btn btn-sm btn-secondary"
+                  onClick={() => setItemForm((f) => ({ ...f, item_type: q.item_type, description: q.description, unit_cost: q.unit_cost, quantity: q.quantity }))}
+                >
+                  {q.label}
+                </button>
+              ))}
             </div>
           </div>
           <div className="field">

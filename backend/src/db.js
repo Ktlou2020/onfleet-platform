@@ -906,6 +906,39 @@ CREATE INDEX IF NOT EXISTS idx_job_card_items_card ON job_card_items(job_card_id
 
 ensureColumn('service_records', 'job_card_id', 'INTEGER REFERENCES job_cards(id)');
 
+// Extend job_type CHECK to cover tyres, brakes, electrical, bodywork
+function ensureJobTypeSchema() {
+  const row = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='job_cards'`).get();
+  if (String(row?.sql || '').includes("'tyres'")) return;
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    BEGIN TRANSACTION;
+    CREATE TABLE job_cards_v2 (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      bike_id INTEGER REFERENCES bikes(id),
+      vin TEXT, registration TEXT, make TEXT, model TEXT, year INTEGER, color TEXT, engine_cc INTEGER,
+      fleet_owner_name TEXT, fleet_org_id INTEGER,
+      job_type TEXT NOT NULL DEFAULT 'service' CHECK(job_type IN ('service','repair','inspection','tyres','brakes','electrical','bodywork','other')),
+      description TEXT,
+      status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','in_progress','completed','cancelled')),
+      priority TEXT NOT NULL DEFAULT 'normal' CHECK(priority IN ('low','normal','high','urgent')),
+      technician_id INTEGER REFERENCES users(id),
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      started_at DATETIME, completed_at DATETIME,
+      completion_notes TEXT, odometer_km INTEGER, next_service_date TEXT, next_service_km INTEGER, bike_status_after TEXT
+    );
+    INSERT INTO job_cards_v2 SELECT * FROM job_cards;
+    DROP TABLE job_cards;
+    ALTER TABLE job_cards_v2 RENAME TO job_cards;
+    COMMIT;
+    PRAGMA foreign_keys = ON;
+    CREATE INDEX IF NOT EXISTS idx_job_cards_status ON job_cards(status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_job_cards_bike ON job_cards(bike_id);
+  `);
+}
+ensureJobTypeSchema();
+
 if (tableHasColumn('users', 'organization_id')) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_users_org ON users(organization_id, role);`);
 }

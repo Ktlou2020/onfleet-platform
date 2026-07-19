@@ -54,6 +54,7 @@ import AdminFleetPayouts from './pages/admin/FleetPayouts';
 import AdminTracking from './pages/admin/Tracking';
 import AdminLeads from './pages/admin/Leads';
 import AdminWorkshop from './pages/admin/Workshop';
+import WorkshopLogin from './pages/workshop/Login';
 import WorkshopShell from './pages/workshop/WorkshopShell';
 import WorkshopDashboard from './pages/workshop/Dashboard';
 import WorkshopJobCards from './pages/workshop/JobCards';
@@ -162,6 +163,7 @@ export default function App() {
           <Route path="audit" element={<AdminAuditLogs />} />
         </Route>
 
+        <Route path="/workshop/login" element={<WorkshopLogin />} />
         <Route path="/workshop/app" element={<PrivateRoute role="workshop"><WorkshopShell /></PrivateRoute>}>
           <Route index element={<WorkshopDashboard />} />
           <Route path="job-cards" element={<WorkshopJobCards />} />

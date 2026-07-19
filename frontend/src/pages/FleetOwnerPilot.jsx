@@ -4,10 +4,9 @@ import { CheckCircle2, Menu, X, Phone, MessageCircle } from 'lucide-react';
 import Logo from '../components/Logo';
 import axios from 'axios';
 
-// TODO: Replace these with real contact details before going live
-const WHATSAPP_NUMBER = 'FILL_IN_WHATSAPP'; // e.g. 27821234567 (no + or spaces)
-const PHONE_DISPLAY   = 'FILL_IN_PHONE';    // e.g. +27 82 123 4567
-const PHONE_DIAL      = 'FILL_IN_PHONE';    // e.g. +27821234567
+const WHATSAPP_NUMBER = '27815395612';
+const PHONE_DISPLAY   = '+27 81 539 5612';
+const PHONE_DIAL      = '+27815395612';
 
 const PROBLEMS = [
   {
@@ -86,7 +85,7 @@ const PRICING_FEATURES = [
 
 export default function FleetOwnerPilot() {
   const [menuOpen, setMenuOpen] = useState(false);
-  const [form, setForm] = useState({ name: '', company: '', phone: '', bikes: '', message: '' });
+  const [form, setForm] = useState({ name: '', company: '', email: '', phone: '', bikes: '', message: '' });
   const [formState, setFormState] = useState('idle'); // idle | busy | success | error
   const [formError, setFormError] = useState('');
 
@@ -105,8 +104,12 @@ export default function FleetOwnerPilot() {
 
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!form.name || !form.company || !form.phone) {
-      setFormError('Please fill in your name, company, and phone number.');
+    if (!form.name || !form.company || !form.email || !form.phone) {
+      setFormError('Please fill in your name, company, email, and phone number.');
+      return;
+    }
+    if (!form.email.includes('@')) {
+      setFormError('Please enter a valid email address.');
       return;
     }
     setFormError('');
@@ -115,6 +118,7 @@ export default function FleetOwnerPilot() {
       await axios.post('/api/pilot/leads', {
         contact_name:  form.name,
         company_name:  form.company,
+        email:         form.email,
         phone:         form.phone,
         fleet_size:    form.bikes ? Number(form.bikes) : undefined,
         notes:         form.message || undefined,
@@ -295,9 +299,18 @@ export default function FleetOwnerPilot() {
                 <div className="card" style={{ textAlign: 'center', padding: 40 }}>
                   <CheckCircle2 size={40} style={{ color: 'var(--success)', margin: '0 auto 16px', display: 'block' }} />
                   <h3 style={{ marginBottom: 8 }}>We'll be in touch</h3>
-                  <p style={{ color: 'var(--muted)', fontSize: 14, margin: 0 }}>
-                    Expect a call within one business day.
+                  <p style={{ color: 'var(--muted)', fontSize: 14, marginBottom: 24 }}>
+                    Expect a call within one business day. Check your email for a confirmation.
                   </p>
+                  <a
+                    href={`https://wa.me/${WHATSAPP_NUMBER}?text=Hi%2C%20I%20just%20submitted%20a%20demo%20request%20for%20OnFleet%20Fleet.`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn btn-block"
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, background: '#25D366', border: 'none', textDecoration: 'none' }}
+                  >
+                    <MessageCircle size={18} /> Chat on WhatsApp now
+                  </a>
                 </div>
               ) : (
                 <form onSubmit={handleSubmit} noValidate style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -310,6 +323,11 @@ export default function FleetOwnerPilot() {
                     <label className="label" htmlFor="fm-company">Company <span style={{ color: 'var(--danger)' }}>*</span></label>
                     <input id="fm-company" className="input" placeholder="Dlamini Fleet Pty Ltd"
                       value={form.company} onChange={e => setForm(f => ({ ...f, company: e.target.value }))} />
+                  </div>
+                  <div className="field">
+                    <label className="label" htmlFor="fm-email">Email address <span style={{ color: 'var(--danger)' }}>*</span></label>
+                    <input id="fm-email" className="input" type="email" placeholder="sipho@dlaminifleet.co.za"
+                      value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} />
                   </div>
                   <div className="field">
                     <label className="label" htmlFor="fm-phone">Phone number <span style={{ color: 'var(--danger)' }}>*</span></label>
@@ -345,12 +363,11 @@ export default function FleetOwnerPilot() {
                   <MessageCircle size={22} style={{ color: '#25D366', flexShrink: 0, marginTop: 2 }} />
                   <div>
                     <div style={{ fontWeight: 600, marginBottom: 6 }}>WhatsApp us</div>
-                    {/* TODO: Replace WHATSAPP_NUMBER at the top of this file */}
                     <a
-                      href={WHATSAPP_NUMBER === 'FILL_IN_WHATSAPP' ? undefined : `https://wa.me/${WHATSAPP_NUMBER}`}
+                      href={`https://wa.me/${WHATSAPP_NUMBER}`}
                       style={{ color: 'var(--primary-light)', fontSize: 14, textDecoration: 'none' }}
                     >
-                      {WHATSAPP_NUMBER === 'FILL_IN_WHATSAPP' ? 'Number coming soon' : `+${WHATSAPP_NUMBER}`}
+                      +{WHATSAPP_NUMBER}
                     </a>
                     <div style={{ color: 'var(--muted)', fontSize: 12, marginTop: 4 }}>Quickest response during business hours.</div>
                   </div>
@@ -362,12 +379,11 @@ export default function FleetOwnerPilot() {
                   <Phone size={22} style={{ color: 'var(--primary-light)', flexShrink: 0, marginTop: 2 }} />
                   <div>
                     <div style={{ fontWeight: 600, marginBottom: 6 }}>Call us</div>
-                    {/* TODO: Replace PHONE_DISPLAY and PHONE_DIAL at the top of this file */}
                     <a
-                      href={PHONE_DIAL === 'FILL_IN_PHONE' ? undefined : `tel:${PHONE_DIAL}`}
+                      href={`tel:${PHONE_DIAL}`}
                       style={{ color: 'var(--primary-light)', fontSize: 14, textDecoration: 'none' }}
                     >
-                      {PHONE_DISPLAY === 'FILL_IN_PHONE' ? 'Number coming soon' : PHONE_DISPLAY}
+                      {PHONE_DISPLAY}
                     </a>
                     <div style={{ color: 'var(--muted)', fontSize: 12, marginTop: 4 }}>Monday–Friday, 8am–5pm.</div>
                   </div>

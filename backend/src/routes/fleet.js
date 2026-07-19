@@ -1865,10 +1865,12 @@ router.post('/payments/bulk-delete', companyRoleAllowed(FLEET_RESOURCE_ACCESS.pa
 
 const PAYSTACK_API = 'https://api.paystack.co';
 
+const FLEET_PRICE_PER_BIKE = 750;
+
 const FLEET_BILLING_PLANS = {
-  small:  { key: 'small',  name: 'Small Fleet',  price_zar: 1499, max_bikes: 20, max_admin_users: 3,  features: ['Up to 20 bikes', '3 admin users', 'CSV imports', 'Maintenance reminders', 'Standard support'] },
-  medium: { key: 'medium', name: 'Medium Fleet', price_zar: 3999, max_bikes: 60, max_admin_users: 5,  features: ['Up to 60 bikes', '5 admin users', 'Advanced filters', 'Bulk contract actions', 'Performance reporting'] },
-  large:  { key: 'large',  name: 'Large Fleet',  price_zar: 6999, max_bikes: 100, max_admin_users: 10, features: ['Up to 100 bikes', '10 admin users', 'Priority onboarding', 'Audit visibility', 'Multi-branch support'] }
+  small:  { key: 'small',  name: 'Small Fleet',  price_per_bike: FLEET_PRICE_PER_BIKE, max_bikes: 20,  max_admin_users: 3,  features: ['Up to 20 bikes', 'R750/bike/month', '3 admin users', 'CSV imports', 'Free monthly service per bike', 'Standard support'] },
+  medium: { key: 'medium', name: 'Medium Fleet', price_per_bike: FLEET_PRICE_PER_BIKE, max_bikes: 60,  max_admin_users: 5,  features: ['Up to 60 bikes', 'R750/bike/month', '5 admin users', 'Advanced filters', 'Free monthly service per bike', 'Performance reporting'] },
+  large:  { key: 'large',  name: 'Large Fleet',  price_per_bike: FLEET_PRICE_PER_BIKE, max_bikes: 100, max_admin_users: 10, features: ['Up to 100 bikes', 'R750/bike/month', '10 admin users', 'Free monthly service per bike', 'Priority onboarding', 'Multi-branch support'] }
 };
 
 function getPlanPaystackCode(planKey) {
@@ -1932,12 +1934,15 @@ router.get('/billing/status', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.v
     const trialDaysLeft = (org.status === 'trialing' && org.trial_ends_at)
       ? Math.max(0, Math.round((new Date(org.trial_ends_at) - new Date()) / 86400000))
       : null;
+    const bikeCount = db.prepare(`SELECT COUNT(*) c FROM bikes WHERE organization_id = ? AND status NOT IN ('retired','sold')`).get(org.id).c || 0;
+    const monthlyTotal = bikeCount * FLEET_PRICE_PER_BIKE;
     res.json({
       organization: {
         id: org.id, name: org.name, plan_key: org.plan_key, status: org.status,
         trial_ends_at: org.trial_ends_at, trial_days_left: trialDaysLeft,
         paystack_subscription_code: org.paystack_subscription_code,
-        max_bikes: org.max_bikes, max_admin_users: org.max_admin_users
+        max_bikes: org.max_bikes, max_admin_users: org.max_admin_users,
+        bike_count: bikeCount, monthly_total: monthlyTotal, price_per_bike: FLEET_PRICE_PER_BIKE
       },
       plans: Object.values(FLEET_BILLING_PLANS),
       can_subscribe: ['trialing', 'past_due', 'cancelled', 'suspended'].includes(org.status)
@@ -1963,8 +1968,9 @@ router.post('/billing/subscribe', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billi
       return res.status(400).json({ error: `The ${plan_key} plan is not yet linked to a Paystack plan code. Please set PAYSTACK_PLAN_${plan_key.toUpperCase()} in the server environment.` });
     }
 
+    const bikeCount = db.prepare(`SELECT COUNT(*) c FROM bikes WHERE organization_id = ? AND status NOT IN ('retired','sold')`).get(org.id).c || 1;
+    const amountCents = bikeCount * FLEET_PRICE_PER_BIKE * 100;
     const reference = `OF-SUB-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
-    const amountCents = FLEET_BILLING_PLANS[plan_key].price_zar * 100;
     const initResp = await axios.post(`${PAYSTACK_API}/transaction/initialize`,
       {
         email: req.user.email,

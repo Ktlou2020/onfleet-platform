@@ -36,6 +36,8 @@ function DiagRow({ ok, label, value }) {
 
 function PlanCard({ plan, current, canSubscribe, onSubscribe, busy }) {
   const isCurrent = current?.plan_key === plan.key && current?.status === 'active';
+  const bikeCount = current?.bike_count || 0;
+  const monthlyEstimate = bikeCount > 0 ? bikeCount * (plan.price_per_bike || 750) : null;
   return (
     <div className="card" style={{
       borderColor: isCurrent ? 'rgba(30,136,209,0.5)' : undefined,
@@ -46,8 +48,13 @@ function PlanCard({ plan, current, canSubscribe, onSubscribe, busy }) {
         <div>
           <h3 style={{ marginBottom: 4 }}>{plan.name}</h3>
           <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--primary-light)', fontFamily: "'Space Grotesk', sans-serif" }}>
-            {fmt(plan.price_zar)}<span className="muted text-sm" style={{ fontWeight: 400 }}>/mo</span>
+            {fmt(plan.price_per_bike || 750)}<span className="muted text-sm" style={{ fontWeight: 400 }}>/bike/mo</span>
           </div>
+          {monthlyEstimate != null && (
+            <div className="text-xs muted" style={{ marginTop: 2 }}>
+              ≈ {fmt(monthlyEstimate)}/mo for your {bikeCount} bike{bikeCount !== 1 ? 's' : ''}
+            </div>
+          )}
         </div>
         {isCurrent && <Badge status="active">Current plan</Badge>}
       </div>
@@ -65,7 +72,11 @@ function PlanCard({ plan, current, canSubscribe, onSubscribe, busy }) {
         <div className="muted text-sm">Your current active plan.</div>
       ) : canSubscribe ? (
         <button className="btn" onClick={() => onSubscribe(plan.key)} disabled={busy === plan.key}>
-          {busy === plan.key ? 'Redirecting to Paystack…' : `Subscribe — ${fmt(plan.price_zar)}/mo`}
+          {busy === plan.key
+            ? 'Redirecting to Paystack…'
+            : monthlyEstimate
+              ? `Subscribe — ${fmt(monthlyEstimate)}/mo`
+              : `Subscribe — ${fmt(plan.price_per_bike || 750)}/bike/mo`}
         </button>
       ) : (
         <div className="muted text-sm">Manage your subscription to change plans.</div>
@@ -218,12 +229,17 @@ export default function FleetBilling() {
         <div className="card">
           <div className="card-title"><h3>How billing works</h3></div>
           <div className="fleet-demo-list">
+            <div className="fleet-demo-list-item"><CheckCircle2 size={15} style={{ color: 'var(--success)' }} /> R750 per bike per month — you only pay for what you have</div>
             <div className="fleet-demo-list-item"><CheckCircle2 size={15} style={{ color: 'var(--success)' }} /> Pay monthly via Paystack (card or EFT)</div>
             <div className="fleet-demo-list-item"><CheckCircle2 size={15} style={{ color: 'var(--success)' }} /> Subscription renews automatically each month</div>
-            <div className="fleet-demo-list-item"><CheckCircle2 size={15} style={{ color: 'var(--success)' }} /> Plan limits update immediately after subscribing</div>
             <div className="fleet-demo-list-item"><CheckCircle2 size={15} style={{ color: 'var(--success)' }} /> Cancel any time — access continues until period end</div>
           </div>
-          <div className="muted text-xs mt-3">All transactions are secured by Paystack and processed in ZAR. VAT may apply.</div>
+          {org.bike_count != null && org.price_per_bike && (
+            <div className="muted text-xs mt-3" style={{ padding: '8px 10px', background: 'var(--surface-2)', borderRadius: 8 }}>
+              Your fleet: <strong>{org.bike_count} bike{org.bike_count !== 1 ? 's' : ''}</strong> · estimated monthly charge: <strong>{fmt(org.monthly_total || 0)}</strong>
+            </div>
+          )}
+          <div className="muted text-xs mt-3">All transactions secured by Paystack and processed in ZAR. VAT may apply.</div>
         </div>
       </div>
 

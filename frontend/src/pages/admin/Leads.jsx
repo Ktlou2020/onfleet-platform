@@ -219,7 +219,7 @@ function ConvertModal({ lead, onClose, onDone }) {
           <div className="field">
             <label className="label">Plan</label>
             <select className="input" value={form.plan_key} onChange={set('plan_key')}>
-              <option value="trial">Trial (14 days)</option>
+              <option value="trial">Trial (1 month free)</option>
               <option value="small">Small fleet</option>
               <option value="medium">Medium fleet</option>
               <option value="large">Large fleet</option>

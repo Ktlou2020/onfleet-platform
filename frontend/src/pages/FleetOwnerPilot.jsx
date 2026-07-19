@@ -279,8 +279,8 @@ export default function FleetOwnerPilot() {
             ))}
           </div>
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: 20, marginBottom: 24 }}>
-            <div style={{ fontWeight: 600, color: 'var(--success)', fontSize: 15, marginBottom: 4 }}>First month free.</div>
-            <div style={{ color: 'var(--muted)', fontSize: 13 }}>No contract. Cancel any time.</div>
+            <div style={{ fontWeight: 600, color: 'var(--success)', fontSize: 15, marginBottom: 4 }}>First month completely free — no card required.</div>
+            <div style={{ color: 'var(--muted)', fontSize: 13 }}>After 30 days: R750 per bike per month. No contract. Cancel any time.</div>
           </div>
           <a href="#contact" onClick={scrollTo('contact')} className="btn btn-block" style={{ textAlign: 'center' }}>
             Book a demo

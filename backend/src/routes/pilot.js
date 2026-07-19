@@ -83,8 +83,9 @@ router.get('/plans', (req, res) => {
     plans: [
       {
         key: 'trial',
-        name: '14-day trial',
+        name: '1-month free trial',
         price_monthly: 0,
+        price_per_bike: 0,
         bike_limit: 10,
         is_trial: true,
         features: ['Fleet dashboard', 'Bike and agreement tracking', 'Basic collections visibility', 'Free monthly basic service per bike', 'Up to 2 admin users']
@@ -92,21 +93,24 @@ router.get('/plans', (req, res) => {
       {
         key: 'small',
         name: 'Small fleet',
-        price_monthly: 1499,
+        price_monthly: null,
+        price_per_bike: 750,
         bike_limit: 20,
         features: ['Everything in trial', 'Free monthly basic service per bike', 'Bulk imports', 'Payment tracking', '3 admin users', 'Email support']
       },
       {
         key: 'medium',
         name: 'Medium fleet',
-        price_monthly: 3999,
+        price_monthly: null,
+        price_per_bike: 750,
         bike_limit: 60,
         features: ['Everything in Small', 'Free monthly basic service per bike', 'Advanced filters', 'Bulk actions', 'Performance reporting', '5 admin users']
       },
       {
         key: 'large',
         name: 'Large fleet',
-        price_monthly: 6999,
+        price_monthly: null,
+        price_per_bike: 750,
         bike_limit: 100,
         features: ['Everything in Medium', 'Free monthly basic service per bike', 'Priority onboarding', 'Multi-branch operations', 'Audit visibility', '10 admin users']
       },
@@ -114,6 +118,7 @@ router.get('/plans', (req, res) => {
         key: 'enterprise',
         name: 'Enterprise+',
         price_monthly: null,
+        price_per_bike: 750,
         bike_limit: null,
         features: ['100+ bikes', 'Free monthly basic service per bike', 'Custom onboarding', 'API and webhook options', 'Dedicated success support']
       }
@@ -392,7 +397,7 @@ router.post('/leads/:id/convert', authRequired, adminOnly, async (req, res) => {
 
   const entitlements = FLEET_PLAN_ENTITLEMENTS[plan_key] || FLEET_PLAN_ENTITLEMENTS.trial;
   const now = new Date();
-  const trialEnds = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+  const trialEnds = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
   const tempPassword = crypto.randomBytes(8).toString('hex');
   const passwordHash = await bcrypt.hash(tempPassword, 10);
 

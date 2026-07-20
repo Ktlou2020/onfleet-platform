@@ -18,10 +18,10 @@ function toInt(value) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-function logAudit(actorId, action, resourceId, metadata) {
+function logAudit(actorId, action, entityId, metadata) {
   try {
-    db.prepare(`INSERT INTO audit_logs (actor_id, action, resource, resource_id, metadata) VALUES (?,?,?,?,?)`)
-      .run(actorId, action, 'job_card', resourceId, JSON.stringify(metadata || {}));
+    db.prepare(`INSERT INTO audit_logs (actor_id, action, entity, entity_id, metadata) VALUES (?,?,?,?,?)`)
+      .run(actorId, action, 'job_card', entityId, JSON.stringify(metadata || {}));
   } catch (e) {
     console.error('[workshop:audit]', e.message);
   }
@@ -673,7 +673,7 @@ router.get('/admin/jobs/:id', authRequired, (req, res) => {
         u.full_name AS actor_name, u.email AS actor_email, u.role AS actor_role
       FROM audit_logs al
       LEFT JOIN users u ON u.id = al.actor_id
-      WHERE al.resource = 'job_card' AND al.resource_id = ?
+      WHERE al.entity = 'job_card' AND al.entity_id = ?
       ORDER BY al.created_at ASC
     `).all(id);
     res.json({ job_card: card, audit });

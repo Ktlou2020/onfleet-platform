@@ -53,6 +53,8 @@ function JobDetailModal({ jobId, onClose, onChanged }) {
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
   const [noting, setNoting] = useState(false);
+  const [itemForm, setItemForm] = useState({ item_type: 'labor', description: '', unit_cost: '', quantity: '1' });
+  const [addingItem, setAddingItem] = useState(false);
 
   const reload = () =>
     api.get(`/workshop/admin/jobs/${jobId}`)
@@ -82,6 +84,36 @@ function JobDetailModal({ jobId, onClose, onChanged }) {
       toast.error(error.response?.data?.error || 'Could not update');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const addItem = async () => {
+    if (!itemForm.description.trim() || !itemForm.unit_cost) return;
+    try {
+      setAddingItem(true);
+      await api.post(`/workshop/job-cards/${jobId}/items`, {
+        item_type: itemForm.item_type,
+        description: itemForm.description.trim(),
+        unit_cost: Number(itemForm.unit_cost),
+        quantity: Number(itemForm.quantity) || 1,
+      });
+      setItemForm({ item_type: 'labor', description: '', unit_cost: '', quantity: '1' });
+      await reload();
+      if (onChanged) onChanged();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not add item');
+    } finally {
+      setAddingItem(false);
+    }
+  };
+
+  const deleteItem = async (itemId) => {
+    try {
+      await api.delete(`/workshop/job-cards/${jobId}/items/${itemId}`);
+      await reload();
+      if (onChanged) onChanged();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not remove item');
     }
   };
 
@@ -148,34 +180,100 @@ function JobDetailModal({ jobId, onClose, onChanged }) {
           {/* Line items */}
           <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid var(--border)' }}>
             <div className="text-xs muted" style={{ marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Line Items</div>
-            {jc.items.length === 0 ? (
-              <p className="text-sm muted">No items added yet.</p>
-            ) : (
-              <div style={{ overflowX: 'auto' }}>
-                <table className="table" style={{ fontSize: 13 }}>
-                  <thead>
-                    <tr>
-                      <th>Description</th>
-                      <th>Type</th>
-                      <th style={{ textAlign: 'right' }}>Qty</th>
-                      <th style={{ textAlign: 'right' }}>Unit cost</th>
-                      <th style={{ textAlign: 'right' }}>Total</th>
+            <div style={{ overflowX: 'auto' }}>
+              <table className="table" style={{ fontSize: 13 }}>
+                <thead>
+                  <tr>
+                    <th>Description</th>
+                    <th>Type</th>
+                    <th style={{ textAlign: 'right' }}>Qty</th>
+                    <th style={{ textAlign: 'right' }}>Unit cost</th>
+                    <th style={{ textAlign: 'right' }}>Total</th>
+                    {jc.status !== 'completed' && jc.status !== 'cancelled' && <th style={{ width: 32 }}></th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {jc.items.map((item) => (
+                    <tr key={item.id}>
+                      <td>{item.description}</td>
+                      <td className="muted text-xs">{item.item_type}</td>
+                      <td style={{ textAlign: 'right' }}>{item.quantity}</td>
+                      <td style={{ textAlign: 'right' }}>{fmt(item.unit_cost)}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(item.quantity * item.unit_cost)}</td>
+                      {jc.status !== 'completed' && jc.status !== 'cancelled' && (
+                        <td>
+                          <button
+                            className="btn btn-sm btn-danger"
+                            style={{ padding: '2px 7px', fontSize: 12 }}
+                            onClick={() => deleteItem(item.id)}
+                          >×</button>
+                        </td>
+                      )}
                     </tr>
-                  </thead>
-                  <tbody>
-                    {jc.items.map((item) => (
-                      <tr key={item.id}>
-                        <td>{item.description}</td>
-                        <td className="muted text-xs">{item.item_type}</td>
-                        <td style={{ textAlign: 'right' }}>{item.quantity}</td>
-                        <td style={{ textAlign: 'right' }}>{fmt(item.unit_cost)}</td>
-                        <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(item.quantity * item.unit_cost)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+                  ))}
+                  {jc.items.length === 0 && (
+                    <tr><td colSpan={jc.status !== 'completed' && jc.status !== 'cancelled' ? 6 : 5} className="muted text-sm" style={{ textAlign: 'center', padding: '12px 0' }}>No items added yet.</td></tr>
+                  )}
+                  {/* Add item row */}
+                  {jc.status !== 'completed' && jc.status !== 'cancelled' && (
+                    <tr style={{ background: 'rgba(99,102,241,0.04)' }}>
+                      <td>
+                        <input
+                          value={itemForm.description}
+                          onChange={(e) => setItemForm((f) => ({ ...f, description: e.target.value }))}
+                          placeholder="Description"
+                          style={{ fontSize: 12, padding: '4px 8px', width: '100%', minWidth: 140 }}
+                        />
+                      </td>
+                      <td>
+                        <select
+                          value={itemForm.item_type}
+                          onChange={(e) => setItemForm((f) => ({ ...f, item_type: e.target.value }))}
+                          style={{ fontSize: 12, padding: '4px 6px' }}
+                        >
+                          <option value="labor">labor</option>
+                          <option value="parts">parts</option>
+                          <option value="other">other</option>
+                        </select>
+                      </td>
+                      <td>
+                        <input
+                          type="number"
+                          min="1"
+                          value={itemForm.quantity}
+                          onChange={(e) => setItemForm((f) => ({ ...f, quantity: e.target.value }))}
+                          style={{ fontSize: 12, padding: '4px 6px', width: 52, textAlign: 'right' }}
+                        />
+                      </td>
+                      <td>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={itemForm.unit_cost}
+                          onChange={(e) => setItemForm((f) => ({ ...f, unit_cost: e.target.value }))}
+                          placeholder="0.00"
+                          style={{ fontSize: 12, padding: '4px 6px', width: 80, textAlign: 'right' }}
+                        />
+                      </td>
+                      <td style={{ textAlign: 'right', fontWeight: 700, fontSize: 12, color: 'var(--muted)' }}>
+                        {itemForm.unit_cost && itemForm.quantity ? fmt(Number(itemForm.unit_cost) * (Number(itemForm.quantity) || 1)) : '—'}
+                      </td>
+                      <td>
+                        <button
+                          className="btn btn-sm"
+                          style={{ padding: '3px 10px', fontSize: 12, whiteSpace: 'nowrap' }}
+                          onClick={addItem}
+                          disabled={addingItem || !itemForm.description.trim() || !itemForm.unit_cost}
+                        >
+                          {addingItem ? '…' : '+ Add'}
+                        </button>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
 
           {/* Edit section */}

@@ -181,7 +181,18 @@ function ensureUserRoleSchema() {
   if (schemaSql && schemaSql.includes(expectedConstraint) && schemaSql.includes('organization_id')) return;
 
   const organizationSelect = selectColumnOrDefault('users', 'organization_id');
-  const roleSelect = selectColumnOrDefault('users', 'role', "'rider'");
+  const roleColumnExists = tableHasColumn('users', 'role');
+  const roleSelect = roleColumnExists
+    ? `CASE
+         WHEN role IN ('rider','admin','superadmin','fleet_owner_admin','fleet_owner_ops','fleet_owner_billing','fleet_owner_viewer') THEN role
+         WHEN role IN ('fleet_owner','owner') THEN 'fleet_owner_admin'
+         WHEN role = 'ops' THEN 'fleet_owner_ops'
+         WHEN role = 'billing' THEN 'fleet_owner_billing'
+         WHEN role IN ('viewer','readonly') THEN 'fleet_owner_viewer'
+         WHEN role = 'staff' THEN 'admin'
+         ELSE 'rider'
+       END`
+    : "'rider'";
   const statusSelect = selectColumnOrDefault('users', 'status', "'active'");
   const idNumberSelect = selectColumnOrDefault('users', 'id_number');
   const dateOfBirthSelect = selectColumnOrDefault('users', 'date_of_birth');

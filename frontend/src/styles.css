@@ -1349,18 +1349,18 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   }
   .filter-pills::-webkit-scrollbar { display: none; }
 
-  /* ── Modals → bottom sheet ── */
+  /* ── Modals → top sheet on mobile ── */
   .modal-overlay {
     padding: 0;
-    align-items: flex-end;
+    align-items: flex-start;
   }
   .modal {
-    border-radius: 16px 16px 0 0;
+    border-radius: 0 0 16px 16px;
     max-height: 92dvh;
     max-width: 100%;
     width: 100%;
     margin: 0;
-    padding: 20px 16px max(20px, env(safe-area-inset-bottom));
+    padding: max(16px, env(safe-area-inset-top)) 16px max(20px, env(safe-area-inset-bottom));
   }
   .modal h2 { font-size: 18px; }
 

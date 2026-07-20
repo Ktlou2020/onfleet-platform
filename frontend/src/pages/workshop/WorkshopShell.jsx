@@ -60,7 +60,7 @@ export default function WorkshopShell() {
       <div className="main">
         <div className="topbar" style={{ gap: 16 }}>
           <div className="text-sm muted">Workshop · OnFleet Africa</div>
-          <div className="text-xs muted" style={{ marginLeft: 'auto' }}>Logged in as <strong>{user?.email}</strong></div>
+          <div className="text-xs muted hide-mobile" style={{ marginLeft: 'auto' }}>Logged in as <strong>{user?.email}</strong></div>
         </div>
         <div className="content">
           <Outlet />

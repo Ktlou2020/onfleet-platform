@@ -463,10 +463,10 @@ export default function WorkshopJobCard() {
         <table className="table">
           <thead>
             <tr>
-              <th>Type</th>
+              <th className="col-mobile-hide">Type</th>
               <th>Description</th>
               <th style={{ textAlign: 'right' }}>Qty</th>
-              <th style={{ textAlign: 'right' }}>Unit</th>
+              <th style={{ textAlign: 'right' }} className="col-mobile-hide">Unit</th>
               <th style={{ textAlign: 'right' }}>Total</th>
               {isOpen && <th style={{ width: 72 }}></th>}
             </tr>
@@ -474,10 +474,13 @@ export default function WorkshopJobCard() {
           <tbody>
             {card.items.map((item) => (
               <tr key={item.id}>
-                <td><Badge>{item.item_type}</Badge></td>
-                <td>{item.description}</td>
+                <td className="col-mobile-hide"><Badge>{item.item_type}</Badge></td>
+                <td>
+                  {item.description}
+                  <div className="mobile-only text-xs muted" style={{ marginTop: 2 }}>{item.item_type}</div>
+                </td>
                 <td style={{ textAlign: 'right' }}>{item.quantity}</td>
-                <td style={{ textAlign: 'right' }}>{fmt(item.unit_cost)}</td>
+                <td style={{ textAlign: 'right' }} className="col-mobile-hide">{fmt(item.unit_cost)}</td>
                 <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(item.quantity * item.unit_cost)}</td>
                 {isOpen && (
                   <td>

@@ -1,0 +1,23 @@
+{
+  "name": "OnFleet Africa",
+  "short_name": "OnFleet",
+  "description": "OnFleet Africa rent-to-own rider and admin workspace.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#1E88D1",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

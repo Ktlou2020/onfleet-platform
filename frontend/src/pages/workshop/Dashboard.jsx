@@ -190,10 +190,10 @@ export default function WorkshopDashboard() {
               <thead>
                 <tr>
                   <th>Bike</th>
-                  <th>Fleet</th>
+                  <th className="col-mobile-hide">Fleet</th>
                   <th>Next service</th>
-                  <th>Next service km</th>
-                  <th>Odometer</th>
+                  <th className="col-mobile-hide">Next service km</th>
+                  <th className="col-mobile-hide">Odometer</th>
                   <th></th>
                 </tr>
               </thead>
@@ -204,13 +204,13 @@ export default function WorkshopDashboard() {
                       <div style={{ fontWeight: 600 }}>{bike.registration || bike.vin || '—'}</div>
                       <div className="text-xs muted">{bike.make} {bike.model}</div>
                     </td>
-                    <td className="text-xs muted">{bike.org_name || '—'}</td>
+                    <td className="col-mobile-hide text-xs muted">{bike.org_name || '—'}</td>
                     <td style={{ color: bike.urgency === 'overdue' ? 'var(--danger)' : undefined, fontWeight: bike.urgency === 'overdue' ? 700 : undefined }}>
                       {fmtDate(bike.next_service_date)}
                       {bike.urgency === 'overdue' && <span className="text-xs" style={{ marginLeft: 6, color: 'var(--danger)' }}>OVERDUE</span>}
                     </td>
-                    <td className="text-xs muted">{bike.next_service_km ? `${bike.next_service_km.toLocaleString()} km` : '—'}</td>
-                    <td className="text-xs muted">{bike.odometer_km ? `${bike.odometer_km.toLocaleString()} km` : '—'}</td>
+                    <td className="col-mobile-hide text-xs muted">{bike.next_service_km ? `${bike.next_service_km.toLocaleString()} km` : '—'}</td>
+                    <td className="col-mobile-hide text-xs muted">{bike.odometer_km ? `${bike.odometer_km.toLocaleString()} km` : '—'}</td>
                     <td>
                       {bike.active_job_id
                         ? <Badge status="warning">In workshop</Badge>

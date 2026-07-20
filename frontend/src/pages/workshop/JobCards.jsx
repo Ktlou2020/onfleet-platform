@@ -253,13 +253,13 @@ export default function WorkshopJobCards() {
               <thead>
                 <tr>
                   <th>Bike</th>
-                  <th>Type</th>
-                  <th>Priority</th>
+                  <th className="col-mobile-hide">Type</th>
+                  <th className="col-mobile-hide">Priority</th>
                   <th>Status</th>
-                  <th>Technician</th>
-                  <th>Fleet</th>
+                  <th className="col-mobile-hide">Technician</th>
+                  <th className="col-mobile-hide">Fleet</th>
                   <th style={{ textAlign: 'right' }}>Cost</th>
-                  <th>Created</th>
+                  <th className="col-mobile-hide">Created</th>
                   <th style={{ width: 80 }}></th>
                 </tr>
               </thead>
@@ -273,18 +273,23 @@ export default function WorkshopJobCards() {
                     <td>
                       <div style={{ fontWeight: 700 }}>{job.display_registration || '—'}</div>
                       <div className="text-xs muted">{job.display_make} {job.display_model}</div>
+                      {/* Status + priority shown inline on mobile (desktop hides this) */}
+                      <div className="mobile-only" style={{ marginTop: 5, gap: 4, flexWrap: 'wrap' }}>
+                        <Badge status={STATUS_COLOR[job.status]}>{job.status.replace('_', ' ')}</Badge>
+                        {job.priority !== 'normal' && <Badge status={PRIORITY_COLOR[job.priority]}>{job.priority}</Badge>}
+                      </div>
                     </td>
-                    <td className="text-sm">{job.job_type}</td>
-                    <td>
+                    <td className="col-mobile-hide text-sm">{job.job_type}</td>
+                    <td className="col-mobile-hide">
                       {job.priority !== 'normal'
                         ? <Badge status={PRIORITY_COLOR[job.priority]}>{job.priority}</Badge>
                         : <span className="muted text-xs">normal</span>}
                     </td>
-                    <td><Badge status={STATUS_COLOR[job.status]}>{job.status.replace('_', ' ')}</Badge></td>
-                    <td className="text-sm">{job.technician_name || <span className="muted">—</span>}</td>
-                    <td className="text-xs muted">{job.fleet_org_name || '—'}</td>
+                    <td className="col-mobile-hide"><Badge status={STATUS_COLOR[job.status]}>{job.status.replace('_', ' ')}</Badge></td>
+                    <td className="col-mobile-hide text-sm">{job.technician_name || <span className="muted">—</span>}</td>
+                    <td className="col-mobile-hide text-xs muted">{job.fleet_org_name || '—'}</td>
                     <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(job.total_cost)}</td>
-                    <td style={{ whiteSpace: 'nowrap' }} className="text-xs muted">{fmtDateTime(job.created_at)}</td>
+                    <td className="col-mobile-hide" style={{ whiteSpace: 'nowrap' }}><span className="text-xs muted">{fmtDateTime(job.created_at)}</span></td>
                     <td onClick={(e) => e.stopPropagation()}>
                       {job.status === 'open' && (
                         <button className="btn btn-sm" disabled={startingId === job.id} onClick={(e) => startJob(e, job.id)} title="Start this job">

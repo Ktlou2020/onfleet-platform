@@ -2,6 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const db = require('../db');
 const { authRequired } = require('../middleware/auth');
+const { sendNotification } = require('../services/notifier');
 const router = express.Router();
 
 const WORKSHOP_ROLES = ['technician', 'admin', 'superadmin'];
@@ -15,6 +16,15 @@ function workshopOnly(req, res, next) {
 function toInt(value) {
   const n = parseInt(value, 10);
   return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function logAudit(actorId, action, resourceId, metadata) {
+  try {
+    db.prepare(`INSERT INTO audit_logs (actor_id, action, resource, resource_id, metadata) VALUES (?,?,?,?,?)`)
+      .run(actorId, action, 'job_card', resourceId, JSON.stringify(metadata || {}));
+  } catch (e) {
+    console.error('[workshop:audit]', e.message);
+  }
 }
 
 function getJobCard(id) {
@@ -184,9 +194,16 @@ router.post('/job-cards', authRequired, workshopOnly, (req, res) => {
       req.user.id
     );
 
-    res.json({ ok: true, id: result.lastInsertRowid, job_card: getJobCard(result.lastInsertRowid) });
+    const newCard = getJobCard(result.lastInsertRowid);
+    res.json({ ok: true, id: result.lastInsertRowid, job_card: newCard });
+    logAudit(req.user.id, 'job_card.created', result.lastInsertRowid, { actor: req.user.full_name || req.user.email, job_type: job_type || 'service' });
+    const createAdmins = db.prepare(`SELECT id FROM users WHERE role IN ('admin','superadmin') AND status='active' AND deleted_at IS NULL`).all();
+    const createDisplayReg = newCard.bike_registration || newCard.registration || newCard.bike_make || newCard.make || 'Unknown bike';
+    for (const admin of createAdmins) {
+      sendNotification({ userId: admin.id, channel: 'in_app', type: 'job_card_created', title: `New job card: ${createDisplayReg}`, message: `Job #${result.lastInsertRowid} (${job_type || 'service'}) created by ${req.user.full_name || req.user.email}.`, throwOnError: false }).catch(() => {});
+    }
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    if (!res.headersSent) res.status(500).json({ error: error.message });
   }
 });
 
@@ -233,8 +250,9 @@ router.post('/job-cards/:id/start', authRequired, workshopOnly, (req, res) => {
 
     db.prepare(`UPDATE job_cards SET status = 'in_progress', started_at = CURRENT_TIMESTAMP, technician_id = COALESCE(technician_id, ?) WHERE id = ?`).run(req.user.id, id);
     res.json({ ok: true, job_card: getJobCard(id) });
+    logAudit(req.user.id, 'job_card.started', id, { actor: req.user.full_name || req.user.email });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    if (!res.headersSent) res.status(500).json({ error: error.message });
   }
 });
 
@@ -282,8 +300,20 @@ router.post('/job-cards/:id/complete', authRequired, workshopOnly, (req, res) =>
     }
 
     res.json({ ok: true, job_card: getJobCard(id) });
+    logAudit(req.user.id, 'job_card.completed', id, { actor: req.user.full_name || req.user.email, completion_notes: completion_notes || null });
+    const completeItems = db.prepare('SELECT quantity, unit_cost FROM job_card_items WHERE job_card_id = ?').all(id);
+    const completeCost = completeItems.reduce((s, i) => s + i.quantity * i.unit_cost, 0);
+    const completeReg = card.registration || card.vin || card.make || `Job #${id}`;
+    const completeTech = req.user.full_name || req.user.email;
+    const completeAdmins = db.prepare(`SELECT id FROM users WHERE role IN ('admin','superadmin') AND status='active' AND deleted_at IS NULL`).all();
+    const completeTitle = `Job completed: ${completeReg}`;
+    const completeMsg = `Job #${id} (${card.job_type}) for ${completeReg} was completed by ${completeTech}. Total: R${completeCost.toFixed(2)}.`;
+    for (const admin of completeAdmins) {
+      sendNotification({ userId: admin.id, channel: 'in_app', type: 'job_card_completed', title: completeTitle, message: completeMsg, throwOnError: false }).catch(() => {});
+      sendNotification({ userId: admin.id, channel: 'email', type: 'job_card_completed', title: completeTitle, message: completeMsg, throwOnError: false }).catch(() => {});
+    }
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    if (!res.headersSent) res.status(500).json({ error: error.message });
   }
 });
 
@@ -630,6 +660,43 @@ router.get('/admin/jobs', authRequired, (req, res) => {
   }
 });
 
+// Admin: get full job card detail with line items and audit trail
+router.get('/admin/jobs/:id', authRequired, (req, res) => {
+  try {
+    if (!['admin', 'superadmin'].includes(req.user.role)) return res.status(403).json({ error: 'Admin only' });
+    const id = toInt(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid id' });
+    const card = getJobCard(id);
+    if (!card) return res.status(404).json({ error: 'Job card not found' });
+    const audit = db.prepare(`
+      SELECT al.id, al.action, al.metadata, al.created_at,
+        u.full_name AS actor_name, u.email AS actor_email, u.role AS actor_role
+      FROM audit_logs al
+      LEFT JOIN users u ON u.id = al.actor_id
+      WHERE al.resource = 'job_card' AND al.resource_id = ?
+      ORDER BY al.created_at ASC
+    `).all(id);
+    res.json({ job_card: card, audit });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Admin: add a note to a job card (logged in audit trail)
+router.post('/admin/jobs/:id/notes', authRequired, (req, res) => {
+  try {
+    if (!['admin', 'superadmin'].includes(req.user.role)) return res.status(403).json({ error: 'Admin only' });
+    const id = toInt(req.params.id);
+    if (!id || !db.prepare('SELECT id FROM job_cards WHERE id = ?').get(id)) return res.status(404).json({ error: 'Job card not found' });
+    const note = String(req.body.note || '').trim();
+    if (!note) return res.status(400).json({ error: 'Note is required' });
+    logAudit(req.user.id, 'job_card.note', id, { note, actor: req.user.full_name || req.user.email });
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Admin: update any job (reassign, reprioritize, cancel)
 router.put('/admin/jobs/:id', authRequired, (req, res) => {
   try {
@@ -647,6 +714,12 @@ router.put('/admin/jobs/:id', authRequired, (req, res) => {
       sets.push('status = ?'); vals.push('cancelled');
     }
     if (sets.length) { vals.push(id); db.prepare(`UPDATE job_cards SET ${sets.join(', ')} WHERE id = ?`).run(...vals); }
+    const changes = {};
+    if (req.body.priority !== undefined && req.body.priority !== card.priority) changes.priority = { from: card.priority, to: req.body.priority };
+    if (req.body.technician_id !== undefined && (req.body.technician_id || null) != card.technician_id) changes.technician_id = { from: card.technician_id, to: req.body.technician_id || null };
+    if (req.body.description !== undefined && req.body.description !== card.description) changes.description = 'updated';
+    if (req.body.status === 'cancelled' && card.status !== 'cancelled') changes.status = { from: card.status, to: 'cancelled' };
+    if (Object.keys(changes).length) logAudit(req.user.id, 'job_card.admin_edit', id, { changes, actor: req.user.full_name || req.user.email });
     res.json({ ok: true, job_card: getJobCard(id) });
   } catch (error) {
     res.status(500).json({ error: error.message });

@@ -101,11 +101,11 @@ export function Loading() {
   return <div className="center-flex"><div className="spinner" /></div>;
 }
 
-export function Modal({ children, onClose, title, isOpen = true }) {
+export function Modal({ children, onClose, title, isOpen = true, style: modalStyle }) {
   if (!isOpen) return null;
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={e => e.stopPropagation()}>
+      <div className="modal" style={modalStyle} onClick={e => e.stopPropagation()}>
         {title && (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
             <h2 style={{ margin: 0 }}>{title}</h2>

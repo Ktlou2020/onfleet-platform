@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Trophy, Medal, Award, Copy, Check } from 'lucide-react';
+import { Trophy, Medal, Award, Copy, Check, Clock, FileText } from 'lucide-react';
 import api from '../../api';
 import { Badge, ConfirmModal, Loading, Modal, SearchInput, fmt, fmtDate, fmtDateTime, matchesSearch } from '../../components/ui';
 
@@ -10,6 +10,15 @@ const HEALTH_COLOR = { overdue: 'danger', due_soon: 'warning', ok: 'success' };
 const HEALTH_LABEL = { overdue: 'Overdue', due_soon: 'Due soon', ok: 'OK' };
 
 const STATUS_OPTS = ['all', 'open', 'in_progress', 'completed', 'cancelled'];
+
+const ACTION_LABELS = {
+  'job_card.created': 'Job card created',
+  'job_card.started': 'Work started',
+  'job_card.completed': 'Job completed',
+  'job_card.admin_edit': 'Edited by admin',
+  'job_card.note': 'Note added',
+  'job_card.cancelled': 'Job cancelled',
+};
 
 const TABS = ['Overview', 'All Jobs', 'Technicians', 'Fleet Health', 'Staff'];
 
@@ -37,10 +46,222 @@ function CopyButton({ text }) {
   );
 }
 
+function JobDetailModal({ jobId, onClose, onChanged }) {
+  const [data, setData] = useState(null);
+  const [technicians, setTechnicians] = useState([]);
+  const [editForm, setEditForm] = useState({});
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [noting, setNoting] = useState(false);
+
+  const reload = () =>
+    api.get(`/workshop/admin/jobs/${jobId}`)
+      .then((r) => {
+        setData(r.data);
+        const jc = r.data.job_card;
+        setEditForm({ priority: jc.priority, technician_id: String(jc.technician_id || ''), description: jc.description || '', status: jc.status });
+      })
+      .catch(() => toast.error('Could not load job details'));
+
+  useEffect(() => {
+    if (!jobId) return;
+    setData(null);
+    setNote('');
+    Promise.all([reload(), api.get('/workshop/technicians').then((r) => setTechnicians(r.data.technicians))])
+      .catch(() => {});
+  }, [jobId]);
+
+  const saveEdit = async () => {
+    try {
+      setSaving(true);
+      await api.put(`/workshop/admin/jobs/${jobId}`, editForm);
+      toast.success('Job updated');
+      await reload();
+      if (onChanged) onChanged();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not update');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const addNote = async () => {
+    if (!note.trim()) return;
+    try {
+      setNoting(true);
+      await api.post(`/workshop/admin/jobs/${jobId}/notes`, { note });
+      setNote('');
+      await reload();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not add note');
+    } finally {
+      setNoting(false);
+    }
+  };
+
+  const jc = data?.job_card;
+  const audit = data?.audit || [];
+
+  return (
+    <Modal
+      title={jc ? `Job #${jc.id} — ${jc.bike_registration || jc.registration || jc.bike_make || jc.make || '—'}` : `Job #${jobId}`}
+      onClose={onClose}
+      style={{ maxWidth: 720 }}
+    >
+      {!jc ? <Loading /> : (
+        <>
+          {/* Status / priority / cost row */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 16, paddingBottom: 16, borderBottom: '1px solid var(--border)' }}>
+            <Badge status={STATUS_COLOR[jc.status]}>{jc.status.replace('_', ' ')}</Badge>
+            {jc.priority !== 'normal' && <Badge status={PRIORITY_COLOR[jc.priority]}>{jc.priority}</Badge>}
+            <span className="text-xs muted">{jc.job_type}</span>
+            <span style={{ marginLeft: 'auto', fontWeight: 700, fontSize: 15 }}>{fmt(jc.total_cost)}</span>
+          </div>
+
+          {/* Key info grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 20px', marginBottom: 16, fontSize: 13 }}>
+            <div><span className="muted">Bike: </span><strong>{[jc.bike_make, jc.bike_model].filter(Boolean).join(' ') || jc.make || '—'}</strong></div>
+            <div><span className="muted">Reg / VIN: </span>{jc.bike_registration || jc.registration || jc.bike_vin || jc.vin || '—'}</div>
+            <div><span className="muted">Technician: </span>{jc.technician_name || <span className="muted">Unassigned</span>}</div>
+            <div><span className="muted">Fleet: </span>{jc.bike_org_name || '—'}</div>
+            <div><span className="muted">Created: </span>{fmtDateTime(jc.created_at)}</div>
+            {jc.completed_at && <div><span className="muted">Completed: </span>{fmtDateTime(jc.completed_at)}</div>}
+          </div>
+
+          {/* Description */}
+          {jc.description && (
+            <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid var(--border)' }}>
+              <div className="text-xs muted" style={{ marginBottom: 4 }}>Description</div>
+              <div className="text-sm" style={{ whiteSpace: 'pre-wrap' }}>{jc.description}</div>
+            </div>
+          )}
+
+          {/* Completion notes */}
+          {jc.completion_notes && (
+            <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid var(--border)' }}>
+              <div className="text-xs muted" style={{ marginBottom: 4 }}>Completion notes</div>
+              <div className="text-sm" style={{ whiteSpace: 'pre-wrap' }}>{jc.completion_notes}</div>
+              {jc.odometer_km && <div className="text-xs muted" style={{ marginTop: 4 }}>Odometer: {jc.odometer_km.toLocaleString()} km</div>}
+            </div>
+          )}
+
+          {/* Line items */}
+          <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid var(--border)' }}>
+            <div className="text-xs muted" style={{ marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Line Items</div>
+            {jc.items.length === 0 ? (
+              <p className="text-sm muted">No items added yet.</p>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table className="table" style={{ fontSize: 13 }}>
+                  <thead>
+                    <tr>
+                      <th>Description</th>
+                      <th>Type</th>
+                      <th style={{ textAlign: 'right' }}>Qty</th>
+                      <th style={{ textAlign: 'right' }}>Unit cost</th>
+                      <th style={{ textAlign: 'right' }}>Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {jc.items.map((item) => (
+                      <tr key={item.id}>
+                        <td>{item.description}</td>
+                        <td className="muted text-xs">{item.item_type}</td>
+                        <td style={{ textAlign: 'right' }}>{item.quantity}</td>
+                        <td style={{ textAlign: 'right' }}>{fmt(item.unit_cost)}</td>
+                        <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(item.quantity * item.unit_cost)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Edit section */}
+          <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid var(--border)' }}>
+            <div className="text-xs muted" style={{ marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Edit</div>
+            <div className="grid grid-2" style={{ gap: 12, marginBottom: 10 }}>
+              <div className="field">
+                <label className="label">Priority</label>
+                <select value={editForm.priority} onChange={(e) => setEditForm((f) => ({ ...f, priority: e.target.value }))}>
+                  {['low', 'normal', 'high', 'urgent'].map((p) => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </div>
+              <div className="field">
+                <label className="label">Technician</label>
+                <select value={editForm.technician_id} onChange={(e) => setEditForm((f) => ({ ...f, technician_id: e.target.value }))}>
+                  <option value="">Unassigned</option>
+                  {technicians.map((t) => <option key={t.id} value={String(t.id)}>{t.full_name}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="field" style={{ marginBottom: 10 }}>
+              <label className="label">Description</label>
+              <textarea rows={2} value={editForm.description} onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))} />
+            </div>
+            {['open', 'in_progress'].includes(jc.status) && (
+              <div className="field" style={{ marginBottom: 10 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={editForm.status === 'cancelled'} onChange={(e) => setEditForm((f) => ({ ...f, status: e.target.checked ? 'cancelled' : jc.status }))} />
+                  <span className="text-sm">Cancel this job</span>
+                </label>
+              </div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button className="btn btn-sm" onClick={saveEdit} disabled={saving}>{saving ? 'Saving…' : 'Save changes'}</button>
+            </div>
+          </div>
+
+          {/* Add note */}
+          <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid var(--border)' }}>
+            <div className="text-xs muted" style={{ marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Add note</div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+              <textarea rows={2} style={{ flex: 1 }} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Add a note for the audit trail…" />
+              <button className="btn btn-sm" onClick={addNote} disabled={noting || !note.trim()}>
+                {noting ? '…' : 'Add note'}
+              </button>
+            </div>
+          </div>
+
+          {/* Audit trail */}
+          <div>
+            <div className="text-xs muted" style={{ marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Activity Log</div>
+            {audit.length === 0 ? (
+              <p className="text-sm muted">No activity recorded yet.</p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {audit.map((entry) => {
+                  let meta = {};
+                  try { meta = JSON.parse(entry.metadata || '{}'); } catch {}
+                  return (
+                    <div key={entry.id} style={{ display: 'flex', gap: 12, fontSize: 13 }}>
+                      <span className="muted text-xs" style={{ whiteSpace: 'nowrap', paddingTop: 2, minWidth: 128, flexShrink: 0 }}>{fmtDateTime(entry.created_at)}</span>
+                      <div>
+                        <div style={{ fontWeight: 600 }}>{ACTION_LABELS[entry.action] || entry.action}</div>
+                        <div className="muted text-xs">
+                          {entry.actor_name || entry.actor_email || 'System'}
+                          {meta.note ? ` — "${meta.note}"` : null}
+                          {meta.changes && Object.keys(meta.changes).length ? ` — ${Object.entries(meta.changes).map(([k, v]) => typeof v === 'object' && v.from !== undefined ? `${k}: ${v.from ?? 'none'} → ${v.to ?? 'none'}` : k).join(', ')}` : null}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
 // --- Tab: Overview ---
 function OverviewTab() {
   const [stats, setStats] = useState(null);
   const [revenue, setRevenue] = useState(null);
+  const [viewJobId, setViewJobId] = useState(null);
 
   useEffect(() => {
     Promise.all([
@@ -119,7 +340,7 @@ function OverviewTab() {
           </thead>
           <tbody>
             {recent_jobs.map((job) => (
-              <tr key={job.id}>
+              <tr key={job.id} style={{ cursor: 'pointer' }} onClick={() => setViewJobId(job.id)}>
                 <td className="text-xs muted">{job.id}</td>
                 <td><div style={{ fontWeight: 600 }}>{job.display_registration || '—'}</div><div className="text-xs muted">{job.display_make} {job.display_model}</div></td>
                 <td className="text-sm">{job.job_type}</td>
@@ -134,6 +355,9 @@ function OverviewTab() {
         </table>
         {!recent_jobs.length && <div style={{ padding: 24, textAlign: 'center' }} className="muted">No jobs yet.</div>}
       </div>
+      {viewJobId && (
+        <JobDetailModal jobId={viewJobId} onClose={() => setViewJobId(null)} />
+      )}
     </>
   );
 }
@@ -150,8 +374,7 @@ function AllJobsTab() {
   const [offset, setOffset] = useState(0);
   const LIMIT = 50;
 
-  const [editJob, setEditJob] = useState(null);
-  const [editForm, setEditForm] = useState({});
+  const [viewJobId, setViewJobId] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -174,25 +397,6 @@ function AllJobsTab() {
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { setOffset(0); }, [status, techFilter, search]);
-
-  const openEdit = (job) => {
-    setEditJob(job);
-    setEditForm({ priority: job.priority, technician_id: job.technician_id || '', description: job.description || '', status: job.status });
-  };
-
-  const saveEdit = async () => {
-    try {
-      setBusy(true);
-      await api.put(`/workshop/admin/jobs/${editJob.id}`, editForm);
-      toast.success('Job updated');
-      setEditJob(null);
-      await load();
-    } catch (error) {
-      toast.error(error.response?.data?.error || 'Could not update');
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const deleteJob = async () => {
     try {
@@ -262,7 +466,7 @@ function AllJobsTab() {
                 <td className="text-xs muted" style={{ whiteSpace: 'nowrap' }}>{fmtDateTime(job.created_at)}</td>
                 <td>
                   <div style={{ display: 'flex', gap: 4 }}>
-                    <button className="btn btn-sm btn-secondary" onClick={() => openEdit(job)}>Edit</button>
+                    <button className="btn btn-sm btn-secondary" onClick={() => setViewJobId(job.id)}>Edit</button>
                     <button className="btn btn-sm btn-danger" onClick={() => setConfirmDelete(job)}>×</button>
                   </div>
                 </td>
@@ -281,41 +485,8 @@ function AllJobsTab() {
         </div>
       )}
 
-      {editJob && (
-        <Modal title={`Edit Job #${editJob.id}`} onClose={() => setEditJob(null)}>
-          <div className="grid grid-2" style={{ gap: 12 }}>
-            <div className="field">
-              <label className="label">Priority</label>
-              <select value={editForm.priority} onChange={(e) => setEditForm((f) => ({ ...f, priority: e.target.value }))}>
-                {['low', 'normal', 'high', 'urgent'].map((p) => <option key={p} value={p}>{p}</option>)}
-              </select>
-            </div>
-            <div className="field">
-              <label className="label">Assign technician</label>
-              <select value={editForm.technician_id} onChange={(e) => setEditForm((f) => ({ ...f, technician_id: e.target.value }))}>
-                <option value="">Unassigned</option>
-                {technicians.map((t) => <option key={t.id} value={t.id}>{t.full_name}</option>)}
-              </select>
-            </div>
-          </div>
-          {['open', 'in_progress'].includes(editJob.status) && (
-            <div className="field">
-              <label className="label">Cancel this job</label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                <input type="checkbox" checked={editForm.status === 'cancelled'} onChange={(e) => setEditForm((f) => ({ ...f, status: e.target.checked ? 'cancelled' : editJob.status }))} />
-                <span className="text-sm">Mark as cancelled</span>
-              </label>
-            </div>
-          )}
-          <div className="field">
-            <label className="label">Description</label>
-            <textarea rows={3} value={editForm.description} onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))} />
-          </div>
-          <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
-            <button className="btn btn-secondary" onClick={() => setEditJob(null)}>Cancel</button>
-            <button className="btn" onClick={saveEdit} disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button>
-          </div>
-        </Modal>
+      {viewJobId && (
+        <JobDetailModal jobId={viewJobId} onClose={() => setViewJobId(null)} onChanged={load} />
       )}
 
       {confirmDelete && (

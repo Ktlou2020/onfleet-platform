@@ -70,7 +70,7 @@ function selectBulkTargets({ user_ids, role, status }) {
     sql += ` AND id IN (${ids.map(() => '?').join(',')})`;
     params.push(...ids);
   } else {
-    if (role && ['rider', 'admin', 'superadmin'].includes(role)) {
+    if (role && ['rider', 'admin', 'superadmin', 'technician'].includes(role)) {
       sql += ' AND role = ?';
       params.push(role);
     }
@@ -539,7 +539,7 @@ router.get('/users/:id', (req, res) => {
 
 router.post('/users', superadminOnly, async (req, res) => {
   const { email, password, full_name, phone, role } = req.body;
-  if (!email || !password || !full_name || !['rider', 'admin', 'superadmin'].includes(role)) {
+  if (!email || !password || !full_name || !['rider', 'admin', 'superadmin', 'technician'].includes(role)) {
     return res.status(400).json({ error: 'email, password, full_name and valid role are required' });
   }
   const normalizedEmail = String(email).trim().toLowerCase();
@@ -692,7 +692,7 @@ router.post('/users/:id/status', (req, res) => {
 
 router.post('/users/:id/role', superadminOnly, (req, res) => {
   const { role } = req.body;
-  if (!['rider', 'admin', 'superadmin'].includes(role)) {
+  if (!['rider', 'admin', 'superadmin', 'technician'].includes(role)) {
     return res.status(400).json({ error: 'Invalid role' });
   }
   const target = db.prepare(`SELECT id, role, email FROM users WHERE id = ? AND deleted_at IS NULL`).get(req.params.id);
@@ -707,6 +707,7 @@ router.delete('/users/:id', superadminOnly, (req, res) => {
   const target = db.prepare('SELECT * FROM users WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
   if (!target) return res.status(404).json({ error: 'User not found' });
   if (target.id === req.user.id) return res.status(400).json({ error: 'You cannot remove your own account' });
+  if (target.role === 'technician') return res.status(400).json({ error: 'Workshop technicians cannot be deleted here. Use the Workshop Staff tab to suspend this user.' });
   const tombstoneEmail = `removed+${target.id}+${Date.now()}@onfleet.local`;
   db.prepare(`UPDATE users
     SET deleted_at = CURRENT_TIMESTAMP, status = 'suspended', email = ?, phone = NULL, full_name = ?, updated_at = CURRENT_TIMESTAMP

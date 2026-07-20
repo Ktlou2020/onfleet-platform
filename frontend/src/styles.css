@@ -1302,20 +1302,69 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 
 /* ── Mobile optimisations ─────────────────────────────────────────── */
 
-/* Bottom nav: hidden by default, shown on small screens */
+/* Visibility helpers — default (desktop) state */
+.mobile-only   { display: none; }
 .mobile-bottom-nav { display: none; }
 
 @media (max-width: 640px) {
-  /* Hide sidebar — bottom nav replaces it */
+  /* ── Shell ── */
   .sidebar { display: none !important; }
+  .main { padding-bottom: 0; }
 
-  /* Extra bottom padding so content doesn't hide behind bottom nav */
-  .main { padding-bottom: 68px; }
+  /* Tighter content padding; extra bottom clears the fixed bottom nav */
+  .content { padding: 14px 14px 80px; }
 
-  /* iOS notch / Dynamic Island: push topbar content below status bar */
-  .topbar { padding-top: max(12px, env(safe-area-inset-top)); }
+  /* Topbar: tighter padding, hide low-priority info */
+  .topbar {
+    padding: 0 14px;
+    min-height: 52px;
+    padding-top: max(12px, env(safe-area-inset-top));
+  }
+  .topbar .hide-mobile { display: none !important; }
 
-  /* Bottom nav bar */
+  /* ── Typography ── */
+  .page-title { font-size: 20px; }
+  .page-sub   { font-size: 13px; margin-bottom: 14px; }
+  .stat       { padding: 12px 14px; }
+  .stat-value { font-size: 20px; }
+
+  /* ── Tables ── */
+  /* Remove forced min-width so hidden-column tables can reflow */
+  .table-wrap .table { min-width: 0; }
+  .table th, .table td { padding: 10px 8px; }
+  /* Column visibility utility — add className="col-mobile-hide" to th/td */
+  .col-mobile-hide { display: none !important; }
+
+  /* ── Visibility helpers (mobile) ── */
+  .mobile-only { display: flex !important; }
+
+  /* ── Filter pills: scroll horizontally instead of wrapping ── */
+  .filter-pills {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 2px;
+    /* hide scrollbar visually on webkit */
+    scrollbar-width: none;
+  }
+  .filter-pills::-webkit-scrollbar { display: none; }
+
+  /* ── Modals → bottom sheet ── */
+  .modal-overlay {
+    padding: 0;
+    align-items: flex-end;
+  }
+  .modal {
+    border-radius: 16px 16px 0 0;
+    max-height: 92dvh;
+    max-width: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 20px 16px max(20px, env(safe-area-inset-bottom));
+  }
+  .modal h2 { font-size: 18px; }
+
+  /* ── Bottom navigation bar ── */
   .mobile-bottom-nav {
     display: flex;
     position: fixed; bottom: 0; left: 0; right: 0; z-index: 300;
@@ -1326,7 +1375,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   .mobile-bottom-nav a {
     flex: 1;
     display: flex; flex-direction: column; align-items: center;
-    gap: 3px; padding: 8px 4px 6px;
+    gap: 3px; padding: 10px 4px 8px;
     text-decoration: none; color: var(--muted);
     font-size: 10px; font-weight: 500; line-height: 1.2;
     transition: color 0.15s;

@@ -26,6 +26,7 @@ const PLAN_DISPLAY = {
   small:  { label: 'Starter',      color: '#10b981' },
   medium: { label: 'Growth',       color: '#3b82f6' },
   large:  { label: 'Professional', color: '#8b5cf6' },
+  empire: { label: 'Empire',       color: '#f59e0b' },
 };
 
 function DiagRow({ ok, label, value }) {
@@ -277,7 +278,7 @@ export default function FleetBilling() {
       <h3 style={{ marginBottom: 16, fontSize: 18 }}>
         {can_subscribe ? 'Choose a plan' : 'Available plans'}
       </h3>
-      <div className="grid grid-3 mb-4">
+      <div className="grid grid-2 mb-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
         {plans.map((plan) => (
           <PlanCard
             key={plan.key}
@@ -295,8 +296,8 @@ export default function FleetBilling() {
         <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
           <CreditCard size={20} style={{ color: 'var(--primary-light)', flexShrink: 0 }} />
           <div>
-            <div style={{ fontWeight: 600, marginBottom: 4 }}>Need a custom plan or 100+ bikes?</div>
-            <div className="muted text-sm">For large fleets, dedicated onboarding, or custom integrations — contact the OnFleet team directly.</div>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>Need a custom enterprise arrangement?</div>
+            <div className="muted text-sm">For 100+ bikes, multi-city operations, or bespoke integrations — contact the OnFleet team directly.</div>
           </div>
         </div>
       </div>

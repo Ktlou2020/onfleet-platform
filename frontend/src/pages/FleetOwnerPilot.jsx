@@ -161,6 +161,7 @@ export default function FleetOwnerPilot() {
           <a href="#pricing" onClick={scrollTo('pricing')}>Pricing</a>
           <a href="#contact" onClick={scrollTo('contact')}>Book a demo</a>
           <Link to="/fleet/login" className="btn btn-secondary" style={{ padding: '6px 16px', fontSize: 13 }}>Sign in</Link>
+          <Link to="/fleet/signup" className="btn" style={{ padding: '6px 16px', fontSize: 13 }}>Start free trial</Link>
         </nav>
 
         <button
@@ -196,13 +197,14 @@ export default function FleetOwnerPilot() {
           and immobilise any bike that falls behind — from your phone.
         </p>
         <div className="fleet-mkt-hero-cta">
-          <a href="#contact" onClick={scrollTo('contact')} className="btn fleet-mkt-cta-primary">
+          <Link to="/fleet/signup" className="btn fleet-mkt-cta-primary">
+            Start free 14-day trial
+          </Link>
+          <a href="#contact" onClick={scrollTo('contact')} className="btn btn-secondary fleet-mkt-cta-secondary">
             Book a demo
           </a>
-          <Link to="/fleet/login" className="btn btn-secondary fleet-mkt-cta-secondary">
-            Sign in
-          </Link>
         </div>
+        <div className="muted text-xs" style={{ marginTop: 10 }}>No card required · Takes 2 minutes · <Link to="/fleet/login" style={{ color: 'inherit' }}>Already have an account? Sign in</Link></div>
       </section>
 
       {/* ── Problems ──────────────────────────────────────────────── */}

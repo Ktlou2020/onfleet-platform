@@ -56,6 +56,10 @@ export const FLEET_RESOURCE_ACCESS = {
   tracking: {
     view: ['fleet_owner_admin', 'fleet_owner_ops'],
     manage: ['fleet_owner_admin', 'fleet_owner_ops']
+  },
+  reporting: {
+    view: ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'],
+    manage: []
   }
 };
 
@@ -65,6 +69,7 @@ export const FLEET_NAV_ITEMS = [
   { key: 'tracking', to: '/fleet/app/tracking', label: 'GPS Tracking' },
   { key: 'agreements', to: '/fleet/app/agreements', label: 'Agreements' },
   { key: 'payments', to: '/fleet/app/payments', label: 'Payments' },
+  { key: 'reporting', to: '/fleet/app/reports', label: 'Reports' },
   { key: 'riders', to: '/fleet/app/riders', label: 'Riders' },
   { key: 'collections', to: '/fleet/app/collections', label: 'Collections' },
   { key: 'hubs', to: '/fleet/app/hubs', label: 'Hubs' },

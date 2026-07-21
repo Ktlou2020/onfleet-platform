@@ -71,6 +71,10 @@ const FLEET_RESOURCE_ACCESS = {
   tracking: {
     view: ['fleet_owner_admin', 'fleet_owner_ops'],
     manage: ['fleet_owner_admin', 'fleet_owner_ops']
+  },
+  reporting: {
+    view: ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'],
+    manage: []
   }
 };
 
@@ -2068,6 +2072,98 @@ router.post('/payments/bulk-delete', companyRoleAllowed(FLEET_RESOURCE_ACCESS.pa
     res.json({ ok: true, requested: paymentIds.length, deleted_count: deleted.length, not_found_count: notFound.length, not_found: notFound });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Could not delete payments' });
+  }
+});
+
+// ─── Fleet Reports ────────────────────────────────────────────────────────────
+
+router.get('/reports', companyRoleAllowed(FLEET_RESOURCE_ACCESS.reporting.view), (req, res) => {
+  try {
+    const organization = getOrganizationOrThrow(req.user.organization_id);
+    const scope = getBikeScope(organization, 'b');
+    const sp = scope.params;
+
+    // Collection rate — scheduled instalments due in the last 30 days
+    const collectionRate = db.prepare(`
+      SELECT
+        COALESCE(SUM(ps.amount_due), 0)  AS total_due,
+        COALESCE(SUM(ps.amount_paid), 0) AS total_paid,
+        COUNT(*) AS schedule_count,
+        COALESCE(SUM(CASE WHEN ps.status = 'paid'    THEN 1 ELSE 0 END), 0) AS paid_count,
+        COALESCE(SUM(CASE WHEN ps.status IN ('overdue','partial') THEN 1 ELSE 0 END), 0) AS unpaid_count
+      FROM payment_schedules ps
+      JOIN agreements a ON a.id = ps.agreement_id
+      JOIN bikes b ON b.id = a.bike_id
+      WHERE ${scope.clause}
+        AND ps.due_date >= date('now', '-30 days')
+        AND ps.due_date <= date('now')
+    `).get(...sp);
+
+    // Revenue trend — monthly totals for the last 12 months
+    const revenueTrend = db.prepare(`
+      SELECT
+        strftime('%Y-%m', COALESCE(p.paid_at, p.created_at)) AS month,
+        COALESCE(SUM(COALESCE(p.net_amount, p.amount, 0)), 0) AS credited,
+        COALESCE(SUM(COALESCE(p.amount, 0)), 0)              AS gross,
+        COUNT(*) AS payment_count
+      FROM payments p
+      JOIN agreements a ON a.id = p.agreement_id
+      JOIN bikes b ON b.id = a.bike_id
+      WHERE ${scope.clause}
+        AND p.status = 'success'
+        AND COALESCE(p.paid_at, p.created_at) >= date('now', '-12 months')
+      GROUP BY strftime('%Y-%m', COALESCE(p.paid_at, p.created_at))
+      ORDER BY month
+    `).all(...sp);
+
+    // Overdue aging bands — how much is owed grouped by days overdue
+    const aging = db.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN CAST(julianday('now') - julianday(ps.due_date) AS INTEGER) BETWEEN 1  AND 30  THEN ps.amount_due - ps.amount_paid ELSE 0 END), 0) AS band_1_30,
+        COALESCE(SUM(CASE WHEN CAST(julianday('now') - julianday(ps.due_date) AS INTEGER) BETWEEN 31 AND 60  THEN ps.amount_due - ps.amount_paid ELSE 0 END), 0) AS band_31_60,
+        COALESCE(SUM(CASE WHEN CAST(julianday('now') - julianday(ps.due_date) AS INTEGER) BETWEEN 61 AND 90  THEN ps.amount_due - ps.amount_paid ELSE 0 END), 0) AS band_61_90,
+        COALESCE(SUM(CASE WHEN CAST(julianday('now') - julianday(ps.due_date) AS INTEGER) > 90               THEN ps.amount_due - ps.amount_paid ELSE 0 END), 0) AS band_90plus
+      FROM payment_schedules ps
+      JOIN agreements a ON a.id = ps.agreement_id
+      JOIN bikes b ON b.id = a.bike_id
+      WHERE ${scope.clause}
+        AND ps.status IN ('overdue', 'partial')
+        AND ps.due_date < date('now')
+        AND ps.amount_due > ps.amount_paid
+    `).get(...sp);
+
+    // Fleet utilisation
+    const utilisation = db.prepare(`
+      SELECT
+        COUNT(*) AS total_bikes,
+        COALESCE(SUM(CASE WHEN b.status IN ('active','ready_to_go','repairs','not_available','stationary') THEN 1 ELSE 0 END), 0) AS serviceable_bikes,
+        COALESCE(SUM(CASE WHEN EXISTS(
+          SELECT 1 FROM agreements aa
+          WHERE aa.bike_id = b.id AND aa.status IN ('active','paused','defaulted')
+        ) THEN 1 ELSE 0 END), 0) AS bikes_with_agreements,
+        COALESCE(SUM(CASE WHEN b.status = 'active' THEN 1 ELSE 0 END), 0) AS active_bikes
+      FROM bikes b
+      WHERE ${scope.clause}
+    `).get(...sp);
+
+    // Agreement status breakdown
+    const agreementBreakdown = db.prepare(`
+      SELECT a.status, COUNT(*) AS count
+      FROM agreements a
+      JOIN bikes b ON b.id = a.bike_id
+      WHERE ${scope.clause}
+      GROUP BY a.status
+    `).all(...sp);
+
+    res.json({
+      collection_rate: collectionRate,
+      revenue_trend: revenueTrend,
+      aging_bands: aging,
+      utilisation,
+      agreement_breakdown: agreementBreakdown
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not load reports' });
   }
 });
 

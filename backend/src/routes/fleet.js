@@ -1329,6 +1329,17 @@ router.patch('/team-members/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.team.
   res.json({ ok: true, member: updated });
 });
 
+router.delete('/team-members/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.team.manage), (req, res) => {
+  const memberId = Number(req.params.id);
+  if (!Number.isInteger(memberId) || memberId <= 0) return res.status(400).json({ error: 'Invalid team member id' });
+  if (memberId === req.user.id) return res.status(400).json({ error: 'You cannot remove yourself from the team' });
+  const member = db.prepare(`SELECT id, role, organization_id FROM users WHERE id = ? AND deleted_at IS NULL`).get(memberId);
+  if (!member || member.organization_id !== req.user.organization_id) return res.status(404).json({ error: 'Team member not found' });
+  db.prepare(`UPDATE users SET deleted_at = CURRENT_TIMESTAMP, status = 'suspended', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(memberId);
+  logAudit(req.user.id, 'fleet_owner.team_member_remove', 'users', memberId, { organization_id: req.user.organization_id }, req.ip);
+  res.json({ ok: true });
+});
+
 router.post('/allocations', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.manage), (req, res) => {
   try {
     const organization = getOrganizationOrThrow(req.user.organization_id);

@@ -26,6 +26,7 @@ import FleetHubs from './pages/fleet/Hubs';
 import FleetApiKeys from './pages/fleet/ApiKeys';
 import FleetTracking from './pages/fleet/Tracking';
 import FleetReports from './pages/fleet/Reports';
+import FleetTeam from './pages/fleet/Team';
 import RiderPortal from './pages/RiderPortal';
 import RiderShell from './pages/rider/RiderShell';
 import RiderDashboard from './pages/rider/Dashboard';
@@ -131,6 +132,7 @@ export default function App() {
           <Route path="hubs" element={<FleetRouteGate section="hubs"><FleetHubs /></FleetRouteGate>} />
           <Route path="api-keys" element={<FleetRouteGate section="api_keys"><FleetApiKeys /></FleetRouteGate>} />
           <Route path="reports" element={<FleetRouteGate section="reporting"><FleetReports /></FleetRouteGate>} />
+          <Route path="team" element={<FleetRouteGate section="team"><FleetTeam /></FleetRouteGate>} />
           <Route path="help" element={<FleetRouteGate section="help"><FleetOwnerHelp /></FleetRouteGate>} />
         </Route>
 

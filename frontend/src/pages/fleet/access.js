@@ -60,6 +60,10 @@ export const FLEET_RESOURCE_ACCESS = {
   reporting: {
     view: ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'],
     manage: []
+  },
+  team: {
+    view: ['fleet_owner_admin'],
+    manage: ['fleet_owner_admin']
   }
 };
 
@@ -74,6 +78,7 @@ export const FLEET_NAV_ITEMS = [
   { key: 'collections', to: '/fleet/app/collections', label: 'Collections' },
   { key: 'hubs', to: '/fleet/app/hubs', label: 'Hubs' },
   { key: 'wallet', to: '/fleet/app/wallet', label: 'Fleet Wallet' },
+  { key: 'team', to: '/fleet/app/team', label: 'Team' },
   { key: 'billing', to: '/fleet/app/billing', label: 'Billing' },
   { key: 'api_keys', to: '/fleet/app/api-keys', label: 'API Access' },
   { key: 'help', to: '/fleet/app/help', label: 'Help' }

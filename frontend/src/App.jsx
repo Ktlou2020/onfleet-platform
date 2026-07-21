@@ -26,6 +26,7 @@ import FleetHubs from './pages/fleet/Hubs';
 import FleetApiKeys from './pages/fleet/ApiKeys';
 import FleetTracking from './pages/fleet/Tracking';
 import FleetReports from './pages/fleet/Reports';
+import RiderPortal from './pages/RiderPortal';
 import RiderShell from './pages/rider/RiderShell';
 import RiderDashboard from './pages/rider/Dashboard';
 import RiderAgreements from './pages/rider/Agreements';
@@ -111,6 +112,7 @@ export default function App() {
         <Route path="/fleet" element={<FleetOwnerPilot />} />
         <Route path="/privacy" element={<Privacy />} />
         <Route path="/terms" element={<Terms />} />
+        <Route path="/rider-portal/:token" element={<RiderPortal />} />
         <Route path="/fleet/login" element={<FleetLogin />} />
         <Route path="/fleet/signup" element={<FleetSignup />} />
         <Route path="/fleet/workspace" element={<FleetOwnerWorkspace />} />

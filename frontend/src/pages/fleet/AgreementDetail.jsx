@@ -47,6 +47,7 @@ export default function FleetAgreementDetail() {
   const [subLink, setSubLink] = useState(null);
   const [showBalanceEdit, setShowBalanceEdit] = useState(false);
   const [newBalance, setNewBalance] = useState('');
+  const [riderPortalLink, setRiderPortalLink] = useState(null);
 
   const load = () => api.get(`/fleet/agreements/${id}`).then((response) => {
     setData(response.data);
@@ -284,6 +285,42 @@ export default function FleetAgreementDetail() {
           )}
         </div>
       )}
+
+      <div className="card mb-4">
+        <div className="flex-between mb-2">
+          <div>
+            <h3 style={{ margin: 0 }}>Rider portal link</h3>
+            <p className="muted text-sm mt-1">Share this read-only link with the rider so they can view their agreement, schedule, and payment history — no login required.</p>
+          </div>
+        </div>
+        {!riderPortalLink ? (
+          <button
+            className="btn btn-sm btn-secondary"
+            onClick={async () => {
+              try {
+                setBusyAction('portal_link');
+                const { data } = await api.get(`/fleet/agreements/${id}/rider-portal-token`);
+                setRiderPortalLink(`${window.location.origin}${data.path}`);
+              } catch {
+                toast.error('Could not generate portal link');
+              } finally {
+                setBusyAction('');
+              }
+            }}
+            disabled={busyAction === 'portal_link'}
+          >
+            {busyAction === 'portal_link' ? 'Generating…' : 'Generate rider portal link'}
+          </button>
+        ) : (
+          <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <input readOnly value={riderPortalLink} style={{ flex: 1, minWidth: 220, fontSize: 12 }} onClick={(e) => e.target.select()} />
+            <CopyBtn text={riderPortalLink} />
+            <a className="btn btn-sm btn-secondary" href={riderPortalLink} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <ExternalLink size={13} /> Preview
+            </a>
+          </div>
+        )}
+      </div>
 
       <div className="grid grid-2 mb-4">
         <div className="card">

@@ -453,6 +453,29 @@ router.post('/fleet-owners/:id/status', superadminOnly, (req, res) => {
   res.json({ ok: true });
 });
 
+router.delete('/organizations/:id', superadminOnly, (req, res) => {
+  const orgId = Number(req.params.id);
+  if (!Number.isInteger(orgId) || orgId <= 0) return res.status(400).json({ error: 'Invalid organization id' });
+
+  const org = db.prepare('SELECT * FROM organizations WHERE id = ?').get(orgId);
+  if (!org) return res.status(404).json({ error: 'Organization not found' });
+
+  const result = db.prepare(
+    `UPDATE users SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE organization_id = ? AND deleted_at IS NULL`
+  ).run(orgId);
+
+  db.prepare('DELETE FROM organizations WHERE id = ?').run(orgId);
+
+  logAudit(req.user.id, 'organization.deleted', 'organizations', orgId, {
+    name: org.name,
+    plan_key: org.plan_key,
+    status: org.status,
+    deleted_users: result.changes
+  }, req.ip);
+
+  res.json({ ok: true, deleted_users: result.changes });
+});
+
 router.post('/fleet-owners/:id/role', superadminOnly, (req, res) => {
   const userId = Number(req.params.id);
   const role = String(req.body.role || '').trim();

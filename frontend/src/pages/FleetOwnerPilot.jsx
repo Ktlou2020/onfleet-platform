@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { CheckCircle2, Menu, X, Phone, MessageCircle } from 'lucide-react';
+import { CheckCircle2, Menu, X, Phone, MessageCircle, ArrowRight } from 'lucide-react';
 import Logo from '../components/Logo';
 import axios from 'axios';
 
@@ -32,17 +32,17 @@ const STEPS = [
   {
     n: '02',
     title: 'Set the agreement',
-    text: 'Choose a daily or weekly payment amount. The platform builds the payment schedule automatically.',
+    text: 'Choose a weekly payment amount and total weeks. The platform builds the payment schedule automatically.',
   },
   {
     n: '03',
     title: 'Payments collected and tracked automatically',
-    text: 'Paystack debits the rider\'s card each week. Funds land in your Fleet Wallet. You see every transaction.',
+    text: "Paystack debits the rider's card each week. Funds land in your Fleet Wallet. You see every transaction.",
   },
   {
     n: '04',
     title: 'Falls behind? Immobilise in one tap',
-    text: 'Open the app, find the bike, tap Immobilise. The bike won\'t start until the rider is back on track.',
+    text: "Open the app, find the bike, tap Immobilise. The bike won't start until the rider is back on track.",
   },
 ];
 
@@ -53,45 +53,73 @@ const FEATURES = [
   },
   {
     title: 'Rider agreements',
-    text: 'Each rider has a contract with a start date, weekly amount, and payment schedule. No more WhatsApp threads.',
+    text: 'Each rider has a digital contract with a start date, weekly amount, and full payment schedule. No more WhatsApp threads.',
   },
   {
     title: 'Automatic payment collection',
-    text: 'Set up a Paystack debit order once. The weekly payment runs itself — you just watch the money come in.',
+    text: 'Set up a Paystack debit once. The weekly payment runs itself — you just watch the money come in.',
   },
   {
     title: 'Remote immobilisation',
-    text: 'If a rider falls behind, cut the ignition from your phone. The bike won\'t start until they\'re up to date.',
+    text: "If a rider falls behind, cut the ignition from your phone. The bike won't start until they're up to date.",
   },
   {
     title: 'Payment history per rider',
-    text: 'See exactly what each rider has paid, what they owe, and when it\'s due. No guesswork.',
+    text: "See exactly what each rider has paid, what they owe, and when it's due. No guesswork.",
   },
   {
-    title: 'Service records',
-    text: 'Log every service, note the mileage, and see when each bike is due for its next check.',
-  },
-  {
-    title: 'Free monthly basic service',
-    text: 'Every bike on the platform gets a free basic service each month — oil, filter, brakes, and chain. Done at our Kya Sand workshop, no admin required.',
+    title: 'Fleet wallet & collections',
+    text: "Track your collections, see overdue balances at a glance, and issue payment links directly to riders.",
   },
 ];
 
-const PRICING_FEATURES = [
-  'Platform access for your whole team',
-  'Automatic payment collection from riders',
-  'Remote immobilisation — one tap',
-  'Free monthly basic service per bike',
-  'Scheduled servicing and workshop booking',
-  'Priority workshop bay access',
-  'Loan bike while yours is in for service',
-  'Rider pipeline to find new operators',
+const TIERS = [
+  {
+    key: 'small',
+    name: 'Starter',
+    bikes: '1–6 bikes',
+    price: 'R200',
+    per: '/mo',
+    color: '#10b981',
+    features: ['Up to 6 bikes', '2 admin users', 'Full platform access', 'Payment collection', 'Remote immobilisation', 'Standard support'],
+    cta: 'trial',
+  },
+  {
+    key: 'medium',
+    name: 'Growth',
+    bikes: '7–20 bikes',
+    price: 'R750',
+    per: '/mo',
+    color: '#3b82f6',
+    features: ['Up to 20 bikes', '3 admin users', 'Full platform access', 'Advanced filters', 'Performance reporting', 'Standard support'],
+    cta: 'trial',
+  },
+  {
+    key: 'large',
+    name: 'Professional',
+    bikes: '21–35 bikes',
+    price: 'R1 500',
+    per: '/mo',
+    color: '#8b5cf6',
+    features: ['Up to 35 bikes', '5 admin users', 'Full platform access', 'Multi-branch support', 'Priority onboarding', 'Priority support'],
+    cta: 'trial',
+  },
+  {
+    key: 'empire',
+    name: 'Empire',
+    bikes: '36+ bikes',
+    price: 'Custom',
+    per: '',
+    color: '#f59e0b',
+    features: ['Unlimited bikes', '20+ admin users', 'Full platform access', 'Dedicated onboarding', 'Custom integrations', 'SLA support'],
+    cta: 'contact',
+  },
 ];
 
 export default function FleetOwnerPilot() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [form, setForm] = useState({ name: '', company: '', email: '', phone: '', bikes: '', message: '' });
-  const [formState, setFormState] = useState('idle'); // idle | busy | success | error
+  const [formState, setFormState] = useState('idle');
   const [formError, setFormError] = useState('');
   const [platformStats, setPlatformStats] = useState(null);
 
@@ -126,19 +154,19 @@ export default function FleetOwnerPilot() {
     setFormState('busy');
     try {
       await axios.post('/api/pilot/leads', {
-        contact_name:  form.name,
-        company_name:  form.company,
-        email:         form.email,
-        phone:         form.phone,
-        fleet_size:    form.bikes ? Number(form.bikes) : undefined,
-        notes:         form.message || undefined,
-        wants_demo:    true,
-        source:        'fleet_landing_page',
+        contact_name: form.name,
+        company_name: form.company,
+        email:        form.email,
+        phone:        form.phone,
+        fleet_size:   form.bikes ? Number(form.bikes) : undefined,
+        notes:        form.message || undefined,
+        wants_demo:   true,
+        source:       'fleet_landing_page',
       });
       setFormState('success');
     } catch (err) {
       if (err.response?.status === 409) {
-        setFormState('success'); // already submitted — treat as success
+        setFormState('success');
       } else {
         setFormError(err.response?.data?.error || 'Something went wrong. Please WhatsApp or call us directly.');
         setFormState('error');
@@ -155,34 +183,26 @@ export default function FleetOwnerPilot() {
           <Logo />
           <span style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Fleet</span>
         </Link>
-
         <nav className="fleet-mkt-links">
           <a href="#how"     onClick={scrollTo('how')}>How it works</a>
           <a href="#pricing" onClick={scrollTo('pricing')}>Pricing</a>
           <a href="#contact" onClick={scrollTo('contact')}>Book a demo</a>
-          <Link to="/fleet/login" className="btn btn-secondary" style={{ padding: '6px 16px', fontSize: 13 }}>Sign in</Link>
-          <Link to="/fleet/signup" className="btn" style={{ padding: '6px 16px', fontSize: 13 }}>Start free trial</Link>
+          <Link to="/fleet/login"  className="btn btn-secondary" style={{ padding: '6px 16px', fontSize: 13 }}>Sign in</Link>
+          <Link to="/fleet/signup" className="btn"               style={{ padding: '6px 16px', fontSize: 13 }}>Start free trial</Link>
         </nav>
-
-        <button
-          className="fleet-mkt-hamburger"
-          onClick={() => setMenuOpen(o => !o)}
-          aria-label={menuOpen ? 'Close menu' : 'Open menu'}
-        >
+        <button className="fleet-mkt-hamburger" onClick={() => setMenuOpen(o => !o)} aria-label={menuOpen ? 'Close menu' : 'Open menu'}>
           {menuOpen ? <X size={22} /> : <Menu size={22} />}
         </button>
       </header>
 
-      {/* Mobile fullscreen menu */}
       {menuOpen && (
         <div className="fleet-mkt-mobile-menu" role="dialog" aria-modal="true">
-          <button className="fleet-mkt-mobile-close" onClick={() => setMenuOpen(false)} aria-label="Close menu">
-            <X size={24} />
-          </button>
+          <button className="fleet-mkt-mobile-close" onClick={() => setMenuOpen(false)} aria-label="Close menu"><X size={24} /></button>
           <a href="#how"     onClick={scrollTo('how')}     className="fleet-mkt-mobile-link">How it works</a>
           <a href="#pricing" onClick={scrollTo('pricing')} className="fleet-mkt-mobile-link">Pricing</a>
           <a href="#contact" onClick={scrollTo('contact')} className="fleet-mkt-mobile-link">Book a demo</a>
-          <Link to="/fleet/login" className="btn" style={{ fontSize: 16, padding: '12px 40px' }} onClick={() => setMenuOpen(false)}>Sign in</Link>
+          <Link to="/fleet/signup" className="btn" style={{ fontSize: 16, padding: '12px 40px' }} onClick={() => setMenuOpen(false)}>Start free trial</Link>
+          <Link to="/fleet/login"  className="btn btn-secondary" style={{ fontSize: 16, padding: '12px 40px', marginTop: 8 }} onClick={() => setMenuOpen(false)}>Sign in</Link>
         </div>
       )}
 
@@ -204,7 +224,10 @@ export default function FleetOwnerPilot() {
             Book a demo
           </a>
         </div>
-        <div className="muted text-xs" style={{ marginTop: 10 }}>No card required · Takes 2 minutes · <Link to="/fleet/login" style={{ color: 'inherit' }}>Already have an account? Sign in</Link></div>
+        <div className="muted text-xs" style={{ marginTop: 10 }}>
+          No card required · Takes 2 minutes ·{' '}
+          <Link to="/fleet/login" style={{ color: 'inherit' }}>Already have an account? Sign in</Link>
+        </div>
       </section>
 
       {/* ── Problems ──────────────────────────────────────────────── */}
@@ -242,7 +265,7 @@ export default function FleetOwnerPilot() {
       {/* ── Features ──────────────────────────────────────────────── */}
       <section className="fleet-mkt-section">
         <h2 className="fleet-mkt-section-title">What you get</h2>
-        <p className="fleet-mkt-section-sub">Everything you need to run a paying fleet.</p>
+        <p className="fleet-mkt-section-sub">Everything you need to run a paying fleet — on every plan.</p>
         <div className="grid grid-3 fleet-mkt-grid">
           {FEATURES.map((f) => (
             <div key={f.title} className="card">
@@ -283,34 +306,88 @@ export default function FleetOwnerPilot() {
       </section>
 
       {/* ── Pricing ───────────────────────────────────────────────── */}
-      <section id="pricing" className="fleet-mkt-section fleet-mkt-pricing-section">
+      <section id="pricing" className="fleet-mkt-section fleet-mkt-section-alt">
         <h2 className="fleet-mkt-section-title">Pricing</h2>
-        <p className="fleet-mkt-section-sub">One rate. No tiers to figure out.</p>
-        <div className="card fleet-mkt-pricing-card">
-          <div style={{ textAlign: 'center', marginBottom: 28 }}>
-            <div className="fleet-mkt-price">R750</div>
-            <div style={{ color: 'var(--muted)', fontSize: 15, marginTop: 6 }}>per bike, per month</div>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 13, marginBottom: 28 }}>
-            {PRICING_FEATURES.map((feature) => (
-              <div key={feature} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <CheckCircle2 size={16} style={{ color: 'var(--success)', flexShrink: 0 }} />
-                <span style={{ fontSize: 14 }}>{feature}</span>
+        <p className="fleet-mkt-section-sub">Flat monthly plans. No per-bike charges, no surprises.</p>
+
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+          gap: 16,
+          maxWidth: 960,
+          margin: '0 auto 20px',
+        }}>
+          {TIERS.map((tier) => (
+            <div key={tier.key} className="card" style={{
+              display: 'flex', flexDirection: 'column', gap: 14,
+              borderColor: tier.key === 'large' ? 'rgba(139,92,246,0.4)' : undefined,
+              boxShadow: tier.key === 'large' ? '0 0 0 1px rgba(139,92,246,0.2)' : undefined,
+              position: 'relative',
+            }}>
+              {tier.key === 'large' && (
+                <div style={{
+                  position: 'absolute', top: -10, left: '50%', transform: 'translateX(-50%)',
+                  background: '#8b5cf6', color: '#fff',
+                  fontSize: 10, fontWeight: 700, padding: '2px 12px', borderRadius: 20,
+                  letterSpacing: '0.06em', textTransform: 'uppercase', whiteSpace: 'nowrap'
+                }}>Most popular</div>
+              )}
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: tier.color, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 4 }}>
+                  {tier.name}
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>{tier.bikes}</div>
+                <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--primary-light)', lineHeight: 1 }}>
+                  {tier.price}
+                  {tier.per && <span style={{ fontSize: 14, fontWeight: 400, color: 'var(--muted)' }}>{tier.per}</span>}
+                </div>
               </div>
-            ))}
+              <ul style={{ listStyle: 'none', display: 'grid', gap: 7, flex: 1, margin: 0, padding: 0 }}>
+                {tier.features.map((f) => (
+                  <li key={f} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13 }}>
+                    <CheckCircle2 size={13} style={{ color: 'var(--success)', flexShrink: 0, marginTop: 2 }} />
+                    {f}
+                  </li>
+                ))}
+              </ul>
+              {tier.cta === 'contact' ? (
+                <a
+                  href={`https://wa.me/${WHATSAPP_NUMBER}?text=Hi%2C+I'm+interested+in+the+Empire+fleet+plan`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn btn-secondary btn-sm"
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                >
+                  Contact us for a quote
+                </a>
+              ) : (
+                <Link
+                  to="/fleet/signup"
+                  className="btn btn-sm"
+                  style={{
+                    background: tier.color, borderColor: tier.color,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6
+                  }}
+                >
+                  Start free trial <ArrowRight size={13} />
+                </Link>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div style={{ textAlign: 'center', maxWidth: 480, margin: '0 auto' }}>
+          <div style={{ fontWeight: 600, color: 'var(--success)', fontSize: 15, marginBottom: 6 }}>
+            All plans include a 14-day free trial — no card required.
           </div>
-          <div style={{ borderTop: '1px solid var(--border)', paddingTop: 20, marginBottom: 24 }}>
-            <div style={{ fontWeight: 600, color: 'var(--success)', fontSize: 15, marginBottom: 4 }}>First month completely free — no card required.</div>
-            <div style={{ color: 'var(--muted)', fontSize: 13 }}>After 30 days: R750 per bike per month. No contract. Cancel any time.</div>
+          <div style={{ color: 'var(--muted)', fontSize: 13 }}>
+            Start on any plan, cancel any time. Billing via Paystack — your card is only charged after the trial ends.
           </div>
-          <a href="#contact" onClick={scrollTo('contact')} className="btn btn-block" style={{ textAlign: 'center' }}>
-            Book a demo
-          </a>
         </div>
       </section>
 
       {/* ── Contact / Demo form ───────────────────────────────────── */}
-      <section id="contact" className="fleet-mkt-section fleet-mkt-section-alt">
+      <section id="contact" className="fleet-mkt-section">
         <div style={{ maxWidth: 840, margin: '0 auto' }}>
           <h2 className="fleet-mkt-section-title" style={{ textAlign: 'left' }}>Book a demo</h2>
           <p style={{ color: 'var(--muted)', marginBottom: 36, fontSize: 15, lineHeight: 1.65, maxWidth: 520 }}>
@@ -319,7 +396,6 @@ export default function FleetOwnerPilot() {
           </p>
 
           <div className="fleet-mkt-contact-grid">
-            {/* Form */}
             <div>
               {formState === 'success' ? (
                 <div className="card" style={{ textAlign: 'center', padding: 40 }}>
@@ -372,9 +448,7 @@ export default function FleetOwnerPilot() {
                       value={form.message} onChange={e => setForm(f => ({ ...f, message: e.target.value }))}
                       style={{ resize: 'vertical', minHeight: 80 }} />
                   </div>
-                  {formError && (
-                    <div style={{ color: 'var(--danger)', fontSize: 13 }}>{formError}</div>
-                  )}
+                  {formError && <div style={{ color: 'var(--danger)', fontSize: 13 }}>{formError}</div>}
                   <button type="submit" className="btn btn-block" disabled={formState === 'busy'}>
                     {formState === 'busy' ? 'Sending…' : 'Send request'}
                   </button>
@@ -382,17 +456,13 @@ export default function FleetOwnerPilot() {
               )}
             </div>
 
-            {/* Direct contact options */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               <div className="card">
                 <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
                   <MessageCircle size={22} style={{ color: '#25D366', flexShrink: 0, marginTop: 2 }} />
                   <div>
                     <div style={{ fontWeight: 600, marginBottom: 6 }}>WhatsApp us</div>
-                    <a
-                      href={`https://wa.me/${WHATSAPP_NUMBER}`}
-                      style={{ color: 'var(--primary-light)', fontSize: 14, textDecoration: 'none' }}
-                    >
+                    <a href={`https://wa.me/${WHATSAPP_NUMBER}`} style={{ color: 'var(--primary-light)', fontSize: 14, textDecoration: 'none' }}>
                       +{WHATSAPP_NUMBER}
                     </a>
                     <div style={{ color: 'var(--muted)', fontSize: 12, marginTop: 4 }}>Quickest response during business hours.</div>
@@ -405,10 +475,7 @@ export default function FleetOwnerPilot() {
                   <Phone size={22} style={{ color: 'var(--primary-light)', flexShrink: 0, marginTop: 2 }} />
                   <div>
                     <div style={{ fontWeight: 600, marginBottom: 6 }}>Call us</div>
-                    <a
-                      href={`tel:${PHONE_DIAL}`}
-                      style={{ color: 'var(--primary-light)', fontSize: 14, textDecoration: 'none' }}
-                    >
+                    <a href={`tel:${PHONE_DIAL}`} style={{ color: 'var(--primary-light)', fontSize: 14, textDecoration: 'none' }}>
                       {PHONE_DISPLAY}
                     </a>
                     <div style={{ color: 'var(--muted)', fontSize: 12, marginTop: 4 }}>Monday–Friday, 8am–5pm.</div>
@@ -423,6 +490,16 @@ export default function FleetOwnerPilot() {
                   Bring your list of bikes. We'll get you set up on the spot.
                 </div>
               </div>
+
+              <div className="card" style={{ background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.2)' }}>
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>Ready to start now?</div>
+                <div style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 12 }}>
+                  Skip the demo — create your account and start your free 14-day trial immediately.
+                </div>
+                <Link to="/fleet/signup" className="btn btn-sm" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  Start free trial <ArrowRight size={13} />
+                </Link>
+              </div>
             </div>
           </div>
         </div>
@@ -435,6 +512,7 @@ export default function FleetOwnerPilot() {
           <div>Kya Sand, Johannesburg</div>
         </div>
         <div className="fleet-mkt-footer-links">
+          <Link to="/fleet/signup">Start free trial</Link>
           <Link to="/fleet/login">Sign in</Link>
           <Link to="/privacy">Privacy policy</Link>
           <Link to="/terms">Terms</Link>

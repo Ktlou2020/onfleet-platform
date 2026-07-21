@@ -69,10 +69,12 @@ function PlanCard({ plan, current, canSubscribe, onSubscribe, busy, recommended 
             {display.label || plan.name}
           </div>
           <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--primary-light)', fontFamily: "'Space Grotesk', sans-serif", lineHeight: 1.1 }}>
-            {fmt(plan.monthly_price)}
-            <span className="muted text-sm" style={{ fontWeight: 400 }}>/mo</span>
+            {plan.key === 'empire' ? 'Custom' : fmt(plan.monthly_price)}
+            {plan.key !== 'empire' && <span className="muted text-sm" style={{ fontWeight: 400 }}>/mo</span>}
           </div>
-          <div className="muted text-xs" style={{ marginTop: 3 }}>Up to {plan.max_bikes} bikes · flat rate</div>
+          <div className="muted text-xs" style={{ marginTop: 3 }}>
+            {plan.key === 'empire' ? '36+ bikes · tailored pricing' : `Up to ${plan.max_bikes} bikes · flat rate`}
+          </div>
         </div>
         {isCurrent && <Badge status="active">Current plan</Badge>}
       </div>
@@ -88,6 +90,16 @@ function PlanCard({ plan, current, canSubscribe, onSubscribe, busy, recommended 
 
       {isCurrent ? (
         <div className="muted text-sm">Your current active plan.</div>
+      ) : plan.key === 'empire' ? (
+        <a
+          href="https://wa.me/27815395612?text=Hi%2C+I'm+interested+in+the+Empire+fleet+plan"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="btn btn-secondary"
+          style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'center' }}
+        >
+          Contact us for a quote
+        </a>
       ) : canSubscribe ? (
         <button className="btn" onClick={() => onSubscribe(plan.key)} disabled={busy === plan.key}
           style={recommended ? { background: '#10b981', borderColor: '#10b981' } : undefined}>

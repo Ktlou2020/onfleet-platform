@@ -2195,7 +2195,7 @@ router.get('/billing/verify', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.m
 
 // ---------- RIDER PAYMENT PLAN HELPERS ----------
 
-const FLEET_PAYMENT_PLAN_AMOUNTS = [650, 700, 750];
+const FLEET_PAYMENT_PLAN_AMOUNTS = [600, 650, 700];
 
 function getFleetPaymentPlanCode(weeklyAmount) {
   const amount = Math.round(Number(weeklyAmount));

@@ -42,8 +42,8 @@ export default function FleetAgreementDetail() {
   const [showPay, setShowPay] = useState(false);
   const [pay, setPay] = useState({ amount: '', method: 'eft', reference: '', notes: '' });
   const [busyAction, setBusyAction] = useState('');
-  const PAY_LINK_AMOUNTS = [650, 700, 750];
-  const [subAmount, setSubAmount] = useState('650');
+  const PAY_LINK_AMOUNTS = [600, 650, 700];
+  const [subAmount, setSubAmount] = useState('600');
   const [subLink, setSubLink] = useState(null);
   const [showBalanceEdit, setShowBalanceEdit] = useState(false);
   const [newBalance, setNewBalance] = useState('');

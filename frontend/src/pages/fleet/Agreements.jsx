@@ -1,10 +1,25 @@
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
+import { Copy, Check, ExternalLink } from 'lucide-react';
 import { FleetHelpTip } from './helpSupport';
 import api from '../../api';
 import { useAuth } from '../../auth';
 import { Badge, ConfirmModal, EmptyState, Loading, Modal, Pagination, SearchInput, fmt, fmtDate, matchesSearch, paginateItems } from '../../components/ui';
 import { canManageFleetSection } from './access';
+
+function CopyBtn({ text }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      className="btn btn-sm btn-secondary"
+      onClick={() => { navigator.clipboard?.writeText(text).catch(() => {}); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+    >
+      {copied ? <Check size={13} /> : <Copy size={13} />}
+      {copied ? 'Copied' : 'Copy link'}
+    </button>
+  );
+}
 
 const STATUS_OPTIONS = ['', 'active', 'completed', 'defaulted', 'cancelled', 'paused', 'discontinued'];
 
@@ -47,6 +62,10 @@ export default function FleetOwnerAgreements() {
   const [showBalanceModal, setShowBalanceModal] = useState(null);
   const [balanceDraft, setBalanceDraft] = useState('');
   const [confirm, setConfirm] = useState(null);
+  const [payLinkAgreement, setPayLinkAgreement] = useState(null);
+  const [payLinkAmount, setPayLinkAmount] = useState('');
+  const [payLinkResult, setPayLinkResult] = useState(null);
+  const [payLinkBusy, setPayLinkBusy] = useState(false);
   const [createForm, setCreateForm] = useState({ bike_id: '', rider_id: '', start_date: todayIso(), weekly_amount: '', total_weeks: '', notes: '' });
   const [reassignForm, setReassignForm] = useState({ agreement_id: '', target_bike_id: '', note: '' });
 
@@ -184,6 +203,28 @@ export default function FleetOwnerAgreements() {
     }
   };
 
+  const openPayLink = (agreement) => {
+    setPayLinkAgreement(agreement);
+    setPayLinkAmount(String(agreement.weekly_amount));
+    setPayLinkResult(null);
+  };
+
+  const sendPayLink = async () => {
+    if (!payLinkAgreement) return;
+    try {
+      setPayLinkBusy(true);
+      const { data } = await api.post(`/fleet/agreements/${payLinkAgreement.id}/payment-link`, {
+        plan_amount: Number(payLinkAmount) || undefined
+      });
+      setPayLinkResult(data);
+      toast.success(`Payment link sent to ${data.rider_email}`);
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not generate payment link');
+    } finally {
+      setPayLinkBusy(false);
+    }
+  };
+
   const runReinstate = async (agreement) => {
     try {
       setActionBusy(`${agreement.id}-reinstate`);
@@ -286,11 +327,12 @@ export default function FleetOwnerAgreements() {
                   {canManage && (
                     <td>
                       <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+                        {['active', 'paused', 'defaulted'].includes(agreement.status) && <button className="btn btn-sm" disabled={busy} onClick={() => openPayLink(agreement)} title="Send driver a secure card payment link">Send payment link</button>}
                         {['active', 'paused', 'defaulted'].includes(agreement.status) && <button className="btn btn-sm btn-secondary" disabled={busy} onClick={() => openReassign(agreement)}>Reassign</button>}
                         {agreement.status === 'active' && <button className="btn btn-sm btn-secondary" disabled={busy} onClick={() => requestConfirm(agreement, 'paused')}>Pause</button>}
                         {agreement.status === 'paused' && <button className="btn btn-sm btn-secondary" disabled={busy} onClick={() => requestConfirm(agreement, 'active')}>Resume</button>}
                         {agreement.status === 'active' && <button className="btn btn-sm btn-danger" disabled={busy} onClick={() => requestConfirm(agreement, 'defaulted')}>Default</button>}
-                        {!['completed', 'cancelled', 'discontinued'].includes(agreement.status) && <button className="btn btn-sm" disabled={busy} onClick={() => requestConfirm(agreement, 'completed')}>Complete</button>}
+                        {!['completed', 'cancelled', 'discontinued'].includes(agreement.status) && <button className="btn btn-sm btn-secondary" disabled={busy} onClick={() => requestConfirm(agreement, 'completed')}>Complete</button>}
                         {!['completed', 'cancelled', 'discontinued'].includes(agreement.status) && <button className="btn btn-sm btn-secondary" disabled={busy} onClick={() => requestConfirm(agreement, 'cancelled')}>Cancel</button>}
                         {!['completed', 'cancelled', 'discontinued'].includes(agreement.status) && <button className="btn btn-sm btn-danger" disabled={busy} onClick={() => requestConfirm(agreement, 'discontinued')}>Discontinue</button>}
                         {agreement.status === 'discontinued' && agreement.discontinued_reason === 'bike_stolen' && <button className="btn btn-sm" disabled={busy} onClick={() => requestReinstate(agreement)}>Reinstate</button>}
@@ -372,6 +414,67 @@ export default function FleetOwnerAgreements() {
             <button className="btn btn-secondary" onClick={() => setShowCreate(false)}>Cancel</button>
             <button className="btn" onClick={submitCreate} disabled={actionBusy === 'create' || !readyBikeOptions.length || !riderOptions.length}>{actionBusy === 'create' ? 'Creating…' : 'Create agreement'}</button>
           </div>
+        </Modal>
+      )}
+
+      {/* Payment link modal */}
+      {payLinkAgreement && (
+        <Modal title={`Send payment link — ${payLinkAgreement.agreement_no}`} onClose={() => { if (!payLinkBusy) { setPayLinkAgreement(null); setPayLinkResult(null); } }}>
+          <div style={{ padding: '10px 14px', marginBottom: 16, background: 'var(--surface-2, rgba(0,0,0,0.04))', borderRadius: 8, border: '1px solid var(--border)' }}>
+            <div className="flex-between"><span className="muted text-sm">Driver</span><strong>{payLinkAgreement.rider_name}</strong></div>
+            <div className="flex-between mt-2"><span className="muted text-sm">Email</span><span className="text-sm">{payLinkAgreement.rider_email}</span></div>
+            <div className="flex-between mt-2"><span className="muted text-sm">Agreement</span><span className="text-sm">{payLinkAgreement.agreement_no}</span></div>
+          </div>
+
+          {!payLinkResult ? (
+            <>
+              <div className="field">
+                <label className="label">Weekly payment amount (R)</label>
+                <input
+                  type="number"
+                  min="1"
+                  step="0.01"
+                  value={payLinkAmount}
+                  onChange={(e) => setPayLinkAmount(e.target.value)}
+                  placeholder={String(payLinkAgreement.weekly_amount)}
+                />
+                <div className="text-xs muted" style={{ marginTop: 4 }}>Defaults to the agreement weekly amount. Adjust only if collecting a different instalment.</div>
+              </div>
+              <p className="text-sm muted" style={{ marginBottom: 16 }}>
+                A secure Paystack payment link will be generated and emailed to the driver automatically. You can also copy the link to share via WhatsApp or SMS.
+              </p>
+              <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
+                <button className="btn btn-secondary" onClick={() => setPayLinkAgreement(null)} disabled={payLinkBusy}>Cancel</button>
+                <button className="btn" onClick={sendPayLink} disabled={payLinkBusy || !payLinkAmount}>
+                  {payLinkBusy ? 'Generating…' : 'Generate & send link'}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ marginBottom: 16, padding: '12px 14px', background: 'rgba(34,197,94,0.08)', borderRadius: 8, border: '1px solid rgba(34,197,94,0.3)' }}>
+                <div className="text-sm" style={{ fontWeight: 600, marginBottom: 4, color: 'var(--success, #22c55e)' }}>
+                  Link sent to {payLinkResult.rider_email}
+                </div>
+                <div className="text-xs muted">
+                  {payLinkResult.is_subscription ? 'Recurring weekly card payment' : 'One-time card payment'} · R{Number(payLinkResult.weekly_amount).toFixed(2)}/week
+                </div>
+              </div>
+              <div className="field">
+                <label className="label">Payment link</label>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <input readOnly value={payLinkResult.authorization_url} style={{ flex: 1, fontSize: 12, background: 'var(--bg)' }} onClick={(e) => e.target.select()} />
+                </div>
+              </div>
+              <div className="row" style={{ gap: 8, marginTop: 8 }}>
+                <CopyBtn text={payLinkResult.authorization_url} />
+                <a href={payLinkResult.authorization_url} target="_blank" rel="noopener noreferrer" className="btn btn-sm btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  <ExternalLink size={13} /> Open link
+                </a>
+                <button className="btn btn-sm btn-secondary" style={{ marginLeft: 'auto' }} onClick={() => { setPayLinkAgreement(null); setPayLinkResult(null); }}>Done</button>
+              </div>
+            </>
+          )}
         </Modal>
       )}
 

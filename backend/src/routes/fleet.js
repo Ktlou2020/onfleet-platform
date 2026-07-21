@@ -12,7 +12,7 @@ const { logAudit, generateAgreementNo, buildPaymentSchedule, addDays, recalcSche
 const { setBikeStatus } = require('../utils/bikeStatus');
 const { discontinueAgreementForStolenBike, discontinueAgreement, reinstateDiscontinuedAgreement } = require('../services/agreementLifecycle');
 const { extractPayslipInsights } = require('../services/documentInsights');
-const { sendNotification } = require('../services/notifier');
+const { sendNotification, sendEmail } = require('../services/notifier');
 const { writeContractSnapshot } = require('../services/contracts');
 
 const router = express.Router();
@@ -1812,6 +1812,95 @@ router.post('/agreements/:id/reinstate', companyRoleAllowed(FLEET_RESOURCE_ACCES
     res.json({ ok: true, ...result });
   } catch (error) {
     res.status(400).json({ error: error.message || 'Could not reinstate agreement' });
+  }
+});
+
+// POST /fleet/agreements/:id/payment-link — generate Paystack checkout link and email it to the rider
+router.post('/agreements/:id/payment-link', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.manage), async (req, res) => {
+  try {
+    const org = getOrganizationOrThrow(req.user.organization_id);
+    const agreementId = toInt(req.params.id);
+    if (!agreementId) return res.status(400).json({ error: 'Invalid agreement id' });
+
+    const agreement = getScopedAgreement(org, agreementId);
+    if (!agreement) return res.status(404).json({ error: 'Agreement not found in your fleet' });
+    if (!['active', 'paused', 'defaulted'].includes(agreement.status)) {
+      return res.status(400).json({ error: 'Payment links can only be sent for active, paused, or defaulted agreements' });
+    }
+    if (!agreement.rider_email) return res.status(400).json({ error: 'Rider has no email address on file' });
+
+    const overrideAmount = req.body.plan_amount ? Math.round(Number(req.body.plan_amount)) : null;
+    const weeklyAmount = overrideAmount || Math.round(Number(agreement.weekly_amount));
+
+    const planCode = getRiderPlanCode(weeklyAmount);
+
+    const reference = `RLINK-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const paystackBody = {
+      email: agreement.rider_email,
+      amount: weeklyAmount * 100,
+      currency: 'ZAR',
+      reference,
+      callback_url: process.env.PAYSTACK_CALLBACK_URL,
+      metadata: {
+        type: planCode ? 'rider_subscription' : 'rider_one_time',
+        organization_id: org.id,
+        rider_user_id: agreement.user_id,
+        agreement_id: agreement.id,
+        weekly_amount: weeklyAmount
+      }
+    };
+    if (planCode) {
+      paystackBody.plan = planCode;
+      const existing = db.prepare(`SELECT id FROM rider_subscriptions WHERE rider_user_id = ? AND organization_id = ? AND status = 'active'`).get(agreement.user_id, org.id);
+      if (existing) return res.status(400).json({ error: 'Rider already has an active payment subscription. Cancel it first before sending a new link.' });
+    }
+
+    const resp = await axios.post(`${PAYSTACK_BASE}/transaction/initialize`, paystackBody, {
+      headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }
+    });
+    const authUrl = resp.data.data.authorization_url;
+
+    if (planCode) {
+      db.prepare(`INSERT INTO rider_subscriptions (organization_id, rider_user_id, agreement_id, plan_code, weekly_amount, status) VALUES (?,?,?,?,?, 'pending')`)
+        .run(org.id, agreement.user_id, agreement.id, planCode, weeklyAmount);
+    }
+
+    const orgName = org.name || 'Your fleet';
+    const emailBody = `Hi ${agreement.rider_name || 'there'},
+
+${orgName} has sent you a secure payment link for your agreement ${agreement.agreement_no}.
+
+Weekly payment amount: R${weeklyAmount.toFixed(2)}
+
+Click the link below to set up your card payment:
+${authUrl}
+
+This link is unique to your account. Do not share it with anyone.
+
+If you have any questions, contact ${orgName} directly.`;
+
+    await sendEmail(agreement.rider_email, `Payment link — ${agreement.agreement_no}`, emailBody).catch((err) => {
+      console.error('[fleet:payment-link] email failed:', err.message);
+    });
+
+    logAudit(req.user.id, 'fleet_owner.payment_link_sent', 'agreements', agreement.id, {
+      rider_email: agreement.rider_email,
+      weekly_amount: weeklyAmount,
+      reference,
+      subscription: !!planCode
+    }, req.ip);
+
+    res.json({
+      ok: true,
+      authorization_url: authUrl,
+      rider_name: agreement.rider_name,
+      rider_email: agreement.rider_email,
+      weekly_amount: weeklyAmount,
+      is_subscription: !!planCode
+    });
+  } catch (error) {
+    const msg = error.response?.data?.message || error.message;
+    res.status(error.status || 500).json({ error: msg || 'Could not generate payment link' });
   }
 });
 

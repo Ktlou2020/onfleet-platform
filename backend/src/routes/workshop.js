@@ -1,9 +1,34 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
 const db = require('../db');
 const { authRequired } = require('../middleware/auth');
-const { sendNotification } = require('../services/notifier');
+const { sendNotification, sendEmail } = require('../services/notifier');
+const UPLOAD_DIRS = require('../uploadPaths');
 const router = express.Router();
+
+function photoUrl(filePath) {
+  const rel = path.relative(UPLOAD_DIRS.base, filePath);
+  return `/uploads/${rel.replace(/\\/g, '/')}`;
+}
+
+const photoStorage = multer.diskStorage({
+  destination: UPLOAD_DIRS.jobPhotos,
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+    cb(null, `job-${req.params.id || 'x'}-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
+  }
+});
+const photoUpload = multer({
+  storage: photoStorage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) cb(null, true);
+    else cb(new Error('Only image files are allowed'));
+  }
+});
 
 const WORKSHOP_ROLES = ['technician', 'admin', 'superadmin'];
 
@@ -226,7 +251,7 @@ router.put('/job-cards/:id', authRequired, workshopOnly, (req, res) => {
     if (!card) return res.status(404).json({ error: 'Job card not found' });
     if (card.status === 'completed') return res.status(400).json({ error: 'Cannot edit a completed job' });
 
-    const allowed = ['job_type', 'description', 'priority', 'technician_id'];
+    const allowed = ['job_type', 'description', 'priority', 'technician_id', 'technician_notes'];
     const sets = [];
     const vals = [];
     for (const key of allowed) {
@@ -246,7 +271,7 @@ router.post('/job-cards/:id/start', authRequired, workshopOnly, (req, res) => {
     const id = toInt(req.params.id);
     const card = db.prepare('SELECT status FROM job_cards WHERE id = ?').get(id);
     if (!card) return res.status(404).json({ error: 'Job card not found' });
-    if (card.status !== 'open') return res.status(400).json({ error: 'Only open jobs can be started' });
+    if (!['open', 'quoted'].includes(card.status)) return res.status(400).json({ error: 'Only open or quoted jobs can be started' });
 
     db.prepare(`UPDATE job_cards SET status = 'in_progress', started_at = CURRENT_TIMESTAMP, technician_id = COALESCE(technician_id, ?) WHERE id = ?`).run(req.user.id, id);
     res.json({ ok: true, job_card: getJobCard(id) });
@@ -311,6 +336,15 @@ router.post('/job-cards/:id/complete', authRequired, workshopOnly, (req, res) =>
     for (const admin of completeAdmins) {
       sendNotification({ userId: admin.id, channel: 'in_app', type: 'job_card_completed', title: completeTitle, message: completeMsg, throwOnError: false }).catch(() => {});
       sendNotification({ userId: admin.id, channel: 'email', type: 'job_card_completed', title: completeTitle, message: completeMsg, throwOnError: false }).catch(() => {});
+    }
+    // Email fleet org contact if job is linked to a bike with an org
+    if (card.bike_id) {
+      const orgRow = db.prepare(`SELECT o.contact_email, o.name FROM bikes b JOIN organizations o ON o.id = b.organization_id WHERE b.id = ?`).get(card.bike_id);
+      if (orgRow?.contact_email) {
+        const itemLines = completeItems.map((i, idx) => `${idx + 1}. ${i.quantity}x item = R${(i.quantity * i.unit_cost).toFixed(2)}`).join('\n') || 'No line items recorded.';
+        const emailBody = `Hi ${orgRow.name},\n\nYour vehicle ${completeReg} has been serviced and is ready.\n\nJob #${id} — ${card.job_type}\nTechnician: ${completeTech}\nTotal: R${completeCost.toFixed(2)}\n\n${completion_notes ? `Notes: ${completion_notes}\n\n` : ''}Thank you for using OnFleet Africa Workshop.`;
+        sendEmail(orgRow.contact_email, completeTitle, emailBody).catch(() => {});
+      }
     }
   } catch (error) {
     if (!res.headersSent) res.status(500).json({ error: error.message });
@@ -622,12 +656,19 @@ router.get('/admin/jobs', authRequired, (req, res) => {
     const status = String(req.query.status || '').trim();
     const search = String(req.query.search || '').trim();
     const techId = String(req.query.technician_id || '').trim();
+    const dateFrom = String(req.query.date_from || '').trim();
+    const dateTo = String(req.query.date_to || '').trim();
     const limit = Math.min(Number(req.query.limit) || 50, 200);
     const offset = Math.max(Number(req.query.offset) || 0, 0);
+    const SORT_COLS = { created_at: 'jc.created_at', completed_at: 'jc.completed_at', priority: 'jc.priority', total_cost: 'total_cost' };
+    const sortBy = SORT_COLS[req.query.sort_by] || null;
+    const sortDir = req.query.sort_dir === 'asc' ? 'ASC' : 'DESC';
     const where = [];
     const params = [];
     if (status) { where.push('jc.status = ?'); params.push(status); }
     if (techId) { where.push('jc.technician_id = ?'); params.push(Number(techId)); }
+    if (dateFrom) { where.push('date(jc.created_at) >= ?'); params.push(dateFrom); }
+    if (dateTo) { where.push('date(jc.created_at) <= ?'); params.push(dateTo); }
     if (search) {
       const like = `%${search}%`;
       where.push(`(COALESCE(b.registration, jc.registration) LIKE ? OR COALESCE(b.vin, jc.vin) LIKE ? OR COALESCE(b.make, jc.make) LIKE ? OR jc.description LIKE ? OR u.full_name LIKE ?)`);
@@ -635,6 +676,9 @@ router.get('/admin/jobs', authRequired, (req, res) => {
     }
     const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const total = db.prepare(`SELECT COUNT(*) AS count FROM job_cards jc LEFT JOIN bikes b ON b.id = jc.bike_id LEFT JOIN users u ON u.id = jc.technician_id ${whereClause}`).get(...params).count;
+    const orderBy = sortBy
+      ? `ORDER BY ${sortBy} ${sortDir}`
+      : `ORDER BY CASE jc.status WHEN 'in_progress' THEN 1 WHEN 'open' THEN 2 WHEN 'quoted' THEN 3 WHEN 'completed' THEN 4 ELSE 5 END, CASE jc.priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 ELSE 3 END, jc.created_at DESC`;
     const jobs = db.prepare(`
       SELECT jc.*,
         COALESCE(b.registration, jc.registration) AS display_registration,
@@ -648,10 +692,7 @@ router.get('/admin/jobs', authRequired, (req, res) => {
       LEFT JOIN organizations o ON o.id = COALESCE(b.organization_id, jc.fleet_org_id)
       LEFT JOIN users u ON u.id = jc.technician_id
       ${whereClause}
-      ORDER BY
-        CASE jc.status WHEN 'in_progress' THEN 1 WHEN 'open' THEN 2 WHEN 'completed' THEN 3 ELSE 4 END,
-        CASE jc.priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 ELSE 3 END,
-        jc.created_at DESC
+      ${orderBy}
       LIMIT ? OFFSET ?
     `).all(...params, limit, offset);
     res.json({ jobs, total, limit, offset });
@@ -713,6 +754,13 @@ router.put('/admin/jobs/:id', authRequired, (req, res) => {
     if (req.body.status === 'cancelled' && !['completed', 'cancelled'].includes(card.status)) {
       sets.push('status = ?'); vals.push('cancelled');
     }
+    if (req.body.status === 'quoted' && card.status === 'open') {
+      sets.push('status = ?'); vals.push('quoted');
+    }
+    if (req.body.status === 'in_progress' && ['open', 'quoted'].includes(card.status)) {
+      sets.push('status = ?'); vals.push('in_progress');
+      if (!card.started_at) { sets.push('started_at = CURRENT_TIMESTAMP'); }
+    }
     if (sets.length) { vals.push(id); db.prepare(`UPDATE job_cards SET ${sets.join(', ')} WHERE id = ?`).run(...vals); }
     const changes = {};
     if (req.body.priority !== undefined && req.body.priority !== card.priority) changes.priority = { from: card.priority, to: req.body.priority };
@@ -770,14 +818,23 @@ router.get('/admin/technician-stats', authRequired, (req, res) => {
 router.get('/admin/fleet-health', authRequired, (req, res) => {
   try {
     if (!['admin', 'superadmin'].includes(req.user.role)) return res.status(403).json({ error: 'Admin only' });
+    const limit = Math.min(Number(req.query.limit) || 50, 100);
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
+    const healthFilter = String(req.query.health || '').trim();
+    const healthWhere = healthFilter === 'overdue'
+      ? `AND (b.next_service_date < date('now') OR (b.next_service_km IS NOT NULL AND b.odometer_km >= b.next_service_km))`
+      : healthFilter === 'due_soon'
+      ? `AND b.next_service_date IS NOT NULL AND b.next_service_date >= date('now') AND b.next_service_date <= date('now', '+30 days')`
+      : '';
+    const total = db.prepare(`SELECT COUNT(*) AS count FROM bikes b WHERE b.status NOT IN ('sold','paid_off','written_off') ${healthWhere}`).get().count;
     const bikes = db.prepare(`
       SELECT b.id, b.registration, b.vin, b.make, b.model, b.year, b.status,
         b.odometer_km, b.next_service_date, b.next_service_km,
         o.name AS org_name,
         CASE
           WHEN b.next_service_date IS NOT NULL AND b.next_service_date < date('now') THEN 'overdue'
-          WHEN b.next_service_date IS NOT NULL AND b.next_service_date <= date('now', '+30 days') THEN 'due_soon'
           WHEN b.next_service_km IS NOT NULL AND b.odometer_km IS NOT NULL AND b.odometer_km >= b.next_service_km THEN 'overdue'
+          WHEN b.next_service_date IS NOT NULL AND b.next_service_date <= date('now', '+30 days') THEN 'due_soon'
           ELSE 'ok'
         END AS service_health,
         (SELECT id FROM job_cards WHERE bike_id = b.id AND status NOT IN ('completed','cancelled') ORDER BY created_at DESC LIMIT 1) AS active_job_id,
@@ -785,7 +842,7 @@ router.get('/admin/fleet-health', authRequired, (req, res) => {
         (SELECT service_date FROM service_records WHERE bike_id = b.id ORDER BY service_date DESC, id DESC LIMIT 1) AS last_service_date
       FROM bikes b
       LEFT JOIN organizations o ON o.id = b.organization_id
-      WHERE b.status NOT IN ('sold','paid_off','written_off')
+      WHERE b.status NOT IN ('sold','paid_off','written_off') ${healthWhere}
       ORDER BY
         CASE
           WHEN b.next_service_date IS NOT NULL AND b.next_service_date < date('now') THEN 1
@@ -795,9 +852,9 @@ router.get('/admin/fleet-health', authRequired, (req, res) => {
           ELSE 4
         END,
         b.next_service_date ASC NULLS LAST
-      LIMIT 300
-    `).all();
-    res.json({ bikes });
+      LIMIT ? OFFSET ?
+    `).all(limit, offset);
+    res.json({ bikes, total, limit, offset });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -834,6 +891,189 @@ router.get('/admin/revenue-by-month', authRequired, (req, res) => {
         AND created_at < datetime('now', '-2 days')
     `).get();
     res.json({ months: months.reverse(), by_type: byType, overdue_jobs: overdueJobs.count });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Technician notes — any workshop user can add a note to their own job
+router.post('/job-cards/:id/notes', authRequired, workshopOnly, (req, res) => {
+  try {
+    const id = toInt(req.params.id);
+    const card = db.prepare('SELECT id, technician_id FROM job_cards WHERE id = ?').get(id);
+    if (!card) return res.status(404).json({ error: 'Job card not found' });
+    const note = String(req.body.note || '').trim();
+    if (!note) return res.status(400).json({ error: 'Note is required' });
+    logAudit(req.user.id, 'job_card.technician_note', id, { note, actor: req.user.full_name || req.user.email });
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Pause timer
+router.post('/job-cards/:id/pause', authRequired, workshopOnly, (req, res) => {
+  try {
+    const id = toInt(req.params.id);
+    const card = db.prepare('SELECT status, paused_at FROM job_cards WHERE id = ?').get(id);
+    if (!card) return res.status(404).json({ error: 'Job card not found' });
+    if (card.status !== 'in_progress') return res.status(400).json({ error: 'Only in-progress jobs can be paused' });
+    if (card.paused_at) return res.status(400).json({ error: 'Job is already paused' });
+    db.prepare(`UPDATE job_cards SET paused_at = CURRENT_TIMESTAMP WHERE id = ?`).run(id);
+    logAudit(req.user.id, 'job_card.paused', id, { actor: req.user.full_name || req.user.email });
+    res.json({ ok: true, job_card: getJobCard(id) });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Resume timer
+router.post('/job-cards/:id/resume', authRequired, workshopOnly, (req, res) => {
+  try {
+    const id = toInt(req.params.id);
+    const card = db.prepare('SELECT status, paused_at, total_paused_seconds FROM job_cards WHERE id = ?').get(id);
+    if (!card) return res.status(404).json({ error: 'Job card not found' });
+    if (!card.paused_at) return res.status(400).json({ error: 'Job is not paused' });
+    const pausedSecs = Math.floor((Date.now() - new Date(card.paused_at).getTime()) / 1000);
+    const newTotal = (card.total_paused_seconds || 0) + pausedSecs;
+    db.prepare(`UPDATE job_cards SET paused_at = NULL, total_paused_seconds = ? WHERE id = ?`).run(newTotal, id);
+    logAudit(req.user.id, 'job_card.resumed', id, { actor: req.user.full_name || req.user.email, paused_seconds: pausedSecs });
+    res.json({ ok: true, job_card: getJobCard(id) });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Photo upload
+router.post('/job-cards/:id/photos', authRequired, workshopOnly, photoUpload.single('photo'), (req, res) => {
+  try {
+    const id = toInt(req.params.id);
+    const card = db.prepare('SELECT id FROM job_cards WHERE id = ?').get(id);
+    if (!card) { if (req.file) try { fs.unlinkSync(req.file.path); } catch {} return res.status(404).json({ error: 'Job card not found' }); }
+    if (!req.file) return res.status(400).json({ error: 'No photo uploaded' });
+    const caption = String(req.body.caption || '').trim();
+    const result = db.prepare(`INSERT INTO job_card_photos (job_card_id, file_path, original_name, caption, created_by) VALUES (?, ?, ?, ?, ?)`)
+      .run(id, req.file.path, req.file.originalname, caption || null, req.user.id);
+    const photo = db.prepare('SELECT * FROM job_card_photos WHERE id = ?').get(result.lastInsertRowid);
+    res.json({ ok: true, photo: { ...photo, url: photoUrl(photo.file_path) } });
+  } catch (error) {
+    if (req.file) try { fs.unlinkSync(req.file.path); } catch {}
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// List photos
+router.get('/job-cards/:id/photos', authRequired, workshopOnly, (req, res) => {
+  try {
+    const id = toInt(req.params.id);
+    if (!db.prepare('SELECT id FROM job_cards WHERE id = ?').get(id)) return res.status(404).json({ error: 'Job card not found' });
+    const photos = db.prepare('SELECT * FROM job_card_photos WHERE job_card_id = ? ORDER BY created_at ASC').all(id);
+    res.json({ photos: photos.map((p) => ({ ...p, url: photoUrl(p.file_path) })) });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Serve photo image
+router.get('/job-cards/:id/photos/:photoId/image', authRequired, workshopOnly, (req, res) => {
+  try {
+    const photo = db.prepare('SELECT * FROM job_card_photos WHERE id = ? AND job_card_id = ?').get(toInt(req.params.photoId), toInt(req.params.id));
+    if (!photo || !fs.existsSync(photo.file_path)) return res.status(404).json({ error: 'Photo not found' });
+    res.sendFile(photo.file_path);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete photo
+router.delete('/job-cards/:id/photos/:photoId', authRequired, workshopOnly, (req, res) => {
+  try {
+    const photo = db.prepare('SELECT * FROM job_card_photos WHERE id = ? AND job_card_id = ?').get(toInt(req.params.photoId), toInt(req.params.id));
+    if (!photo) return res.status(404).json({ error: 'Photo not found' });
+    try { fs.unlinkSync(photo.file_path); } catch {}
+    db.prepare('DELETE FROM job_card_photos WHERE id = ?').run(photo.id);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Labour rates — list
+router.get('/labour-rates', authRequired, workshopOnly, (req, res) => {
+  try {
+    const rates = db.prepare('SELECT * FROM labour_rates WHERE active = 1 ORDER BY item_type, name').all();
+    res.json({ rates });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Labour rates — create (admin)
+router.post('/labour-rates', authRequired, (req, res) => {
+  try {
+    if (!['admin', 'superadmin'].includes(req.user.role)) return res.status(403).json({ error: 'Admin only' });
+    const { name, description, item_type, unit_cost } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ error: 'Name is required' });
+    if (!Number.isFinite(Number(unit_cost)) || Number(unit_cost) < 0) return res.status(400).json({ error: 'Unit cost must be a non-negative number' });
+    const result = db.prepare(`INSERT INTO labour_rates (name, description, item_type, unit_cost, created_by) VALUES (?, ?, ?, ?, ?)`)
+      .run(name.trim(), description || null, item_type || 'labor', Number(unit_cost), req.user.id);
+    res.json({ ok: true, rate: db.prepare('SELECT * FROM labour_rates WHERE id = ?').get(result.lastInsertRowid) });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Labour rates — update (admin)
+router.put('/labour-rates/:id', authRequired, (req, res) => {
+  try {
+    if (!['admin', 'superadmin'].includes(req.user.role)) return res.status(403).json({ error: 'Admin only' });
+    const id = toInt(req.params.id);
+    if (!db.prepare('SELECT id FROM labour_rates WHERE id = ?').get(id)) return res.status(404).json({ error: 'Rate not found' });
+    const { name, description, item_type, unit_cost, active } = req.body;
+    const sets = []; const vals = [];
+    if (name !== undefined) { sets.push('name = ?'); vals.push(String(name).trim()); }
+    if (description !== undefined) { sets.push('description = ?'); vals.push(description || null); }
+    if (item_type !== undefined) { sets.push('item_type = ?'); vals.push(item_type); }
+    if (unit_cost !== undefined) { sets.push('unit_cost = ?'); vals.push(Number(unit_cost)); }
+    if (active !== undefined) { sets.push('active = ?'); vals.push(active ? 1 : 0); }
+    if (sets.length) { sets.push('updated_at = CURRENT_TIMESTAMP'); vals.push(id); db.prepare(`UPDATE labour_rates SET ${sets.join(', ')} WHERE id = ?`).run(...vals); }
+    res.json({ ok: true, rate: db.prepare('SELECT * FROM labour_rates WHERE id = ?').get(id) });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Labour rates — delete (admin)
+router.delete('/labour-rates/:id', authRequired, (req, res) => {
+  try {
+    if (!['admin', 'superadmin'].includes(req.user.role)) return res.status(403).json({ error: 'Admin only' });
+    const id = toInt(req.params.id);
+    if (!db.prepare('SELECT id FROM labour_rates WHERE id = ?').get(id)) return res.status(404).json({ error: 'Rate not found' });
+    db.prepare('UPDATE labour_rates SET active = 0 WHERE id = ?').run(id);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Admin: revenue breakdown by fleet org
+router.get('/admin/revenue-by-org', authRequired, (req, res) => {
+  try {
+    if (!['admin', 'superadmin'].includes(req.user.role)) return res.status(403).json({ error: 'Admin only' });
+    const byOrg = db.prepare(`
+      SELECT COALESCE(o.name, 'Walk-in / External') AS org_name,
+        COUNT(DISTINCT jc.id) AS job_count,
+        COALESCE(SUM(i.quantity * i.unit_cost), 0) AS revenue
+      FROM job_cards jc
+      LEFT JOIN bikes b ON b.id = jc.bike_id
+      LEFT JOIN organizations o ON o.id = COALESCE(b.organization_id, jc.fleet_org_id)
+      LEFT JOIN job_card_items i ON i.job_card_id = jc.id
+      WHERE jc.status = 'completed'
+      GROUP BY COALESCE(o.id, -1), COALESCE(o.name, 'Walk-in / External')
+      ORDER BY revenue DESC
+      LIMIT 20
+    `).all();
+    res.json({ by_org: byOrg });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

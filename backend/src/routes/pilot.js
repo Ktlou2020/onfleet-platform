@@ -71,11 +71,10 @@ function slugifyCompanyName(value) {
 }
 
 const FLEET_PLAN_ENTITLEMENTS = {
-  trial: { max_bikes: 10, max_admin_users: 2 },
-  small: { max_bikes: 20, max_admin_users: 3 },
-  medium: { max_bikes: 60, max_admin_users: 5 },
-  large: { max_bikes: 100, max_admin_users: 10 },
-  enterprise: { max_bikes: 9999, max_admin_users: 50 },
+  trial:  { max_bikes: 10,  max_admin_users: 2 },
+  small:  { max_bikes: 20,  max_admin_users: 3 },
+  medium: { max_bikes: 60,  max_admin_users: 5 },
+  large:  { max_bikes: 100, max_admin_users: 10 },
 };
 
 router.get('/stats', (req, res) => {
@@ -406,7 +405,7 @@ router.post('/leads/:id/convert', authRequired, adminOnly, async (req, res) => {
 
   const entitlements = FLEET_PLAN_ENTITLEMENTS[plan_key] || FLEET_PLAN_ENTITLEMENTS.trial;
   const now = new Date();
-  const trialEnds = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+  const trialEnds = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
   const tempPassword = crypto.randomBytes(8).toString('hex');
   const passwordHash = await bcrypt.hash(tempPassword, 10);
 

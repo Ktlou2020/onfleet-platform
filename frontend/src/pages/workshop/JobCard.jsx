@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { ArrowLeft, Plus, Pencil, Trash2, Clock, ChevronDown, ChevronRight, Printer, FileText } from 'lucide-react';
+import { ArrowLeft, Plus, Pencil, Trash2, Clock, ChevronDown, ChevronRight, Printer, FileText, Pause, Play, Camera, Image } from 'lucide-react';
 import api from '../../api';
 import { Badge, ConfirmModal, Loading, Modal, fmt, fmtDate, fmtDateTime } from '../../components/ui';
 
@@ -13,13 +13,13 @@ const BIKE_STATUSES = ['active', 'ready_to_go', 'repairs', 'not_available', 'sta
 
 const EMPTY_ITEM = { item_type: 'labor', description: '', quantity: '1', unit_cost: '' };
 const EMPTY_COMPLETE = { completion_notes: '', odometer_km: '', next_service_date: '', next_service_km: '', bike_status_after: 'active' };
-const QUICK_ITEMS = [
-  { label: 'Basic service · R275', item_type: 'labor', description: 'Basic service', unit_cost: '275', quantity: '1' },
-];
 
-function elapsed(startedAt) {
+function elapsed(startedAt, pausedAt, totalPausedSeconds) {
   if (!startedAt) return null;
-  const ms = Date.now() - new Date(startedAt).getTime();
+  const start = new Date(startedAt).getTime();
+  const paused = (totalPausedSeconds || 0) * 1000;
+  const activeCeil = pausedAt ? new Date(pausedAt).getTime() : Date.now();
+  const ms = Math.max(0, activeCeil - start - paused);
   const mins = Math.floor(ms / 60000);
   if (mins < 60) return `${mins}m`;
   const hrs = Math.floor(mins / 60);
@@ -155,31 +155,48 @@ export default function WorkshopJobCard() {
   const [card, setCard] = useState(null);
   const [technicians, setTechnicians] = useState([]);
   const [templates, setTemplates] = useState([]);
+  const [labourRates, setLabourRates] = useState([]);
   const [history, setHistory] = useState(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [photosOpen, setPhotosOpen] = useState(false);
   const [templateName, setTemplateName] = useState('');
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [applyingTemplate, setApplyingTemplate] = useState(null);
+  const [techNote, setTechNote] = useState('');
+  const [savingNote, setSavingNote] = useState(false);
+  const [photos, setPhotos] = useState([]);
+  const [photoUploading, setPhotoUploading] = useState(false);
+  const photoInputRef = useRef(null);
 
   const [showAddItem, setShowAddItem] = useState(false);
   const [editItem, setEditItem] = useState(null);
   const [itemForm, setItemForm] = useState(EMPTY_ITEM);
   const [confirmDeleteItem, setConfirmDeleteItem] = useState(null);
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const [confirmComplete, setConfirmComplete] = useState(false);
   const [showComplete, setShowComplete] = useState(false);
   const [completeForm, setCompleteForm] = useState(EMPTY_COMPLETE);
   const [busy, setBusy] = useState(false);
 
+  const loadPhotos = async () => {
+    try {
+      const r = await api.get(`/workshop/job-cards/${id}/photos`);
+      setPhotos(r.data.photos);
+    } catch {}
+  };
+
   const load = async () => {
-    const [cardRes, techRes, tmplRes] = await Promise.all([
+    const [cardRes, techRes, tmplRes, ratesRes] = await Promise.all([
       api.get(`/workshop/job-cards/${id}`),
       api.get('/workshop/technicians'),
       api.get('/workshop/templates'),
+      api.get('/workshop/labour-rates'),
     ]);
     setCard(cardRes.data.job_card);
     setTechnicians(techRes.data.technicians);
     setTemplates(tmplRes.data.templates || []);
+    setLabourRates(ratesRes.data.rates || []);
   };
 
   useEffect(() => { load().catch(() => toast.error('Could not load job card')); }, [id]);
@@ -284,6 +301,73 @@ export default function WorkshopJobCard() {
     }
   };
 
+  const pauseJob = async () => {
+    try {
+      setBusy(true);
+      const { data } = await api.post(`/workshop/job-cards/${id}/pause`);
+      setCard(data.job_card);
+      toast.success('Work paused');
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not pause');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resumeJob = async () => {
+    try {
+      setBusy(true);
+      const { data } = await api.post(`/workshop/job-cards/${id}/resume`);
+      setCard(data.job_card);
+      toast.success('Work resumed');
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not resume');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveTechNote = async () => {
+    if (!techNote.trim()) return;
+    try {
+      setSavingNote(true);
+      const { data } = await api.post(`/workshop/job-cards/${id}/notes`, { note: techNote.trim() });
+      setCard(data.job_card);
+      setTechNote('');
+      toast.success('Note saved');
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not save note');
+    } finally {
+      setSavingNote(false);
+    }
+  };
+
+  const uploadPhoto = async (file) => {
+    if (!file) return;
+    const formData = new FormData();
+    formData.append('photo', file);
+    try {
+      setPhotoUploading(true);
+      await api.post(`/workshop/job-cards/${id}/photos`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+      await loadPhotos();
+      toast.success('Photo added');
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Upload failed');
+    } finally {
+      setPhotoUploading(false);
+      if (photoInputRef.current) photoInputRef.current.value = '';
+    }
+  };
+
+  const deletePhoto = async (photoId) => {
+    try {
+      await api.delete(`/workshop/job-cards/${id}/photos/${photoId}`);
+      setPhotos((ps) => ps.filter((p) => p.id !== photoId));
+    } catch {
+      toast.error('Could not delete photo');
+    }
+  };
+
   const saveAsTemplate = async () => {
     if (!templateName.trim()) return;
     try {
@@ -334,11 +418,16 @@ export default function WorkshopJobCard() {
     w.document.close();
   };
 
-  const elapsedTime = useMemo(() => card?.status === 'in_progress' ? elapsed(card.started_at) : null, [card]);
+  useEffect(() => { loadPhotos(); }, [id]);
+
+  const elapsedTime = useMemo(() => {
+    if (!card?.started_at) return null;
+    return elapsed(card.started_at, card.paused_at, card.total_paused_seconds);
+  }, [card]);
 
   if (!card) return <Loading />;
 
-  const isOpen = ['open', 'in_progress'].includes(card.status);
+  const isOpen = ['open', 'quoted', 'in_progress'].includes(card.status);
   const bikeReg = card.bike_registration || card.registration;
   const bikeMake = card.bike_make || card.make;
   const bikeModel = card.bike_model || card.model;
@@ -358,8 +447,8 @@ export default function WorkshopJobCard() {
             <Badge status={STATUS_COLOR[card.status]}>{card.status.replace('_', ' ')}</Badge>
             {card.priority !== 'normal' && <Badge status={PRIORITY_COLOR[card.priority]}>{card.priority}</Badge>}
             {elapsedTime && (
-              <span style={{ fontSize: 12, color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                <Clock size={12} /> {elapsedTime} elapsed
+              <span style={{ fontSize: 12, color: card.paused_at ? 'var(--warning, #f97316)' : 'var(--muted)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Clock size={12} /> {elapsedTime} {card.paused_at ? '(paused)' : 'elapsed'}
               </span>
             )}
           </div>
@@ -369,12 +458,30 @@ export default function WorkshopJobCard() {
           <button className="btn btn-sm btn-secondary" onClick={printJob}>
             <Printer size={13} /> Print
           </button>
-          {card.status === 'open' && (
+          {['open', 'quoted'].includes(card.status) && (
             <button className="btn btn-sm" onClick={startJob} disabled={busy}>Start job</button>
+          )}
+          {card.status === 'in_progress' && !card.paused_at && (
+            <button className="btn btn-sm btn-secondary" onClick={pauseJob} disabled={busy} title="Pause work timer" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <Pause size={13} /> Pause
+            </button>
+          )}
+          {card.status === 'in_progress' && card.paused_at && (
+            <button className="btn btn-sm" onClick={resumeJob} disabled={busy} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <Play size={13} /> Resume
+            </button>
           )}
           {isOpen && (
             <>
-              <button className="btn btn-sm" onClick={() => { setCompleteForm(EMPTY_COMPLETE); setShowComplete(true); }} disabled={busy}>
+              <button
+                className="btn btn-sm"
+                onClick={() => {
+                  if (card.items.length === 0) { setConfirmComplete(true); return; }
+                  setCompleteForm(EMPTY_COMPLETE);
+                  setShowComplete(true);
+                }}
+                disabled={busy}
+              >
                 Mark complete
               </button>
               <button className="btn btn-sm btn-danger" onClick={() => setConfirmCancel(true)} disabled={busy}>Cancel</button>
@@ -568,6 +675,85 @@ export default function WorkshopJobCard() {
         )}
       </div>
 
+      {/* Technician notes */}
+      <div className="card" style={{ padding: 16, marginBottom: 20 }}>
+        <div className="text-xs muted" style={{ textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>Technician Notes</div>
+        {card.technician_notes && (
+          <div className="text-sm" style={{ whiteSpace: 'pre-wrap', marginBottom: 12, padding: '10px 12px', background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)' }}>
+            {card.technician_notes}
+          </div>
+        )}
+        {isOpen && (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+            <textarea
+              rows={2}
+              style={{ flex: 1 }}
+              value={techNote}
+              onChange={(e) => setTechNote(e.target.value)}
+              placeholder="Add a note (e.g. found worn brake pads, ordered part…)"
+            />
+            <button className="btn btn-sm" onClick={saveTechNote} disabled={savingNote || !techNote.trim()}>
+              {savingNote ? '…' : 'Save note'}
+            </button>
+          </div>
+        )}
+        {!card.technician_notes && !isOpen && (
+          <p className="muted text-sm">No technician notes recorded.</p>
+        )}
+      </div>
+
+      {/* Photos */}
+      <div className="card" style={{ padding: 0, marginBottom: 20 }}>
+        <button
+          style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text)', fontWeight: 600, fontSize: 14 }}
+          onClick={() => { setPhotosOpen((v) => !v); if (!photosOpen) loadPhotos(); }}
+        >
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Camera size={15} />
+            Photos
+            {photos.length > 0 && <span className="text-xs muted" style={{ fontWeight: 400 }}>({photos.length})</span>}
+          </span>
+          {photosOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+        </button>
+        {photosOpen && (
+          <div style={{ borderTop: '1px solid var(--border)', padding: 16 }}>
+            {isOpen && (
+              <div style={{ marginBottom: 14 }}>
+                <button
+                  className="btn btn-sm btn-secondary"
+                  onClick={() => photoInputRef.current?.click()}
+                  disabled={photoUploading}
+                  style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                >
+                  <Image size={13} /> {photoUploading ? 'Uploading…' : 'Upload photo'}
+                </button>
+                <input ref={photoInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => uploadPhoto(e.target.files?.[0])} />
+              </div>
+            )}
+            {photos.length === 0 ? (
+              <p className="muted text-sm">No photos yet.</p>
+            ) : (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                {photos.map((p) => (
+                  <div key={p.id} style={{ position: 'relative', width: 100, height: 100, borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border)' }}>
+                    <img src={p.url} alt={p.original_name || 'photo'} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    {isOpen && (
+                      <button
+                        onClick={() => deletePhoto(p.id)}
+                        style={{ position: 'absolute', top: 4, right: 4, background: 'rgba(0,0,0,0.55)', border: 'none', borderRadius: 4, color: '#fff', cursor: 'pointer', padding: '3px 5px', lineHeight: 1 }}
+                        title="Delete photo"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Bike service history */}
       {hasBike && (
         <div className="card" style={{ padding: 0, marginBottom: 24 }}>
@@ -633,21 +819,23 @@ export default function WorkshopJobCard() {
               <input type="number" min="0.01" step="0.01" value={itemForm.quantity} onChange={(e) => setItemForm((f) => ({ ...f, quantity: e.target.value }))} />
             </div>
           </div>
-          <div style={{ marginBottom: 12 }}>
-            <div className="text-xs muted" style={{ marginBottom: 6 }}>Quick add</div>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              {QUICK_ITEMS.map((q) => (
-                <button
-                  key={q.label}
-                  type="button"
-                  className="btn btn-sm btn-secondary"
-                  onClick={() => setItemForm((f) => ({ ...f, item_type: q.item_type, description: q.description, unit_cost: q.unit_cost, quantity: q.quantity }))}
-                >
-                  {q.label}
-                </button>
-              ))}
+          {labourRates.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div className="text-xs muted" style={{ marginBottom: 6 }}>Quick add from catalogue</div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {labourRates.map((q) => (
+                  <button
+                    key={q.id}
+                    type="button"
+                    className="btn btn-sm btn-secondary"
+                    onClick={() => setItemForm((f) => ({ ...f, item_type: q.item_type, description: q.name, unit_cost: String(q.unit_cost), quantity: '1' }))}
+                  >
+                    {q.name} · {fmt(q.unit_cost)}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
           <div className="field">
             <label className="label">Description <span style={{ color: 'var(--danger)' }}>*</span></label>
             <div style={{ position: 'relative' }}>
@@ -727,6 +915,17 @@ export default function WorkshopJobCard() {
           busy={busy}
           onConfirm={cancelJob}
           onClose={() => setConfirmCancel(false)}
+        />
+      )}
+
+      {confirmComplete && (
+        <ConfirmModal
+          title="Complete with no line items?"
+          body="This job has no line items and will complete with R0.00 cost. Are you sure you want to continue?"
+          confirmLabel="Yes, complete"
+          busy={busy}
+          onConfirm={() => { setConfirmComplete(false); setCompleteForm(EMPTY_COMPLETE); setShowComplete(true); }}
+          onClose={() => setConfirmComplete(false)}
         />
       )}
 

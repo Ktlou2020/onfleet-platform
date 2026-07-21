@@ -18,6 +18,7 @@ const UPLOAD_DIRS = {
   bikeDocuments:   path.join(UPLOAD_BASE, 'bike-documents'),
   branding:        path.join(UPLOAD_BASE, 'branding'),
   contracts:       path.join(UPLOAD_BASE, 'contracts'),
+  jobPhotos:       path.join(UPLOAD_BASE, 'job-photos'),
 };
 
 // Create all directories on first require

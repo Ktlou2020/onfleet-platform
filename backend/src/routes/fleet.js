@@ -12,7 +12,7 @@ const { logAudit, generateAgreementNo, buildPaymentSchedule, addDays, recalcSche
 const { setBikeStatus } = require('../utils/bikeStatus');
 const { discontinueAgreementForStolenBike, discontinueAgreement, reinstateDiscontinuedAgreement } = require('../services/agreementLifecycle');
 const { extractPayslipInsights } = require('../services/documentInsights');
-const { sendNotification } = require('../services/notifier');
+const { sendNotification, sendEmail } = require('../services/notifier');
 const { writeContractSnapshot } = require('../services/contracts');
 
 const router = express.Router();
@@ -1670,6 +1670,49 @@ router.get('/agreements', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.vi
   }
 });
 
+router.get('/agreements/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.view), (req, res) => {
+  try {
+    const org = getOrganizationOrThrow(req.user.organization_id);
+    const agreementId = toInt(req.params.id);
+    if (!agreementId) return res.status(400).json({ error: 'Invalid agreement id' });
+    const agreement = getScopedAgreement(org, agreementId);
+    if (!agreement) return res.status(404).json({ error: 'Agreement not found in your fleet' });
+
+    const schedule = db.prepare(`SELECT * FROM payment_schedules WHERE agreement_id = ? ORDER BY week_number`).all(agreement.id);
+    const payments = db.prepare(`SELECT * FROM payments WHERE agreement_id = ? ORDER BY COALESCE(paid_at, created_at) DESC`).all(agreement.id);
+
+    const successPayments = payments.filter((p) => p.status === 'success');
+    const creditedAmt = (p) => Number(p.net_amount || p.amount || 0);
+    const totalPaid = successPayments.reduce((sum, p) => sum + creditedAmt(p), 0);
+    const weeklyAmount = Number(agreement.weekly_amount) || 0;
+    const weeksPaid = weeklyAmount > 0 ? Math.floor(+(totalPaid / weeklyAmount).toFixed(10)) : 0;
+    const today = new Date().toISOString().slice(0, 10);
+    const nonWaived = schedule.filter((s) => s.status !== 'waived');
+    const weeksDueByToday = nonWaived.filter((s) => s.due_date <= today).length;
+    const overdueRaw = Math.max(0, +(weeksDueByToday * weeklyAmount - totalPaid).toFixed(2));
+    const nextDue = nonWaived[weeksPaid] || null;
+    const progressPct = agreement.total_amount ? +((totalPaid / agreement.total_amount) * 100).toFixed(1) : 0;
+    const isDiscontinued = agreement.status === 'discontinued';
+
+    res.json({
+      agreement,
+      schedule,
+      payments,
+      summary: {
+        total_paid: +totalPaid.toFixed(2),
+        remaining: isDiscontinued ? 0 : Math.max(0, +(agreement.total_amount - totalPaid).toFixed(2)),
+        weeks_paid: weeksPaid,
+        weeks_total: agreement.total_weeks,
+        overdue: isDiscontinued ? 0 : +overdueRaw.toFixed(2),
+        next_due: isDiscontinued ? null : nextDue,
+        progress_pct: progressPct
+      }
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not load agreement' });
+  }
+});
+
 router.post('/agreements', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.manage), (req, res) => {
   try {
     const organization = getOrganizationOrThrow(req.user.organization_id);
@@ -1815,6 +1858,95 @@ router.post('/agreements/:id/reinstate', companyRoleAllowed(FLEET_RESOURCE_ACCES
   }
 });
 
+// POST /fleet/agreements/:id/payment-link — generate Paystack checkout link and email it to the rider
+router.post('/agreements/:id/payment-link', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.manage), async (req, res) => {
+  try {
+    const org = getOrganizationOrThrow(req.user.organization_id);
+    const agreementId = toInt(req.params.id);
+    if (!agreementId) return res.status(400).json({ error: 'Invalid agreement id' });
+
+    const agreement = getScopedAgreement(org, agreementId);
+    if (!agreement) return res.status(404).json({ error: 'Agreement not found in your fleet' });
+    if (!['active', 'paused', 'defaulted'].includes(agreement.status)) {
+      return res.status(400).json({ error: 'Payment links can only be sent for active, paused, or defaulted agreements' });
+    }
+    if (!agreement.rider_email) return res.status(400).json({ error: 'Rider has no email address on file' });
+
+    const overrideAmount = req.body.plan_amount ? Math.round(Number(req.body.plan_amount)) : null;
+    const weeklyAmount = overrideAmount || Math.round(Number(agreement.weekly_amount));
+
+    const planCode = getRiderPlanCode(weeklyAmount);
+
+    const reference = `RLINK-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const paystackBody = {
+      email: agreement.rider_email,
+      amount: weeklyAmount * 100,
+      currency: 'ZAR',
+      reference,
+      callback_url: process.env.PAYSTACK_CALLBACK_URL,
+      metadata: {
+        type: planCode ? 'rider_subscription' : 'rider_one_time',
+        organization_id: org.id,
+        rider_user_id: agreement.user_id,
+        agreement_id: agreement.id,
+        weekly_amount: weeklyAmount
+      }
+    };
+    if (planCode) {
+      paystackBody.plan = planCode;
+      const existing = db.prepare(`SELECT id FROM rider_subscriptions WHERE rider_user_id = ? AND organization_id = ? AND status = 'active'`).get(agreement.user_id, org.id);
+      if (existing) return res.status(400).json({ error: 'Rider already has an active payment subscription. Cancel it first before sending a new link.' });
+    }
+
+    const resp = await axios.post(`${PAYSTACK_BASE}/transaction/initialize`, paystackBody, {
+      headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }
+    });
+    const authUrl = resp.data.data.authorization_url;
+
+    if (planCode) {
+      db.prepare(`INSERT INTO rider_subscriptions (organization_id, rider_user_id, agreement_id, plan_code, weekly_amount, status) VALUES (?,?,?,?,?, 'pending')`)
+        .run(org.id, agreement.user_id, agreement.id, planCode, weeklyAmount);
+    }
+
+    const orgName = org.name || 'Your fleet';
+    const emailBody = `Hi ${agreement.rider_name || 'there'},
+
+${orgName} has sent you a secure payment link for your agreement ${agreement.agreement_no}.
+
+Weekly payment amount: R${weeklyAmount.toFixed(2)}
+
+Click the link below to set up your card payment:
+${authUrl}
+
+This link is unique to your account. Do not share it with anyone.
+
+If you have any questions, contact ${orgName} directly.`;
+
+    await sendEmail(agreement.rider_email, `Payment link — ${agreement.agreement_no}`, emailBody).catch((err) => {
+      console.error('[fleet:payment-link] email failed:', err.message);
+    });
+
+    logAudit(req.user.id, 'fleet_owner.payment_link_sent', 'agreements', agreement.id, {
+      rider_email: agreement.rider_email,
+      weekly_amount: weeklyAmount,
+      reference,
+      subscription: !!planCode
+    }, req.ip);
+
+    res.json({
+      ok: true,
+      authorization_url: authUrl,
+      rider_name: agreement.rider_name,
+      rider_email: agreement.rider_email,
+      weekly_amount: weeklyAmount,
+      is_subscription: !!planCode
+    });
+  } catch (error) {
+    const msg = error.response?.data?.message || error.message;
+    res.status(error.status || 500).json({ error: msg || 'Could not generate payment link' });
+  }
+});
+
 router.get('/payments', companyRoleAllowed(FLEET_RESOURCE_ACCESS.payments.view), (req, res) => {
   try {
     const organization = getOrganizationOrThrow(req.user.organization_id);
@@ -1881,13 +2013,17 @@ router.post('/payments/bulk-delete', companyRoleAllowed(FLEET_RESOURCE_ACCESS.pa
 
 const PAYSTACK_API = 'https://api.paystack.co';
 
-const FLEET_PRICE_PER_BIKE = 750;
-
 const FLEET_BILLING_PLANS = {
-  small:  { key: 'small',  name: 'Small Fleet',  price_per_bike: FLEET_PRICE_PER_BIKE, max_bikes: 20,  max_admin_users: 3,  features: ['Up to 20 bikes', 'R750/bike/month', '3 admin users', 'CSV imports', 'Free monthly service per bike', 'Standard support'] },
-  medium: { key: 'medium', name: 'Medium Fleet', price_per_bike: FLEET_PRICE_PER_BIKE, max_bikes: 60,  max_admin_users: 5,  features: ['Up to 60 bikes', 'R750/bike/month', '5 admin users', 'Advanced filters', 'Free monthly service per bike', 'Performance reporting'] },
-  large:  { key: 'large',  name: 'Large Fleet',  price_per_bike: FLEET_PRICE_PER_BIKE, max_bikes: 100, max_admin_users: 10, features: ['Up to 100 bikes', 'R750/bike/month', '10 admin users', 'Free monthly service per bike', 'Priority onboarding', 'Multi-branch support'] }
+  small:  { key: 'small',  name: 'Starter',      monthly_price: 200,   max_bikes: 20,  max_admin_users: 3,  features: ['Up to 20 bikes', 'R200 flat monthly fee', '3 admin users', 'CSV imports', 'Standard support'] },
+  medium: { key: 'medium', name: 'Growth',        monthly_price: 750,   max_bikes: 60,  max_admin_users: 5,  features: ['Up to 60 bikes', 'R750 flat monthly fee', '5 admin users', 'Advanced filters', 'Performance reporting'] },
+  large:  { key: 'large',  name: 'Professional',  monthly_price: 1500,  max_bikes: 100, max_admin_users: 10, features: ['Up to 100 bikes', 'R1 500 flat monthly fee', '10 admin users', 'Priority onboarding', 'Multi-branch support'] }
 };
+
+function getTierForBikeCount(count) {
+  if (count <= 20) return 'small';
+  if (count <= 60) return 'medium';
+  return 'large';
+}
 
 function getPlanPaystackCode(planKey) {
   const raw = process.env[`PAYSTACK_PLAN_${String(planKey).toUpperCase()}`];
@@ -1951,14 +2087,17 @@ router.get('/billing/status', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.v
       ? Math.max(0, Math.round((new Date(org.trial_ends_at) - new Date()) / 86400000))
       : null;
     const bikeCount = db.prepare(`SELECT COUNT(*) c FROM bikes WHERE organization_id = ? AND status NOT IN ('retired','sold')`).get(org.id).c || 0;
-    const monthlyTotal = bikeCount * FLEET_PRICE_PER_BIKE;
+    const suggestedTier = getTierForBikeCount(bikeCount);
+    const currentPlan = FLEET_BILLING_PLANS[org.plan_key] || null;
+    const approachingLimit = currentPlan && bikeCount >= currentPlan.max_bikes * 0.8;
     res.json({
       organization: {
         id: org.id, name: org.name, plan_key: org.plan_key, status: org.status,
         trial_ends_at: org.trial_ends_at, trial_days_left: trialDaysLeft,
         paystack_subscription_code: org.paystack_subscription_code,
         max_bikes: org.max_bikes, max_admin_users: org.max_admin_users,
-        bike_count: bikeCount, monthly_total: monthlyTotal, price_per_bike: FLEET_PRICE_PER_BIKE
+        bike_count: bikeCount, monthly_price: currentPlan?.monthly_price || null,
+        suggested_tier: suggestedTier, approaching_limit: approachingLimit
       },
       plans: Object.values(FLEET_BILLING_PLANS),
       can_subscribe: ['trialing', 'past_due', 'cancelled', 'suspended'].includes(org.status)
@@ -1973,7 +2112,7 @@ router.post('/billing/subscribe', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billi
   try {
     const org = getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
     const { plan_key } = req.body;
-    if (!FLEET_BILLING_PLANS[plan_key]) return res.status(400).json({ error: 'Invalid plan key. Choose small, medium, or large.' });
+    if (!FLEET_BILLING_PLANS[plan_key]) return res.status(400).json({ error: 'Invalid plan key. Choose small, medium, or large.', valid_keys: Object.keys(FLEET_BILLING_PLANS) });
 
     if (!process.env.PAYSTACK_SECRET_KEY || process.env.PAYSTACK_SECRET_KEY.includes('xxxx')) {
       return res.status(500).json({ error: 'Paystack is not configured on this server. Please set PAYSTACK_SECRET_KEY.' });
@@ -1984,8 +2123,8 @@ router.post('/billing/subscribe', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billi
       return res.status(400).json({ error: `The ${plan_key} plan is not yet linked to a Paystack plan code. Please set PAYSTACK_PLAN_${plan_key.toUpperCase()} in the server environment.` });
     }
 
-    const bikeCount = db.prepare(`SELECT COUNT(*) c FROM bikes WHERE organization_id = ? AND status NOT IN ('retired','sold')`).get(org.id).c || 1;
-    const amountCents = bikeCount * FLEET_PRICE_PER_BIKE * 100;
+    const plan = FLEET_BILLING_PLANS[plan_key];
+    const amountCents = plan.monthly_price * 100;
     const reference = `OF-SUB-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
     const initResp = await axios.post(`${PAYSTACK_API}/transaction/initialize`,
       {

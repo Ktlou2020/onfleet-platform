@@ -15,6 +15,7 @@ import FleetOwnerShell from './pages/fleet/FleetOwnerShell';
 import FleetDashboard from './pages/fleet/Dashboard';
 import FleetOwnerBikes from './pages/fleet/Bikes';
 import FleetOwnerAgreements from './pages/fleet/Agreements';
+import FleetAgreementDetail from './pages/fleet/AgreementDetail';
 import FleetOwnerPayments from './pages/fleet/Payments';
 import FleetOwnerRiders from './pages/fleet/Riders';
 import FleetOwnerHelp from './pages/fleet/Help';
@@ -118,6 +119,7 @@ export default function App() {
           <Route path="bikes" element={<FleetRouteGate section="bikes"><FleetOwnerBikes /></FleetRouteGate>} />
           <Route path="tracking" element={<FleetRouteGate section="tracking"><FleetTracking /></FleetRouteGate>} />
           <Route path="agreements" element={<FleetRouteGate section="agreements"><FleetOwnerAgreements /></FleetRouteGate>} />
+          <Route path="agreements/:id" element={<FleetRouteGate section="agreements"><FleetAgreementDetail /></FleetRouteGate>} />
           <Route path="payments" element={<FleetRouteGate section="payments"><FleetOwnerPayments /></FleetRouteGate>} />
           <Route path="riders" element={<FleetRouteGate section="riders"><FleetOwnerRiders /></FleetRouteGate>} />
           <Route path="wallet" element={<FleetRouteGate section="wallet"><FleetWallet /></FleetRouteGate>} />

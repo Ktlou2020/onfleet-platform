@@ -205,7 +205,7 @@ export default function FleetOwnerAgreements() {
     }
   };
 
-  const PAY_LINK_AMOUNTS = [600, 650, 700];
+  const PAY_LINK_AMOUNTS = [600, 650, 700, 850];
 
   const openPayLink = (agreement) => {
     setPayLinkAgreement(agreement);

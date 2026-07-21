@@ -205,9 +205,14 @@ export default function FleetOwnerAgreements() {
     }
   };
 
+  const PAY_LINK_AMOUNTS = [600, 650, 700];
+
   const openPayLink = (agreement) => {
     setPayLinkAgreement(agreement);
-    setPayLinkAmount(String(agreement.weekly_amount));
+    const defaultAmt = PAY_LINK_AMOUNTS.includes(Number(agreement.weekly_amount))
+      ? String(agreement.weekly_amount)
+      : String(PAY_LINK_AMOUNTS[0]);
+    setPayLinkAmount(defaultAmt);
     setPayLinkResult(null);
   };
 
@@ -338,7 +343,6 @@ export default function FleetOwnerAgreements() {
                   {canManage && (
                     <td>
                       <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
-                        {['active', 'paused', 'defaulted'].includes(agreement.status) && <button className="btn btn-sm" disabled={busy} onClick={() => openPayLink(agreement)} title="Send driver a secure card payment link">Send payment link</button>}
                         {['active', 'paused', 'defaulted'].includes(agreement.status) && <button className="btn btn-sm btn-secondary" disabled={busy} onClick={() => openReassign(agreement)}>Reassign</button>}
                         {agreement.status === 'active' && <button className="btn btn-sm btn-secondary" disabled={busy} onClick={() => requestConfirm(agreement, 'paused')}>Pause</button>}
                         {agreement.status === 'paused' && <button className="btn btn-sm btn-secondary" disabled={busy} onClick={() => requestConfirm(agreement, 'active')}>Resume</button>}
@@ -440,23 +444,27 @@ export default function FleetOwnerAgreements() {
           {!payLinkResult ? (
             <>
               <div className="field">
-                <label className="label">Weekly payment amount (R)</label>
-                <input
-                  type="number"
-                  min="1"
-                  step="0.01"
-                  value={payLinkAmount}
-                  onChange={(e) => setPayLinkAmount(e.target.value)}
-                  placeholder={String(payLinkAgreement.weekly_amount)}
-                />
-                <div className="text-xs muted" style={{ marginTop: 4 }}>Defaults to the agreement weekly amount. Adjust only if collecting a different instalment.</div>
+                <label className="label">Weekly payment amount</label>
+                <div className="row" style={{ gap: 8 }}>
+                  {PAY_LINK_AMOUNTS.map((amt) => (
+                    <button
+                      key={amt}
+                      type="button"
+                      onClick={() => setPayLinkAmount(String(amt))}
+                      className={String(payLinkAmount) === String(amt) ? 'btn btn-sm' : 'btn btn-sm btn-secondary'}
+                      style={{ minWidth: 70 }}
+                    >
+                      R{amt}
+                    </button>
+                  ))}
+                </div>
               </div>
               <p className="text-sm muted" style={{ marginBottom: 16 }}>
                 A secure Paystack payment link will be generated and emailed to the driver automatically. You can also copy the link to share via WhatsApp or SMS.
               </p>
               <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
                 <button className="btn btn-secondary" onClick={() => setPayLinkAgreement(null)} disabled={payLinkBusy}>Cancel</button>
-                <button className="btn" onClick={sendPayLink} disabled={payLinkBusy || !payLinkAmount}>
+                <button className="btn" onClick={sendPayLink} disabled={payLinkBusy}>
                   {payLinkBusy ? 'Generating…' : 'Generate & send link'}
                 </button>
               </div>

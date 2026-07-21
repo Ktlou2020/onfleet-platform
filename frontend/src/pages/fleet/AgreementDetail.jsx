@@ -42,7 +42,8 @@ export default function FleetAgreementDetail() {
   const [showPay, setShowPay] = useState(false);
   const [pay, setPay] = useState({ amount: '', method: 'eft', reference: '', notes: '' });
   const [busyAction, setBusyAction] = useState('');
-  const [subAmount, setSubAmount] = useState('');
+  const PAY_LINK_AMOUNTS = [600, 650, 700];
+  const [subAmount, setSubAmount] = useState('600');
   const [subLink, setSubLink] = useState(null);
   const [showBalanceEdit, setShowBalanceEdit] = useState(false);
   const [newBalance, setNewBalance] = useState('');
@@ -241,25 +242,25 @@ export default function FleetAgreementDetail() {
           <p className="muted text-sm mb-3">
             Generate a secure Paystack payment link and send it to the driver automatically. The link is also emailed to {agreement.rider_email || 'the driver'}.
           </p>
-          <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-            <div className="field" style={{ marginBottom: 0 }}>
-              <label className="label">Weekly amount (ZAR)</label>
-              <select value={subAmount} onChange={(e) => { setSubAmount(e.target.value); setSubLink(null); }}>
-                <option value="">Use agreement default (R{agreement.weekly_amount})</option>
-                <option value="500">R500</option>
-                <option value="650">R650</option>
-                <option value="700">R700</option>
-                <option value="750">R750</option>
-                <option value="800">R800</option>
-                <option value="850">R850</option>
-                <option value="1000">R1000</option>
-                <option value="1200">R1200</option>
-              </select>
+          <div className="field mb-3">
+            <label className="label">Weekly payment amount</label>
+            <div className="row" style={{ gap: 8 }}>
+              {PAY_LINK_AMOUNTS.map((amt) => (
+                <button
+                  key={amt}
+                  type="button"
+                  onClick={() => { setSubAmount(String(amt)); setSubLink(null); }}
+                  className={String(subAmount) === String(amt) ? 'btn btn-sm' : 'btn btn-sm btn-secondary'}
+                  style={{ minWidth: 70 }}
+                >
+                  R{amt}
+                </button>
+              ))}
             </div>
-            <button className="btn btn-sm" onClick={generatePayLink} disabled={busyAction === 'pay_link'}>
-              {busyAction === 'pay_link' ? 'Generating…' : 'Generate & send to driver'}
-            </button>
           </div>
+          <button className="btn btn-sm" onClick={generatePayLink} disabled={busyAction === 'pay_link'}>
+            {busyAction === 'pay_link' ? 'Generating…' : 'Generate & send to driver'}
+          </button>
           {subLink && (
             <div className="mt-3">
               <div

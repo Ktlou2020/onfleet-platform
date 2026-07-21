@@ -1875,7 +1875,11 @@ router.post('/agreements/:id/payment-link', companyRoleAllowed(FLEET_RESOURCE_AC
     const overrideAmount = req.body.plan_amount ? Math.round(Number(req.body.plan_amount)) : null;
     const weeklyAmount = overrideAmount || Math.round(Number(agreement.weekly_amount));
 
-    const planCode = getRiderPlanCode(weeklyAmount);
+    if (overrideAmount && !FLEET_PAYMENT_PLAN_AMOUNTS.includes(overrideAmount)) {
+      return res.status(400).json({ error: `Amount must be one of R${FLEET_PAYMENT_PLAN_AMOUNTS.join(', R')}` });
+    }
+
+    const planCode = getFleetPaymentPlanCode(weeklyAmount) || getRiderPlanCode(weeklyAmount);
 
     const reference = `RLINK-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const paystackBody = {
@@ -2190,6 +2194,15 @@ router.get('/billing/verify', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.m
 });
 
 // ---------- RIDER PAYMENT PLAN HELPERS ----------
+
+const FLEET_PAYMENT_PLAN_AMOUNTS = [600, 650, 700];
+
+function getFleetPaymentPlanCode(weeklyAmount) {
+  const amount = Math.round(Number(weeklyAmount));
+  if (!FLEET_PAYMENT_PLAN_AMOUNTS.includes(amount)) return null;
+  const raw = process.env[`PAYSTACK_FlEET_PLAN_${amount}`];
+  return String(raw || '').split('#')[0].trim() || null;
+}
 
 function getRiderPlanCode(weeklyAmount) {
   const amount = Math.round(Number(weeklyAmount));

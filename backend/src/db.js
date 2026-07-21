@@ -967,4 +967,92 @@ if (tableHasColumn('bikes', 'organization_id')) {
   backfillBikeOrganizations();
 }
 
+// ---- Workshop v2: photos, labour rates, job card extensions ----
+db.exec(`
+CREATE TABLE IF NOT EXISTS job_card_photos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_card_id INTEGER NOT NULL REFERENCES job_cards(id) ON DELETE CASCADE,
+  file_path TEXT NOT NULL,
+  original_name TEXT,
+  caption TEXT,
+  created_by INTEGER REFERENCES users(id),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS labour_rates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  description TEXT,
+  item_type TEXT NOT NULL DEFAULT 'labor' CHECK(item_type IN ('labor','part','consumable','other')),
+  unit_cost REAL NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_by INTEGER REFERENCES users(id),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_job_card_photos_card ON job_card_photos(job_card_id);
+CREATE INDEX IF NOT EXISTS idx_labour_rates_active ON labour_rates(active, name);
+`);
+
+// New columns on job_cards
+ensureColumn('job_cards', 'technician_notes', 'TEXT');
+ensureColumn('job_cards', 'paused_at', 'DATETIME');
+ensureColumn('job_cards', 'total_paused_seconds', 'INTEGER DEFAULT 0');
+ensureColumn('job_cards', 'quote_approved_at', 'DATETIME');
+ensureColumn('job_cards', 'quote_approved_by', 'INTEGER');
+
+// Extend job_cards status CHECK to include 'quoted'
+function ensureJobCardQuotedStatus() {
+  const row = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='job_cards'`).get();
+  if (String(row?.sql || '').includes("'quoted'")) return;
+  try {
+    db.exec(`
+      PRAGMA foreign_keys = OFF;
+      BEGIN TRANSACTION;
+      CREATE TABLE job_cards_v3 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        bike_id INTEGER REFERENCES bikes(id),
+        vin TEXT, registration TEXT, make TEXT, model TEXT, year INTEGER, color TEXT, engine_cc INTEGER,
+        fleet_owner_name TEXT, fleet_org_id INTEGER,
+        job_type TEXT NOT NULL DEFAULT 'service' CHECK(job_type IN ('service','repair','inspection','tyres','brakes','electrical','bodywork','other')),
+        description TEXT,
+        technician_notes TEXT,
+        status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','quoted','in_progress','completed','cancelled')),
+        priority TEXT NOT NULL DEFAULT 'normal' CHECK(priority IN ('low','normal','high','urgent')),
+        technician_id INTEGER REFERENCES users(id),
+        created_by INTEGER REFERENCES users(id),
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        started_at DATETIME, completed_at DATETIME,
+        completion_notes TEXT, odometer_km INTEGER, next_service_date TEXT, next_service_km INTEGER, bike_status_after TEXT,
+        paused_at DATETIME, total_paused_seconds INTEGER DEFAULT 0,
+        quote_approved_at DATETIME, quote_approved_by INTEGER
+      );
+      INSERT INTO job_cards_v3 (id, bike_id, vin, registration, make, model, year, color, engine_cc,
+        fleet_owner_name, fleet_org_id, job_type, description, technician_notes,
+        status, priority, technician_id, created_by, created_at, started_at, completed_at,
+        completion_notes, odometer_km, next_service_date, next_service_km, bike_status_after,
+        paused_at, total_paused_seconds, quote_approved_at, quote_approved_by)
+      SELECT id, bike_id, vin, registration, make, model, year, color, engine_cc,
+        fleet_owner_name, fleet_org_id, job_type, description, technician_notes,
+        status, priority, technician_id, created_by, created_at, started_at, completed_at,
+        completion_notes, odometer_km, next_service_date, next_service_km, bike_status_after,
+        paused_at, total_paused_seconds, quote_approved_at, quote_approved_by
+      FROM job_cards;
+      DROP TABLE job_cards;
+      ALTER TABLE job_cards_v3 RENAME TO job_cards;
+      COMMIT;
+      PRAGMA foreign_keys = ON;
+    `);
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_job_cards_status ON job_cards(status, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_job_cards_bike ON job_cards(bike_id);
+    `);
+  } catch (e) {
+    console.error('[ensureJobCardQuotedStatus] migration failed:', e.message);
+    try { db.exec('ROLLBACK; PRAGMA foreign_keys = ON;'); } catch (_) {}
+  }
+}
+ensureJobCardQuotedStatus();
+
 module.exports = db;

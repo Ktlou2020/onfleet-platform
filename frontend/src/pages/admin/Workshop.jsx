@@ -1,15 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Trophy, Medal, Award, Copy, Check, Clock, FileText } from 'lucide-react';
+import { Trophy, Medal, Award, Copy, Check, Clock, FileText, Image, Trash2, Upload, ChevronUp, ChevronDown as ChevronDownIcon, ArrowUpDown } from 'lucide-react';
 import api from '../../api';
 import { Badge, ConfirmModal, Loading, Modal, SearchInput, fmt, fmtDate, fmtDateTime, matchesSearch } from '../../components/ui';
 
-const STATUS_COLOR = { open: 'info', in_progress: 'warning', completed: 'success', cancelled: '' };
+const STATUS_COLOR = { open: 'info', quoted: 'info', in_progress: 'warning', completed: 'success', cancelled: '' };
 const PRIORITY_COLOR = { urgent: 'danger', high: 'warning', normal: '', low: '' };
 const HEALTH_COLOR = { overdue: 'danger', due_soon: 'warning', ok: 'success' };
 const HEALTH_LABEL = { overdue: 'Overdue', due_soon: 'Due soon', ok: 'OK' };
 
-const STATUS_OPTS = ['all', 'open', 'in_progress', 'completed', 'cancelled'];
+const STATUS_OPTS = ['all', 'open', 'quoted', 'in_progress', 'completed', 'cancelled'];
 
 const ACTION_LABELS = {
   'job_card.created': 'Job card created',
@@ -18,9 +18,12 @@ const ACTION_LABELS = {
   'job_card.admin_edit': 'Edited by admin',
   'job_card.note': 'Note added',
   'job_card.cancelled': 'Job cancelled',
+  'job_card.technician_note': 'Technician note',
+  'job_card.paused': 'Work paused',
+  'job_card.resumed': 'Work resumed',
 };
 
-const TABS = ['Overview', 'All Jobs', 'Technicians', 'Fleet Health', 'Staff'];
+const TABS = ['Overview', 'All Jobs', 'Technicians', 'Fleet Health', 'Rates', 'Staff'];
 
 function KPI({ label, value, sub, accent }) {
   return (
@@ -55,6 +58,9 @@ function JobDetailModal({ jobId, onClose, onChanged }) {
   const [noting, setNoting] = useState(false);
   const [itemForm, setItemForm] = useState({ item_type: 'labor', description: '', unit_cost: '', quantity: '1' });
   const [addingItem, setAddingItem] = useState(false);
+  const [photos, setPhotos] = useState([]);
+  const [photoUploading, setPhotoUploading] = useState(false);
+  const photoInputRef = useRef(null);
 
   const reload = () =>
     api.get(`/workshop/admin/jobs/${jobId}`)
@@ -65,13 +71,48 @@ function JobDetailModal({ jobId, onClose, onChanged }) {
       })
       .catch(() => toast.error('Could not load job details'));
 
+  const loadPhotos = () =>
+    api.get(`/workshop/job-cards/${jobId}/photos`)
+      .then((r) => setPhotos(r.data.photos))
+      .catch(() => {});
+
   useEffect(() => {
     if (!jobId) return;
     setData(null);
     setNote('');
-    Promise.all([reload(), api.get('/workshop/technicians').then((r) => setTechnicians(r.data.technicians))])
-      .catch(() => {});
+    setPhotos([]);
+    Promise.all([
+      reload(),
+      api.get('/workshop/technicians').then((r) => setTechnicians(r.data.technicians)),
+      loadPhotos(),
+    ]).catch(() => {});
   }, [jobId]);
+
+  const uploadPhoto = async (file) => {
+    if (!file) return;
+    const formData = new FormData();
+    formData.append('photo', file);
+    try {
+      setPhotoUploading(true);
+      await api.post(`/workshop/job-cards/${jobId}/photos`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+      await loadPhotos();
+      toast.success('Photo uploaded');
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Upload failed');
+    } finally {
+      setPhotoUploading(false);
+      if (photoInputRef.current) photoInputRef.current.value = '';
+    }
+  };
+
+  const deletePhoto = async (photoId) => {
+    try {
+      await api.delete(`/workshop/job-cards/${jobId}/photos/${photoId}`);
+      setPhotos((ps) => ps.filter((p) => p.id !== photoId));
+    } catch {
+      toast.error('Could not delete photo');
+    }
+  };
 
   const saveEdit = async () => {
     try {
@@ -322,6 +363,42 @@ function JobDetailModal({ jobId, onClose, onChanged }) {
             </div>
           </div>
 
+          {/* Photos */}
+          <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid var(--border)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <div className="text-xs muted" style={{ textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Image size={12} /> Photos {photos.length > 0 && `(${photos.length})`}
+              </div>
+              <button
+                className="btn btn-sm btn-secondary"
+                onClick={() => photoInputRef.current?.click()}
+                disabled={photoUploading}
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}
+              >
+                <Upload size={12} /> {photoUploading ? 'Uploading…' : 'Upload'}
+              </button>
+              <input ref={photoInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => uploadPhoto(e.target.files?.[0])} />
+            </div>
+            {photos.length === 0 ? (
+              <p className="text-xs muted">No photos yet.</p>
+            ) : (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {photos.map((p) => (
+                  <div key={p.id} style={{ position: 'relative', width: 80, height: 80, borderRadius: 6, overflow: 'hidden', border: '1px solid var(--border)' }}>
+                    <img src={p.url} alt={p.original_name || 'photo'} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    <button
+                      onClick={() => deletePhoto(p.id)}
+                      style={{ position: 'absolute', top: 2, right: 2, background: 'rgba(0,0,0,0.55)', border: 'none', borderRadius: 4, color: '#fff', cursor: 'pointer', padding: '2px 4px', lineHeight: 1 }}
+                      title="Delete photo"
+                    >
+                      <Trash2 size={11} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* Audit trail */}
           <div>
             <div className="text-xs muted" style={{ marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Activity Log</div>
@@ -359,15 +436,18 @@ function JobDetailModal({ jobId, onClose, onChanged }) {
 function OverviewTab() {
   const [stats, setStats] = useState(null);
   const [revenue, setRevenue] = useState(null);
+  const [revenueByOrg, setRevenueByOrg] = useState(null);
   const [viewJobId, setViewJobId] = useState(null);
 
   useEffect(() => {
     Promise.all([
       api.get('/workshop/admin/stats'),
-      api.get('/workshop/admin/revenue-by-month')
-    ]).then(([s, r]) => {
+      api.get('/workshop/admin/revenue-by-month'),
+      api.get('/workshop/admin/revenue-by-org'),
+    ]).then(([s, r, ro]) => {
       setStats(s.data);
       setRevenue(r.data);
+      setRevenueByOrg(ro.data.by_org || []);
     }).catch(() => toast.error('Could not load overview'));
   }, []);
 
@@ -375,6 +455,7 @@ function OverviewTab() {
 
   const { recent_jobs, stats: s } = stats;
   const { months, by_type, overdue_jobs } = revenue;
+  const maxOrgRevenue = Math.max(...(revenueByOrg || []).map((o) => o.revenue), 1);
   const maxRevenue = Math.max(...months.map((m) => m.revenue), 1);
 
   return (
@@ -430,6 +511,25 @@ function OverviewTab() {
         </div>
       </div>
 
+      {/* Revenue by fleet org */}
+      {revenueByOrg && revenueByOrg.length > 0 && (
+        <div className="card" style={{ padding: 20, marginBottom: 28 }}>
+          <div style={{ fontWeight: 700, marginBottom: 14, fontSize: 14 }}>Revenue by fleet</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {revenueByOrg.map((o) => (
+              <div key={o.org_name} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span className="text-xs muted" style={{ width: 140, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={o.org_name || 'Walk-in'}>{o.org_name || 'Walk-in'}</span>
+                <div style={{ flex: 1, background: 'var(--border)', borderRadius: 4, height: 10, overflow: 'hidden' }}>
+                  <div style={{ width: `${(o.revenue / maxOrgRevenue) * 100}%`, background: 'var(--accent)', height: '100%', borderRadius: 4, minWidth: o.revenue > 0 ? 4 : 0 }} />
+                </div>
+                <span className="text-xs" style={{ width: 80, textAlign: 'right', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{fmt(o.revenue)}</span>
+                <span className="text-xs muted" style={{ width: 28, flexShrink: 0 }}>{o.job_count}j</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>Recent Jobs</div>
       <div className="card table-wrap" style={{ padding: 0 }}>
         <table className="table">
@@ -460,6 +560,20 @@ function OverviewTab() {
   );
 }
 
+function SortHeader({ col, label, sortBy, sortDir, onSort }) {
+  const active = sortBy === col;
+  return (
+    <th style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} onClick={() => onSort(col)}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        {label}
+        {active
+          ? (sortDir === 'asc' ? <ChevronUp size={12} /> : <ChevronDownIcon size={12} />)
+          : <ArrowUpDown size={12} style={{ opacity: 0.35 }} />}
+      </span>
+    </th>
+  );
+}
+
 // --- Tab: All Jobs ---
 function AllJobsTab() {
   const [jobs, setJobs] = useState([]);
@@ -470,17 +584,31 @@ function AllJobsTab() {
   const [techFilter, setTechFilter] = useState('');
   const [search, setSearch] = useState('');
   const [offset, setOffset] = useState(0);
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [sortBy, setSortBy] = useState('');
+  const [sortDir, setSortDir] = useState('desc');
   const LIMIT = 50;
 
   const [viewJobId, setViewJobId] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [busy, setBusy] = useState(false);
 
+  const handleSort = (col) => {
+    if (sortBy === col) {
+      setSortDir((d) => d === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortBy(col);
+      setSortDir('desc');
+    }
+    setOffset(0);
+  };
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const [jobsRes, techRes] = await Promise.all([
-        api.get('/workshop/admin/jobs', { params: { status: status === 'all' ? '' : status, technician_id: techFilter, search, limit: LIMIT, offset } }),
+        api.get('/workshop/admin/jobs', { params: { status: status === 'all' ? '' : status, technician_id: techFilter, search, limit: LIMIT, offset, date_from: dateFrom, date_to: dateTo, sort_by: sortBy, sort_dir: sortDir } }),
         api.get('/workshop/technicians')
       ]);
       setJobs(jobsRes.data.jobs);
@@ -491,10 +619,10 @@ function AllJobsTab() {
     } finally {
       setLoading(false);
     }
-  }, [status, techFilter, search, offset]);
+  }, [status, techFilter, search, offset, dateFrom, dateTo, sortBy, sortDir]);
 
   useEffect(() => { load(); }, [load]);
-  useEffect(() => { setOffset(0); }, [status, techFilter, search]);
+  useEffect(() => { setOffset(0); }, [status, techFilter, search, dateFrom, dateTo, sortBy, sortDir]);
 
   const deleteJob = async () => {
     try {
@@ -527,15 +655,18 @@ function AllJobsTab() {
 
   return (
     <>
-      <div className="flex-between mb-3" style={{ flexWrap: 'wrap', gap: 10 }}>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', flex: 1 }}>
-          <SearchInput value={search} onChange={setSearch} placeholder="Search bike, VIN, description, technician…" style={{ flex: '1 1 240px', maxWidth: 340 }} />
-          <select value={techFilter} onChange={(e) => setTechFilter(e.target.value)} style={{ fontSize: 13, minWidth: 140 }}>
-            <option value="">All technicians</option>
-            {technicians.map((t) => <option key={t.id} value={t.id}>{t.full_name}</option>)}
-          </select>
-        </div>
-        <button className="btn btn-sm btn-secondary" onClick={exportCsv}>Export CSV</button>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+        <SearchInput value={search} onChange={setSearch} placeholder="Search bike, VIN, description, technician…" style={{ flex: '1 1 240px', maxWidth: 340 }} />
+        <select value={techFilter} onChange={(e) => setTechFilter(e.target.value)} style={{ fontSize: 13, minWidth: 140 }}>
+          <option value="">All technicians</option>
+          {technicians.map((t) => <option key={t.id} value={t.id}>{t.full_name}</option>)}
+        </select>
+        <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} title="From date" style={{ fontSize: 13 }} />
+        <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} title="To date" style={{ fontSize: 13 }} />
+        {(dateFrom || dateTo) && (
+          <button className="btn btn-sm btn-secondary" onClick={() => { setDateFrom(''); setDateTo(''); }}>Clear dates</button>
+        )}
+        <button className="btn btn-sm btn-secondary" style={{ marginLeft: 'auto' }} onClick={exportCsv}>Export CSV</button>
       </div>
       <div className="filter-pills mb-3">
         {STATUS_OPTS.map((s) => (
@@ -548,7 +679,12 @@ function AllJobsTab() {
       <div className="card table-wrap" style={{ padding: 0 }}>
         <table className="table">
           <thead>
-            <tr><th>#</th><th>Bike</th><th>Type</th><th>Priority</th><th>Status</th><th>Technician</th><th>Fleet</th><th style={{ textAlign: 'right' }}>Cost</th><th>Created</th><th style={{ width: 96 }}></th></tr>
+            <tr>
+              <th>#</th><th>Bike</th><th>Type</th><th>Priority</th><th>Status</th><th>Technician</th><th>Fleet</th>
+              <SortHeader col="total_cost" label="Cost" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+              <SortHeader col="created_at" label="Created" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+              <th style={{ width: 96 }}></th>
+            </tr>
           </thead>
           <tbody>
             {jobs.map((job) => (
@@ -655,36 +791,38 @@ function TechniciansTab() {
 
 // --- Tab: Fleet Health ---
 function FleetHealthTab() {
-  const [bikes, setBikes] = useState(null);
+  const [result, setResult] = useState(null);
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
-  useEffect(() => {
-    api.get('/workshop/admin/fleet-health')
-      .then((r) => setBikes(r.data.bikes))
-      .catch(() => toast.error('Could not load fleet health'));
-  }, []);
+  const [offset, setOffset] = useState(0);
+  const LIMIT = 50;
 
-  const filtered = useMemo(() => (bikes || []).filter((b) => {
-    if (filter === 'overdue' && b.service_health !== 'overdue') return false;
-    if (filter === 'due_soon' && b.service_health !== 'due_soon') return false;
-    if (filter === 'in_workshop' && !b.active_job_id) return false;
-    return matchesSearch(search, b.registration, b.vin, b.make, b.model, b.org_name);
-  }), [bikes, filter, search]);
+  const load = useCallback(async () => {
+    try {
+      const r = await api.get('/workshop/admin/fleet-health', { params: { limit: LIMIT, offset, health: filter === 'all' || filter === 'in_workshop' ? '' : filter } });
+      setResult(r.data);
+    } catch {
+      toast.error('Could not load fleet health');
+    }
+  }, [filter, offset]);
 
-  if (!bikes) return <Loading />;
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { setOffset(0); }, [filter]);
 
-  const overdue = bikes.filter((b) => b.service_health === 'overdue').length;
-  const dueSoon = bikes.filter((b) => b.service_health === 'due_soon').length;
-  const inWorkshop = bikes.filter((b) => b.active_job_id).length;
+  const bikes = result?.bikes || [];
+  const total = result?.total ?? 0;
+  const totalPages = Math.ceil(total / LIMIT);
+  const currentPage = Math.floor(offset / LIMIT) + 1;
+
+  const filtered = useMemo(() => filter === 'in_workshop'
+    ? bikes.filter((b) => b.active_job_id && matchesSearch(search, b.registration, b.vin, b.make, b.model, b.org_name))
+    : bikes.filter((b) => matchesSearch(search, b.registration, b.vin, b.make, b.model, b.org_name)),
+  [bikes, filter, search]);
+
+  if (!result) return <Loading />;
 
   return (
     <>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 14, marginBottom: 20 }}>
-        <KPI label="Overdue service" value={overdue} accent="#ef4444" />
-        <KPI label="Due within 30d" value={dueSoon} accent="#f97316" />
-        <KPI label="In workshop" value={inWorkshop} accent="#6366f1" />
-        <KPI label="Total bikes" value={bikes.length} accent="#6b7280" />
-      </div>
       <div className="mb-3" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
         <SearchInput value={search} onChange={setSearch} placeholder="Search registration, VIN, make, fleet…" style={{ flex: '1 1 240px', maxWidth: 340 }} />
         <div className="filter-pills">
@@ -692,6 +830,7 @@ function FleetHealthTab() {
             <button key={val} className={`filter-pill ${filter === val ? 'active' : ''}`} onClick={() => setFilter(val)}>{label}</button>
           ))}
         </div>
+        <span className="text-xs muted" style={{ marginLeft: 'auto' }}>{total} bikes · page {currentPage} of {Math.max(1, totalPages)}</span>
       </div>
       <div className="card table-wrap" style={{ padding: 0 }}>
         <table className="table">
@@ -728,6 +867,140 @@ function FleetHealthTab() {
         </table>
         {!filtered.length && <div style={{ padding: 24, textAlign: 'center' }} className="muted">No bikes match the current filter.</div>}
       </div>
+      {totalPages > 1 && (
+        <div className="row" style={{ justifyContent: 'center', gap: 8, marginTop: 12 }}>
+          <button className="btn btn-sm btn-secondary" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - LIMIT))}>← Prev</button>
+          <span className="text-sm muted">{currentPage} / {totalPages}</span>
+          <button className="btn btn-sm btn-secondary" disabled={offset + LIMIT >= total} onClick={() => setOffset(offset + LIMIT)}>Next →</button>
+        </div>
+      )}
+    </>
+  );
+}
+
+// --- Tab: Rates ---
+function RatesTab() {
+  const [rates, setRates] = useState(null);
+  const [showCreate, setShowCreate] = useState(false);
+  const [editRate, setEditRate] = useState(null);
+  const [form, setForm] = useState({ name: '', description: '', item_type: 'labor', unit_cost: '' });
+  const [busy, setBusy] = useState(false);
+
+  const load = () => api.get('/workshop/labour-rates').then((r) => setRates(r.data.rates)).catch(() => toast.error('Could not load rates'));
+  useEffect(() => { load(); }, []);
+
+  const openCreate = () => { setForm({ name: '', description: '', item_type: 'labor', unit_cost: '' }); setEditRate(null); setShowCreate(true); };
+  const openEdit = (rate) => { setForm({ name: rate.name, description: rate.description || '', item_type: rate.item_type, unit_cost: String(rate.unit_cost) }); setEditRate(rate); setShowCreate(true); };
+
+  const save = async () => {
+    if (!form.name.trim() || !form.unit_cost) return;
+    try {
+      setBusy(true);
+      if (editRate) {
+        await api.put(`/workshop/labour-rates/${editRate.id}`, form);
+        toast.success('Rate updated');
+      } else {
+        await api.post('/workshop/labour-rates', { ...form, unit_cost: Number(form.unit_cost) });
+        toast.success('Rate created');
+      }
+      setShowCreate(false);
+      await load();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not save rate');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const archive = async (rate) => {
+    try {
+      await api.delete(`/workshop/labour-rates/${rate.id}`);
+      toast.success('Rate archived');
+      await load();
+    } catch {
+      toast.error('Could not archive rate');
+    }
+  };
+
+  if (!rates) return <Loading />;
+
+  const byType = rates.reduce((acc, r) => { (acc[r.item_type] = acc[r.item_type] || []).push(r); return acc; }, {});
+
+  return (
+    <>
+      <div className="flex-between mb-3">
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 2 }}>Labour Rates &amp; Parts Catalogue</div>
+          <div className="text-xs muted">Rates appear as quick-add items when creating job card line items</div>
+        </div>
+        <button className="btn" onClick={openCreate}>+ Add rate</button>
+      </div>
+
+      {Object.entries(byType).map(([type, items]) => (
+        <div key={type} style={{ marginBottom: 20 }}>
+          <div className="text-xs muted" style={{ textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>{type}</div>
+          <div className="card table-wrap" style={{ padding: 0 }}>
+            <table className="table" style={{ fontSize: 13 }}>
+              <thead>
+                <tr><th>Name</th><th>Description</th><th style={{ textAlign: 'right' }}>Unit cost</th><th style={{ width: 96 }}></th></tr>
+              </thead>
+              <tbody>
+                {items.map((r) => (
+                  <tr key={r.id}>
+                    <td style={{ fontWeight: 600 }}>{r.name}</td>
+                    <td className="muted text-xs">{r.description || '—'}</td>
+                    <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(r.unit_cost)}</td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
+                        <button className="btn btn-sm btn-secondary" onClick={() => openEdit(r)}>Edit</button>
+                        <button className="btn btn-sm btn-danger" onClick={() => archive(r)} title="Archive">×</button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
+
+      {rates.length === 0 && (
+        <div style={{ padding: 40, textAlign: 'center' }}>
+          <p className="muted">No rates yet. Add your first labour rate or part to get started.</p>
+          <button className="btn" style={{ marginTop: 12 }} onClick={openCreate}>Add first rate</button>
+        </div>
+      )}
+
+      {showCreate && (
+        <Modal title={editRate ? 'Edit rate' : 'Add rate'} onClose={() => setShowCreate(false)}>
+          <div className="field">
+            <label className="label">Name <span style={{ color: 'var(--danger)' }}>*</span></label>
+            <input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="e.g. Basic service, Oil filter" />
+          </div>
+          <div className="grid grid-2" style={{ gap: 12 }}>
+            <div className="field">
+              <label className="label">Type</label>
+              <select value={form.item_type} onChange={(e) => setForm((f) => ({ ...f, item_type: e.target.value }))}>
+                {['labor', 'part', 'consumable', 'other'].map((t) => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
+              </select>
+            </div>
+            <div className="field">
+              <label className="label">Unit cost (R) <span style={{ color: 'var(--danger)' }}>*</span></label>
+              <input type="number" min="0" step="0.01" value={form.unit_cost} onChange={(e) => setForm((f) => ({ ...f, unit_cost: e.target.value }))} placeholder="0.00" />
+            </div>
+          </div>
+          <div className="field">
+            <label className="label">Description (optional)</label>
+            <input value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} placeholder="Short description" />
+          </div>
+          <div className="row" style={{ justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
+            <button className="btn btn-secondary" onClick={() => setShowCreate(false)}>Cancel</button>
+            <button className="btn" onClick={save} disabled={busy || !form.name.trim() || !form.unit_cost}>
+              {busy ? 'Saving…' : editRate ? 'Save changes' : 'Create rate'}
+            </button>
+          </div>
+        </Modal>
+      )}
     </>
   );
 }
@@ -876,6 +1149,7 @@ export default function AdminWorkshop() {
       {tab === 'All Jobs' && <AllJobsTab />}
       {tab === 'Technicians' && <TechniciansTab />}
       {tab === 'Fleet Health' && <FleetHealthTab />}
+      {tab === 'Rates' && <RatesTab />}
       {tab === 'Staff' && <StaffTab />}
     </>
   );

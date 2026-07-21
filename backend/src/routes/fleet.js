@@ -2539,6 +2539,7 @@ router.get('/collections', companyRoleAllowed(FLEET_RESOURCE_ACCESS.collections.
     const items = db.prepare(`SELECT a.id, a.agreement_no, a.status, a.weekly_amount, a.start_date,
         u.full_name AS rider_name, u.email AS rider_email, u.phone AS rider_phone,
         b.registration AS bike_registration, b.make, b.model,
+        td.id AS tracking_device_id, td.model AS device_model, td.connected AS device_connected,
         COALESCE((
           SELECT SUM(CASE WHEN ps.amount_due > COALESCE(ps.amount_paid, 0) THEN ps.amount_due - COALESCE(ps.amount_paid, 0) ELSE 0 END)
           FROM payment_schedules ps
@@ -2556,6 +2557,7 @@ router.get('/collections', companyRoleAllowed(FLEET_RESOURCE_ACCESS.collections.
       FROM agreements a
       JOIN bikes b ON b.id = a.bike_id
       LEFT JOIN users u ON u.id = a.user_id
+      LEFT JOIN tracking_devices td ON td.bike_id = b.id
       WHERE (a.status = 'defaulted' OR EXISTS(
         SELECT 1 FROM payment_schedules ps WHERE ps.agreement_id = a.id AND ps.status = 'overdue'
       )) AND ${scope.clause}

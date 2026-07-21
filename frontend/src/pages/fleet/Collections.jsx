@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../../api';
 import { useAuth } from '../../auth';
-import { Badge, EmptyState, Loading, SearchInput, fmt, fmtDate, matchesSearch } from '../../components/ui';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { Badge, ConfirmModal, EmptyState, Loading, SearchInput, fmt, fmtDate, matchesSearch } from '../../components/ui';
+import { ChevronDown, ChevronRight, Zap, ZapOff, Wifi, WifiOff } from 'lucide-react';
 import { canManageFleetSection } from './access';
 
 const STAGES = ['pending', 'contacted', 'notice_sent', 'recovery', 'resolved'];
@@ -24,6 +24,7 @@ function buildActionForm() {
 export default function Collections() {
   const { user } = useAuth();
   const canManage = canManageFleetSection(user?.role, 'collections');
+  const canImmobilise = canManageFleetSection(user?.role, 'tracking');
   const [loading, setLoading] = useState(true);
   const [collections, setCollections] = useState([]);
   const [search, setSearch] = useState('');
@@ -33,6 +34,8 @@ export default function Collections() {
   const [actionForm, setActionForm] = useState(buildActionForm());
   const [saving, setSaving] = useState(false);
   const [loadingActions, setLoadingActions] = useState(false);
+  const [immobModal, setImmobModal] = useState(null); // { item, preset }
+  const [immobBusy, setImmobBusy] = useState(false);
 
   const load = async ({ silent = false } = {}) => {
     if (!silent) setLoading(true);
@@ -89,10 +92,38 @@ export default function Collections() {
     }
   };
 
+  const sendCommand = async () => {
+    if (!immobModal) return;
+    const { item, preset } = immobModal;
+    setImmobBusy(true);
+    try {
+      const { data } = await api.post(`/fleet/tracking/devices${item.tracking_device_id}/commands`, { preset });
+      toast.success(data.note || (preset === 'cut_engine' ? 'Immobilisation command sent' : 'Restore command sent'));
+      setImmobModal(null);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Command failed');
+    } finally {
+      setImmobBusy(false);
+    }
+  };
+
   if (loading) return <Loading />;
 
   return (
     <>
+      {immobModal && (
+        <ConfirmModal
+          title={immobModal.preset === 'cut_engine' ? `Immobilise ${immobModal.item.bike_registration || 'bike'}?` : `Restore ignition — ${immobModal.item.bike_registration || 'bike'}?`}
+          body={immobModal.preset === 'cut_engine'
+            ? `The bike won't start until you restore ignition. If the device is offline the command will be queued and sent when it reconnects. The rider will not receive an automatic notification.`
+            : `The bike's ignition will be restored. If the device is offline the command will be queued.`}
+          confirmLabel={immobModal.preset === 'cut_engine' ? 'Immobilise bike' : 'Restore ignition'}
+          danger={immobModal.preset === 'cut_engine'}
+          busy={immobBusy}
+          onConfirm={sendCommand}
+          onClose={() => { if (!immobBusy) setImmobModal(null); }}
+        />
+      )}
       <div className="flex-between mb-4" style={{ gap: 16, flexWrap: 'wrap' }}>
         <div>
           <h1 className="page-title">Collections</h1>
@@ -137,6 +168,29 @@ export default function Collections() {
                     {item.current_stage.replace(/_/g, ' ')}
                   </span>
                   <Badge status={item.status} />
+                  {canImmobilise && item.tracking_device_id && (
+                    <div style={{ display: 'flex', gap: 6 }} onClick={(e) => e.stopPropagation()}>
+                      <span title={item.device_connected ? 'Device online' : 'Device offline — command will queue'} style={{ display: 'flex', alignItems: 'center', color: item.device_connected ? 'var(--success)' : 'var(--muted)' }}>
+                        {item.device_connected ? <Wifi size={13} /> : <WifiOff size={13} />}
+                      </span>
+                      <button
+                        className="btn btn-sm btn-danger"
+                        style={{ padding: '3px 10px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}
+                        onClick={() => setImmobModal({ item, preset: 'cut_engine' })}
+                        title="Immobilise bike"
+                      >
+                        <ZapOff size={12} /> Immobilise
+                      </button>
+                      <button
+                        className="btn btn-sm btn-secondary"
+                        style={{ padding: '3px 10px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}
+                        onClick={() => setImmobModal({ item, preset: 'restore_engine' })}
+                        title="Restore ignition"
+                      >
+                        <Zap size={12} /> Restore
+                      </button>
+                    </div>
+                  )}
                   {isExpanded ? <ChevronDown size={16} style={{ color: 'var(--muted)' }} /> : <ChevronRight size={16} style={{ color: 'var(--muted)' }} />}
                 </div>
               </div>

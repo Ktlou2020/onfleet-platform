@@ -2018,15 +2018,17 @@ router.post('/payments/bulk-delete', companyRoleAllowed(FLEET_RESOURCE_ACCESS.pa
 const PAYSTACK_API = 'https://api.paystack.co';
 
 const FLEET_BILLING_PLANS = {
-  small:  { key: 'small',  name: 'Starter',      monthly_price: 200,   max_bikes: 20,  max_admin_users: 3,  features: ['Up to 20 bikes', 'R200 flat monthly fee', '3 admin users', 'CSV imports', 'Standard support'] },
-  medium: { key: 'medium', name: 'Growth',        monthly_price: 750,   max_bikes: 60,  max_admin_users: 5,  features: ['Up to 60 bikes', 'R750 flat monthly fee', '5 admin users', 'Advanced filters', 'Performance reporting'] },
-  large:  { key: 'large',  name: 'Professional',  monthly_price: 1500,  max_bikes: 100, max_admin_users: 10, features: ['Up to 100 bikes', 'R1 500 flat monthly fee', '10 admin users', 'Priority onboarding', 'Multi-branch support'] }
+  small:  { key: 'small',  name: 'Starter',      monthly_price: 200,   max_bikes: 6,    max_admin_users: 2,  features: ['1–6 bikes', 'R200 flat monthly', '2 admin users', 'Standard support'] },
+  medium: { key: 'medium', name: 'Growth',        monthly_price: 750,   max_bikes: 20,   max_admin_users: 3,  features: ['7–20 bikes', 'R750 flat monthly', '3 admin users', 'Advanced filters', 'Performance reporting'] },
+  large:  { key: 'large',  name: 'Professional',  monthly_price: 1500,  max_bikes: 35,   max_admin_users: 5,  features: ['21–35 bikes', 'R1 500 flat monthly', '5 admin users', 'Priority onboarding', 'Multi-branch support'] },
+  empire: { key: 'empire', name: 'Empire',        monthly_price: 2800,  max_bikes: 9999, max_admin_users: 20, features: ['36+ bikes', 'R2 800 flat monthly', '20 admin users', 'Dedicated onboarding', 'Custom integrations', 'SLA support'] }
 };
 
 function getTierForBikeCount(count) {
-  if (count <= 20) return 'small';
-  if (count <= 60) return 'medium';
-  return 'large';
+  if (count <= 6)  return 'small';
+  if (count <= 20) return 'medium';
+  if (count <= 35) return 'large';
+  return 'empire';
 }
 
 function getPlanPaystackCode(planKey) {
@@ -2116,7 +2118,7 @@ router.post('/billing/subscribe', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billi
   try {
     const org = getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
     const { plan_key } = req.body;
-    if (!FLEET_BILLING_PLANS[plan_key]) return res.status(400).json({ error: 'Invalid plan key. Choose small, medium, or large.', valid_keys: Object.keys(FLEET_BILLING_PLANS) });
+    if (!FLEET_BILLING_PLANS[plan_key]) return res.status(400).json({ error: 'Invalid plan key.', valid_keys: Object.keys(FLEET_BILLING_PLANS) });
 
     if (!process.env.PAYSTACK_SECRET_KEY || process.env.PAYSTACK_SECRET_KEY.includes('xxxx')) {
       return res.status(500).json({ error: 'Paystack is not configured on this server. Please set PAYSTACK_SECRET_KEY.' });

@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Bike, FileText, CreditCard, HelpCircle, LogOut, Users, Wallet, AlertTriangle, PiggyBank, AlertCircle, MapPin, Key } from 'lucide-react';
+import { LayoutDashboard, Bike, FileText, CreditCard, HelpCircle, LogOut, Users, Wallet, AlertTriangle, PiggyBank, AlertCircle, MapPin, Key, Clock, CheckCircle2, ArrowRight, X } from 'lucide-react';
 import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
 import { useAuth } from '../../auth';
 import { FLEET_NAV_ITEMS, canAccessFleetRoute, getFleetRoleLabel } from './access';
 import api from '../../api';
+import { fmt } from '../../components/ui';
 
 const navIconMap = {
   dashboard: LayoutDashboard,
@@ -24,30 +25,141 @@ const navIconMap = {
 
 const BLOCKED_STATUSES = ['past_due', 'suspended', 'cancelled'];
 
-function SubscriptionGate({ status, canOpenBilling, onGoToBilling }) {
-  const messages = {
-    past_due: { heading: 'Trial ended — subscription required', body: 'Your free 1-month trial has expired. Choose a plan to keep accessing the fleet portal.' },
-    suspended: { heading: 'Account suspended', body: 'Your subscription payment failed. Update your payment method to restore access.' },
-    cancelled: { heading: 'Subscription cancelled', body: 'Your subscription has been cancelled. Choose a plan to regain access.' },
+const PLAN_ACCENT = {
+  small:  '#10b981',
+  medium: '#3b82f6',
+  large:  '#8b5cf6',
+  empire: '#f59e0b',
+};
+
+function SubscriptionGate({ billingData, onSubscribed }) {
+  const { logout } = useAuth();
+  const nav = useNavigate();
+  const [busy, setBusy] = useState('');
+
+  const org = billingData?.organization;
+  const plans = billingData?.plans || [];
+  const status = org?.status;
+
+  const headings = {
+    past_due:  'Your 14-day free trial has ended',
+    suspended: 'Payment failed — access suspended',
+    cancelled: 'Subscription cancelled',
   };
-  const { heading, body } = messages[status] || { heading: 'Subscription required', body: 'Please subscribe to continue.' };
+  const sublines = {
+    past_due:  'Subscribe to a plan below to restore full access. Paystack securely captures your card — billing starts immediately.',
+    suspended: 'Your last payment was not collected. Update your payment method by subscribing again below.',
+    cancelled: 'Your subscription was cancelled. Choose a plan below to regain access.',
+  };
+
+  const subscribe = async (planKey) => {
+    try {
+      setBusy(planKey);
+      const { data } = await api.post('/fleet/billing/subscribe', { plan_key: planKey });
+      window.location.href = data.authorization_url;
+    } catch (err) {
+      setBusy('');
+      alert(err.response?.data?.error || 'Could not start checkout — please try again.');
+    }
+  };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '60vh', gap: 24, padding: 32, textAlign: 'center' }}>
-      <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'rgba(239,68,68,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <AlertTriangle size={30} style={{ color: 'var(--danger)' }} />
+    <div style={{
+      minHeight: '100vh', display: 'flex', flexDirection: 'column',
+      alignItems: 'center', justifyContent: 'center',
+      background: 'var(--bg)', padding: '32px 16px'
+    }}>
+      <div style={{ marginBottom: 32 }}><Logo size="lg" /></div>
+
+      <div style={{ maxWidth: 640, width: '100%', textAlign: 'center', marginBottom: 40 }}>
+        <div style={{
+          width: 56, height: 56, borderRadius: '50%',
+          background: 'rgba(239,68,68,0.12)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          margin: '0 auto 20px'
+        }}>
+          <AlertTriangle size={26} style={{ color: 'var(--danger)' }} />
+        </div>
+        <h2 style={{ marginBottom: 10, fontSize: 22 }}>{headings[status] || 'Subscription required'}</h2>
+        <p className="muted" style={{ maxWidth: 480, margin: '0 auto' }}>
+          {sublines[status] || 'Please subscribe to continue.'}
+        </p>
       </div>
-      <div>
-        <h2 style={{ marginBottom: 8 }}>{heading}</h2>
-        <p className="muted" style={{ maxWidth: 400 }}>{body}</p>
+
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: `repeat(${Math.min(plans.length, 2)}, minmax(220px, 1fr))`,
+        gap: 16, width: '100%', maxWidth: 900, marginBottom: 32
+      }}>
+        {plans.map((plan) => {
+          const accent = PLAN_ACCENT[plan.key] || 'var(--primary-light)';
+          return (
+            <div key={plan.key} className="card" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: accent, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>
+                  {plan.name}
+                </div>
+                <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--primary-light)', lineHeight: 1 }}>
+                  {fmt(plan.monthly_price)}<span className="muted text-sm" style={{ fontWeight: 400 }}>/mo</span>
+                </div>
+              </div>
+              <ul style={{ listStyle: 'none', display: 'grid', gap: 6, flex: 1 }}>
+                {plan.features.map((f) => (
+                  <li key={f} className="row" style={{ gap: 7, alignItems: 'flex-start' }}>
+                    <CheckCircle2 size={13} style={{ color: 'var(--success)', flexShrink: 0, marginTop: 2 }} />
+                    <span className="text-sm">{f}</span>
+                  </li>
+                ))}
+              </ul>
+              <button
+                className="btn btn-sm"
+                onClick={() => subscribe(plan.key)}
+                disabled={!!busy}
+                style={{ background: busy === plan.key ? undefined : accent, borderColor: accent, display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'center' }}
+              >
+                {busy === plan.key ? 'Redirecting…' : <><span>Subscribe</span><ArrowRight size={13} /></>}
+              </button>
+            </div>
+          );
+        })}
       </div>
-      {canOpenBilling ? (
-        <button className="btn" onClick={onGoToBilling} style={{ minWidth: 160 }}>
-          <Wallet size={15} /> View Plans &amp; Subscribe
-        </button>
-      ) : (
-        <p className="muted text-sm">Contact your account administrator to reactivate this account.</p>
-      )}
+
+      <div className="muted text-xs" style={{ marginBottom: 24, textAlign: 'center' }}>
+        All billing via Paystack — card details captured securely. Cancel any time.
+      </div>
+
+      <button
+        onClick={() => { logout(); nav('/fleet/login'); }}
+        className="btn btn-secondary btn-sm"
+        style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+      >
+        <LogOut size={13} /> Sign out
+      </button>
+    </div>
+  );
+}
+
+function TrialBanner({ daysLeft, onSubscribe, onDismiss }) {
+  const urgent = daysLeft <= 3;
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+      padding: '7px 16px',
+      background: urgent ? 'rgba(239,68,68,0.12)' : 'rgba(245,158,11,0.1)',
+      borderBottom: `1px solid ${urgent ? 'rgba(239,68,68,0.25)' : 'rgba(245,158,11,0.25)'}`,
+      fontSize: 13
+    }}>
+      <Clock size={14} style={{ color: urgent ? 'var(--danger)' : 'var(--warn)', flexShrink: 0 }} />
+      <span style={{ flex: 1 }}>
+        <strong>{daysLeft === 0 ? 'Trial expires today' : `${daysLeft} day${daysLeft !== 1 ? 's' : ''} left on your free trial`}</strong>
+        {' — add your card now so there’s no interruption when it ends.'}
+      </span>
+      <button className="btn btn-sm" onClick={onSubscribe} style={{ flexShrink: 0, fontSize: 12 }}>
+        Add payment method
+      </button>
+      <button onClick={onDismiss} style={{ background: 'transparent', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: 2, flexShrink: 0 }}>
+        <X size={14} />
+      </button>
     </div>
   );
 }
@@ -57,18 +169,29 @@ export default function FleetOwnerShell() {
   const nav = useNavigate();
   const location = useLocation();
   const [search, setSearch] = useState('');
-  const [orgStatus, setOrgStatus] = useState(null);
+  const [billingData, setBillingData] = useState(null);
   const [statusLoaded, setStatusLoaded] = useState(false);
+  const [bannerDismissed, setBannerDismissed] = useState(false);
 
   const canOpenBilling = canAccessFleetRoute(user?.role, 'billing');
   const onBillingPage = location.pathname.endsWith('/billing');
 
-  useEffect(() => {
+  const loadBilling = useCallback(() => {
     api.get('/fleet/billing/status')
-      .then((r) => { setOrgStatus(r.data.organization?.status ?? null); })
-      .catch(() => { setOrgStatus('past_due'); })
+      .then((r) => setBillingData(r.data))
+      .catch(() => setBillingData({ organization: { status: 'past_due' }, plans: [], can_subscribe: true }))
       .finally(() => setStatusLoaded(true));
-  }, [location.pathname]);
+  }, []);
+
+  useEffect(() => { loadBilling(); }, [location.pathname]);
+
+  const org = billingData?.organization;
+  const orgStatus = org?.status ?? null;
+  const trialDaysLeft = org?.trial_days_left ?? null;
+  const showTrialBanner = !bannerDismissed
+    && orgStatus === 'trialing'
+    && trialDaysLeft !== null
+    && trialDaysLeft <= 7;
 
   const allowedNav = useMemo(() => FLEET_NAV_ITEMS.filter((item) => canAccessFleetRoute(user?.role, item.key)), [user?.role]);
   const filteredNav = useMemo(() => allowedNav.filter((item) => matchesSearch(search, item.label, item.to)), [allowedNav, search]);
@@ -82,6 +205,10 @@ export default function FleetOwnerShell() {
   };
 
   const isBlocked = statusLoaded && BLOCKED_STATUSES.includes(orgStatus) && !onBillingPage;
+
+  if (isBlocked) {
+    return <SubscriptionGate billingData={billingData} onSubscribed={loadBilling} />;
+  }
 
   return (
     <div className="app-shell">
@@ -117,6 +244,13 @@ export default function FleetOwnerShell() {
         })}
       </nav>
       <div className="main">
+        {showTrialBanner && (
+          <TrialBanner
+            daysLeft={trialDaysLeft}
+            onSubscribe={() => nav('/fleet/app/billing')}
+            onDismiss={() => setBannerDismissed(true)}
+          />
+        )}
         <div className="topbar" style={{ gap: 16 }}>
           <div className="text-sm muted">Fleet Owner Console · OnFleet Africa</div>
           <div style={{ position: 'relative', width: 'min(520px, 100%)', marginLeft: 'auto' }}>
@@ -133,15 +267,7 @@ export default function FleetOwnerShell() {
           <div className="text-xs muted">Logged in as <strong>{user?.email}</strong></div>
         </div>
         <div className="content">
-          {isBlocked ? (
-            <SubscriptionGate
-              status={orgStatus}
-              canOpenBilling={canOpenBilling}
-              onGoToBilling={() => nav('/fleet/app/billing')}
-            />
-          ) : (
-            <Outlet />
-          )}
+          <Outlet />
         </div>
       </div>
     </div>

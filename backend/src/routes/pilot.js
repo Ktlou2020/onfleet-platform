@@ -71,10 +71,11 @@ function slugifyCompanyName(value) {
 }
 
 const FLEET_PLAN_ENTITLEMENTS = {
-  trial:  { max_bikes: 10,  max_admin_users: 2 },
-  small:  { max_bikes: 20,  max_admin_users: 3 },
-  medium: { max_bikes: 60,  max_admin_users: 5 },
-  large:  { max_bikes: 100, max_admin_users: 10 },
+  trial:  { max_bikes: 6,    max_admin_users: 2 },
+  small:  { max_bikes: 6,    max_admin_users: 2 },
+  medium: { max_bikes: 20,   max_admin_users: 3 },
+  large:  { max_bikes: 35,   max_admin_users: 5 },
+  empire: { max_bikes: 9999, max_admin_users: 20 },
 };
 
 router.get('/stats', (req, res) => {

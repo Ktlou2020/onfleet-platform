@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { AlertTriangle, CheckCircle2, Clock3, CreditCard, RefreshCw, XCircle, Wrench } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Clock3, CreditCard, RefreshCw, XCircle, Wrench, TrendingUp } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../api';
 import { Badge, ConfirmModal, Loading, fmt, fmtDate } from '../../components/ui';
 import { FleetHelpTip } from './helpSupport';
 
 const STATUS_LABELS = {
-  trialing: 'Trial',
+  trialing: 'Free trial',
   active: 'Active',
   past_due: 'Past due',
   suspended: 'Suspended',
@@ -22,6 +22,12 @@ const STATUS_BADGE = {
   cancelled: 'cancelled'
 };
 
+const PLAN_DISPLAY = {
+  small:  { label: 'Starter',      color: '#10b981' },
+  medium: { label: 'Growth',       color: '#3b82f6' },
+  large:  { label: 'Professional', color: '#8b5cf6' },
+};
+
 function DiagRow({ ok, label, value }) {
   return (
     <div className="row" style={{ gap: 10, alignItems: 'flex-start', fontSize: 13 }}>
@@ -34,27 +40,38 @@ function DiagRow({ ok, label, value }) {
   );
 }
 
-function PlanCard({ plan, current, canSubscribe, onSubscribe, busy }) {
+function PlanCard({ plan, current, canSubscribe, onSubscribe, busy, recommended }) {
   const isCurrent = current?.plan_key === plan.key && current?.status === 'active';
-  const bikeCount = current?.bike_count || 0;
-  const monthlyEstimate = bikeCount > 0 ? bikeCount * (plan.price_per_bike || 750) : null;
+  const display = PLAN_DISPLAY[plan.key] || {};
   return (
     <div className="card" style={{
-      borderColor: isCurrent ? 'rgba(30,136,209,0.5)' : undefined,
-      boxShadow: isCurrent ? '0 0 0 1px rgba(30,136,209,0.3)' : undefined,
-      display: 'flex', flexDirection: 'column', gap: 16
+      borderColor: isCurrent ? 'rgba(30,136,209,0.5)' : recommended && !isCurrent ? 'rgba(16,185,129,0.4)' : undefined,
+      boxShadow: isCurrent
+        ? '0 0 0 1px rgba(30,136,209,0.3)'
+        : recommended && !isCurrent
+          ? '0 0 0 1px rgba(16,185,129,0.2)'
+          : undefined,
+      display: 'flex', flexDirection: 'column', gap: 16, position: 'relative'
     }}>
+      {recommended && !isCurrent && (
+        <div style={{
+          position: 'absolute', top: -10, left: 16,
+          background: '#10b981', color: '#fff',
+          fontSize: 11, fontWeight: 700, padding: '2px 10px', borderRadius: 20,
+          letterSpacing: '0.04em', textTransform: 'uppercase'
+        }}>Recommended for your fleet</div>
+      )}
+
       <div className="flex-between">
         <div>
-          <h3 style={{ marginBottom: 4 }}>{plan.name}</h3>
-          <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--primary-light)', fontFamily: "'Space Grotesk', sans-serif" }}>
-            {fmt(plan.price_per_bike || 750)}<span className="muted text-sm" style={{ fontWeight: 400 }}>/bike/mo</span>
+          <div style={{ fontSize: 12, fontWeight: 600, color: display.color || 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>
+            {display.label || plan.name}
           </div>
-          {monthlyEstimate != null && (
-            <div className="text-xs muted" style={{ marginTop: 2 }}>
-              ≈ {fmt(monthlyEstimate)}/mo for your {bikeCount} bike{bikeCount !== 1 ? 's' : ''}
-            </div>
-          )}
+          <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--primary-light)', fontFamily: "'Space Grotesk', sans-serif", lineHeight: 1.1 }}>
+            {fmt(plan.monthly_price)}
+            <span className="muted text-sm" style={{ fontWeight: 400 }}>/mo</span>
+          </div>
+          <div className="muted text-xs" style={{ marginTop: 3 }}>Up to {plan.max_bikes} bikes · flat rate</div>
         </div>
         {isCurrent && <Badge status="active">Current plan</Badge>}
       </div>
@@ -71,12 +88,9 @@ function PlanCard({ plan, current, canSubscribe, onSubscribe, busy }) {
       {isCurrent ? (
         <div className="muted text-sm">Your current active plan.</div>
       ) : canSubscribe ? (
-        <button className="btn" onClick={() => onSubscribe(plan.key)} disabled={busy === plan.key}>
-          {busy === plan.key
-            ? 'Redirecting to Paystack…'
-            : monthlyEstimate
-              ? `Subscribe — ${fmt(monthlyEstimate)}/mo`
-              : `Subscribe — ${fmt(plan.price_per_bike || 750)}/bike/mo`}
+        <button className="btn" onClick={() => onSubscribe(plan.key)} disabled={busy === plan.key}
+          style={recommended ? { background: '#10b981', borderColor: '#10b981' } : undefined}>
+          {busy === plan.key ? 'Redirecting to Paystack…' : `Subscribe — ${fmt(plan.monthly_price)}/mo`}
         </button>
       ) : (
         <div className="muted text-sm">Manage your subscription to change plans.</div>
@@ -100,7 +114,6 @@ export default function FleetBilling() {
     setBilling(data);
   };
 
-  // Verify if redirected back from Paystack
   useEffect(() => {
     const reference = searchParams.get('reference') || searchParams.get('trxref');
     if (!reference || verifying || verified) return;
@@ -108,7 +121,8 @@ export default function FleetBilling() {
     api.get(`/fleet/billing/verify?reference=${encodeURIComponent(reference)}`)
       .then(({ data }) => {
         setVerified(true);
-        toast.success(`Subscription activated! Welcome to the ${data.plan_key ? String(data.plan_key).replace(/_/g, ' ') : 'paid'} plan.`);
+        const planName = PLAN_DISPLAY[data.plan_key]?.label || data.plan_key || 'paid';
+        toast.success(`Subscription activated! Welcome to the ${planName} plan.`);
         window.history.replaceState({}, '', window.location.pathname);
         load();
       })
@@ -162,25 +176,25 @@ export default function FleetBilling() {
   const { organization: org, plans, can_subscribe } = billing;
   const trialExpiringSoon = org.status === 'trialing' && org.trial_days_left !== null && org.trial_days_left <= 5;
   const trialExpired = org.status === 'past_due';
+  const currentPlanDisplay = PLAN_DISPLAY[org.plan_key];
 
   return (
     <>
       <div className="flex-between mb-2" style={{ gap: 16, flexWrap: 'wrap' }}>
         <div>
-          <h1 className="page-title">Billing & subscription</h1>
+          <h1 className="page-title">Billing &amp; subscription</h1>
           <p className="page-sub" style={{ marginBottom: 8 }}>Manage your OnFleet fleet plan and Paystack subscription.</p>
-          <FleetHelpTip section="getting-started" tooltip="Upgrade from trial to a paid plan to unlock higher bike and user limits. All billing is processed securely via Paystack." label="Learn more about plans" />
+          <FleetHelpTip section="getting-started" tooltip="Start with a 14-day free trial. Upgrade to a flat-rate monthly plan to unlock higher bike and user limits. All billing via Paystack." label="Learn more about plans" />
         </div>
         <button className="btn btn-secondary btn-sm" onClick={() => load().catch(() => {})} disabled={!!busy}>
           <RefreshCw size={14} /> Refresh
         </button>
       </div>
 
-      {/* Status alerts */}
       {trialExpired && (
         <div className="alert-banner alert-danger mb-4">
           <AlertTriangle size={16} style={{ flexShrink: 0, marginTop: 1 }} />
-          <span><strong>Your trial has ended.</strong> Subscribe to a paid plan below to continue using all fleet features without interruption.</span>
+          <span><strong>Your trial has ended.</strong> Subscribe to a paid plan below to continue using all fleet features.</span>
         </div>
       )}
       {trialExpiringSoon && (
@@ -195,8 +209,18 @@ export default function FleetBilling() {
           <span><strong>Account suspended.</strong> Contact support to reactivate your account.</span>
         </div>
       )}
+      {org.approaching_limit && org.status === 'active' && (
+        <div className="alert-banner alert-warn mb-4">
+          <TrendingUp size={16} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>
+            <strong>Approaching your bike limit.</strong> Your fleet has {org.bike_count} of {org.max_bikes} bikes.{' '}
+            {org.suggested_tier !== org.plan_key && PLAN_DISPLAY[org.suggested_tier]
+              ? `Upgrade to the ${PLAN_DISPLAY[org.suggested_tier].label} plan to keep growing.`
+              : 'Consider upgrading your plan.'}
+          </span>
+        </div>
+      )}
 
-      {/* Current plan summary */}
       <div className="grid grid-2 mb-4">
         <div className="card">
           <div className="card-title">
@@ -204,13 +228,17 @@ export default function FleetBilling() {
             <Badge status={STATUS_BADGE[org.status] || 'pending'}>{STATUS_LABELS[org.status] || org.status}</Badge>
           </div>
           <div className="fleet-demo-list">
-            <div className="fleet-demo-list-item"><CreditCard size={15} /> {String(org.plan_key || 'trial').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}</div>
+            <div className="fleet-demo-list-item">
+              <CreditCard size={15} />
+              {currentPlanDisplay?.label || String(org.plan_key || 'trial').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
+              {org.monthly_price ? <span className="muted text-xs ml-2">{fmt(org.monthly_price)}/mo flat</span> : null}
+            </div>
             <div className="fleet-demo-list-item"><CheckCircle2 size={15} /> Up to {org.max_bikes} bikes</div>
             <div className="fleet-demo-list-item"><CheckCircle2 size={15} /> Up to {org.max_admin_users} admin users</div>
             {org.status === 'trialing' && org.trial_ends_at && (
               <div className="fleet-demo-list-item">
                 <Clock3 size={15} style={{ color: trialExpiringSoon ? 'var(--warn)' : undefined }} />
-                Trial ends: {fmtDate(org.trial_ends_at)}
+                14-day free trial — ends {fmtDate(org.trial_ends_at)}
                 {org.trial_days_left !== null && (
                   <span className="muted text-xs ml-2">({org.trial_days_left} day{org.trial_days_left !== 1 ? 's' : ''} left)</span>
                 )}
@@ -229,21 +257,23 @@ export default function FleetBilling() {
         <div className="card">
           <div className="card-title"><h3>How billing works</h3></div>
           <div className="fleet-demo-list">
-            <div className="fleet-demo-list-item"><CheckCircle2 size={15} style={{ color: 'var(--success)' }} /> R750 per bike per month — you only pay for what you have</div>
+            <div className="fleet-demo-list-item"><CheckCircle2 size={15} style={{ color: 'var(--success)' }} /> Flat monthly fee — no per-bike charges</div>
+            <div className="fleet-demo-list-item"><CheckCircle2 size={15} style={{ color: 'var(--success)' }} /> 14-day free trial on every new account</div>
             <div className="fleet-demo-list-item"><CheckCircle2 size={15} style={{ color: 'var(--success)' }} /> Pay monthly via Paystack (card or EFT)</div>
-            <div className="fleet-demo-list-item"><CheckCircle2 size={15} style={{ color: 'var(--success)' }} /> Subscription renews automatically each month</div>
             <div className="fleet-demo-list-item"><CheckCircle2 size={15} style={{ color: 'var(--success)' }} /> Cancel any time — access continues until period end</div>
           </div>
-          {org.bike_count != null && org.price_per_bike && (
+          {org.bike_count != null && (
             <div className="muted text-xs mt-3" style={{ padding: '8px 10px', background: 'var(--surface-2)', borderRadius: 8 }}>
-              Your fleet: <strong>{org.bike_count} bike{org.bike_count !== 1 ? 's' : ''}</strong> · estimated monthly charge: <strong>{fmt(org.monthly_total || 0)}</strong>
+              Your fleet: <strong>{org.bike_count} bike{org.bike_count !== 1 ? 's' : ''}</strong>
+              {org.suggested_tier && PLAN_DISPLAY[org.suggested_tier] && (
+                <> · suggested plan: <strong>{PLAN_DISPLAY[org.suggested_tier].label}</strong> ({fmt(plans.find(p => p.key === org.suggested_tier)?.monthly_price || 0)}/mo)</>
+              )}
             </div>
           )}
           <div className="muted text-xs mt-3">All transactions secured by Paystack and processed in ZAR. VAT may apply.</div>
         </div>
       </div>
 
-      {/* Plan comparison */}
       <h3 style={{ marginBottom: 16, fontSize: 18 }}>
         {can_subscribe ? 'Choose a plan' : 'Available plans'}
       </h3>
@@ -256,6 +286,7 @@ export default function FleetBilling() {
             canSubscribe={can_subscribe}
             onSubscribe={subscribe}
             busy={busy}
+            recommended={org.suggested_tier === plan.key && can_subscribe}
           />
         ))}
       </div>
@@ -264,13 +295,12 @@ export default function FleetBilling() {
         <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
           <CreditCard size={20} style={{ color: 'var(--primary-light)', flexShrink: 0 }} />
           <div>
-            <div style={{ fontWeight: 600, marginBottom: 4 }}>Need an Enterprise plan or custom pricing?</div>
-            <div className="muted text-sm">For 100+ bikes, dedicated onboarding, or custom integrations, contact the OnFleet team directly.</div>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>Need a custom plan or 100+ bikes?</div>
+            <div className="muted text-sm">For large fleets, dedicated onboarding, or custom integrations — contact the OnFleet team directly.</div>
           </div>
         </div>
       </div>
 
-      {/* Paystack config diagnostics */}
       <div className="card mt-4" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
         <div className="flex-between" style={{ marginBottom: diag ? 12 : 0 }}>
           <div className="row" style={{ gap: 8 }}>
@@ -286,7 +316,7 @@ export default function FleetBilling() {
             <DiagRow ok={diag.secret_key_set} label="Paystack secret key" value={diag.secret_key_env} />
             <DiagRow ok={diag.paystack_reachable} label="Paystack API reachable" value={diag.paystack_error || 'OK'} />
             {Object.entries(diag.plans).map(([key, p]) => (
-              <DiagRow key={key} ok={p.valid_format} label={`Plan code: ${key}`} value={p.code} />
+              <DiagRow key={key} ok={p.valid_format} label={`Plan code: ${key} (${PLAN_DISPLAY[key]?.label || key})`} value={p.code} />
             ))}
           </div>
         )}

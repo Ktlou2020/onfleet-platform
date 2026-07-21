@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Copy, Check, ExternalLink } from 'lucide-react';
 import { FleetHelpTip } from './helpSupport';
@@ -46,6 +47,7 @@ const emptyPortal = { bikes: [], agreements: [], rider_options: [] };
 
 export default function FleetOwnerAgreements() {
   const { user } = useAuth();
+  const nav = useNavigate();
   const canManage = canManageFleetSection(user?.role, 'agreements');
   const [portal, setPortal] = useState(emptyPortal);
   const [loading, setLoading] = useState(true);
@@ -298,7 +300,16 @@ export default function FleetOwnerAgreements() {
               const overdueDays = daysOverdue(agreement);
               return (
                 <tr key={agreement.id}>
-                  <td><strong>{agreement.agreement_no}</strong></td>
+                  <td>
+                    <button
+                      className="btn btn-sm btn-secondary"
+                      style={{ fontWeight: 700, padding: '2px 8px', fontSize: 13 }}
+                      onClick={() => nav(`/fleet/app/agreements/${agreement.id}`)}
+                      title="View agreement detail"
+                    >
+                      {agreement.agreement_no}
+                    </button>
+                  </td>
                   <td>
                     {agreement.rider_name}
                     <div className="text-xs muted">{agreement.rider_email}</div>

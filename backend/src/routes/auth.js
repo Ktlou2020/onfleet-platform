@@ -42,11 +42,10 @@ const router = express.Router();
 const { applications: uploadDir, profiles: profileUploadDir } = require('../uploadPaths');
 const FLEET_ROLE_VALUES = ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'];
 const FLEET_PLAN_ENTITLEMENTS = {
-  trial: { max_bikes: 10, max_admin_users: 2 },
-  small: { max_bikes: 20, max_admin_users: 3 },
-  medium: { max_bikes: 60, max_admin_users: 5 },
-  large: { max_bikes: 100, max_admin_users: 10 },
-  enterprise: { max_bikes: 250, max_admin_users: 25 }
+  trial:  { max_bikes: 10,  max_admin_users: 2 },
+  small:  { max_bikes: 20,  max_admin_users: 3 },
+  medium: { max_bikes: 60,  max_admin_users: 5 },
+  large:  { max_bikes: 100, max_admin_users: 10 },
 };
 
 const storage = multer.diskStorage({
@@ -501,7 +500,7 @@ router.post('/fleet/signup',
     const entitlements = getFleetEntitlements(planKey);
     const hash = await bcrypt.hash(password, 10);
     const now = new Date();
-    const trialEnds = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    const trialEnds = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
 
     const created = db.transaction(() => {
       const orgInfo = db.prepare(`INSERT INTO organizations

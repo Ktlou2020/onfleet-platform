@@ -805,18 +805,52 @@ function buildSummary(bikes, agreements, members, recentServices) {
   };
 }
 
-function getFleetPayments(org) {
+function getFleetPaymentsPaged(org, { search, method, days, page, pageSize, all } = {}) {
   const scope = getBikeScope(org, 'b');
-  return db.prepare(`SELECT p.*, u.full_name, u.email, a.agreement_no,
-      b.registration AS bike_registration, b.make, b.model, b.status AS bike_status,
-      a.status AS agreement_status
-    FROM payments p
+  const conditions = [scope.clause];
+  const params = [...scope.params];
+
+  if (method) { conditions.push('p.method = ?'); params.push(method); }
+  if (days) { conditions.push("COALESCE(p.paid_at, p.created_at) >= date('now', ?)"); params.push(`-${days} days`); }
+  if (search) {
+    const q = `%${search}%`;
+    conditions.push("(u.full_name LIKE ? OR u.email LIKE ? OR a.agreement_no LIKE ? OR COALESCE(p.reference,'') LIKE ? OR COALESCE(b.registration,'') LIKE ?)");
+    params.push(q, q, q, q, q);
+  }
+
+  const baseFrom = `FROM payments p
     JOIN agreements a ON a.id = p.agreement_id
     JOIN bikes b ON b.id = a.bike_id
     JOIN users u ON u.id = p.user_id
-    WHERE ${scope.clause}
+    WHERE ${conditions.join(' AND ')}`;
+
+  const total = db.prepare(`SELECT COUNT(*) AS cnt ${baseFrom}`).get(...params).cnt;
+  const agg = db.prepare(`SELECT
+    COALESCE(SUM(CASE WHEN p.status='success' THEN COALESCE(p.net_amount,p.amount,0) ELSE 0 END),0) AS credited,
+    COALESCE(SUM(CASE WHEN p.status='success' THEN COALESCE(p.fee_amount,0) ELSE 0 END),0) AS fees,
+    COALESCE(SUM(CASE WHEN p.status='success' THEN COALESCE(p.amount,0) ELSE 0 END),0) AS gross
+    ${baseFrom}`).get(...params);
+
+  const safeSize = Math.min(200, Math.max(1, Number(pageSize) || 15));
+  const safePage = Math.max(1, Number(page) || 1);
+  const offset = (safePage - 1) * safeSize;
+  const limitClause = all ? '' : `LIMIT ${safeSize} OFFSET ${offset}`;
+
+  const payments = db.prepare(`SELECT p.*, u.full_name, u.email, a.agreement_no,
+      b.registration AS bike_registration, b.make, b.model, b.status AS bike_status,
+      a.status AS agreement_status
+    ${baseFrom}
     ORDER BY COALESCE(p.paid_at, p.created_at) DESC, p.id DESC
-    LIMIT 500`).all(...scope.params);
+    ${limitClause}`).all(...params);
+
+  return {
+    payments,
+    total,
+    page: safePage,
+    pageSize: safeSize,
+    pages: Math.ceil(total / safeSize) || 1,
+    aggregates: { credited: agg.credited, fees: agg.fees, gross: agg.gross }
+  };
 }
 
 function getScopedPayment(org, paymentId) {
@@ -1972,7 +2006,13 @@ If you have any questions, contact ${orgName} directly.`;
 router.get('/payments', companyRoleAllowed(FLEET_RESOURCE_ACCESS.payments.view), (req, res) => {
   try {
     const organization = getOrganizationOrThrow(req.user.organization_id);
-    res.json({ payments: getFleetPayments(organization) });
+    const search = String(req.query.search || '').trim();
+    const method = String(req.query.method || '').trim();
+    const days = toInt(req.query.days);
+    const page = Math.max(1, toInt(req.query.page) || 1);
+    const pageSize = Math.min(200, Math.max(1, toInt(req.query.page_size) || 15));
+    const all = req.query.all === '1';
+    res.json(getFleetPaymentsPaged(organization, { search, method, days, page, pageSize, all }));
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Could not load payments' });
   }

@@ -1,15 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { FleetHelpTip } from './helpSupport';
 import api from '../../api';
 import { useAuth } from '../../auth';
-import { Badge, ConfirmModal, EmptyState, Loading, Modal, Pagination, SearchInput, fmt, fmtDateTime, matchesSearch, paginateItems } from '../../components/ui';
+import { Badge, ConfirmModal, EmptyState, Loading, Modal, Pagination, SearchInput, fmt, fmtDateTime } from '../../components/ui';
 import { canManageFleetSection } from './access';
 
 const METHOD_OPTIONS = ['eft', 'cash', 'card', 'other'];
-
-const CANONICAL_COLS = ['registration', 'amount', 'paid_at', 'reference', 'method', 'notes'];
-const COL_LABELS = { registration: 'Bike registration', amount: 'Amount', paid_at: 'Payment date', reference: 'Reference', method: 'Method', notes: 'Notes' };
 const DATE_RANGES = [
   { label: '7 days', days: 7 },
   { label: '30 days', days: 30 },
@@ -17,73 +14,96 @@ const DATE_RANGES = [
   { label: 'All time', days: null }
 ];
 
-const creditedAmount = (payment) => Number(payment?.net_amount ?? payment?.amount ?? 0);
-const feeAmount = (payment) => Number(payment?.fee_amount || 0);
-const grossAmount = (payment) => Number(payment?.amount || 0);
+const CANONICAL_COLS = ['registration', 'amount', 'paid_at', 'reference', 'method', 'notes'];
+const COL_LABELS = { registration: 'Bike registration', amount: 'Amount', paid_at: 'Payment date', reference: 'Reference', method: 'Method', notes: 'Notes' };
 
-function isWithinDays(dateStr, days) {
-  if (!days) return true;
-  if (!dateStr) return false;
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - days);
-  return new Date(dateStr) >= cutoff;
+const creditedAmount = (p) => Number(p?.net_amount ?? p?.amount ?? 0);
+const feeAmount = (p) => Number(p?.fee_amount || 0);
+const grossAmount = (p) => Number(p?.amount || 0);
+
+function buildPaymentsQuery({ search, method, days, page, pageSize }) {
+  const params = new URLSearchParams();
+  if (search) params.set('search', search);
+  if (method) params.set('method', method);
+  if (days) params.set('days', days);
+  params.set('page', page);
+  params.set('page_size', pageSize);
+  return params.toString();
 }
 
 export default function FleetOwnerPayments() {
   const { user } = useAuth();
   const canManage = canManageFleetSection(user?.role, 'payments');
+
   const [payments, setPayments] = useState(null);
+  const [total, setTotal] = useState(0);
+  const [pages, setPages] = useState(1);
+  const [aggregates, setAggregates] = useState({ credited: 0, fees: 0, gross: 0 });
   const [agreements, setAgreements] = useState([]);
+
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [dateRange, setDateRange] = useState(30);
   const [methodFilter, setMethodFilter] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(15);
+
   const [selectedIds, setSelectedIds] = useState([]);
   const [busy, setBusy] = useState(false);
   const [showPay, setShowPay] = useState(false);
   const [pay, setPay] = useState({ agreement_id: '', amount: '', method: 'eft', reference: '', payment_date: '', notes: '' });
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [importState, setImportState] = useState(null); // null | 'picking' | 'preview' | 'importing' | 'done'
+  const [importState, setImportState] = useState(null);
   const [importFile, setImportFile] = useState(null);
-  const [importPreview, setImportPreview] = useState(null); // { headers, sample_rows, total_rows, suggested_mapping }
+  const [importPreview, setImportPreview] = useState(null);
   const [importMapping, setImportMapping] = useState({});
   const [importResult, setImportResult] = useState(null);
-  const importFileRef = useState(() => ({ current: null }))[0];
+  const importFileRef = useRef(null);
+  const debounceTimer = useRef(null);
 
-  const load = async () => {
-    const [paymentsResponse, portalResponse] = await Promise.all([
-      api.get('/fleet/payments'),
-      api.get('/fleet/portal-data')
-    ]);
-    setPayments(paymentsResponse.data.payments);
-    setAgreements((portalResponse.data.agreements || []).filter((a) => ['active', 'paused', 'defaulted'].includes(a.status)));
-  };
+  const loadPayments = useCallback(async ({ search: s, method: m, days: d, page: pg, pageSize: ps } = {}) => {
+    try {
+      const qs = buildPaymentsQuery({ search: s ?? debouncedSearch, method: m ?? methodFilter, days: d ?? dateRange, page: pg ?? page, pageSize: ps ?? pageSize });
+      const { data } = await api.get(`/fleet/payments?${qs}`);
+      setPayments(data.payments);
+      setTotal(data.total || 0);
+      setPages(data.pages || 1);
+      setAggregates(data.aggregates || { credited: 0, fees: 0, gross: 0 });
+    } catch {
+      toast.error('Could not load payments');
+    }
+  }, [debouncedSearch, methodFilter, dateRange, page, pageSize]);
 
-  useEffect(() => { load().catch(() => toast.error('Could not load payments')); }, []);
-  useEffect(() => { setPage(1); }, [search, dateRange, methodFilter]);
+  const loadAgreements = useCallback(async () => {
+    try {
+      const { data } = await api.get('/fleet/portal-data');
+      setAgreements((data.agreements || []).filter((a) => ['active', 'paused', 'defaulted'].includes(a.status)));
+    } catch { /* portal-data failure is non-fatal */ }
+  }, []);
+
+  useEffect(() => { loadAgreements(); }, [loadAgreements]);
+
   useEffect(() => {
-    setSelectedIds((current) => current.filter((id) => (payments || []).some((p) => p.id === id)));
-  }, [payments]);
+    if (payments !== null) loadPayments();
+  }, [page, pageSize]);
 
-  const filtered = useMemo(() => (payments || []).filter((payment) => {
-    if (!isWithinDays(payment.paid_at || payment.created_at, dateRange)) return false;
-    if (methodFilter && payment.method !== methodFilter) return false;
-    return matchesSearch(
-      search,
-      payment.full_name, payment.email, payment.agreement_no, payment.reference,
-      payment.method, payment.status, payment.amount, payment.net_amount,
-      payment.fee_amount, payment.bike_registration
-    );
-  }), [payments, search, dateRange, methodFilter]);
+  useEffect(() => {
+    if (payments === null) {
+      loadPayments();
+    } else {
+      setPage(1);
+      loadPayments({ page: 1 });
+    }
+  }, [debouncedSearch, methodFilter, dateRange]);
 
-  const pagination = useMemo(() => paginateItems(filtered, page, pageSize), [filtered, page, pageSize]);
-  const visibleIds = pagination.items.map((p) => p.id);
+  useEffect(() => {
+    clearTimeout(debounceTimer.current);
+    debounceTimer.current = setTimeout(() => setDebouncedSearch(search), 320);
+    return () => clearTimeout(debounceTimer.current);
+  }, [search]);
+
+  const visibleIds = (payments || []).map((p) => p.id);
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.includes(id));
-
-  const totalCredited = useMemo(() => filtered.filter((p) => p.status === 'success').reduce((sum, p) => sum + creditedAmount(p), 0), [filtered]);
-  const totalFees = useMemo(() => filtered.filter((p) => p.status === 'success').reduce((sum, p) => sum + feeAmount(p), 0), [filtered]);
-  const totalGross = useMemo(() => filtered.filter((p) => p.status === 'success').reduce((sum, p) => sum + grossAmount(p), 0), [filtered]);
 
   const toggleSelected = (id) => setSelectedIds((curr) => curr.includes(id) ? curr.filter((x) => x !== id) : [...curr, id]);
   const toggleAllVisible = () => setSelectedIds((curr) => allVisibleSelected ? curr.filter((id) => !visibleIds.includes(id)) : Array.from(new Set([...curr, ...visibleIds])));
@@ -96,7 +116,7 @@ export default function FleetOwnerPayments() {
       toast.success('Payment recorded');
       setShowPay(false);
       setPay({ agreement_id: '', amount: '', method: 'eft', reference: '', payment_date: '', notes: '' });
-      await load();
+      await loadPayments();
     } catch (error) {
       toast.error(error.response?.data?.error || 'Could not record payment');
     } finally {
@@ -111,7 +131,7 @@ export default function FleetOwnerPayments() {
       toast.success(`Deleted ${data.deleted_count} payment(s)`);
       setSelectedIds([]);
       setConfirmDelete(false);
-      await load();
+      await loadPayments();
     } catch (error) {
       toast.error(error.response?.data?.error || 'Could not delete selected payments');
     } finally {
@@ -119,31 +139,31 @@ export default function FleetOwnerPayments() {
     }
   };
 
-  const exportCsv = () => {
-    const rows = [
-      ['Date', 'Rider', 'Email', 'Agreement', 'Bike', 'Method', 'Reference', 'Status', 'Rental', 'Fee', 'Gross'],
-      ...filtered.map((p) => [
-        p.paid_at || p.created_at,
-        p.full_name,
-        p.email,
-        p.agreement_no,
-        p.bike_registration || '',
-        p.method,
-        p.reference || '',
-        p.status,
-        creditedAmount(p),
-        feeAmount(p),
-        grossAmount(p)
-      ])
-    ];
-    const csv = rows.map((row) => row.map((cell) => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `payments-export.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+  const exportCsv = async () => {
+    try {
+      const qs = buildPaymentsQuery({ search: debouncedSearch, method: methodFilter, days: dateRange, page: 1, pageSize: 15 });
+      const { data } = await api.get(`/fleet/payments?${qs}&all=1`);
+      const allPayments = data.payments || [];
+      if (!allPayments.length) return toast.error('No payments to export');
+      const rows = [
+        ['Date', 'Rider', 'Email', 'Agreement', 'Bike', 'Method', 'Reference', 'Status', 'Rental', 'Fee', 'Gross'],
+        ...allPayments.map((p) => [
+          p.paid_at || p.created_at, p.full_name, p.email, p.agreement_no,
+          p.bike_registration || '', p.method, p.reference || '', p.status,
+          creditedAmount(p), feeAmount(p), grossAmount(p)
+        ])
+      ];
+      const csv = rows.map((row) => row.map((cell) => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'payments-export.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error('Could not export payments');
+    }
   };
 
   const openImport = () => { setImportState('picking'); setImportFile(null); setImportPreview(null); setImportMapping({}); setImportResult(null); };
@@ -177,7 +197,7 @@ export default function FleetOwnerPayments() {
       const { data } = await api.post('/fleet/payments/import', fd);
       setImportResult(data);
       setImportState('done');
-      if (data.payments_created > 0) await load();
+      if (data.payments_created > 0) await loadPayments();
     } catch (err) {
       toast.error(err.response?.data?.error || 'Import failed');
       setImportState('preview');
@@ -192,7 +212,7 @@ export default function FleetOwnerPayments() {
         <div>
           <h1 className="page-title">Payments</h1>
           <p className="page-sub" style={{ marginBottom: 8 }}>
-            Rental received {fmt(totalCredited)} · Gateway fees {fmt(totalFees)} · Gross {fmt(totalGross)}
+            Rental received {fmt(aggregates.credited)} · Gateway fees {fmt(aggregates.fees)} · Gross {fmt(aggregates.gross)}
             {dateRange ? <span className="muted"> · Last {dateRange} days</span> : null}
           </p>
           <FleetHelpTip section="payments" tooltip="Record manual collections, review payment methods, and fix incorrect payment rows safely." label="Learn more about payments" />
@@ -201,13 +221,12 @@ export default function FleetOwnerPayments() {
           {canManage && <button className="btn btn-sm" onClick={() => setShowPay(true)} title="Record an EFT, cash, card, or other manual rental payment">+ Record payment</button>}
           {canManage && <button className="btn btn-sm btn-secondary" onClick={openImport} title="Import payments from a CSV file">Import CSV</button>}
           {canManage && <button className="btn btn-sm btn-danger" onClick={() => { if (!selectedIds.length) return toast.error('Select at least one payment first'); setConfirmDelete(true); }} disabled={busy}>{busy ? 'Deleting…' : 'Delete selected'}</button>}
-          <button className="btn btn-sm btn-secondary" onClick={exportCsv} disabled={!filtered.length} title="Export visible payments to CSV">Export CSV</button>
+          <button className="btn btn-sm btn-secondary" onClick={exportCsv} title="Export all matching payments to CSV">Export CSV</button>
         </div>
       </div>
 
-      {/* Filters */}
       <div className="mb-3" style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
-        <SearchInput value={search} onChange={setSearch} placeholder="Search rider, agreement, reference, method" style={{ flex: '1 1 280px', maxWidth: 400 }} />
+        <SearchInput value={search} onChange={setSearch} placeholder="Search rider, agreement, reference, bike" style={{ flex: '1 1 280px', maxWidth: 400 }} />
         <div className="filter-pills">
           {DATE_RANGES.map((range) => (
             <button key={range.days ?? 'all'} className={`filter-pill ${dateRange === range.days ? 'active' : ''}`} onClick={() => setDateRange(range.days)}>
@@ -226,8 +245,8 @@ export default function FleetOwnerPayments() {
       </div>
 
       <div className="row mb-3" style={{ flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div className="muted text-sm">{canManage ? `${selectedIds.length} selected · ` : ''}Showing {filtered.length} of {payments.length} payments</div>
-        <FleetHelpTip section="common-questions" tooltip="Search works with rider names, agreement numbers, references, methods, and bike registrations." label="Search tips" compact />
+        <div className="muted text-sm">{canManage ? `${selectedIds.length} selected · ` : ''}Showing {payments.length} of {total} payments</div>
+        <FleetHelpTip section="common-questions" tooltip="Search works with rider names, agreement numbers, references, and bike registrations." label="Search tips" compact />
       </div>
 
       <div className="card table-wrap" style={{ padding: 0 }}>
@@ -248,7 +267,7 @@ export default function FleetOwnerPayments() {
             </tr>
           </thead>
           <tbody>
-            {pagination.items.map((payment) => (
+            {payments.map((payment) => (
               <tr key={payment.id}>
                 {canManage ? <td><input type="checkbox" checked={selectedIds.includes(payment.id)} onChange={() => toggleSelected(payment.id)} aria-label={`Select payment ${payment.reference || payment.id}`} /></td> : null}
                 <td style={{ whiteSpace: 'nowrap' }}>{fmtDateTime(payment.paid_at || payment.created_at)}</td>
@@ -265,15 +284,15 @@ export default function FleetOwnerPayments() {
             ))}
           </tbody>
         </table>
-        {!pagination.items.length && (
+        {!payments.length && (
           <EmptyState
             title="No payments found"
-            sub={search || methodFilter || dateRange ? 'Adjust your filters to show more payments.' : 'Payments recorded for your agreements will appear here.'}
+            sub={debouncedSearch || methodFilter || dateRange ? 'Adjust your filters to show more payments.' : 'Payments recorded for your agreements will appear here.'}
             action={canManage ? <button className="btn" onClick={() => setShowPay(true)}>Record manual payment</button> : null}
           />
         )}
       </div>
-      <Pagination page={pagination.currentPage} pageSize={pagination.pageSize} totalItems={pagination.totalItems} onPageChange={setPage} onPageSizeChange={setPageSize} label="payments" />
+      <Pagination page={page} pageSize={pageSize} totalItems={total} onPageChange={setPage} onPageSizeChange={(ps) => { setPageSize(ps); setPage(1); }} label="payments" />
 
       {confirmDelete && (
         <ConfirmModal
@@ -287,12 +306,12 @@ export default function FleetOwnerPayments() {
         />
       )}
 
-      {importState && importState !== null && (
+      {importState && (
         <Modal
           title={importState === 'done' ? 'Import complete' : importState === 'preview' ? 'Map columns & preview' : 'Import payments from CSV'}
           onClose={importState === 'importing' ? undefined : closeImport}
         >
-          {(importState === 'picking' || importState === 'preview') && !importPreview && (
+          {(importState === 'picking' || (importState === 'preview' && !importPreview)) && (
             <div>
               <p className="muted text-sm mb-4">Upload a CSV with columns for bike registration and payment amount. Other columns (date, reference, method, notes) are optional.</p>
               <div
@@ -305,7 +324,7 @@ export default function FleetOwnerPayments() {
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>Drop your CSV here or click to browse</div>
                 <div className="muted text-xs">Max 5 MB · CSV only · Bikes must belong to your fleet</div>
               </div>
-              <input ref={(el) => { importFileRef.current = el; }} type="file" accept=".csv,text/csv" style={{ display: 'none' }} onChange={(e) => handleImportFile(e.target.files[0])} />
+              <input ref={importFileRef} type="file" accept=".csv,text/csv" style={{ display: 'none' }} onChange={(e) => handleImportFile(e.target.files[0])} />
               {busy && <div className="muted text-sm mt-3">Reading file…</div>}
               <div className="row mt-4" style={{ justifyContent: 'flex-end' }}>
                 <button className="btn btn-secondary" onClick={closeImport}>Cancel</button>
@@ -341,11 +360,7 @@ export default function FleetOwnerPayments() {
               </div>
               <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
                 <button className="btn btn-secondary" onClick={() => { setImportPreview(null); setImportState('picking'); }}>Back</button>
-                <button
-                  className="btn"
-                  disabled={!importMapping.registration || !importMapping.amount}
-                  onClick={confirmImport}
-                >
+                <button className="btn" disabled={!importMapping.registration || !importMapping.amount} onClick={confirmImport}>
                   Import {importPreview.total_rows} rows
                 </button>
               </div>
@@ -364,7 +379,7 @@ export default function FleetOwnerPayments() {
           {importState === 'done' && importResult && (
             <div>
               <div className="grid grid-2 mb-4" style={{ gap: 12 }}>
-                <div className="card" style={{ background: 'var(--success-bg, #eafaf1)', textAlign: 'center' }}>
+                <div className="card" style={{ textAlign: 'center' }}>
                   <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--success)' }}>{importResult.payments_created}</div>
                   <div className="text-xs muted">Payments created</div>
                 </div>

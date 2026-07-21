@@ -460,20 +460,37 @@ router.delete('/organizations/:id', superadminOnly, (req, res) => {
   const org = db.prepare('SELECT * FROM organizations WHERE id = ?').get(orgId);
   if (!org) return res.status(404).json({ error: 'Organization not found' });
 
-  const result = db.prepare(
-    `UPDATE users SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE organization_id = ? AND deleted_at IS NULL`
-  ).run(orgId);
+  const userCount = db.prepare('SELECT COUNT(*) as n FROM users WHERE organization_id = ?').get(orgId).n;
 
-  db.prepare('DELETE FROM organizations WHERE id = ?').run(orgId);
+  // Disable FK enforcement for this cascading delete. better-sqlite3 is synchronous
+  // so no concurrent request can interleave between PRAGMA OFF and PRAGMA ON.
+  db.prepare('PRAGMA foreign_keys = OFF').run();
+  const deleteTx = db.transaction(() => {
+    db.prepare('DELETE FROM fleet_wallet_transactions WHERE organization_id = ?').run(orgId);
+    db.prepare('DELETE FROM fleet_payout_requests WHERE organization_id = ?').run(orgId);
+    db.prepare('DELETE FROM fleet_wallets WHERE organization_id = ?').run(orgId);
+    db.prepare('DELETE FROM rider_subscriptions WHERE organization_id = ?').run(orgId);
+    db.prepare('DELETE FROM collections_actions WHERE organization_id = ?').run(orgId);
+    db.prepare('DELETE FROM api_keys WHERE organization_id = ?').run(orgId);
+    db.prepare('DELETE FROM hubs WHERE organization_id = ?').run(orgId);
+    db.prepare('DELETE FROM bikes WHERE organization_id = ?').run(orgId);
+    db.prepare('DELETE FROM users WHERE organization_id = ?').run(orgId);
+    db.prepare('DELETE FROM organizations WHERE id = ?').run(orgId);
+  });
+  try {
+    deleteTx();
+  } finally {
+    db.prepare('PRAGMA foreign_keys = ON').run();
+  }
 
   logAudit(req.user.id, 'organization.deleted', 'organizations', orgId, {
     name: org.name,
     plan_key: org.plan_key,
     status: org.status,
-    deleted_users: result.changes
+    deleted_users: userCount
   }, req.ip);
 
-  res.json({ ok: true, deleted_users: result.changes });
+  res.json({ ok: true, deleted_users: userCount });
 });
 
 router.post('/fleet-owners/:id/role', superadminOnly, (req, res) => {

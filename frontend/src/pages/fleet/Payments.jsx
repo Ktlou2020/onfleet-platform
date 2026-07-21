@@ -7,6 +7,9 @@ import { Badge, ConfirmModal, EmptyState, Loading, Modal, Pagination, SearchInpu
 import { canManageFleetSection } from './access';
 
 const METHOD_OPTIONS = ['eft', 'cash', 'card', 'other'];
+
+const CANONICAL_COLS = ['registration', 'amount', 'paid_at', 'reference', 'method', 'notes'];
+const COL_LABELS = { registration: 'Bike registration', amount: 'Amount', paid_at: 'Payment date', reference: 'Reference', method: 'Method', notes: 'Notes' };
 const DATE_RANGES = [
   { label: '7 days', days: 7 },
   { label: '30 days', days: 30 },
@@ -41,6 +44,12 @@ export default function FleetOwnerPayments() {
   const [showPay, setShowPay] = useState(false);
   const [pay, setPay] = useState({ agreement_id: '', amount: '', method: 'eft', reference: '', payment_date: '', notes: '' });
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [importState, setImportState] = useState(null); // null | 'picking' | 'preview' | 'importing' | 'done'
+  const [importFile, setImportFile] = useState(null);
+  const [importPreview, setImportPreview] = useState(null); // { headers, sample_rows, total_rows, suggested_mapping }
+  const [importMapping, setImportMapping] = useState({});
+  const [importResult, setImportResult] = useState(null);
+  const importFileRef = useState(() => ({ current: null }))[0];
 
   const load = async () => {
     const [paymentsResponse, portalResponse] = await Promise.all([
@@ -137,6 +146,44 @@ export default function FleetOwnerPayments() {
     URL.revokeObjectURL(url);
   };
 
+  const openImport = () => { setImportState('picking'); setImportFile(null); setImportPreview(null); setImportMapping({}); setImportResult(null); };
+  const closeImport = () => setImportState(null);
+
+  const handleImportFile = async (file) => {
+    if (!file) return;
+    setImportFile(file);
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      setBusy(true);
+      const { data } = await api.post('/fleet/payments/import/preview', fd);
+      setImportPreview(data);
+      setImportMapping(data.suggested_mapping || {});
+      setImportState('preview');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Could not read CSV');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmImport = async () => {
+    if (!importFile) return;
+    const fd = new FormData();
+    fd.append('file', importFile);
+    fd.append('mapping', JSON.stringify(importMapping));
+    try {
+      setImportState('importing');
+      const { data } = await api.post('/fleet/payments/import', fd);
+      setImportResult(data);
+      setImportState('done');
+      if (data.payments_created > 0) await load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Import failed');
+      setImportState('preview');
+    }
+  };
+
   if (!payments) return <Loading />;
 
   return (
@@ -152,6 +199,7 @@ export default function FleetOwnerPayments() {
         </div>
         <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
           {canManage && <button className="btn btn-sm" onClick={() => setShowPay(true)} title="Record an EFT, cash, card, or other manual rental payment">+ Record payment</button>}
+          {canManage && <button className="btn btn-sm btn-secondary" onClick={openImport} title="Import payments from a CSV file">Import CSV</button>}
           {canManage && <button className="btn btn-sm btn-danger" onClick={() => { if (!selectedIds.length) return toast.error('Select at least one payment first'); setConfirmDelete(true); }} disabled={busy}>{busy ? 'Deleting…' : 'Delete selected'}</button>}
           <button className="btn btn-sm btn-secondary" onClick={exportCsv} disabled={!filtered.length} title="Export visible payments to CSV">Export CSV</button>
         </div>
@@ -237,6 +285,110 @@ export default function FleetOwnerPayments() {
           onConfirm={deleteSelected}
           onClose={() => setConfirmDelete(false)}
         />
+      )}
+
+      {importState && importState !== null && (
+        <Modal
+          title={importState === 'done' ? 'Import complete' : importState === 'preview' ? 'Map columns & preview' : 'Import payments from CSV'}
+          onClose={importState === 'importing' ? undefined : closeImport}
+        >
+          {(importState === 'picking' || importState === 'preview') && !importPreview && (
+            <div>
+              <p className="muted text-sm mb-4">Upload a CSV with columns for bike registration and payment amount. Other columns (date, reference, method, notes) are optional.</p>
+              <div
+                style={{ border: '2px dashed var(--border)', borderRadius: 8, padding: 32, textAlign: 'center', cursor: 'pointer', background: 'var(--surface-2)' }}
+                onClick={() => importFileRef.current?.click()}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleImportFile(f); }}
+              >
+                <div style={{ fontSize: 32, marginBottom: 8 }}>📂</div>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>Drop your CSV here or click to browse</div>
+                <div className="muted text-xs">Max 5 MB · CSV only · Bikes must belong to your fleet</div>
+              </div>
+              <input ref={(el) => { importFileRef.current = el; }} type="file" accept=".csv,text/csv" style={{ display: 'none' }} onChange={(e) => handleImportFile(e.target.files[0])} />
+              {busy && <div className="muted text-sm mt-3">Reading file…</div>}
+              <div className="row mt-4" style={{ justifyContent: 'flex-end' }}>
+                <button className="btn btn-secondary" onClick={closeImport}>Cancel</button>
+              </div>
+            </div>
+          )}
+
+          {importState === 'preview' && importPreview && (
+            <div>
+              <p className="text-sm mb-3">Found <strong>{importPreview.total_rows}</strong> rows. Map your CSV columns to the expected fields below, then confirm.</p>
+              <div className="card mb-4" style={{ background: 'var(--surface-2)' }}>
+                <h4 className="mb-3" style={{ fontSize: 13 }}>Column mapping</h4>
+                <div className="grid grid-2" style={{ gap: '8px 16px' }}>
+                  {CANONICAL_COLS.map((canonical) => (
+                    <div key={canonical} className="field" style={{ marginBottom: 0 }}>
+                      <label className="label" style={{ fontSize: 11 }}>{COL_LABELS[canonical]}{canonical === 'registration' || canonical === 'amount' ? ' *' : ''}</label>
+                      <select value={importMapping[canonical] || ''} onChange={(e) => setImportMapping((m) => ({ ...m, [canonical]: e.target.value || null }))}>
+                        <option value="">— skip —</option>
+                        {importPreview.headers.map((h) => <option key={h} value={h}>{h}</option>)}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <h4 className="mb-2" style={{ fontSize: 13 }}>Sample rows (first 5)</h4>
+              <div style={{ overflowX: 'auto', marginBottom: 16 }}>
+                <table className="table" style={{ fontSize: 11 }}>
+                  <thead><tr>{importPreview.headers.map((h) => <th key={h}>{h}</th>)}</tr></thead>
+                  <tbody>{importPreview.sample_rows.map((row, i) => (
+                    <tr key={i}>{importPreview.headers.map((h) => <td key={h}>{row[h] || '—'}</td>)}</tr>
+                  ))}</tbody>
+                </table>
+              </div>
+              <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
+                <button className="btn btn-secondary" onClick={() => { setImportPreview(null); setImportState('picking'); }}>Back</button>
+                <button
+                  className="btn"
+                  disabled={!importMapping.registration || !importMapping.amount}
+                  onClick={confirmImport}
+                >
+                  Import {importPreview.total_rows} rows
+                </button>
+              </div>
+              {(!importMapping.registration || !importMapping.amount) && (
+                <p className="muted text-xs mt-2">Map at least "Bike registration" and "Amount" to proceed.</p>
+              )}
+            </div>
+          )}
+
+          {importState === 'importing' && (
+            <div style={{ textAlign: 'center', padding: '32px 0' }}>
+              <div className="muted">Importing payments…</div>
+            </div>
+          )}
+
+          {importState === 'done' && importResult && (
+            <div>
+              <div className="grid grid-2 mb-4" style={{ gap: 12 }}>
+                <div className="card" style={{ background: 'var(--success-bg, #eafaf1)', textAlign: 'center' }}>
+                  <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--success)' }}>{importResult.payments_created}</div>
+                  <div className="text-xs muted">Payments created</div>
+                </div>
+                <div className="card" style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--muted)' }}>{importResult.skipped}</div>
+                  <div className="text-xs muted">Duplicate / skipped</div>
+                </div>
+              </div>
+              {importResult.errors && importResult.errors.length > 0 && (
+                <div className="card mb-3" style={{ background: 'var(--danger-bg, #fdf2f2)' }}>
+                  <h4 className="mb-2" style={{ fontSize: 13, color: 'var(--danger)' }}>{importResult.errors.length} row{importResult.errors.length !== 1 ? 's' : ''} with errors</h4>
+                  <div style={{ maxHeight: 160, overflowY: 'auto' }}>
+                    {importResult.errors.map((e, i) => (
+                      <div key={i} className="text-xs" style={{ marginBottom: 4 }}>Row {e.row}: {e.error}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="row" style={{ justifyContent: 'flex-end' }}>
+                <button className="btn" onClick={closeImport}>Done</button>
+              </div>
+            </div>
+          )}
+        </Modal>
       )}
 
       {showPay && (

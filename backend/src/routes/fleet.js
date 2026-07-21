@@ -14,6 +14,7 @@ const { discontinueAgreementForStolenBike, discontinueAgreement, reinstateDiscon
 const { extractPayslipInsights } = require('../services/documentInsights');
 const { sendNotification, sendEmail } = require('../services/notifier');
 const { writeContractSnapshot } = require('../services/contracts');
+const { insertImportedPaymentForFleet } = require('../services/csvImportsFleet');
 
 const router = express.Router();
 const PAYSTACK_BASE = 'https://api.paystack.co';
@@ -2027,6 +2028,98 @@ router.post('/payments/bulk-delete', companyRoleAllowed(FLEET_RESOURCE_ACCESS.pa
     res.json({ ok: true, requested: paymentIds.length, deleted_count: deleted.length, not_found_count: notFound.length, not_found: notFound });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Could not delete payments' });
+  }
+});
+
+const csvUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+
+router.post('/payments/import/preview', companyRoleAllowed(FLEET_RESOURCE_ACCESS.payments.manage), csvUpload.single('file'), (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const mime = req.file.mimetype || '';
+    if (!mime.includes('csv') && !mime.includes('text') && !mime.includes('excel') && !mime.includes('spreadsheet')) {
+      const ext = (req.file.originalname || '').toLowerCase();
+      if (!ext.endsWith('.csv')) return res.status(400).json({ error: 'Please upload a CSV file' });
+    }
+    const organization = getOrganizationOrThrow(req.user.organization_id);
+    const text = req.file.buffer.toString('utf8').replace(/^﻿/, '');
+    const lines = text.split(/\r?\n/).filter((l) => l.trim());
+    if (lines.length < 2) return res.status(400).json({ error: 'CSV must have a header row and at least one data row' });
+    const headers = lines[0].split(',').map((h) => h.replace(/^"|"$/g, '').trim());
+    const sampleRows = lines.slice(1, 6).map((line) => {
+      const vals = line.split(',').map((v) => v.replace(/^"|"$/g, '').trim());
+      const row = {};
+      headers.forEach((h, i) => { row[h] = vals[i] || ''; });
+      return row;
+    });
+    const regCol = headers.find((h) => /reg(istration)?|bike/i.test(h));
+    const amtCol = headers.find((h) => /amount|collected|payment/i.test(h));
+    const dateCol = headers.find((h) => /date|paid/i.test(h));
+    const refCol = headers.find((h) => /ref(erence)?/i.test(h));
+    const methodCol = headers.find((h) => /method|type/i.test(h));
+    const notesCol = headers.find((h) => /note|comment/i.test(h));
+    res.json({
+      headers,
+      total_rows: lines.length - 1,
+      sample_rows: sampleRows,
+      suggested_mapping: { registration: regCol || null, amount: amtCol || null, paid_at: dateCol || null, reference: refCol || null, method: methodCol || null, notes: notesCol || null },
+      org_name: organization.name
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not preview CSV' });
+  }
+});
+
+router.post('/payments/import', companyRoleAllowed(FLEET_RESOURCE_ACCESS.payments.manage), csvUpload.single('file'), (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const organization = getOrganizationOrThrow(req.user.organization_id);
+
+    let mapping = {};
+    try { mapping = req.body.mapping ? JSON.parse(req.body.mapping) : {}; } catch (_) {}
+
+    function parseCsvRows(text) {
+      const rows = [];
+      const lines = String(text || '').replace(/^﻿/, '').split(/\r?\n/).filter((l) => l.trim());
+      if (!lines.length) return rows;
+      const hdrs = lines.shift().split(',').map((h) => h.replace(/^"|"$/g, '').trim());
+      for (const line of lines) {
+        const vals = line.split(',').map((v) => v.replace(/^"|"$/g, '').trim());
+        const row = {};
+        hdrs.forEach((h, i) => { row[h] = vals[i] || ''; });
+        rows.push(row);
+      }
+      return rows;
+    }
+
+    function applyMapping(rows, map) {
+      if (!map || !Object.keys(map).length) return rows;
+      return rows.map((row) => {
+        const out = { ...row };
+        for (const [canonical, source] of Object.entries(map)) {
+          if (source && row[source] !== undefined) out[canonical] = row[source];
+        }
+        return out;
+      });
+    }
+
+    const rows = applyMapping(parseCsvRows(req.file.buffer.toString('utf8')), mapping);
+
+    const summary = { total_rows: rows.length, payments_created: 0, skipped: 0, errors: [] };
+    for (const [index, row] of rows.entries()) {
+      try {
+        const result = insertImportedPaymentForFleet(row, req.user.id, organization.id);
+        if (result.skipped) summary.skipped += 1;
+        else summary.payments_created += 1;
+      } catch (error) {
+        summary.errors.push({ row: index + 2, error: error.message });
+      }
+    }
+
+    logAudit(req.user.id, 'fleet_owner.payments_import', 'payments', null, { ...summary, org_id: organization.id }, req.ip);
+    res.json({ ok: true, ...summary });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not import payments' });
   }
 });
 

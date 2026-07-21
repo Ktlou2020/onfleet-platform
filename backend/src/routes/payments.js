@@ -397,11 +397,12 @@ router.post('/paystack/webhook', (req, res) => {
   res.sendStatus(200);
 });
 
-// Shared plan lookup used by webhook (mirrors fleet.js FLEET_BILLING_PLANS)
+// Shared plan lookup used by webhook — must stay in sync with FLEET_BILLING_PLANS in fleet.js
 const FLEET_BILLING_PLAN_ENTITLEMENTS = {
-  small:  { max_bikes: 20, max_admin_users: 3 },
-  medium: { max_bikes: 60, max_admin_users: 5 },
-  large:  { max_bikes: 100, max_admin_users: 10 }
+  small:  { max_bikes: 6,    max_admin_users: 2  },
+  medium: { max_bikes: 20,   max_admin_users: 3  },
+  large:  { max_bikes: 35,   max_admin_users: 5  },
+  empire: { max_bikes: 9999, max_admin_users: 20 },
 };
 
 function getKeyForPlanCode(planCode) {

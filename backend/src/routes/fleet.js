@@ -2058,6 +2058,16 @@ function applyPlanToOrg(orgId, planKey, subscriptionCode) {
     WHERE id = ?`).run(...updates, ...subParams, orgId);
 }
 
+async function cancelPaystackSubscription(subscriptionCode) {
+  const subResp = await axios.get(`${PAYSTACK_API}/subscription/${encodeURIComponent(subscriptionCode)}`,
+    { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } });
+  const emailToken = subResp.data.data?.email_token;
+  if (!emailToken) throw new Error('Paystack subscription has no email_token');
+  await axios.post(`${PAYSTACK_API}/subscription/disable`,
+    { code: subscriptionCode, token: emailToken },
+    { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } });
+}
+
 // GET /fleet/billing/diagnose — admin-only config check (does not charge)
 router.get('/billing/diagnose', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
   const secretKey = process.env.PAYSTACK_SECRET_KEY || '';
@@ -2106,7 +2116,8 @@ router.get('/billing/status', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.v
         suggested_tier: suggestedTier, approaching_limit: approachingLimit
       },
       plans: Object.values(FLEET_BILLING_PLANS),
-      can_subscribe: ['trialing', 'past_due', 'cancelled', 'suspended'].includes(org.status)
+      can_subscribe: ['trialing', 'past_due', 'cancelled', 'suspended', 'active'].includes(org.status),
+      is_active_subscriber: org.status === 'active' && !!org.paystack_subscription_code
     });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Could not load billing status' });
@@ -2184,11 +2195,20 @@ router.get('/billing/verify', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.m
     const planKey = txn.metadata?.plan_key
       || (txn.plan?.plan_code ? getKeyForPlanCode(txn.plan.plan_code) : null);
 
+    const oldSubCode = org.paystack_subscription_code || null;
+    const newSubCode = txn.subscription?.subscription_code || null;
+
     if (planKey && FLEET_BILLING_PLANS[planKey]) {
-      applyPlanToOrg(org.id, planKey, txn.subscription?.subscription_code || null);
+      applyPlanToOrg(org.id, planKey, newSubCode);
     }
 
-    logAudit(req.user.id, 'fleet_owner.billing.subscribe_verified', 'organizations', org.id, { reference, plan_key: planKey }, req.ip);
+    // Cancel the previous subscription when switching plans
+    if (oldSubCode && newSubCode && oldSubCode !== newSubCode) {
+      cancelPaystackSubscription(oldSubCode).catch((e) =>
+        console.error(`[billing] Could not cancel old subscription ${oldSubCode}:`, e.message));
+    }
+
+    logAudit(req.user.id, 'fleet_owner.billing.subscribe_verified', 'organizations', org.id, { reference, plan_key: planKey, switched_from: oldSubCode ? 'existing' : null }, req.ip);
     res.json({ ok: true, plan_key: planKey, txn_status: txn.status });
   } catch (error) {
     res.status(500).json({ error: 'Could not verify subscription', details: error.response?.data || error.message });
@@ -2410,13 +2430,23 @@ router.post('/riders/:id/subscription/init', companyRoleAllowed(FLEET_RESOURCE_A
 });
 
 // POST /fleet/billing/cancel — cancel active subscription
-router.post('/billing/cancel', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), (req, res) => {
+router.post('/billing/cancel', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
   try {
     const org = getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
     if (org.status !== 'active') return res.status(400).json({ error: 'No active subscription to cancel' });
+
+    if (org.paystack_subscription_code) {
+      try {
+        await cancelPaystackSubscription(org.paystack_subscription_code);
+      } catch (e) {
+        console.error(`[billing/cancel] Paystack cancel failed for ${org.paystack_subscription_code}:`, e.message);
+        // Still cancel in DB even if Paystack call fails — admin can handle edge case
+      }
+    }
+
     db.prepare("UPDATE organizations SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(org.id);
-    logAudit(req.user.id, 'fleet_owner.billing.cancelled', 'organizations', org.id, {}, req.ip);
-    res.json({ ok: true, note: 'Subscription cancelled. Access continues until your current billing period ends.' });
+    logAudit(req.user.id, 'fleet_owner.billing.cancelled', 'organizations', org.id, { subscription_code: org.paystack_subscription_code }, req.ip);
+    res.json({ ok: true, note: 'Subscription cancelled. You will not be charged again.' });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Could not cancel subscription' });
   }

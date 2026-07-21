@@ -41,9 +41,11 @@ function DiagRow({ ok, label, value }) {
   );
 }
 
-function PlanCard({ plan, current, canSubscribe, onSubscribe, busy, recommended }) {
+function PlanCard({ plan, current, canSubscribe, isActiveSubscriber, onSubscribe, busy, recommended }) {
   const isCurrent = current?.plan_key === plan.key && current?.status === 'active';
   const display = PLAN_DISPLAY[plan.key] || {};
+  const isSwitching = isActiveSubscriber && !isCurrent;
+
   return (
     <div className="card" style={{
       borderColor: isCurrent ? 'rgba(30,136,209,0.5)' : recommended && !isCurrent ? 'rgba(16,185,129,0.4)' : undefined,
@@ -101,13 +103,15 @@ function PlanCard({ plan, current, canSubscribe, onSubscribe, busy, recommended 
           Contact us for a quote
         </a>
       ) : canSubscribe ? (
-        <button className="btn" onClick={() => onSubscribe(plan.key)} disabled={busy === plan.key}
-          style={recommended ? { background: '#10b981', borderColor: '#10b981' } : undefined}>
-          {busy === plan.key ? 'Redirecting to Paystack…' : `Subscribe — ${fmt(plan.monthly_price)}/mo`}
+        <button className="btn" onClick={() => onSubscribe(plan.key, isSwitching)} disabled={busy === plan.key}
+          style={recommended && !isSwitching ? { background: '#10b981', borderColor: '#10b981' } : undefined}>
+          {busy === plan.key
+            ? 'Redirecting to Paystack…'
+            : isSwitching
+              ? `Switch to this plan — ${fmt(plan.monthly_price)}/mo`
+              : `Subscribe — ${fmt(plan.monthly_price)}/mo`}
         </button>
-      ) : (
-        <div className="muted text-sm">Manage your subscription to change plans.</div>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -117,6 +121,7 @@ export default function FleetBilling() {
   const [billing, setBilling] = useState(null);
   const [busy, setBusy] = useState('');
   const [showCancel, setShowCancel] = useState(false);
+  const [switchPlan, setSwitchPlan] = useState(null);
   const [verifying, setVerifying] = useState(false);
   const [verified, setVerified] = useState(false);
   const [diag, setDiag] = useState(null);
@@ -147,10 +152,27 @@ export default function FleetBilling() {
 
   useEffect(() => { load().catch(() => toast.error('Could not load billing status')); }, []);
 
-  const subscribe = async (planKey) => {
+  const subscribe = async (planKey, isSwitching = false) => {
+    if (isSwitching) {
+      setSwitchPlan(planKey);
+      return;
+    }
     try {
       setBusy(planKey);
       const { data } = await api.post('/fleet/billing/subscribe', { plan_key: planKey });
+      window.location.href = data.authorization_url;
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Could not initiate checkout');
+      setBusy('');
+    }
+  };
+
+  const confirmSwitch = async () => {
+    if (!switchPlan) return;
+    try {
+      setBusy(switchPlan);
+      setSwitchPlan(null);
+      const { data } = await api.post('/fleet/billing/subscribe', { plan_key: switchPlan });
       window.location.href = data.authorization_url;
     } catch (err) {
       toast.error(err.response?.data?.error || 'Could not initiate checkout');
@@ -186,7 +208,7 @@ export default function FleetBilling() {
 
   if (!billing || verifying) return <Loading />;
 
-  const { organization: org, plans, can_subscribe } = billing;
+  const { organization: org, plans, can_subscribe, is_active_subscriber } = billing;
   const trialExpiringSoon = org.status === 'trialing' && org.trial_days_left !== null && org.trial_days_left <= 5;
   const trialExpired = org.status === 'past_due';
   const currentPlanDisplay = PLAN_DISPLAY[org.plan_key];
@@ -297,6 +319,7 @@ export default function FleetBilling() {
             plan={plan}
             current={org}
             canSubscribe={can_subscribe}
+            isActiveSubscriber={is_active_subscriber}
             onSubscribe={subscribe}
             busy={busy}
             recommended={org.suggested_tier === plan.key && can_subscribe}
@@ -338,12 +361,22 @@ export default function FleetBilling() {
       {showCancel && (
         <ConfirmModal
           title="Cancel subscription?"
-          body={<>Your subscription will be cancelled and your plan will revert to <strong>trial</strong> at the end of the current billing period. You can resubscribe at any time.</>}
+          body={<>Your current subscription will be cancelled immediately on Paystack — you will <strong>not</strong> be charged again. Access to your fleet portal ends now.</>}
           danger
           confirmLabel="Yes, cancel subscription"
           busy={busy === 'cancel'}
           onConfirm={cancelSubscription}
           onClose={() => { if (busy !== 'cancel') setShowCancel(false); }}
+        />
+      )}
+      {switchPlan && (
+        <ConfirmModal
+          title={`Switch to ${PLAN_DISPLAY[switchPlan]?.label || switchPlan}?`}
+          body={<>Your current subscription will be cancelled and you will be taken to Paystack to complete the new <strong>{PLAN_DISPLAY[switchPlan]?.label}</strong> subscription ({plans.find(p => p.key === switchPlan) ? fmt(plans.find(p => p.key === switchPlan).monthly_price) : ''}/mo). The switch takes effect immediately on payment.</>}
+          confirmLabel="Continue to Paystack"
+          busy={!!busy}
+          onConfirm={confirmSwitch}
+          onClose={() => setSwitchPlan(null)}
         />
       )}
     </>

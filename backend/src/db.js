@@ -177,6 +177,8 @@ function ensureAgreementStatusSchema() {
 function ensureUserRoleSchema() {
   const schemaRow = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'`).get();
   const schemaSql = String(schemaRow?.sql || '');
+  // If 'technician' is already in the schema, ensureTechnicianRoleSchema has already run a superset migration — skip
+  if (schemaSql && schemaSql.includes("'technician'")) return;
   const expectedConstraint = `CHECK(role IN ('rider','admin','superadmin','fleet_owner_admin','fleet_owner_ops','fleet_owner_billing','fleet_owner_viewer'))`;
   if (schemaSql && schemaSql.includes(expectedConstraint) && schemaSql.includes('organization_id')) return;
 
@@ -198,49 +200,54 @@ function ensureUserRoleSchema() {
   const createdAtSelect = selectColumnOrDefault('users', 'created_at', 'CURRENT_TIMESTAMP');
   const updatedAtSelect = selectColumnOrDefault('users', 'updated_at', 'CURRENT_TIMESTAMP');
 
-  db.exec(`
-    PRAGMA foreign_keys = OFF;
-    BEGIN TRANSACTION;
-    CREATE TABLE users_new (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      email TEXT UNIQUE NOT NULL,
-      phone TEXT,
-      password_hash TEXT NOT NULL,
-      full_name TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'rider' CHECK(role IN ('rider','admin','superadmin','fleet_owner_admin','fleet_owner_ops','fleet_owner_billing','fleet_owner_viewer')),
-      organization_id INTEGER,
-      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','suspended')),
-      id_number TEXT,
-      date_of_birth TEXT,
-      address TEXT,
-      city TEXT,
-      province TEXT,
-      postal_code TEXT,
-      emergency_contact_name TEXT,
-      emergency_contact_phone TEXT,
-      avatar_url TEXT,
-      country_of_origin TEXT,
-      user_tags TEXT,
-      deleted_at TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY(organization_id) REFERENCES organizations(id)
-    );
-    INSERT INTO users_new (
-      id, email, phone, password_hash, full_name, role, organization_id, status, id_number, date_of_birth,
-      address, city, province, postal_code, emergency_contact_name, emergency_contact_phone,
-      avatar_url, country_of_origin, user_tags, deleted_at, created_at, updated_at
-    )
-    SELECT
-      id, email, phone, password_hash, full_name, ${roleSelect}, ${organizationSelect}, ${statusSelect}, ${idNumberSelect}, ${dateOfBirthSelect},
-      ${addressSelect}, ${citySelect}, ${provinceSelect}, ${postalCodeSelect}, ${emergencyContactNameSelect}, ${emergencyContactPhoneSelect},
-      ${avatarUrlSelect}, ${countryOfOriginSelect}, ${userTagsSelect}, ${deletedAtSelect}, ${createdAtSelect}, ${updatedAtSelect}
-    FROM users;
-    DROP TABLE users;
-    ALTER TABLE users_new RENAME TO users;
-    COMMIT;
-    PRAGMA foreign_keys = ON;
-  `);
+  try {
+    db.exec(`
+      PRAGMA foreign_keys = OFF;
+      BEGIN TRANSACTION;
+      CREATE TABLE users_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT UNIQUE NOT NULL,
+        phone TEXT,
+        password_hash TEXT NOT NULL,
+        full_name TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'rider' CHECK(role IN ('rider','admin','superadmin','fleet_owner_admin','fleet_owner_ops','fleet_owner_billing','fleet_owner_viewer','technician')),
+        organization_id INTEGER,
+        status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','suspended')),
+        id_number TEXT,
+        date_of_birth TEXT,
+        address TEXT,
+        city TEXT,
+        province TEXT,
+        postal_code TEXT,
+        emergency_contact_name TEXT,
+        emergency_contact_phone TEXT,
+        avatar_url TEXT,
+        country_of_origin TEXT,
+        user_tags TEXT,
+        deleted_at TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(organization_id) REFERENCES organizations(id)
+      );
+      INSERT INTO users_new (
+        id, email, phone, password_hash, full_name, role, organization_id, status, id_number, date_of_birth,
+        address, city, province, postal_code, emergency_contact_name, emergency_contact_phone,
+        avatar_url, country_of_origin, user_tags, deleted_at, created_at, updated_at
+      )
+      SELECT
+        id, email, phone, password_hash, full_name, ${roleSelect}, ${organizationSelect}, ${statusSelect}, ${idNumberSelect}, ${dateOfBirthSelect},
+        ${addressSelect}, ${citySelect}, ${provinceSelect}, ${postalCodeSelect}, ${emergencyContactNameSelect}, ${emergencyContactPhoneSelect},
+        ${avatarUrlSelect}, ${countryOfOriginSelect}, ${userTagsSelect}, ${deletedAtSelect}, ${createdAtSelect}, ${updatedAtSelect}
+      FROM users;
+      DROP TABLE users;
+      ALTER TABLE users_new RENAME TO users;
+      COMMIT;
+      PRAGMA foreign_keys = ON;
+    `);
+  } catch (e) {
+    console.error('[ensureUserRoleSchema] migration failed, rolling back:', e.message);
+    try { db.exec('ROLLBACK; PRAGMA foreign_keys = ON;'); } catch (_) {}
+  }
 }
 
 // ---------- SCHEMA ----------

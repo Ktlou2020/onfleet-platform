@@ -100,7 +100,8 @@ function SubscriptionGate({ billingData, onSubscribed }) {
                   {plan.name}
                 </div>
                 <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--primary-light)', lineHeight: 1 }}>
-                  {fmt(plan.monthly_price)}<span className="muted text-sm" style={{ fontWeight: 400 }}>/mo</span>
+                  {plan.key === 'empire' ? 'Custom' : fmt(plan.monthly_price)}
+                  {plan.key !== 'empire' && <span className="muted text-sm" style={{ fontWeight: 400 }}>/mo</span>}
                 </div>
               </div>
               <ul style={{ listStyle: 'none', display: 'grid', gap: 6, flex: 1 }}>
@@ -111,14 +112,26 @@ function SubscriptionGate({ billingData, onSubscribed }) {
                   </li>
                 ))}
               </ul>
-              <button
-                className="btn btn-sm"
-                onClick={() => subscribe(plan.key)}
-                disabled={!!busy}
-                style={{ background: busy === plan.key ? undefined : accent, borderColor: accent, display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'center' }}
-              >
-                {busy === plan.key ? 'Redirecting…' : <><span>Subscribe</span><ArrowRight size={13} /></>}
-              </button>
+              {plan.key === 'empire' ? (
+                <a
+                  href="https://wa.me/27815395612?text=Hi%2C+I'm+interested+in+the+Empire+fleet+plan"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn btn-sm btn-secondary"
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'center' }}
+                >
+                  Contact us for a quote
+                </a>
+              ) : (
+                <button
+                  className="btn btn-sm"
+                  onClick={() => subscribe(plan.key)}
+                  disabled={!!busy}
+                  style={{ background: busy === plan.key ? undefined : accent, borderColor: accent, display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'center' }}
+                >
+                  {busy === plan.key ? 'Redirecting…' : <><span>Subscribe</span><ArrowRight size={13} /></>}
+                </button>
+              )}
             </div>
           );
         })}

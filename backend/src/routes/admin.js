@@ -814,6 +814,24 @@ router.post('/fleet-payouts/:id/process', superadminOnly, (req, res) => {
     .run(newStatus, admin_notes || null, req.user.id, id);
 
   logAudit(req.user.id, `fleet.payout.${newStatus}`, 'fleet_payout_requests', id, { action, admin_notes }, req.ip);
+
+  const payoutMessages = {
+    approved: (fmt) => `Your payout request of ${fmt} has been approved and is being processed. Funds will arrive in your bank account within 1–2 business days.`,
+    paid:     (fmt) => `Your payout of ${fmt} has been paid into your bank account.`,
+    rejected: (fmt) => `Your payout request of ${fmt} has been declined.${admin_notes ? ` Reason: ${admin_notes}` : ' Please contact OnFleet support for more information.'}`,
+  };
+  const fmtAmount = `R${Number(request.net_payout).toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const payoutMsg = payoutMessages[newStatus]?.(fmtAmount);
+  if (payoutMsg) {
+    sendNotification({
+      userId: request.requested_by,
+      channel: 'email',
+      type: `payout_${newStatus}`,
+      title: `Payout ${newStatus} · ${fmtAmount}`,
+      message: payoutMsg
+    }).catch((e) => console.error(`[admin] payout notify failed for request ${id}:`, e.message));
+  }
+
   res.json({ ok: true, status: newStatus });
 });
 

@@ -1838,6 +1838,23 @@ router.post('/agreements/:id/status', companyRoleAllowed(FLEET_RESOURCE_ACCESS.a
     if (nextStatus === 'active') db.prepare(`UPDATE bikes SET status = 'active' WHERE id = ? AND status <> 'active'`).run(agreement.bike_id);
 
     logAudit(req.user.id, 'fleet_owner.agreement_status', 'agreements', agreementId, { previous_status: agreement.status, next_status: nextStatus }, req.ip);
+
+    if (nextStatus === 'defaulted') {
+      const rider = db.prepare('SELECT full_name FROM users WHERE id = ?').get(agreement.user_id);
+      const orgAdmins = db.prepare(
+        `SELECT id, full_name FROM users WHERE organization_id = ? AND role IN ('fleet_owner_admin','fleet_owner_ops') AND status = 'active' AND deleted_at IS NULL`
+      ).all(organization.id);
+      for (const admin of orgAdmins) {
+        sendNotification({
+          userId: admin.id,
+          channel: 'email',
+          type: 'agreement_defaulted',
+          title: `Agreement defaulted · ${agreement.agreement_no}`,
+          message: `Hi ${admin.full_name.split(' ')[0]}, agreement ${agreement.agreement_no} for rider ${rider?.full_name || 'Unknown'} has been marked as defaulted. Open your fleet portal to begin collections or immobilise the bike.`
+        }).catch((e) => console.error(`[fleet] defaulted notify failed for ${agreement.agreement_no}:`, e.message));
+      }
+    }
+
     res.json({ ok: true });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Could not update agreement status' });

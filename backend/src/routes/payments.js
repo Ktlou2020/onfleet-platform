@@ -6,6 +6,7 @@ const { v4: uuid } = require('uuid');
 const db = require('../db');
 const { authRequired, adminOnly } = require('../middleware/auth');
 const { logAudit, recalcScheduleStatuses } = require('../utils/helpers');
+const { sendNotification } = require('../services/notifier');
 const { applyCsvMapping, previewImportCsv } = require('../services/csvPreview');
 const { resolveAgreementForPayment, parseMoney, parseDateFlexible } = require('../services/csvImports');
 
@@ -380,6 +381,21 @@ router.post('/paystack/webhook', (req, res) => {
     if (subscriptionCode) {
       db.prepare("UPDATE organizations SET status = 'past_due', updated_at = CURRENT_TIMESTAMP WHERE paystack_subscription_code = ?")
         .run(subscriptionCode);
+      const org = db.prepare('SELECT id FROM organizations WHERE paystack_subscription_code = ?').get(subscriptionCode);
+      if (org) {
+        const orgAdmins = db.prepare(
+          `SELECT id, full_name FROM users WHERE organization_id = ? AND role IN ('fleet_owner_admin','fleet_owner_ops') AND status = 'active' AND deleted_at IS NULL`
+        ).all(org.id);
+        for (const admin of orgAdmins) {
+          sendNotification({
+            userId: admin.id,
+            channel: 'email',
+            type: 'billing_payment_failed',
+            title: 'OnFleet subscription payment failed',
+            message: `Hi ${admin.full_name.split(' ')[0]}, your OnFleet fleet subscription payment failed and your account has been suspended. Log in to update your payment method and restore access to your fleet.`
+          }).catch((e) => console.error(`[webhook] billing_payment_failed notify failed for org ${org.id}:`, e.message));
+        }
+      }
     }
   } else if (event.event === 'charge.success' && !isFleetEvent) {
     // Rider one-time payment

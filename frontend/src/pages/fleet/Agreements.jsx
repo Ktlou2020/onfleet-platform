@@ -343,7 +343,6 @@ export default function FleetOwnerAgreements() {
                   {canManage && (
                     <td>
                       <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
-                        {['active', 'paused', 'defaulted'].includes(agreement.status) && <button className="btn btn-sm" disabled={busy} onClick={() => openPayLink(agreement)} title="Send driver a secure card payment link">Send payment link</button>}
                         {['active', 'paused', 'defaulted'].includes(agreement.status) && <button className="btn btn-sm btn-secondary" disabled={busy} onClick={() => openReassign(agreement)}>Reassign</button>}
                         {agreement.status === 'active' && <button className="btn btn-sm btn-secondary" disabled={busy} onClick={() => requestConfirm(agreement, 'paused')}>Pause</button>}
                         {agreement.status === 'paused' && <button className="btn btn-sm btn-secondary" disabled={busy} onClick={() => requestConfirm(agreement, 'active')}>Resume</button>}

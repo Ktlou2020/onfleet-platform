@@ -113,11 +113,10 @@ async function runMonthlyStatements(statementMonth = previousMonthKey()) {
 }
 
 async function runLicenseDiscAlerts() {
-  const admins = db.prepare(`SELECT id FROM users
+  const platformAdmins = db.prepare(`SELECT id FROM users
     WHERE role IN ('admin','superadmin') AND status = 'active' AND deleted_at IS NULL`).all();
-  if (!admins.length) return;
 
-  const bikes = db.prepare(`SELECT id, make, model, registration, vin, license_disc_no, license_disc_expiry
+  const bikes = db.prepare(`SELECT id, make, model, registration, vin, license_disc_no, license_disc_expiry, organization_id
     FROM bikes
     WHERE license_disc_expiry IS NOT NULL AND license_disc_expiry <= date('now','+30 days')
     ORDER BY license_disc_expiry ASC`).all();
@@ -136,18 +135,34 @@ async function runLicenseDiscAlerts() {
         : `expires in ${daysRemaining} day${daysRemaining === 1 ? '' : 's'}`;
     const message = `Bike ${bike.make} ${bike.model} (${ref}) has a license disc that ${ageText}. Expiry date: ${bike.license_disc_expiry}.${bike.license_disc_no ? ` Disc no: ${bike.license_disc_no}.` : ''} Update the fleet record once renewed.`;
 
-    for (const admin of admins) {
+    // Notify platform admins (in-app)
+    for (const admin of platformAdmins) {
       if (notificationExistsToday(admin.id, 'license_disc_expiry', `${title} · ${ref}`)) continue;
       try {
-        await sendNotification({
-          userId: admin.id,
-          channel: 'in_app',
-          type: 'license_disc_expiry',
-          title: `${title} · ${ref}`,
-          message
-        });
+        await sendNotification({ userId: admin.id, channel: 'in_app', type: 'license_disc_expiry', title: `${title} · ${ref}`, message });
       } catch (err) {
-        console.error(`[license-disc] notify failed for bike ${ref}:`, err.message);
+        console.error(`[license-disc] platform notify failed for bike ${ref}:`, err.message);
+      }
+    }
+
+    // Notify fleet owner admins/ops for their org's bike (email)
+    if (bike.organization_id) {
+      const fleetAdmins = db.prepare(
+        `SELECT id, full_name FROM users WHERE organization_id = ? AND role IN ('fleet_owner_admin','fleet_owner_ops') AND status = 'active' AND deleted_at IS NULL`
+      ).all(bike.organization_id);
+      for (const admin of fleetAdmins) {
+        if (notificationExistsToday(admin.id, 'license_disc_expiry', `${title} · ${ref}`)) continue;
+        try {
+          await sendNotification({
+            userId: admin.id,
+            channel: 'email',
+            type: 'license_disc_expiry',
+            title: `${title} · ${ref}`,
+            message: `Hi ${admin.full_name.split(' ')[0]}, ${message}`
+          });
+        } catch (err) {
+          console.error(`[license-disc] fleet notify failed for bike ${ref}:`, err.message);
+        }
       }
     }
   }

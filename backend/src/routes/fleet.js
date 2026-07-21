@@ -14,6 +14,7 @@ const { discontinueAgreementForStolenBike, discontinueAgreement, reinstateDiscon
 const { extractPayslipInsights } = require('../services/documentInsights');
 const { sendNotification, sendEmail } = require('../services/notifier');
 const { writeContractSnapshot } = require('../services/contracts');
+const { insertImportedPaymentForFleet } = require('../services/csvImportsFleet');
 
 const router = express.Router();
 const PAYSTACK_BASE = 'https://api.paystack.co';
@@ -70,6 +71,10 @@ const FLEET_RESOURCE_ACCESS = {
   tracking: {
     view: ['fleet_owner_admin', 'fleet_owner_ops'],
     manage: ['fleet_owner_admin', 'fleet_owner_ops']
+  },
+  reporting: {
+    view: ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'],
+    manage: []
   }
 };
 
@@ -804,18 +809,52 @@ function buildSummary(bikes, agreements, members, recentServices) {
   };
 }
 
-function getFleetPayments(org) {
+function getFleetPaymentsPaged(org, { search, method, days, page, pageSize, all } = {}) {
   const scope = getBikeScope(org, 'b');
-  return db.prepare(`SELECT p.*, u.full_name, u.email, a.agreement_no,
-      b.registration AS bike_registration, b.make, b.model, b.status AS bike_status,
-      a.status AS agreement_status
-    FROM payments p
+  const conditions = [scope.clause];
+  const params = [...scope.params];
+
+  if (method) { conditions.push('p.method = ?'); params.push(method); }
+  if (days) { conditions.push("COALESCE(p.paid_at, p.created_at) >= date('now', ?)"); params.push(`-${days} days`); }
+  if (search) {
+    const q = `%${search}%`;
+    conditions.push("(u.full_name LIKE ? OR u.email LIKE ? OR a.agreement_no LIKE ? OR COALESCE(p.reference,'') LIKE ? OR COALESCE(b.registration,'') LIKE ?)");
+    params.push(q, q, q, q, q);
+  }
+
+  const baseFrom = `FROM payments p
     JOIN agreements a ON a.id = p.agreement_id
     JOIN bikes b ON b.id = a.bike_id
     JOIN users u ON u.id = p.user_id
-    WHERE ${scope.clause}
+    WHERE ${conditions.join(' AND ')}`;
+
+  const total = db.prepare(`SELECT COUNT(*) AS cnt ${baseFrom}`).get(...params).cnt;
+  const agg = db.prepare(`SELECT
+    COALESCE(SUM(CASE WHEN p.status='success' THEN COALESCE(p.net_amount,p.amount,0) ELSE 0 END),0) AS credited,
+    COALESCE(SUM(CASE WHEN p.status='success' THEN COALESCE(p.fee_amount,0) ELSE 0 END),0) AS fees,
+    COALESCE(SUM(CASE WHEN p.status='success' THEN COALESCE(p.amount,0) ELSE 0 END),0) AS gross
+    ${baseFrom}`).get(...params);
+
+  const safeSize = Math.min(200, Math.max(1, Number(pageSize) || 15));
+  const safePage = Math.max(1, Number(page) || 1);
+  const offset = (safePage - 1) * safeSize;
+  const limitClause = all ? '' : `LIMIT ${safeSize} OFFSET ${offset}`;
+
+  const payments = db.prepare(`SELECT p.*, u.full_name, u.email, a.agreement_no,
+      b.registration AS bike_registration, b.make, b.model, b.status AS bike_status,
+      a.status AS agreement_status
+    ${baseFrom}
     ORDER BY COALESCE(p.paid_at, p.created_at) DESC, p.id DESC
-    LIMIT 500`).all(...scope.params);
+    ${limitClause}`).all(...params);
+
+  return {
+    payments,
+    total,
+    page: safePage,
+    pageSize: safeSize,
+    pages: Math.ceil(total / safeSize) || 1,
+    aggregates: { credited: agg.credited, fees: agg.fees, gross: agg.gross }
+  };
 }
 
 function getScopedPayment(org, paymentId) {
@@ -1288,6 +1327,17 @@ router.patch('/team-members/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.team.
 
   const updated = db.prepare(`SELECT id, email, full_name, phone, city, role, status, created_at FROM users WHERE id = ?`).get(memberId);
   res.json({ ok: true, member: updated });
+});
+
+router.delete('/team-members/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.team.manage), (req, res) => {
+  const memberId = Number(req.params.id);
+  if (!Number.isInteger(memberId) || memberId <= 0) return res.status(400).json({ error: 'Invalid team member id' });
+  if (memberId === req.user.id) return res.status(400).json({ error: 'You cannot remove yourself from the team' });
+  const member = db.prepare(`SELECT id, role, organization_id FROM users WHERE id = ? AND deleted_at IS NULL`).get(memberId);
+  if (!member || member.organization_id !== req.user.organization_id) return res.status(404).json({ error: 'Team member not found' });
+  db.prepare(`UPDATE users SET deleted_at = CURRENT_TIMESTAMP, status = 'suspended', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(memberId);
+  logAudit(req.user.id, 'fleet_owner.team_member_remove', 'users', memberId, { organization_id: req.user.organization_id }, req.ip);
+  res.json({ ok: true });
 });
 
 router.post('/allocations', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.manage), (req, res) => {
@@ -1838,6 +1888,23 @@ router.post('/agreements/:id/status', companyRoleAllowed(FLEET_RESOURCE_ACCESS.a
     if (nextStatus === 'active') db.prepare(`UPDATE bikes SET status = 'active' WHERE id = ? AND status <> 'active'`).run(agreement.bike_id);
 
     logAudit(req.user.id, 'fleet_owner.agreement_status', 'agreements', agreementId, { previous_status: agreement.status, next_status: nextStatus }, req.ip);
+
+    if (nextStatus === 'defaulted') {
+      const rider = db.prepare('SELECT full_name FROM users WHERE id = ?').get(agreement.user_id);
+      const orgAdmins = db.prepare(
+        `SELECT id, full_name FROM users WHERE organization_id = ? AND role IN ('fleet_owner_admin','fleet_owner_ops') AND status = 'active' AND deleted_at IS NULL`
+      ).all(organization.id);
+      for (const admin of orgAdmins) {
+        sendNotification({
+          userId: admin.id,
+          channel: 'email',
+          type: 'agreement_defaulted',
+          title: `Agreement defaulted · ${agreement.agreement_no}`,
+          message: `Hi ${admin.full_name.split(' ')[0]}, agreement ${agreement.agreement_no} for rider ${rider?.full_name || 'Unknown'} has been marked as defaulted. Open your fleet portal to begin collections or immobilise the bike.`
+        }).catch((e) => console.error(`[fleet] defaulted notify failed for ${agreement.agreement_no}:`, e.message));
+      }
+    }
+
     res.json({ ok: true });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Could not update agreement status' });
@@ -1951,10 +2018,35 @@ If you have any questions, contact ${orgName} directly.`;
   }
 });
 
+router.get('/agreements/:id/rider-portal-token', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.view), (req, res) => {
+  try {
+    const organization = getOrganizationOrThrow(req.user.organization_id);
+    const agreementId = toInt(req.params.id);
+    if (!agreementId) return res.status(400).json({ error: 'Invalid agreement ID' });
+    const agreement = getScopedAgreement(organization, agreementId);
+    if (!agreement) return res.status(404).json({ error: 'Agreement not found' });
+    const hmac = crypto
+      .createHmac('sha256', process.env.JWT_SECRET || 'onfleet-fallback')
+      .update(String(agreementId))
+      .digest('hex')
+      .slice(0, 32);
+    const token = `${agreementId}.${hmac}`;
+    res.json({ token, path: `/rider-portal/${token}` });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not generate portal link' });
+  }
+});
+
 router.get('/payments', companyRoleAllowed(FLEET_RESOURCE_ACCESS.payments.view), (req, res) => {
   try {
     const organization = getOrganizationOrThrow(req.user.organization_id);
-    res.json({ payments: getFleetPayments(organization) });
+    const search = String(req.query.search || '').trim();
+    const method = String(req.query.method || '').trim();
+    const days = toInt(req.query.days);
+    const page = Math.max(1, toInt(req.query.page) || 1);
+    const pageSize = Math.min(200, Math.max(1, toInt(req.query.page_size) || 15));
+    const all = req.query.all === '1';
+    res.json(getFleetPaymentsPaged(organization, { search, method, days, page, pageSize, all }));
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Could not load payments' });
   }
@@ -2013,6 +2105,190 @@ router.post('/payments/bulk-delete', companyRoleAllowed(FLEET_RESOURCE_ACCESS.pa
   }
 });
 
+// ─── Fleet Reports ────────────────────────────────────────────────────────────
+
+router.get('/reports', companyRoleAllowed(FLEET_RESOURCE_ACCESS.reporting.view), (req, res) => {
+  try {
+    const organization = getOrganizationOrThrow(req.user.organization_id);
+    const scope = getBikeScope(organization, 'b');
+    const sp = scope.params;
+
+    // Collection rate — scheduled instalments due in the last 30 days
+    const collectionRate = db.prepare(`
+      SELECT
+        COALESCE(SUM(ps.amount_due), 0)  AS total_due,
+        COALESCE(SUM(ps.amount_paid), 0) AS total_paid,
+        COUNT(*) AS schedule_count,
+        COALESCE(SUM(CASE WHEN ps.status = 'paid'    THEN 1 ELSE 0 END), 0) AS paid_count,
+        COALESCE(SUM(CASE WHEN ps.status IN ('overdue','partial') THEN 1 ELSE 0 END), 0) AS unpaid_count
+      FROM payment_schedules ps
+      JOIN agreements a ON a.id = ps.agreement_id
+      JOIN bikes b ON b.id = a.bike_id
+      WHERE ${scope.clause}
+        AND ps.due_date >= date('now', '-30 days')
+        AND ps.due_date <= date('now')
+    `).get(...sp);
+
+    // Revenue trend — monthly totals for the last 12 months
+    const revenueTrend = db.prepare(`
+      SELECT
+        strftime('%Y-%m', COALESCE(p.paid_at, p.created_at)) AS month,
+        COALESCE(SUM(COALESCE(p.net_amount, p.amount, 0)), 0) AS credited,
+        COALESCE(SUM(COALESCE(p.amount, 0)), 0)              AS gross,
+        COUNT(*) AS payment_count
+      FROM payments p
+      JOIN agreements a ON a.id = p.agreement_id
+      JOIN bikes b ON b.id = a.bike_id
+      WHERE ${scope.clause}
+        AND p.status = 'success'
+        AND COALESCE(p.paid_at, p.created_at) >= date('now', '-12 months')
+      GROUP BY strftime('%Y-%m', COALESCE(p.paid_at, p.created_at))
+      ORDER BY month
+    `).all(...sp);
+
+    // Overdue aging bands — how much is owed grouped by days overdue
+    const aging = db.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN CAST(julianday('now') - julianday(ps.due_date) AS INTEGER) BETWEEN 1  AND 30  THEN ps.amount_due - ps.amount_paid ELSE 0 END), 0) AS band_1_30,
+        COALESCE(SUM(CASE WHEN CAST(julianday('now') - julianday(ps.due_date) AS INTEGER) BETWEEN 31 AND 60  THEN ps.amount_due - ps.amount_paid ELSE 0 END), 0) AS band_31_60,
+        COALESCE(SUM(CASE WHEN CAST(julianday('now') - julianday(ps.due_date) AS INTEGER) BETWEEN 61 AND 90  THEN ps.amount_due - ps.amount_paid ELSE 0 END), 0) AS band_61_90,
+        COALESCE(SUM(CASE WHEN CAST(julianday('now') - julianday(ps.due_date) AS INTEGER) > 90               THEN ps.amount_due - ps.amount_paid ELSE 0 END), 0) AS band_90plus
+      FROM payment_schedules ps
+      JOIN agreements a ON a.id = ps.agreement_id
+      JOIN bikes b ON b.id = a.bike_id
+      WHERE ${scope.clause}
+        AND ps.status IN ('overdue', 'partial')
+        AND ps.due_date < date('now')
+        AND ps.amount_due > ps.amount_paid
+    `).get(...sp);
+
+    // Fleet utilisation
+    const utilisation = db.prepare(`
+      SELECT
+        COUNT(*) AS total_bikes,
+        COALESCE(SUM(CASE WHEN b.status IN ('active','ready_to_go','repairs','not_available','stationary') THEN 1 ELSE 0 END), 0) AS serviceable_bikes,
+        COALESCE(SUM(CASE WHEN EXISTS(
+          SELECT 1 FROM agreements aa
+          WHERE aa.bike_id = b.id AND aa.status IN ('active','paused','defaulted')
+        ) THEN 1 ELSE 0 END), 0) AS bikes_with_agreements,
+        COALESCE(SUM(CASE WHEN b.status = 'active' THEN 1 ELSE 0 END), 0) AS active_bikes
+      FROM bikes b
+      WHERE ${scope.clause}
+    `).get(...sp);
+
+    // Agreement status breakdown
+    const agreementBreakdown = db.prepare(`
+      SELECT a.status, COUNT(*) AS count
+      FROM agreements a
+      JOIN bikes b ON b.id = a.bike_id
+      WHERE ${scope.clause}
+      GROUP BY a.status
+    `).all(...sp);
+
+    res.json({
+      collection_rate: collectionRate,
+      revenue_trend: revenueTrend,
+      aging_bands: aging,
+      utilisation,
+      agreement_breakdown: agreementBreakdown
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not load reports' });
+  }
+});
+
+const csvUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+
+router.post('/payments/import/preview', companyRoleAllowed(FLEET_RESOURCE_ACCESS.payments.manage), csvUpload.single('file'), (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const mime = req.file.mimetype || '';
+    if (!mime.includes('csv') && !mime.includes('text') && !mime.includes('excel') && !mime.includes('spreadsheet')) {
+      const ext = (req.file.originalname || '').toLowerCase();
+      if (!ext.endsWith('.csv')) return res.status(400).json({ error: 'Please upload a CSV file' });
+    }
+    const organization = getOrganizationOrThrow(req.user.organization_id);
+    const text = req.file.buffer.toString('utf8').replace(/^﻿/, '');
+    const lines = text.split(/\r?\n/).filter((l) => l.trim());
+    if (lines.length < 2) return res.status(400).json({ error: 'CSV must have a header row and at least one data row' });
+    const headers = lines[0].split(',').map((h) => h.replace(/^"|"$/g, '').trim());
+    const sampleRows = lines.slice(1, 6).map((line) => {
+      const vals = line.split(',').map((v) => v.replace(/^"|"$/g, '').trim());
+      const row = {};
+      headers.forEach((h, i) => { row[h] = vals[i] || ''; });
+      return row;
+    });
+    const regCol = headers.find((h) => /reg(istration)?|bike/i.test(h));
+    const amtCol = headers.find((h) => /amount|collected|payment/i.test(h));
+    const dateCol = headers.find((h) => /date|paid/i.test(h));
+    const refCol = headers.find((h) => /ref(erence)?/i.test(h));
+    const methodCol = headers.find((h) => /method|type/i.test(h));
+    const notesCol = headers.find((h) => /note|comment/i.test(h));
+    res.json({
+      headers,
+      total_rows: lines.length - 1,
+      sample_rows: sampleRows,
+      suggested_mapping: { registration: regCol || null, amount: amtCol || null, paid_at: dateCol || null, reference: refCol || null, method: methodCol || null, notes: notesCol || null },
+      org_name: organization.name
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not preview CSV' });
+  }
+});
+
+router.post('/payments/import', companyRoleAllowed(FLEET_RESOURCE_ACCESS.payments.manage), csvUpload.single('file'), (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const organization = getOrganizationOrThrow(req.user.organization_id);
+
+    let mapping = {};
+    try { mapping = req.body.mapping ? JSON.parse(req.body.mapping) : {}; } catch (_) {}
+
+    function parseCsvRows(text) {
+      const rows = [];
+      const lines = String(text || '').replace(/^﻿/, '').split(/\r?\n/).filter((l) => l.trim());
+      if (!lines.length) return rows;
+      const hdrs = lines.shift().split(',').map((h) => h.replace(/^"|"$/g, '').trim());
+      for (const line of lines) {
+        const vals = line.split(',').map((v) => v.replace(/^"|"$/g, '').trim());
+        const row = {};
+        hdrs.forEach((h, i) => { row[h] = vals[i] || ''; });
+        rows.push(row);
+      }
+      return rows;
+    }
+
+    function applyMapping(rows, map) {
+      if (!map || !Object.keys(map).length) return rows;
+      return rows.map((row) => {
+        const out = { ...row };
+        for (const [canonical, source] of Object.entries(map)) {
+          if (source && row[source] !== undefined) out[canonical] = row[source];
+        }
+        return out;
+      });
+    }
+
+    const rows = applyMapping(parseCsvRows(req.file.buffer.toString('utf8')), mapping);
+
+    const summary = { total_rows: rows.length, payments_created: 0, skipped: 0, errors: [] };
+    for (const [index, row] of rows.entries()) {
+      try {
+        const result = insertImportedPaymentForFleet(row, req.user.id, organization.id);
+        if (result.skipped) summary.skipped += 1;
+        else summary.payments_created += 1;
+      } catch (error) {
+        summary.errors.push({ row: index + 2, error: error.message });
+      }
+    }
+
+    logAudit(req.user.id, 'fleet_owner.payments_import', 'payments', null, { ...summary, org_id: organization.id }, req.ip);
+    res.json({ ok: true, ...summary });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not import payments' });
+  }
+});
+
 // ─── Fleet Billing (Paystack Subscriptions) ───────────────────────────────────
 
 const PAYSTACK_API = 'https://api.paystack.co';
@@ -2056,6 +2332,16 @@ function applyPlanToOrg(orgId, planKey, subscriptionCode) {
     status = 'active'${subUpdate},
     updated_at = CURRENT_TIMESTAMP
     WHERE id = ?`).run(...updates, ...subParams, orgId);
+}
+
+async function cancelPaystackSubscription(subscriptionCode) {
+  const subResp = await axios.get(`${PAYSTACK_API}/subscription/${encodeURIComponent(subscriptionCode)}`,
+    { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } });
+  const emailToken = subResp.data.data?.email_token;
+  if (!emailToken) throw new Error('Paystack subscription has no email_token');
+  await axios.post(`${PAYSTACK_API}/subscription/disable`,
+    { code: subscriptionCode, token: emailToken },
+    { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } });
 }
 
 // GET /fleet/billing/diagnose — admin-only config check (does not charge)
@@ -2106,7 +2392,8 @@ router.get('/billing/status', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.v
         suggested_tier: suggestedTier, approaching_limit: approachingLimit
       },
       plans: Object.values(FLEET_BILLING_PLANS),
-      can_subscribe: ['trialing', 'past_due', 'cancelled', 'suspended'].includes(org.status)
+      can_subscribe: ['trialing', 'past_due', 'cancelled', 'suspended', 'active'].includes(org.status),
+      is_active_subscriber: org.status === 'active' && !!org.paystack_subscription_code
     });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Could not load billing status' });
@@ -2184,11 +2471,20 @@ router.get('/billing/verify', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.m
     const planKey = txn.metadata?.plan_key
       || (txn.plan?.plan_code ? getKeyForPlanCode(txn.plan.plan_code) : null);
 
+    const oldSubCode = org.paystack_subscription_code || null;
+    const newSubCode = txn.subscription?.subscription_code || null;
+
     if (planKey && FLEET_BILLING_PLANS[planKey]) {
-      applyPlanToOrg(org.id, planKey, txn.subscription?.subscription_code || null);
+      applyPlanToOrg(org.id, planKey, newSubCode);
     }
 
-    logAudit(req.user.id, 'fleet_owner.billing.subscribe_verified', 'organizations', org.id, { reference, plan_key: planKey }, req.ip);
+    // Cancel the previous subscription when switching plans
+    if (oldSubCode && newSubCode && oldSubCode !== newSubCode) {
+      cancelPaystackSubscription(oldSubCode).catch((e) =>
+        console.error(`[billing] Could not cancel old subscription ${oldSubCode}:`, e.message));
+    }
+
+    logAudit(req.user.id, 'fleet_owner.billing.subscribe_verified', 'organizations', org.id, { reference, plan_key: planKey, switched_from: oldSubCode ? 'existing' : null }, req.ip);
     res.json({ ok: true, plan_key: planKey, txn_status: txn.status });
   } catch (error) {
     res.status(500).json({ error: 'Could not verify subscription', details: error.response?.data || error.message });
@@ -2410,13 +2706,23 @@ router.post('/riders/:id/subscription/init', companyRoleAllowed(FLEET_RESOURCE_A
 });
 
 // POST /fleet/billing/cancel — cancel active subscription
-router.post('/billing/cancel', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), (req, res) => {
+router.post('/billing/cancel', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
   try {
     const org = getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
     if (org.status !== 'active') return res.status(400).json({ error: 'No active subscription to cancel' });
+
+    if (org.paystack_subscription_code) {
+      try {
+        await cancelPaystackSubscription(org.paystack_subscription_code);
+      } catch (e) {
+        console.error(`[billing/cancel] Paystack cancel failed for ${org.paystack_subscription_code}:`, e.message);
+        // Still cancel in DB even if Paystack call fails — admin can handle edge case
+      }
+    }
+
     db.prepare("UPDATE organizations SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(org.id);
-    logAudit(req.user.id, 'fleet_owner.billing.cancelled', 'organizations', org.id, {}, req.ip);
-    res.json({ ok: true, note: 'Subscription cancelled. Access continues until your current billing period ends.' });
+    logAudit(req.user.id, 'fleet_owner.billing.cancelled', 'organizations', org.id, { subscription_code: org.paystack_subscription_code }, req.ip);
+    res.json({ ok: true, note: 'Subscription cancelled. You will not be charged again.' });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Could not cancel subscription' });
   }
@@ -2492,6 +2798,7 @@ router.get('/collections', companyRoleAllowed(FLEET_RESOURCE_ACCESS.collections.
     const items = db.prepare(`SELECT a.id, a.agreement_no, a.status, a.weekly_amount, a.start_date,
         u.full_name AS rider_name, u.email AS rider_email, u.phone AS rider_phone,
         b.registration AS bike_registration, b.make, b.model,
+        td.id AS tracking_device_id, td.model AS device_model, td.connected AS device_connected,
         COALESCE((
           SELECT SUM(CASE WHEN ps.amount_due > COALESCE(ps.amount_paid, 0) THEN ps.amount_due - COALESCE(ps.amount_paid, 0) ELSE 0 END)
           FROM payment_schedules ps
@@ -2509,6 +2816,7 @@ router.get('/collections', companyRoleAllowed(FLEET_RESOURCE_ACCESS.collections.
       FROM agreements a
       JOIN bikes b ON b.id = a.bike_id
       LEFT JOIN users u ON u.id = a.user_id
+      LEFT JOIN tracking_devices td ON td.bike_id = b.id
       WHERE (a.status = 'defaulted' OR EXISTS(
         SELECT 1 FROM payment_schedules ps WHERE ps.agreement_id = a.id AND ps.status = 'overdue'
       )) AND ${scope.clause}

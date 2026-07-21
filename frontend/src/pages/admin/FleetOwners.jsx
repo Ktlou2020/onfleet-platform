@@ -5,7 +5,7 @@ import api from '../../api';
 import { useAuth } from '../../auth';
 import { Badge, ConfirmModal, CopyableContactValue, EmptyState, Loading, Modal, Pagination, SearchInput, Stat, fmt, fmtDate, matchesSearch, paginateItems } from '../../components/ui';
 import { getFleetRoleLabel } from '../fleet/access';
-import { Building2, ShieldCheck, Users, Wallet, Settings, ChevronDown, ChevronRight, Mail, MapPin, Bike, CreditCard, KeyRound } from 'lucide-react';
+import { Building2, ShieldCheck, Users, Wallet, Settings, ChevronDown, ChevronRight, Mail, MapPin, Bike, CreditCard, KeyRound, Trash2 } from 'lucide-react';
 
 const PLAN_OPTIONS = [
   { key: 'trial',      label: 'Trial',       defaultStatus: 'trialing', maxBikes: 10,  maxAdmins: 2  },
@@ -211,6 +211,30 @@ export default function AdminFleetOwners() {
     });
   };
 
+  const deleteOrg = (org) => {
+    const members = byOrg[org.id] || [];
+    setConfirmModal({
+      title: 'Delete organization',
+      body: `This will permanently delete ${org.name} and revoke access for all ${members.length} team member${members.length !== 1 ? 's' : ''}. This cannot be undone.`,
+      confirmLabel: 'Delete permanently',
+      danger: true,
+      key: `delete-org-${org.id}`,
+      onConfirm: async () => {
+        setBusyKey(`delete-org-${org.id}`);
+        try {
+          await api.delete(`/admin/organizations/${org.id}`);
+          toast.success(`${org.name} deleted`);
+          setConfirmModal(null);
+          await load();
+        } catch (error) {
+          toast.error(error.response?.data?.error || 'Could not delete organization');
+        } finally {
+          setBusyKey('');
+        }
+      }
+    });
+  };
+
   const sendPasswordReset = (account) => {
     setConfirmModal({
       title: 'Send password reset',
@@ -361,6 +385,14 @@ export default function AdminFleetOwners() {
                         onClick={() => toggleExpanded(org.id)}
                       >
                         {isExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />} Team ({members.length})
+                      </button>
+                      <button
+                        className="btn btn-sm btn-danger"
+                        disabled={busyKey === `delete-org-${org.id}`}
+                        onClick={() => deleteOrg(org)}
+                        title="Delete organization permanently"
+                      >
+                        <Trash2 size={13} />
                       </button>
                     </div>
                   </div>

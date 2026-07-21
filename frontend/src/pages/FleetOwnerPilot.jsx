@@ -1,12 +1,10 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { CheckCircle2, Menu, X, Phone, MessageCircle, ArrowRight } from 'lucide-react';
+import { CheckCircle2, Menu, X, ArrowRight } from 'lucide-react';
 import Logo from '../components/Logo';
 import axios from 'axios';
 
 const WHATSAPP_NUMBER = '27815395612';
-const PHONE_DISPLAY   = '+27 81 539 5612';
-const PHONE_DIAL      = '+27815395612';
 
 const PROBLEMS = [
   {
@@ -118,9 +116,6 @@ const TIERS = [
 
 export default function FleetOwnerPilot() {
   const [menuOpen, setMenuOpen] = useState(false);
-  const [form, setForm] = useState({ name: '', company: '', email: '', phone: '', bikes: '', message: '' });
-  const [formState, setFormState] = useState('idle');
-  const [formError, setFormError] = useState('');
   const [platformStats, setPlatformStats] = useState(null);
 
   useEffect(() => {
@@ -140,40 +135,6 @@ export default function FleetOwnerPilot() {
     };
   }
 
-  async function handleSubmit(e) {
-    e.preventDefault();
-    if (!form.name || !form.company || !form.email || !form.phone) {
-      setFormError('Please fill in your name, company, email, and phone number.');
-      return;
-    }
-    if (!form.email.includes('@')) {
-      setFormError('Please enter a valid email address.');
-      return;
-    }
-    setFormError('');
-    setFormState('busy');
-    try {
-      await axios.post('/api/pilot/leads', {
-        contact_name: form.name,
-        company_name: form.company,
-        email:        form.email,
-        phone:        form.phone,
-        fleet_size:   form.bikes ? Number(form.bikes) : undefined,
-        notes:        form.message || undefined,
-        wants_demo:   true,
-        source:       'fleet_landing_page',
-      });
-      setFormState('success');
-    } catch (err) {
-      if (err.response?.status === 409) {
-        setFormState('success');
-      } else {
-        setFormError(err.response?.data?.error || 'Something went wrong. Please WhatsApp or call us directly.');
-        setFormState('error');
-      }
-    }
-  }
-
   return (
     <div style={{ background: 'var(--bg)', color: 'var(--text)', minHeight: '100vh' }}>
 
@@ -186,7 +147,6 @@ export default function FleetOwnerPilot() {
         <nav className="fleet-mkt-links">
           <a href="#how"     onClick={scrollTo('how')}>How it works</a>
           <a href="#pricing" onClick={scrollTo('pricing')}>Pricing</a>
-          <a href="#contact" onClick={scrollTo('contact')}>Book a demo</a>
           <Link to="/fleet/login"  className="btn btn-secondary" style={{ padding: '6px 16px', fontSize: 13 }}>Sign in</Link>
           <Link to="/fleet/signup" className="btn"               style={{ padding: '6px 16px', fontSize: 13 }}>Start free trial</Link>
         </nav>
@@ -200,7 +160,6 @@ export default function FleetOwnerPilot() {
           <button className="fleet-mkt-mobile-close" onClick={() => setMenuOpen(false)} aria-label="Close menu"><X size={24} /></button>
           <a href="#how"     onClick={scrollTo('how')}     className="fleet-mkt-mobile-link">How it works</a>
           <a href="#pricing" onClick={scrollTo('pricing')} className="fleet-mkt-mobile-link">Pricing</a>
-          <a href="#contact" onClick={scrollTo('contact')} className="fleet-mkt-mobile-link">Book a demo</a>
           <Link to="/fleet/signup" className="btn" style={{ fontSize: 16, padding: '12px 40px' }} onClick={() => setMenuOpen(false)}>Start free trial</Link>
           <Link to="/fleet/login"  className="btn btn-secondary" style={{ fontSize: 16, padding: '12px 40px', marginTop: 8 }} onClick={() => setMenuOpen(false)}>Sign in</Link>
         </div>
@@ -220,8 +179,8 @@ export default function FleetOwnerPilot() {
           <Link to="/fleet/signup" className="btn fleet-mkt-cta-primary">
             Start free 14-day trial
           </Link>
-          <a href="#contact" onClick={scrollTo('contact')} className="btn btn-secondary fleet-mkt-cta-secondary">
-            Book a demo
+          <a href="#pricing" onClick={scrollTo('pricing')} className="btn btn-secondary fleet-mkt-cta-secondary">
+            See pricing
           </a>
         </div>
         <div className="muted text-xs" style={{ marginTop: 10 }}>
@@ -279,10 +238,7 @@ export default function FleetOwnerPilot() {
       {/* ── Proof strip ───────────────────────────────────────────── */}
       <section className="fleet-mkt-proof">
         {[
-          {
-            value: platformStats ? `${platformStats.bikes} bikes` : '— bikes',
-            label: 'On the platform'
-          },
+          { value: platformStats ? `${platformStats.bikes} bikes` : '— bikes', label: 'On the platform' },
           {
             value: platformStats
               ? `R${platformStats.collected >= 1000000
@@ -293,10 +249,7 @@ export default function FleetOwnerPilot() {
               : 'R—',
             label: 'Collected for fleet owners'
           },
-          {
-            value: platformStats?.recovered_pct != null ? `${platformStats.recovered_pct}%` : '—%',
-            label: 'Defaults recovered via immobilisation'
-          },
+          { value: platformStats?.recovered_pct != null ? `${platformStats.recovered_pct}%` : '—%', label: 'Defaults recovered via immobilisation' },
         ].map((s) => (
           <div key={s.label} className="fleet-mkt-proof-stat">
             <div className="fleet-mkt-proof-value">{s.value}</div>
@@ -364,10 +317,7 @@ export default function FleetOwnerPilot() {
                 <Link
                   to="/fleet/signup"
                   className="btn btn-sm"
-                  style={{
-                    background: tier.color, borderColor: tier.color,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6
-                  }}
+                  style={{ background: tier.color, borderColor: tier.color, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
                 >
                   Start free trial <ArrowRight size={13} />
                 </Link>
@@ -382,125 +332,6 @@ export default function FleetOwnerPilot() {
           </div>
           <div style={{ color: 'var(--muted)', fontSize: 13 }}>
             Start on any plan, cancel any time. Billing via Paystack — your card is only charged after the trial ends.
-          </div>
-        </div>
-      </section>
-
-      {/* ── Contact / Demo form ───────────────────────────────────── */}
-      <section id="contact" className="fleet-mkt-section">
-        <div style={{ maxWidth: 840, margin: '0 auto' }}>
-          <h2 className="fleet-mkt-section-title" style={{ textAlign: 'left' }}>Book a demo</h2>
-          <p style={{ color: 'var(--muted)', marginBottom: 36, fontSize: 15, lineHeight: 1.65, maxWidth: 520 }}>
-            Fill in the form and we'll call you back. We also do in-person demos at
-            our Kya Sand workshop — bring your list of bikes and we'll set you up on the spot.
-          </p>
-
-          <div className="fleet-mkt-contact-grid">
-            <div>
-              {formState === 'success' ? (
-                <div className="card" style={{ textAlign: 'center', padding: 40 }}>
-                  <CheckCircle2 size={40} style={{ color: 'var(--success)', margin: '0 auto 16px', display: 'block' }} />
-                  <h3 style={{ marginBottom: 8 }}>We'll be in touch</h3>
-                  <p style={{ color: 'var(--muted)', fontSize: 14, marginBottom: 24 }}>
-                    Expect a call within one business day. Check your email for a confirmation.
-                  </p>
-                  <a
-                    href={`https://wa.me/${WHATSAPP_NUMBER}?text=Hi%2C%20I%20just%20submitted%20a%20demo%20request%20for%20OnFleet%20Fleet.`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="btn btn-block"
-                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, background: '#25D366', border: 'none', textDecoration: 'none' }}
-                  >
-                    <MessageCircle size={18} /> Chat on WhatsApp now
-                  </a>
-                </div>
-              ) : (
-                <form onSubmit={handleSubmit} noValidate style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                  <div className="field">
-                    <label className="label" htmlFor="fm-name">Your name <span style={{ color: 'var(--danger)' }}>*</span></label>
-                    <input id="fm-name" className="input" placeholder="Sipho Dlamini"
-                      value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
-                  </div>
-                  <div className="field">
-                    <label className="label" htmlFor="fm-company">Company <span style={{ color: 'var(--danger)' }}>*</span></label>
-                    <input id="fm-company" className="input" placeholder="Dlamini Fleet Pty Ltd"
-                      value={form.company} onChange={e => setForm(f => ({ ...f, company: e.target.value }))} />
-                  </div>
-                  <div className="field">
-                    <label className="label" htmlFor="fm-email">Email address <span style={{ color: 'var(--danger)' }}>*</span></label>
-                    <input id="fm-email" className="input" type="email" placeholder="sipho@dlaminifleet.co.za"
-                      value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} />
-                  </div>
-                  <div className="field">
-                    <label className="label" htmlFor="fm-phone">Phone number <span style={{ color: 'var(--danger)' }}>*</span></label>
-                    <input id="fm-phone" className="input" type="tel" placeholder="+27 82 000 0000"
-                      value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} />
-                  </div>
-                  <div className="field">
-                    <label className="label" htmlFor="fm-bikes">How many bikes do you have?</label>
-                    <input id="fm-bikes" className="input" type="number" min="1" max="1000" placeholder="e.g. 8"
-                      value={form.bikes} onChange={e => setForm(f => ({ ...f, bikes: e.target.value }))} />
-                  </div>
-                  <div className="field">
-                    <label className="label" htmlFor="fm-message">Anything else we should know?</label>
-                    <textarea id="fm-message" className="input"
-                      placeholder="e.g. We run Hondas in Soweto and Midrand, looking to move off spreadsheets"
-                      value={form.message} onChange={e => setForm(f => ({ ...f, message: e.target.value }))}
-                      style={{ resize: 'vertical', minHeight: 80 }} />
-                  </div>
-                  {formError && <div style={{ color: 'var(--danger)', fontSize: 13 }}>{formError}</div>}
-                  <button type="submit" className="btn btn-block" disabled={formState === 'busy'}>
-                    {formState === 'busy' ? 'Sending…' : 'Send request'}
-                  </button>
-                </form>
-              )}
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              <div className="card">
-                <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
-                  <MessageCircle size={22} style={{ color: '#25D366', flexShrink: 0, marginTop: 2 }} />
-                  <div>
-                    <div style={{ fontWeight: 600, marginBottom: 6 }}>WhatsApp us</div>
-                    <a href={`https://wa.me/${WHATSAPP_NUMBER}`} style={{ color: 'var(--primary-light)', fontSize: 14, textDecoration: 'none' }}>
-                      +{WHATSAPP_NUMBER}
-                    </a>
-                    <div style={{ color: 'var(--muted)', fontSize: 12, marginTop: 4 }}>Quickest response during business hours.</div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="card">
-                <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
-                  <Phone size={22} style={{ color: 'var(--primary-light)', flexShrink: 0, marginTop: 2 }} />
-                  <div>
-                    <div style={{ fontWeight: 600, marginBottom: 6 }}>Call us</div>
-                    <a href={`tel:${PHONE_DIAL}`} style={{ color: 'var(--primary-light)', fontSize: 14, textDecoration: 'none' }}>
-                      {PHONE_DISPLAY}
-                    </a>
-                    <div style={{ color: 'var(--muted)', fontSize: 12, marginTop: 4 }}>Monday–Friday, 8am–5pm.</div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="card" style={{ background: 'rgba(30,136,209,0.07)', border: '1px solid rgba(30,136,209,0.2)' }}>
-                <div style={{ fontWeight: 600, marginBottom: 8 }}>In-person demo</div>
-                <div style={{ color: 'var(--muted)', fontSize: 14, lineHeight: 1.65 }}>
-                  Kya Sand, Johannesburg.<br />
-                  Bring your list of bikes. We'll get you set up on the spot.
-                </div>
-              </div>
-
-              <div className="card" style={{ background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.2)' }}>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>Ready to start now?</div>
-                <div style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 12 }}>
-                  Skip the demo — create your account and start your free 14-day trial immediately.
-                </div>
-                <Link to="/fleet/signup" className="btn btn-sm" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                  Start free trial <ArrowRight size={13} />
-                </Link>
-              </div>
-            </div>
           </div>
         </div>
       </section>

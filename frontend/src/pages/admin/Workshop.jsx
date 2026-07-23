@@ -272,9 +272,10 @@ function JobDetailModal({ jobId, onClose, onChanged }) {
                           onChange={(e) => setItemForm((f) => ({ ...f, item_type: e.target.value }))}
                           style={{ fontSize: 12, padding: '4px 6px' }}
                         >
-                          <option value="labor">labor</option>
-                          <option value="parts">parts</option>
-                          <option value="other">other</option>
+                          <option value="labor">Labor</option>
+                          <option value="part">Part</option>
+                          <option value="consumable">Consumable</option>
+                          <option value="other">Other</option>
                         </select>
                       </td>
                       <td>

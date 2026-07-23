@@ -2,6 +2,7 @@
 
 const net = require('net');
 const db = require('../db');
+const pgDb = require('../pgDb');
 const trackingEvents = require('../trackingEvents');
 const geofenceService = require('../services/geofenceService');
 const tripService = require('../services/tripService');
@@ -9,7 +10,7 @@ const tripService = require('../services/tripService');
 // Active TCP connections keyed by IMEI
 const connections = new Map();
 
-// CRC-16/ARC (poly=0xA001, init=0, reflected)
+// ── CRC-16/ARC ────────────────────────────────────────────────────────────────
 function crc16(buf, start, len) {
   let crc = 0;
   for (let i = start; i < start + len; i++) {
@@ -21,51 +22,45 @@ function crc16(buf, start, len) {
   return crc >>> 0;
 }
 
-// Build a Codec 12 GPRS command packet
+// ── Codec 12 GPRS command packet builder ──────────────────────────────────────
 function buildCommandPacket(command) {
   const cmd = Buffer.from(command, 'ascii');
-  // dataLen = codec_id(1) + qty1(1) + type(1) + cmd_size(4) + cmd(N) + qty2(1)
   const dataLen = 8 + cmd.length;
   const packet = Buffer.alloc(4 + 4 + dataLen + 4);
   let o = 0;
-  packet.writeUInt32BE(0, o); o += 4;        // preamble
-  packet.writeUInt32BE(dataLen, o); o += 4;  // data field length
-  packet[o++] = 0x0c;                        // Codec 12
-  packet[o++] = 0x01;                        // quantity 1
-  packet[o++] = 0x05;                        // type: GPRS command
+  packet.writeUInt32BE(0, o); o += 4;
+  packet.writeUInt32BE(dataLen, o); o += 4;
+  packet[o++] = 0x0c;
+  packet[o++] = 0x01;
+  packet[o++] = 0x05;
   packet.writeUInt32BE(cmd.length, o); o += 4;
   cmd.copy(packet, o); o += cmd.length;
-  packet[o++] = 0x01;                        // quantity 2
+  packet[o++] = 0x01;
   packet.writeUInt32BE(crc16(packet, 8, dataLen), o);
   return packet;
 }
 
-// Parse Codec 8 or 8E AVL data records
-// buf starts at codec_id byte (offset 8 from start of raw packet)
+// ── Parse Codec 8 / 8E AVL ────────────────────────────────────────────────────
 function parseAvl(buf, extended) {
   let o = 1; // skip codec_id already validated by caller
   const numData1 = buf[o++];
   const records = [];
 
   for (let r = 0; r < numData1; r++) {
-    // Timestamp (uint64 BE, ms since epoch)
     const tsHigh = buf.readUInt32BE(o); o += 4;
-    const tsLow = buf.readUInt32BE(o); o += 4;
+    const tsLow  = buf.readUInt32BE(o); o += 4;
     const ts = tsHigh * 4294967296 + tsLow;
 
     o++; // priority
 
-    // GPS element
-    const lng = buf.readInt32BE(o) / 1e7; o += 4;
-    const lat = buf.readInt32BE(o) / 1e7; o += 4;
-    const altitude = buf.readUInt16BE(o); o += 2;
-    const angle = buf.readUInt16BE(o); o += 2;
+    const lng       = buf.readInt32BE(o) / 1e7; o += 4;
+    const lat       = buf.readInt32BE(o) / 1e7; o += 4;
+    const altitude  = buf.readUInt16BE(o); o += 2;
+    const angle     = buf.readUInt16BE(o); o += 2;
     const satellites = buf[o++];
-    const speed = buf.readUInt16BE(o); o += 2;
+    const speed     = buf.readUInt16BE(o); o += 2;
 
-    // IO element header
-    if (extended) { o += 2; o += 2; } // event_id (2B) + total_io (2B)
-    else { o++; o++; }                 // event_id (1B) + total_io (1B)
+    if (extended) { o += 2; o += 2; } else { o++; o++; }
 
     const io = {};
     const sizes = [1, 2, 4, 8];
@@ -81,11 +76,10 @@ function parseAvl(buf, extended) {
         else { io[id] = buf.readBigUInt64BE(o).toString(); o += 8; }
       }
     }
-    // Codec 8E X-byte IOs
     if (extended) {
       const xCnt = buf.readUInt16BE(o); o += 2;
       for (let i = 0; i < xCnt; i++) {
-        const id = buf.readUInt16BE(o); o += 2;
+        const id   = buf.readUInt16BE(o); o += 2;
         const xLen = buf.readUInt16BE(o); o += 2;
         io[id] = buf.slice(o, o + xLen).toString('hex');
         o += xLen;
@@ -100,143 +94,143 @@ function parseAvl(buf, extended) {
   return { numData1, records };
 }
 
-// Process a complete raw packet (preamble through CRC)
-function handlePacket(imei, packet) {
+// ── Pure-parse: returns { ack, pingRecords, commandResponse } ─────────────────
+// No DB access — all DB work happens async in processPacket()
+function parsePacket(packet) {
   if (packet.length < 12) return null;
   const dataLen = packet.readUInt32BE(4);
   const codecId = packet[8];
 
   if (codecId === 0x08 || codecId === 0x8e) {
-    // Validate CRC
     const crcExpected = packet.readUInt32BE(8 + dataLen);
     const crcCalc = crc16(packet, 8, dataLen);
-    if (crcExpected !== crcCalc) {
-      console.warn(`[Teltonika] ${imei} CRC mismatch`);
-      return null;
-    }
+    if (crcExpected !== crcCalc) return { crcError: true };
 
     let parsed;
     try {
       parsed = parseAvl(packet.slice(8), codecId === 0x8e);
-    } catch (parseErr) {
-      console.warn(`[Teltonika] ${imei} AVL parse error:`, parseErr.message);
+    } catch {
       return null;
     }
     const { numData1, records } = parsed;
-
-    const device = db.prepare('SELECT * FROM tracking_devices WHERE imei = ?').get(imei);
-    if (device && !device.bike_id && records.length) {
-      console.warn(`[Teltonika] ${imei} has ${records.length} record(s) but no bike linked — assign a bike to this device to store positions`);
-    }
-    if (device?.bike_id && records.length) {
-      const insertPing = db.prepare(
-        `INSERT INTO gps_pings (bike_id, lat, lng, speed_kmh, heading, recorded_at, satellites, altitude, ignition, io_data)
-         VALUES (?,?,?,?,?,?,?,?,?,?)`
-      );
-      let latestRec = null;
-      let stored = 0;
-      for (const rec of records) {
-        // lat=0/lng=0 are already excluded by parseAvl; accept any valid coordinate
-        // regardless of satellite count (device may report 0 satellites but still have a fix)
-        const recAt = new Date(rec.ts).toISOString();
-        const ignition = rec.io[239] !== undefined ? rec.io[239] : null;
-        insertPing.run(
-          device.bike_id, rec.lat, rec.lng, rec.speed, rec.angle,
-          recAt,
-          rec.satellites, rec.altitude,
-          ignition,
-          JSON.stringify(rec.io)
-        );
-        if (!latestRec || rec.ts > latestRec.ts) latestRec = rec;
-        stored++;
-        try { tripService.processPing(device.bike_id, device.id, rec.lat, rec.lng, rec.speed, ignition ? 1 : 0, recAt, rec.io, device.speed_limit_kmh || 120); } catch (e) { console.error('[Trip]', e.message); }
-        try { geofenceService.checkGeofences(device.bike_id, device.id, rec.lat, rec.lng, recAt); } catch (e) { console.error('[Geofence]', e.message); }
-      }
-      if (stored < records.length) {
-        console.warn(`[Teltonika] ${imei} ${records.length - stored}/${records.length} record(s) had lat=0/lng=0 and were skipped`);
-      }
-      if (latestRec) {
-        db.prepare(
-          `UPDATE bikes SET last_known_lat=?, last_known_lng=?, last_location_at=? WHERE id=?`
-        ).run(latestRec.lat, latestRec.lng, new Date(latestRec.ts).toISOString(), device.bike_id);
-        trackingEvents.emit('ping', {
-          imei,
-          device_id: device.id,
-          bike_id: device.bike_id,
-          lat: latestRec.lat,
-          lng: latestRec.lng,
-          speed: latestRec.speed,
-          heading: latestRec.angle,
-          altitude: latestRec.altitude,
-          satellites: latestRec.satellites,
-          ignition: latestRec.io[239] !== undefined ? latestRec.io[239] : null,
-          gsm_signal: latestRec.io[21] != null ? Number(latestRec.io[21]) : null,
-          battery_mv: latestRec.io[66] != null ? Number(latestRec.io[66]) : null,
-          ext_voltage_mv: latestRec.io[67] != null ? Number(latestRec.io[67]) : null,
-          ts: latestRec.ts,
-        });
-      }
-    }
-
-    db.prepare('UPDATE tracking_devices SET connected=1, last_seen_at=CURRENT_TIMESTAMP WHERE imei=?').run(imei);
-
-    // Acknowledge with record count
     const ack = Buffer.alloc(4);
     ack.writeUInt32BE(numData1, 0);
-    return ack;
+    return { ack, pingRecords: records };
   }
 
   if (codecId === 0x0c) {
-    // Codec 12 response from device
-    let o = 9; // skip preamble(4)+length(4)+codec_id(1)
-    o++; // qty1
+    let o = 9;
+    o++;
     const type = packet[o++];
     if (type === 0x06) {
       const respLen = packet.readUInt32BE(o); o += 4;
-      const response = packet.slice(o, o + respLen).toString('ascii');
-      const pending = db.prepare(
-        `SELECT tc.id FROM tracking_commands tc
-         JOIN tracking_devices td ON td.id = tc.device_id
-         WHERE td.imei=? AND tc.status='sent' ORDER BY tc.sent_at ASC LIMIT 1`
-      ).get(imei);
-      if (pending) {
-        db.prepare(
-          `UPDATE tracking_commands SET status='delivered', response=?, responded_at=CURRENT_TIMESTAMP WHERE id=?`
-        ).run(response, pending.id);
-      }
-      console.log(`[Teltonika] ${imei} → ${response}`);
+      const commandResponse = packet.slice(o, o + respLen).toString('ascii');
+      return { commandResponse };
     }
   }
 
   return null;
 }
 
-function dispatchCommand(socket, imei, cmdId, command) {
-  try {
-    socket.write(buildCommandPacket(command));
-    db.prepare(`UPDATE tracking_commands SET status='sent', sent_at=CURRENT_TIMESTAMP WHERE id=?`).run(cmdId);
-    console.log(`[Teltonika] → ${imei}: ${command}`);
-  } catch (err) {
-    console.error(`[Teltonika] send failed (${imei}):`, err.message);
-    db.prepare(`UPDATE tracking_commands SET status='failed' WHERE id=?`).run(cmdId);
+// ── Async: write parsed GPS records to Postgres ───────────────────────────────
+async function storeRecords(imei, device, records) {
+  if (!device?.bike_id || !records.length) return;
+
+  let latestRec = null;
+  for (const rec of records) {
+    const recAt = new Date(rec.ts).toISOString();
+    const ignition = rec.io[239] !== undefined ? rec.io[239] : null;
+    await pgDb.query(
+      `INSERT INTO gps_pings (bike_id, lat, lng, speed_kmh, heading, recorded_at, satellites, altitude, ignition, io_data)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [device.bike_id, rec.lat, rec.lng, rec.speed, rec.angle, recAt,
+       rec.satellites, rec.altitude, ignition, JSON.stringify(rec.io)]
+    );
+    await tripService.processPing(device.bike_id, device.id, rec.lat, rec.lng, rec.speed,
+      ignition ? 1 : 0, recAt, rec.io, device.speed_limit_kmh || 120);
+    await geofenceService.checkGeofences(device.bike_id, device.id, rec.lat, rec.lng, recAt);
+    if (!latestRec || rec.ts > latestRec.ts) latestRec = rec;
+  }
+
+  if (latestRec) {
+    db.prepare('UPDATE bikes SET last_known_lat=?, last_known_lng=?, last_location_at=? WHERE id=?')
+      .run(latestRec.lat, latestRec.lng, new Date(latestRec.ts).toISOString(), device.bike_id);
+    trackingEvents.emit('ping', {
+      imei,
+      device_id: device.id,
+      bike_id:   device.bike_id,
+      lat:       latestRec.lat,
+      lng:       latestRec.lng,
+      speed:     latestRec.speed,
+      heading:   latestRec.angle,
+      altitude:  latestRec.altitude,
+      satellites: latestRec.satellites,
+      ignition:  latestRec.io[239] !== undefined ? latestRec.io[239] : null,
+      gsm_signal:    latestRec.io[21] != null ? Number(latestRec.io[21]) : null,
+      battery_mv:    latestRec.io[66] != null ? Number(latestRec.io[66]) : null,
+      ext_voltage_mv: latestRec.io[67] != null ? Number(latestRec.io[67]) : null,
+      ts: latestRec.ts,
+    });
   }
 }
 
+// ── Async: mark sent command as delivered ─────────────────────────────────────
+async function storeCommandResponse(imei, response) {
+  console.log(`[Teltonika] ${imei} → ${response}`);
+  const { rows } = await pgDb.query(
+    `SELECT tc.id FROM tracking_commands tc
+     JOIN tracking_devices td ON td.id = tc.device_id
+     WHERE td.imei=$1 AND tc.status='sent' ORDER BY tc.sent_at ASC LIMIT 1`,
+    [imei]
+  );
+  if (rows[0]) {
+    await pgDb.query(
+      `UPDATE tracking_commands SET status='delivered', response=$1, responded_at=NOW() WHERE id=$2`,
+      [response, rows[0].id]
+    );
+  }
+}
+
+// ── Dispatch a command to a connected device ──────────────────────────────────
+function dispatchCommand(socket, imei, cmdId, command) {
+  try {
+    socket.write(buildCommandPacket(command));
+    pgDb.query(`UPDATE tracking_commands SET status='sent', sent_at=NOW() WHERE id=$1`, [cmdId])
+      .catch(console.error);
+    console.log(`[Teltonika] → ${imei}: ${command}`);
+  } catch (err) {
+    console.error(`[Teltonika] send failed (${imei}):`, err.message);
+    pgDb.query(`UPDATE tracking_commands SET status='failed' WHERE id=$1`, [cmdId])
+      .catch(console.error);
+  }
+}
+
+// ── Handle one TCP connection ─────────────────────────────────────────────────
 function handleConnection(socket) {
   let imei = null;
   let authed = false;
+  let cachedDevice = null;
   let buf = Buffer.alloc(0);
+
+  // Serial processing queue: ensures data chunks are processed one at a time
+  // even while async DB ops are in flight (prevents interleaved writes)
+  let processing = Promise.resolve();
 
   socket.setTimeout(300_000, () => socket.destroy());
 
   socket.on('data', (chunk) => {
-    buf = Buffer.concat([buf, chunk]);
-    if (buf.length > 1024 * 1024) { // 1 MB max buffer — reject runaway connection
+    if (buf.length + chunk.length > 1024 * 1024) {
       console.warn(`[Teltonika] ${imei || '?'} buffer overflow — disconnecting`);
       socket.destroy();
       return;
     }
+    buf = Buffer.concat([buf, chunk]);
+    processing = processing.then(() => processBuffer()).catch((e) =>
+      console.error(`[Teltonika] processBuffer error (${imei || '?'}):`, e.message)
+    );
+  });
 
+  async function processBuffer() {
     if (!authed) {
       if (buf.length < 2) return;
       const imeiLen = buf.readUInt16BE(0);
@@ -244,20 +238,21 @@ function handleConnection(socket) {
       imei = buf.slice(2, 2 + imeiLen).toString('ascii');
       buf = buf.slice(2 + imeiLen);
 
-      const device = db.prepare('SELECT * FROM tracking_devices WHERE imei=?').get(imei);
+      const { rows } = await pgDb.query('SELECT * FROM tracking_devices WHERE imei=$1', [imei]);
+      const device = rows[0];
       if (device) {
         socket.write(Buffer.from([0x01]));
         authed = true;
+        cachedDevice = device;
         connections.set(imei, socket);
-        db.prepare('UPDATE tracking_devices SET connected=1, last_seen_at=CURRENT_TIMESTAMP WHERE imei=?').run(imei);
+        await pgDb.query('UPDATE tracking_devices SET connected=TRUE, last_seen_at=NOW() WHERE imei=$1', [imei]);
         console.log(`[Teltonika] + ${imei} (${device.model})`);
-        // Flush pending commands
-        const pending = db.prepare(
-          `SELECT * FROM tracking_commands WHERE device_id=? AND status='pending' ORDER BY created_at ASC`
-        ).all(device.id);
+        // Flush queued commands
+        const { rows: pending } = await pgDb.query(
+          `SELECT * FROM tracking_commands WHERE device_id=$1 AND status='pending' ORDER BY created_at ASC`,
+          [device.id]
+        );
         for (const cmd of pending) dispatchCommand(socket, imei, cmd.id, cmd.command);
-        // Fall through to packet-consuming loop — device may have sent AVL data
-        // in the same TCP segment as the IMEI handshake
       } else {
         socket.write(Buffer.from([0x00]));
         console.log(`[Teltonika] rejected unknown IMEI ${imei}`);
@@ -266,32 +261,57 @@ function handleConnection(socket) {
       }
     }
 
-    // Consume complete packets from buffer
     while (buf.length >= 12) {
-      if (buf.readUInt32BE(0) !== 0) { console.warn(`[Teltonika] ${imei} bad preamble — disconnecting`); socket.destroy(); return; }
+      if (buf.readUInt32BE(0) !== 0) {
+        console.warn(`[Teltonika] ${imei} bad preamble — disconnecting`);
+        socket.destroy();
+        return;
+      }
       const dataLen = buf.readUInt32BE(4);
       const total = 4 + 4 + dataLen + 4;
       if (buf.length < total) break;
-      const reply = handlePacket(imei, buf.slice(0, total));
-      if (reply) socket.write(reply);
+
+      const parsed = parsePacket(buf.slice(0, total));
       buf = buf.slice(total);
+
+      if (!parsed) continue;
+
+      if (parsed.crcError) {
+        console.warn(`[Teltonika] ${imei} CRC mismatch`);
+        continue;
+      }
+
+      if (parsed.ack) {
+        socket.write(parsed.ack);
+        if (!cachedDevice?.bike_id && parsed.pingRecords?.length) {
+          console.warn(`[Teltonika] ${imei} has ${parsed.pingRecords.length} record(s) but no bike linked`);
+        }
+        if (cachedDevice?.bike_id && parsed.pingRecords?.length) {
+          await storeRecords(imei, cachedDevice, parsed.pingRecords);
+        }
+        await pgDb.query('UPDATE tracking_devices SET connected=TRUE, last_seen_at=NOW() WHERE imei=$1', [imei]);
+      }
+
+      if (parsed.commandResponse) {
+        await storeCommandResponse(imei, parsed.commandResponse);
+      }
     }
-  });
+  }
 
   socket.on('close', () => {
-    if (imei) {
-      if (connections.get(imei) === socket) {
-        connections.delete(imei);
-        try { db.prepare('UPDATE tracking_devices SET connected=0 WHERE imei=?').run(imei); } catch (_) {}
-      }
+    if (imei && connections.get(imei) === socket) {
+      connections.delete(imei);
+      pgDb.query('UPDATE tracking_devices SET connected=FALSE WHERE imei=$1', [imei]).catch(() => {});
       console.log(`[Teltonika] - ${imei}`);
     }
   });
 
-  socket.on('error', (err) => console.error(`[Teltonika] socket error (${imei || '?'}):`, err.message));
+  socket.on('error', (err) =>
+    console.error(`[Teltonika] socket error (${imei || '?'}):`, err.message)
+  );
 }
 
-// Send a command immediately if device is connected; returns true if sent now
+// ── Public API ────────────────────────────────────────────────────────────────
 function sendCommand(imei, cmdId, command) {
   const socket = connections.get(imei);
   if (!socket || socket.destroyed) return false;
@@ -304,35 +324,28 @@ function getConnectedIMEIs() {
 }
 
 function start(port) {
+  // Hydrate open trips from Postgres before accepting connections
+  tripService.hydrateOpenTrips().catch(console.error);
+
   const server = net.createServer(handleConnection);
   server.listen(port, () => console.log(`📡 Teltonika TCP server on :${port}`));
   server.on('error', (err) => console.error('[Teltonika] server error:', err));
   return server;
 }
 
-// ── Device-offline alert ─────────────────────────────────────────────────────
-// Fires once per hour per device when a bike-linked tracker hasn't reported in
-// more than 30 minutes and is not currently connected.
-const offlineAlertCooldowns = new Map(); // deviceId → last-alert epoch ms
+// ── Offline alert checker (every 10 min) ──────────────────────────────────────
+const offlineAlertCooldowns = new Map();
 
-const findStaleDevices = db.prepare(`
-  SELECT td.id, td.imei, td.bike_id
-  FROM tracking_devices td
-  WHERE td.bike_id IS NOT NULL
-    AND td.last_seen_at IS NOT NULL
-    AND td.last_seen_at < ?
-`);
-const insertOfflineAlert = db.prepare(
-  `INSERT INTO tracking_alerts (bike_id, device_id, alert_type, payload, created_at) VALUES (?, ?, 'device_offline', ?, ?)`
-);
-const getBikeRegForOffline = db.prepare('SELECT registration FROM bikes WHERE id = ?');
-
-function checkOfflineDevices() {
+async function checkOfflineDevices() {
   try {
     const threshold = new Date(Date.now() - 30 * 60_000).toISOString();
-    const stale = findStaleDevices.all(threshold);
+    const { rows: stale } = await pgDb.query(
+      `SELECT id, imei, bike_id FROM tracking_devices
+       WHERE bike_id IS NOT NULL AND last_seen_at IS NOT NULL AND last_seen_at < $1`,
+      [threshold]
+    );
     const connectedSet = new Set(connections.keys());
-    const cooldownMs = 60 * 60_000; // re-alert at most once per hour per device
+    const cooldownMs = 60 * 60_000;
     const now = Date.now();
     const at = new Date().toISOString();
 
@@ -343,15 +356,18 @@ function checkOfflineDevices() {
       offlineAlertCooldowns.set(dev.id, now);
 
       const payload = JSON.stringify({ imei: dev.imei });
-      const result = insertOfflineAlert.run(dev.bike_id, dev.id, payload, at);
-      const reg = getBikeRegForOffline.get(dev.bike_id)?.registration || null;
+      const { rows } = await pgDb.query(
+        `INSERT INTO tracking_alerts (bike_id, device_id, alert_type, payload, created_at) VALUES ($1,$2,'device_offline',$3,$4) RETURNING id`,
+        [dev.bike_id, dev.id, payload, at]
+      );
+      const bike = db.prepare('SELECT registration FROM bikes WHERE id = ?').get(dev.bike_id);
       trackingEvents.emit('alert', {
-        id: result.lastInsertRowid,
+        id: rows[0].id,
         bike_id: dev.bike_id,
         device_id: dev.id,
         alert_type: 'device_offline',
         payload,
-        bike_registration: reg,
+        bike_registration: bike?.registration || null,
         created_at: at,
         acknowledged_at: null,
       });
@@ -362,6 +378,6 @@ function checkOfflineDevices() {
   }
 }
 
-setInterval(checkOfflineDevices, 10 * 60_000); // check every 10 minutes
+setInterval(checkOfflineDevices, 10 * 60_000);
 
 module.exports = { start, sendCommand, getConnectedIMEIs, trackingEvents };

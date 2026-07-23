@@ -204,7 +204,14 @@ if (superadminBootstrap?.skipped) {
 }
 
 if (process.env.NODE_ENV !== 'test') {
-  require('./services/scheduler').start();
-  const TCP_PORT = Number(process.env.TELTONIKA_TCP_PORT || 5000);
-  require('./tcp/teltonikaServer').start(TCP_PORT);
+  require('./migrations/trackingPgSchema').runTrackingSchema().then(() => {
+    require('./services/scheduler').start();
+    const TCP_PORT = Number(process.env.TELTONIKA_TCP_PORT || 5000);
+    require('./tcp/teltonikaServer').start(TCP_PORT);
+  }).catch((err) => {
+    console.error('[startup] Postgres schema failed, starting anyway:', err.message);
+    require('./services/scheduler').start();
+    const TCP_PORT = Number(process.env.TELTONIKA_TCP_PORT || 5000);
+    require('./tcp/teltonikaServer').start(TCP_PORT);
+  });
 }

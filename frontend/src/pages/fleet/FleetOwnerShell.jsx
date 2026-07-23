@@ -229,9 +229,8 @@ export default function FleetOwnerShell() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 8px 24px' }}>
+        <div style={{ padding: '0 8px 24px' }}>
           <Logo />
-          <span className="badge badge-info" style={{ fontSize: 9 }}>FLEET</span>
         </div>
         <nav>
           {allowedNav.map((item) => {
@@ -326,20 +325,18 @@ export default function FleetOwnerShell() {
             onDismiss={() => setBannerDismissed(true)}
           />
         )}
-        <div className="topbar" style={{ gap: 16 }}>
-          <div className="text-sm muted">Fleet Owner Console · OnFleet Africa</div>
-          <div style={{ position: 'relative', width: 'min(520px, 100%)', marginLeft: 'auto' }}>
-            <SearchInput value={search} onChange={setSearch} placeholder="Search fleet tabs, including Help" inputProps={{ onKeyDown: goToFirstMatch }} style={{ width: '100%' }} />
+        <div className="topbar" style={{ gap: 12 }}>
+          <div style={{ position: 'relative', width: 'min(420px, 100%)', marginLeft: 'auto' }}>
+            <SearchInput value={search} onChange={setSearch} placeholder="Search…" inputProps={{ onKeyDown: goToFirstMatch }} style={{ width: '100%' }} />
             {!!search && (
               <div className="card" style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: '100%', zIndex: 20, padding: 12 }}>
                 {filteredNav.length ? filteredNav.map((item) => {
                   const Icon = navIconMap[item.key] || LayoutDashboard;
                   return <button key={item.to} className="btn btn-secondary btn-sm" style={{ width: '100%', justifyContent: 'flex-start', marginBottom: 8 }} onClick={() => { nav(item.to); setSearch(''); }}><Icon size={14} /> {item.label}</button>;
-                }) : <div className="muted text-sm">No fleet tabs match your search.</div>}
+                }) : <div className="muted text-sm">No results.</div>}
               </div>
             )}
           </div>
-          <div className="text-xs muted">Logged in as <strong>{user?.email}</strong></div>
         </div>
         <div className="content">
           <Outlet />

@@ -162,7 +162,7 @@ async function approveFleetApplication({ organization, applicationId, bikeId, we
   const riderHasOpenAgreement = db.prepare(`SELECT id FROM agreements WHERE user_id = ? AND status IN ('active', 'paused', 'defaulted') LIMIT 1`).get(application.user_id);
   if (riderHasOpenAgreement) throw new Error('Rider already has an open agreement');
 
-  const bikeHasOpenAgreement = db.prepare(`SELECT id FROM agreements WHERE bike_id = ? AND status IN ('active', 'paused', 'defaulted') LIMIT 1`).get(selectedBikeId);
+  const bikeHasOpenAgreement = db.prepare(`SELECT id FROM agreements WHERE bike_id = ? AND status IN ('active', 'paused') LIMIT 1`).get(selectedBikeId);
   if (bikeHasOpenAgreement) throw new Error('Bike already has an open agreement');
 
   const weekly = Number(weeklyAmount || bike.rental_weekly);
@@ -2932,6 +2932,7 @@ router.delete('/api-keys/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.api_keys
 
 const teltonikaServer = require('../tcp/teltonikaServer');
 const trackingEvents  = require('../trackingEvents');
+const pgDb            = require('../pgDb');
 
 const FLEET_ENGINE_CUT  = { FMB920: 'setdigout 1 1', FMC920: 'setdigout 1 1', FMB965: 'setdigout 2 1', other: 'setdigout 1 1' };
 const FLEET_ENGINE_REST = { FMB920: 'setdigout 1 0', FMC920: 'setdigout 1 0', FMB965: 'setdigout 2 0', other: 'setdigout 1 0' };
@@ -2946,73 +2947,122 @@ function getOrgBikeIds(organizationId) {
   return db.prepare(`SELECT id FROM bikes WHERE organization_id = ?`).all(organizationId).map(r => r.id);
 }
 
-// GET /fleet/tracking/map
-router.get('/tracking/map', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.view), (req, res) => {
-  const orgId = req.user.organization_id;
-  const connected = teltonikaServer.getConnectedIMEIs();
-  const devices = db.prepare(`
-    SELECT td.id, td.imei, td.model, td.label, td.last_seen_at, td.speed_limit_kmh,
-           b.id AS bike_id, b.registration, b.make, b.model AS bike_model, b.status AS bike_status,
-           b.color AS bike_color, b.vin AS bike_vin, b.year AS bike_year,
-           b.last_known_lat AS lat, b.last_known_lng AS lng, b.last_location_at,
-           b.odometer_km,
-           gp.speed_kmh, gp.heading, gp.ignition, gp.satellites, gp.altitude, gp.io_data,
+function getOrgBikeMap(bikeIds) {
+  if (!bikeIds.length) return {};
+  const ph = bikeIds.map(() => '?').join(',');
+  const bikes = db.prepare(`
+    SELECT b.id, b.registration, b.make, b.model, b.color, b.vin, b.year, b.status,
+           b.last_known_lat, b.last_known_lng, b.last_location_at, b.odometer_km,
            (SELECT u.full_name FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_name,
            (SELECT u.phone    FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_phone
-    FROM tracking_devices td
-    JOIN bikes b ON b.id = td.bike_id AND b.organization_id = ?
-    LEFT JOIN gps_pings gp ON gp.id = (
-      SELECT id FROM gps_pings WHERE bike_id = b.id ORDER BY recorded_at DESC LIMIT 1
-    )
-    ORDER BY td.last_seen_at DESC
-  `).all(orgId);
-  for (const d of devices) d.connected = connected.includes(d.imei) ? 1 : 0;
-  res.json(devices);
+    FROM bikes b WHERE b.id IN (${ph})
+  `).all(...bikeIds);
+  const map = {};
+  for (const b of bikes) map[b.id] = b;
+  return map;
+}
+
+// GET /fleet/tracking/map
+router.get('/tracking/map', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.view), async (req, res) => {
+  const orgId = req.user.organization_id;
+  const orgBikeIds = getOrgBikeIds(orgId);
+  if (!orgBikeIds.length) return res.json([]);
+
+  const connected = teltonikaServer.getConnectedIMEIs();
+  const { rows: devices } = await pgDb.query(
+    `SELECT id, imei, model, label, last_seen_at, speed_limit_kmh, bike_id FROM tracking_devices WHERE bike_id = ANY($1)`,
+    [orgBikeIds]
+  );
+  if (!devices.length) return res.json([]);
+
+  const bikeIds = devices.map(d => d.bike_id);
+  const bikeMap = getOrgBikeMap(bikeIds);
+  const { rows: latestPings } = await pgDb.query(
+    `SELECT DISTINCT ON (bike_id) bike_id, speed_kmh, heading, ignition, satellites, altitude, io_data
+     FROM gps_pings WHERE bike_id = ANY($1) ORDER BY bike_id, recorded_at DESC`,
+    [bikeIds]
+  );
+  const pingMap = {};
+  for (const p of latestPings) pingMap[p.bike_id] = p;
+
+  const result = devices.map(d => {
+    const b = bikeMap[d.bike_id] || {};
+    const p = pingMap[d.bike_id] || {};
+    return {
+      id: d.id, imei: d.imei, model: d.model, label: d.label,
+      last_seen_at: d.last_seen_at, speed_limit_kmh: d.speed_limit_kmh,
+      bike_id: d.bike_id,
+      registration: b.registration, make: b.make, bike_model: b.model,
+      bike_status: b.status, bike_color: b.color, bike_vin: b.vin, bike_year: b.year,
+      lat: b.last_known_lat, lng: b.last_known_lng, last_location_at: b.last_location_at,
+      odometer_km: b.odometer_km,
+      speed_kmh: p.speed_kmh, heading: p.heading, ignition: p.ignition,
+      satellites: p.satellites, altitude: p.altitude, io_data: p.io_data,
+      rider_name: b.rider_name, rider_phone: b.rider_phone,
+      connected: connected.includes(d.imei) ? 1 : 0,
+    };
+  });
+  res.json(result);
 });
 
 // GET /fleet/tracking/devices
-router.get('/tracking/devices', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.view), (req, res) => {
+router.get('/tracking/devices', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.view), async (req, res) => {
   const orgId = req.user.organization_id;
+  const orgBikeIds = getOrgBikeIds(orgId);
+  if (!orgBikeIds.length) return res.json([]);
+
   const connected = teltonikaServer.getConnectedIMEIs();
-  const devices = db.prepare(`
-    SELECT td.*, b.registration, b.make, b.model AS bike_model, b.color AS bike_color,
-           b.last_known_lat, b.last_known_lng, b.last_location_at,
-           (SELECT u.full_name FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_name,
-           (SELECT u.phone    FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_phone
-    FROM tracking_devices td
-    JOIN bikes b ON b.id = td.bike_id AND b.organization_id = ?
-    ORDER BY td.connected DESC, td.last_seen_at DESC
-  `).all(orgId);
-  for (const d of devices) d.connected = connected.includes(d.imei) ? 1 : 0;
-  res.json(devices);
+  const { rows: devices } = await pgDb.query(
+    `SELECT * FROM tracking_devices WHERE bike_id = ANY($1) ORDER BY connected DESC, last_seen_at DESC`,
+    [orgBikeIds]
+  );
+  const bikeMap = getOrgBikeMap(devices.map(d => d.bike_id).filter(Boolean));
+  const result = devices.map(d => {
+    const b = bikeMap[d.bike_id] || {};
+    return {
+      ...d,
+      connected: connected.includes(d.imei) ? 1 : 0,
+      registration: b.registration, make: b.make, bike_model: b.model, bike_color: b.color,
+      last_known_lat: b.last_known_lat, last_known_lng: b.last_known_lng,
+      last_location_at: b.last_location_at,
+      rider_name: b.rider_name, rider_phone: b.rider_phone,
+    };
+  });
+  res.json(result);
 });
 
 // GET /fleet/tracking/devices/:id/positions
-router.get('/tracking/devices/:id/positions', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.view), (req, res) => {
+router.get('/tracking/devices/:id/positions', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.view), async (req, res) => {
   const orgId = req.user.organization_id;
-  const device = db.prepare(`
-    SELECT td.*, b.organization_id FROM tracking_devices td
-    JOIN bikes b ON b.id = td.bike_id WHERE td.id = ?`).get(req.params.id);
-  if (!device || device.organization_id !== orgId) return res.status(404).json({ error: 'Device not found' });
+  const { rows: devRows } = await pgDb.query('SELECT * FROM tracking_devices WHERE id=$1', [req.params.id]);
+  if (!devRows[0]) return res.status(404).json({ error: 'Device not found' });
+  const device = devRows[0];
+  if (!device.bike_id) return res.status(404).json({ error: 'Device not found' });
+  const bike = db.prepare('SELECT organization_id FROM bikes WHERE id = ?').get(device.bike_id);
+  if (!bike || bike.organization_id !== orgId) return res.status(404).json({ error: 'Device not found' });
+
   const limit = Math.min(Number(req.query.limit) || 200, 1000);
-  const from = req.query.from || null;
-  const to = req.query.to || null;
-  let sql = `SELECT id, lat, lng, speed_kmh, heading, recorded_at, satellites, altitude, ignition FROM gps_pings WHERE bike_id = ?`;
+  const from  = req.query.from || null;
+  const to    = req.query.to   || null;
   const params = [device.bike_id];
-  if (from) { sql += ' AND recorded_at >= ?'; params.push(from); }
-  if (to) { sql += ' AND recorded_at <= ?'; params.push(to); }
-  sql += ' ORDER BY recorded_at DESC LIMIT ?';
+  let sql = 'SELECT id, lat, lng, speed_kmh, heading, recorded_at, satellites, altitude, ignition FROM gps_pings WHERE bike_id=$1';
+  if (from) { params.push(from); sql += ` AND recorded_at >= $${params.length}`; }
+  if (to)   { params.push(to);   sql += ` AND recorded_at <= $${params.length}`; }
   params.push(limit);
-  res.json(db.prepare(sql).all(...params).reverse());
+  sql += ` ORDER BY recorded_at DESC LIMIT $${params.length}`;
+  const { rows } = await pgDb.query(sql, params);
+  res.json(rows.reverse());
 });
 
 // POST /fleet/tracking/devices/:id/commands
 router.post('/tracking/devices/:id/commands', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.manage), async (req, res) => {
   const orgId = req.user.organization_id;
-  const device = db.prepare(`
-    SELECT td.*, b.organization_id FROM tracking_devices td
-    JOIN bikes b ON b.id = td.bike_id WHERE td.id = ?`).get(req.params.id);
-  if (!device || device.organization_id !== orgId) return res.status(404).json({ error: 'Device not found' });
+  const { rows: devRows } = await pgDb.query('SELECT * FROM tracking_devices WHERE id=$1', [req.params.id]);
+  if (!devRows[0]) return res.status(404).json({ error: 'Device not found' });
+  const device = devRows[0];
+  if (!device.bike_id) return res.status(404).json({ error: 'Device not found' });
+  const bike = db.prepare('SELECT organization_id FROM bikes WHERE id = ?').get(device.bike_id);
+  if (!bike || bike.organization_id !== orgId) return res.status(404).json({ error: 'Device not found' });
 
   const { preset } = req.body;
   if (!preset) return res.status(400).json({ error: 'Provide a preset command' });
@@ -3020,62 +3070,88 @@ router.post('/tracking/devices/:id/commands', companyRoleAllowed(FLEET_RESOURCE_
   if (!fn) return res.status(400).json({ error: `Unknown preset. Available: ${Object.keys(FLEET_TRACKING_PRESETS).join(', ')}` });
 
   const command = fn(device.model);
-  const info = db.prepare(`INSERT INTO tracking_commands (device_id, command, created_by) VALUES (?,?,?)`).run(device.id, command, req.user.id);
-  const sentNow = teltonikaServer.sendCommand(device.imei, info.lastInsertRowid, command);
-
+  const { rows: cmdRows } = await pgDb.query(
+    `INSERT INTO tracking_commands (device_id, command, created_by) VALUES ($1,$2,$3) RETURNING id`,
+    [device.id, command, req.user.id]
+  );
+  const cmdId = cmdRows[0].id;
+  const sentNow = teltonikaServer.sendCommand(device.imei, cmdId, command);
   logAudit(req.user.id, `fleet_tracking.${preset}`, 'tracking_devices', device.id, { preset, bike_id: device.bike_id }, req.ip);
-
   res.json({
-    id: info.lastInsertRowid,
+    id: cmdId,
     command,
     status: sentNow ? 'sent' : 'pending',
-    note: sentNow ? 'Command sent to device' : 'Device offline — command queued for when it reconnects'
+    note: sentNow ? 'Command sent to device' : 'Device offline — command queued for when it reconnects',
   });
 });
 
 // GET /fleet/tracking/devices/:id/commands
-router.get('/tracking/devices/:id/commands', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.view), (req, res) => {
+router.get('/tracking/devices/:id/commands', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.view), async (req, res) => {
   const orgId = req.user.organization_id;
-  const device = db.prepare(`
-    SELECT td.id, b.organization_id FROM tracking_devices td
-    JOIN bikes b ON b.id = td.bike_id WHERE td.id = ?`).get(req.params.id);
-  if (!device || device.organization_id !== orgId) return res.status(404).json({ error: 'Device not found' });
-  const commands = db.prepare(
-    `SELECT tc.*, u.full_name AS created_by_name FROM tracking_commands tc
-     LEFT JOIN users u ON u.id = tc.created_by
-     WHERE tc.device_id = ? ORDER BY tc.created_at DESC LIMIT 50`
-  ).all(device.id);
-  res.json(commands);
+  const { rows: devRows } = await pgDb.query('SELECT * FROM tracking_devices WHERE id=$1', [req.params.id]);
+  if (!devRows[0]) return res.status(404).json({ error: 'Device not found' });
+  const device = devRows[0];
+  if (!device.bike_id) return res.status(404).json({ error: 'Device not found' });
+  const bike = db.prepare('SELECT organization_id FROM bikes WHERE id = ?').get(device.bike_id);
+  if (!bike || bike.organization_id !== orgId) return res.status(404).json({ error: 'Device not found' });
+
+  const { rows } = await pgDb.query(
+    `SELECT tc.* FROM tracking_commands tc WHERE tc.device_id=$1 ORDER BY tc.created_at DESC LIMIT 50`,
+    [device.id]
+  );
+  for (const cmd of rows) {
+    if (cmd.created_by) {
+      const u = db.prepare('SELECT full_name FROM users WHERE id = ?').get(cmd.created_by);
+      cmd.created_by_name = u?.full_name || null;
+    }
+  }
+  res.json(rows);
 });
 
 // GET /fleet/tracking/alerts
-router.get('/tracking/alerts', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.view), (req, res) => {
+router.get('/tracking/alerts', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.view), async (req, res) => {
   const orgId = req.user.organization_id;
-  const limit = Math.min(Number(req.query.limit) || 100, 500);
+  const orgBikeIds = getOrgBikeIds(orgId);
+  if (!orgBikeIds.length) return res.json([]);
+
+  const limit      = Math.min(Number(req.query.limit) || 100, 500);
   const unackedOnly = req.query.unacked === '1';
-  let sql = `SELECT ta.*, b.registration AS bike_registration FROM tracking_alerts ta
-    JOIN bikes b ON b.id = ta.bike_id AND b.organization_id = ? WHERE 1=1`;
-  const params = [orgId];
-  if (unackedOnly) sql += ' AND ta.acknowledged_at IS NULL';
-  sql += ' ORDER BY ta.created_at DESC LIMIT ?';
+  const params = [orgBikeIds];
+  let sql = 'SELECT * FROM tracking_alerts WHERE bike_id = ANY($1)';
+  if (unackedOnly) sql += ' AND acknowledged_at IS NULL';
   params.push(limit);
-  res.json(db.prepare(sql).all(...params));
+  sql += ` ORDER BY created_at DESC LIMIT $${params.length}`;
+  const { rows } = await pgDb.query(sql, params);
+
+  const bikeMap = getOrgBikeMap(orgBikeIds);
+  for (const a of rows) {
+    a.bike_registration = bikeMap[a.bike_id]?.registration || null;
+  }
+  res.json(rows);
 });
 
 // PUT /fleet/tracking/alerts/:id/acknowledge
-router.put('/tracking/alerts/:id/acknowledge', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.manage), (req, res) => {
+router.put('/tracking/alerts/:id/acknowledge', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.manage), async (req, res) => {
   const orgId = req.user.organization_id;
-  const alert = db.prepare(`SELECT ta.id FROM tracking_alerts ta JOIN bikes b ON b.id = ta.bike_id WHERE ta.id = ? AND b.organization_id = ?`).get(req.params.id, orgId);
-  if (!alert) return res.status(404).json({ error: 'Alert not found' });
-  db.prepare('UPDATE tracking_alerts SET acknowledged_at=CURRENT_TIMESTAMP WHERE id=?').run(alert.id);
+  const orgBikeIds = getOrgBikeIds(orgId);
+  if (!orgBikeIds.length) return res.status(404).json({ error: 'Alert not found' });
+  const { rows } = await pgDb.query(
+    'SELECT id FROM tracking_alerts WHERE id=$1 AND bike_id = ANY($2)',
+    [req.params.id, orgBikeIds]
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'Alert not found' });
+  await pgDb.query('UPDATE tracking_alerts SET acknowledged_at=NOW() WHERE id=$1', [rows[0].id]);
   res.json({ ok: true });
 });
 
 // POST /fleet/tracking/alerts/acknowledge-all
-router.post('/tracking/alerts/acknowledge-all', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.manage), (req, res) => {
-  const orgId = req.user.organization_id;
-  db.prepare(`UPDATE tracking_alerts SET acknowledged_at=CURRENT_TIMESTAMP
-    WHERE acknowledged_at IS NULL AND bike_id IN (SELECT id FROM bikes WHERE organization_id = ?)`).run(orgId);
+router.post('/tracking/alerts/acknowledge-all', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.manage), async (req, res) => {
+  const orgBikeIds = getOrgBikeIds(req.user.organization_id);
+  if (!orgBikeIds.length) return res.json({ ok: true });
+  await pgDb.query(
+    'UPDATE tracking_alerts SET acknowledged_at=NOW() WHERE acknowledged_at IS NULL AND bike_id = ANY($1)',
+    [orgBikeIds]
+  );
   res.json({ ok: true });
 });
 

@@ -240,7 +240,7 @@ router.post('/:id/status', authRequired, adminOnly, (req, res) => {
   if (!agreement) return res.status(404).json({ error: 'Agreement not found' });
   db.prepare('UPDATE agreements SET status = ? WHERE id = ?').run(status, req.params.id);
   if (status === 'completed') db.prepare(`UPDATE bikes SET status = 'paid_off' WHERE id = ?`).run(agreement.bike_id);
-  if (status === 'cancelled') db.prepare(`UPDATE bikes SET status = 'ready_to_go' WHERE id = ?`).run(agreement.bike_id);
+  if (status === 'cancelled' || status === 'defaulted') db.prepare(`UPDATE bikes SET status = 'ready_to_go' WHERE id = ?`).run(agreement.bike_id);
   if (status === 'discontinued') {
     db.prepare(`UPDATE agreements SET discontinued_at = CURRENT_TIMESTAMP, discontinued_reason = 'admin_status_change' WHERE id = ?`).run(req.params.id);
     db.prepare(`UPDATE payment_schedules SET status = 'waived' WHERE agreement_id = ? AND status IN ('pending','upcoming','overdue')`).run(req.params.id);

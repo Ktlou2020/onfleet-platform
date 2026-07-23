@@ -162,7 +162,7 @@ async function approveFleetApplication({ organization, applicationId, bikeId, we
   const riderHasOpenAgreement = db.prepare(`SELECT id FROM agreements WHERE user_id = ? AND status IN ('active', 'paused', 'defaulted') LIMIT 1`).get(application.user_id);
   if (riderHasOpenAgreement) throw new Error('Rider already has an open agreement');
 
-  const bikeHasOpenAgreement = db.prepare(`SELECT id FROM agreements WHERE bike_id = ? AND status IN ('active', 'paused', 'defaulted') LIMIT 1`).get(selectedBikeId);
+  const bikeHasOpenAgreement = db.prepare(`SELECT id FROM agreements WHERE bike_id = ? AND status IN ('active', 'paused') LIMIT 1`).get(selectedBikeId);
   if (bikeHasOpenAgreement) throw new Error('Bike already has an open agreement');
 
   const weekly = Number(weeklyAmount || bike.rental_weekly);

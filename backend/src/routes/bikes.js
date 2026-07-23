@@ -423,7 +423,7 @@ router.post('/:id/allocate', authRequired, adminOnly, (req, res) => {
     if (!ALLOCATION_ELIGIBLE_BIKE_STATUSES.includes(String(bike.status || ''))) {
       return res.status(400).json({ error: 'Bike must be active or ready to go before allocation' });
     }
-    if (getOpenAgreementForBike(bikeId)) {
+    if (db.prepare(`SELECT id FROM agreements WHERE bike_id = ? AND status IN ('active','paused') LIMIT 1`).get(bikeId)) {
       return res.status(400).json({ error: 'This bike already has an allocated rider' });
     }
 

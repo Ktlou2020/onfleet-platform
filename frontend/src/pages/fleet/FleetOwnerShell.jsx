@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Bike, FileText, CreditCard, HelpCircle, LogOut, Users, Wallet, AlertTriangle, PiggyBank, AlertCircle, MapPin, Key, Clock, CheckCircle2, ArrowRight, X } from 'lucide-react';
+import { LayoutDashboard, Bike, FileText, CreditCard, HelpCircle, LogOut, Users, Wallet, AlertTriangle, PiggyBank, AlertCircle, MapPin, Key, Clock, CheckCircle2, ArrowRight, X, MoreHorizontal, BarChart2, UserCog } from 'lucide-react';
 import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
 import { useAuth } from '../../auth';
@@ -20,6 +20,8 @@ const navIconMap = {
   wallet: PiggyBank,
   billing: Wallet,
   api_keys: Key,
+  reporting: BarChart2,
+  team: UserCog,
   help: HelpCircle
 };
 
@@ -185,6 +187,7 @@ export default function FleetOwnerShell() {
   const [billingData, setBillingData] = useState(null);
   const [statusLoaded, setStatusLoaded] = useState(false);
   const [bannerDismissed, setBannerDismissed] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
 
   const canOpenBilling = canAccessFleetRoute(user?.role, 'billing');
   const onBillingPage = location.pathname.endsWith('/billing');
@@ -245,17 +248,76 @@ export default function FleetOwnerShell() {
           <button onClick={() => { logout(); nav('/fleet/login'); }} title="Log out" style={{ background: 'transparent', color: 'var(--muted)', padding: 8, border: 'none' }}><LogOut size={16} /></button>
         </div>
       </aside>
+      {/* Mobile bottom nav — primary 4 items + More drawer */}
       <nav className="mobile-bottom-nav">
-        {allowedNav.slice(0, 5).map((item) => {
+        {allowedNav.slice(0, 4).map((item) => {
           const Icon = navIconMap[item.key] || LayoutDashboard;
           return (
-            <NavLink key={item.to} to={item.to} end={item.to === '/fleet/app'}>
+            <NavLink key={item.to} to={item.to} end={item.to === '/fleet/app'} onClick={() => setMoreOpen(false)}>
               <Icon size={20} />
               <span>{item.label}</span>
             </NavLink>
           );
         })}
+        {allowedNav.length > 4 && (
+          <button
+            className={`mobile-more-btn${moreOpen ? ' active' : ''}`}
+            onClick={() => setMoreOpen((o) => !o)}
+            aria-label="More navigation options"
+          >
+            <MoreHorizontal size={20} />
+            <span>More</span>
+          </button>
+        )}
       </nav>
+
+      {/* More drawer — slide-up sheet with all remaining nav items */}
+      {moreOpen && (
+        <div className="mobile-more-overlay" onClick={() => setMoreOpen(false)}>
+          <div className="mobile-more-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="mobile-more-header">
+              <span className="text-sm" style={{ fontWeight: 600 }}>Menu</span>
+              <button onClick={() => setMoreOpen(false)} style={{ background: 'transparent', border: 'none', color: 'var(--muted)', padding: 4, display: 'flex' }}>
+                <X size={18} />
+              </button>
+            </div>
+            <div className="mobile-more-grid">
+              {allowedNav.map((item) => {
+                const Icon = navIconMap[item.key] || LayoutDashboard;
+                const isActive = item.to === '/fleet/app'
+                  ? location.pathname === '/fleet/app'
+                  : location.pathname.startsWith(item.to);
+                return (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    end={item.to === '/fleet/app'}
+                    className={isActive ? 'active' : ''}
+                    onClick={() => setMoreOpen(false)}
+                  >
+                    <span className="mobile-more-icon"><Icon size={22} /></span>
+                    <span className="mobile-more-label">{item.label}</span>
+                  </NavLink>
+                );
+              })}
+            </div>
+            <div className="mobile-more-user">
+              <div className="avatar" style={{ flexShrink: 0 }}>{user?.full_name?.[0]}</div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div className="text-sm" style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user?.full_name}</div>
+                <div className="text-xs muted">{getFleetRoleLabel(user?.role)}</div>
+              </div>
+              <button
+                onClick={() => { logout(); nav('/fleet/login'); }}
+                className="btn btn-secondary btn-sm"
+                style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6 }}
+              >
+                <LogOut size={14} /> Sign out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="main">
         {showTrialBanner && (
           <TrialBanner

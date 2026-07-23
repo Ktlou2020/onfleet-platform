@@ -1384,4 +1384,73 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   .mobile-bottom-nav a span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; text-align: center; }
   .mobile-bottom-nav a:hover  { color: var(--text); }
   .mobile-bottom-nav a.active { color: var(--primary-light); }
+
+  /* More button in bottom nav */
+  .mobile-more-btn {
+    flex: 1; display: flex; flex-direction: column; align-items: center;
+    gap: 3px; padding: 10px 4px 8px;
+    color: var(--muted); background: transparent; border: none;
+    font-size: 10px; font-weight: 500; line-height: 1.2; cursor: pointer;
+    transition: color 0.15s;
+  }
+  .mobile-more-btn.active { color: var(--primary-light); }
+  .mobile-more-btn span { white-space: nowrap; }
+
+  /* More drawer overlay */
+  .mobile-more-overlay {
+    position: fixed; inset: 0; z-index: 400;
+    background: rgba(0,0,0,0.45);
+    animation: fadeIn 0.15s ease;
+  }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+  /* More drawer sheet */
+  .mobile-more-sheet {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: var(--surface);
+    border-radius: 20px 20px 0 0;
+    border-top: 1px solid var(--border);
+    padding-bottom: env(safe-area-inset-bottom, 16px);
+    animation: slideUp 0.2s cubic-bezier(0.32,0.72,0,1);
+    max-height: 82vh;
+    overflow-y: auto;
+  }
+  @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+
+  .mobile-more-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 20px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* Icon grid of all nav items */
+  .mobile-more-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+    padding: 16px 12px;
+  }
+  .mobile-more-grid a {
+    display: flex; flex-direction: column; align-items: center;
+    gap: 6px; padding: 14px 4px 12px;
+    border-radius: 12px;
+    text-decoration: none; color: var(--muted);
+    transition: background 0.12s, color 0.12s;
+  }
+  .mobile-more-grid a:hover,
+  .mobile-more-grid a:active { background: var(--surface-2); color: var(--text); }
+  .mobile-more-grid a.active { background: rgba(30,136,209,0.1); color: var(--primary-light); }
+  .mobile-more-icon { display: flex; }
+  .mobile-more-label {
+    font-size: 10px; font-weight: 500; line-height: 1.2;
+    text-align: center; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; width: 100%;
+  }
+
+  /* User row at bottom of drawer */
+  .mobile-more-user {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 20px 18px;
+    border-top: 1px solid var(--border);
+  }
 }

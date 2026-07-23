@@ -70,7 +70,6 @@ export const FLEET_RESOURCE_ACCESS = {
 export const FLEET_NAV_ITEMS = [
   { key: 'dashboard', to: '/fleet/app', label: 'Dashboard' },
   { key: 'bikes', to: '/fleet/app/bikes', label: 'Bikes Fleet' },
-  { key: 'tracking', to: '/fleet/app/tracking', label: 'GPS Tracking' },
   { key: 'agreements', to: '/fleet/app/agreements', label: 'Agreements' },
   { key: 'payments', to: '/fleet/app/payments', label: 'Payments' },
   { key: 'reporting', to: '/fleet/app/reports', label: 'Reports' },

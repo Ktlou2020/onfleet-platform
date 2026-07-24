@@ -211,6 +211,7 @@ function writeContractSnapshot({ agreement, rider, bike, application, signatureD
 
 function getAgreementContractContext(agreementId) {
   const agreement = db.prepare(`SELECT a.*, b.make, b.model, b.registration, b.image_url, b.vin,
+      b.year, b.engine_cc, b.color,
       b.last_known_lat, b.last_known_lng, b.last_location_at, b.next_service_date,
       b.next_service_km, b.odometer_km, b.status AS bike_status,
       u.full_name, u.email, u.phone, u.id_number, u.address, u.city, u.province, u.postal_code
@@ -275,9 +276,280 @@ function ensureContractSnapshotForRelativePath(relativePath = '') {
   return ensureContractSnapshotForAgreement({ agreementId: agreement.id, kind: parsed.kind });
 }
 
+function rentToOwnContractTemplate({ org, agreement, rider, bike }) {
+  const orgName = org.name || 'Fleet Owner';
+  const orgAddress = org.address || org.city || 'Address not recorded';
+  const orgReg = org.registration_number || 'Not recorded';
+  const orgVat = org.vat_number || null;
+  const riderAddress = [rider.address, rider.city, rider.province, rider.postal_code].filter(Boolean).join(', ');
+  const bikeDesc = [bike.year, bike.make, bike.model].filter(Boolean).join(' ');
+  const today = new Date().toISOString().slice(0, 10);
+
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Rent-to-Own Agreement ${escapeHtml(agreement.agreement_no)}</title>
+  <style>
+    :root{--primary:#1E3A5F;--accent:#2563EB;--accent-soft:#eff6ff;--text:#111827;--muted:#6B7280;--border:#E5E7EB;--danger:#DC2626;--success:#16A34A}
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:Arial,sans-serif;background:#F9FAFB;color:var(--text);padding:32px;line-height:1.6}
+    .wrap{max-width:900px;margin:0 auto;background:#fff;padding:48px;border-radius:8px;box-shadow:0 4px 24px rgba(0,0,0,.08)}
+    .header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:32px;padding-bottom:24px;border-bottom:3px solid var(--primary)}
+    .header-left{}
+    .org-name{font-size:22px;font-weight:700;color:var(--primary);margin-bottom:4px}
+    .org-meta{font-size:12px;color:var(--muted);line-height:1.7}
+    .doc-title{font-size:26px;font-weight:800;color:var(--primary);margin-bottom:6px}
+    .doc-sub{font-size:13px;color:var(--muted)}
+    .badge{background:var(--primary);color:#fff;padding:8px 16px;border-radius:4px;font-weight:700;font-size:11px;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap;align-self:flex-start}
+    .parties{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:24px 0}
+    .party-card{background:var(--accent-soft);border:1px solid #BFDBFE;border-radius:6px;padding:16px}
+    .party-label{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:8px}
+    .party-name{font-size:15px;font-weight:700;margin-bottom:6px}
+    table.details{width:100%;border-collapse:collapse;font-size:13px}
+    table.details td{padding:5px 0;border-bottom:1px solid var(--border);vertical-align:top}
+    table.details td:first-child{color:var(--muted);width:40%}
+    .section{margin-top:20px;border:1px solid var(--border);border-radius:6px;overflow:hidden}
+    .section-head{background:var(--primary);color:#fff;padding:10px 16px;font-size:13px;font-weight:700;letter-spacing:.04em}
+    .section-body{padding:16px;font-size:13px;line-height:1.7}
+    .section-body p{margin-bottom:10px}
+    .section-body p:last-child{margin-bottom:0}
+    .section-body ul{margin:8px 0 10px 20px}
+    .section-body li{margin:4px 0}
+    .terms-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:20px 0}
+    .term-card{background:#F8FAFC;border:1px solid var(--border);border-radius:6px;padding:14px;text-align:center}
+    .term-value{font-size:22px;font-weight:800;color:var(--primary);margin-bottom:2px}
+    .term-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+    .highlight{background:#FFF7ED;border:1px solid #FED7AA;border-radius:6px;padding:14px 16px;margin:16px 0;font-size:13px}
+    .highlight strong{color:#C2410C}
+    .sig-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:24px}
+    .sig-card{border:1px solid var(--border);border-radius:6px;padding:16px}
+    .sig-title{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:12px}
+    .sig-line{border-bottom:1px solid var(--text);margin-top:40px;margin-bottom:6px}
+    .sig-label{font-size:11px;color:var(--muted)}
+    .sig-date{margin-top:14px}
+    .footer-note{margin-top:24px;font-size:11px;color:var(--muted);border-top:1px solid var(--border);padding-top:14px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <div class="header-left">
+        <div class="org-name">${escapeHtml(orgName)}</div>
+        <div class="org-meta">
+          ${escapeHtml(orgAddress)}<br/>
+          Reg. No: ${escapeHtml(orgReg)}${orgVat ? ` &nbsp;·&nbsp; VAT: ${escapeHtml(orgVat)}` : ''}
+        </div>
+        <div class="doc-title" style="margin-top:14px">Rent-to-Own Agreement</div>
+        <div class="doc-sub">Agreement No: <strong>${escapeHtml(agreement.agreement_no)}</strong> &nbsp;·&nbsp; Date: ${escapeHtml(today)}</div>
+      </div>
+      <div class="badge">Rent-to-Own</div>
+    </div>
+
+    <div class="parties">
+      <div class="party-card">
+        <div class="party-label">Lessor (Fleet Owner)</div>
+        <div class="party-name">${escapeHtml(orgName)}</div>
+        <table class="details">
+          <tr><td>Registration</td><td>${escapeHtml(orgReg)}</td></tr>
+          ${orgVat ? `<tr><td>VAT number</td><td>${escapeHtml(orgVat)}</td></tr>` : ''}
+          <tr><td>Address</td><td>${escapeHtml(orgAddress)}</td></tr>
+        </table>
+      </div>
+      <div class="party-card">
+        <div class="party-label">Lessee (Rider)</div>
+        <div class="party-name">${escapeHtml(rider.full_name)}</div>
+        <table class="details">
+          <tr><td>ID / Passport</td><td>${escapeHtml(rider.id_number || 'Not recorded')}</td></tr>
+          <tr><td>Phone</td><td>${escapeHtml(rider.phone || 'Not recorded')}</td></tr>
+          <tr><td>E-mail</td><td>${escapeHtml(rider.email || 'Not recorded')}</td></tr>
+          <tr><td>Address</td><td>${escapeHtml(riderAddress || 'Not recorded')}</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-head">VEHICLE DESCRIPTION</div>
+      <div class="section-body">
+        <table class="details">
+          <tr><td>Motorcycle</td><td><strong>${escapeHtml(bikeDesc || `${bike.make} ${bike.model}`)}</strong></td></tr>
+          <tr><td>VIN number</td><td>${escapeHtml(bike.vin || 'Not recorded')}</td></tr>
+          <tr><td>Registration number</td><td>${escapeHtml(bike.registration || 'Pending')}</td></tr>
+          <tr><td>Engine capacity</td><td>${bike.engine_cc ? `${escapeHtml(String(bike.engine_cc))} cc` : 'Not recorded'}</td></tr>
+          <tr><td>Colour</td><td>${escapeHtml(bike.color || 'Not recorded')}</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="terms-grid">
+      <div class="term-card"><div class="term-value">${money(agreement.weekly_amount)}</div><div class="term-label">Weekly Rental</div></div>
+      <div class="term-card"><div class="term-value">${escapeHtml(String(agreement.total_weeks || 0))} weeks</div><div class="term-label">Contract Term</div></div>
+      <div class="term-card"><div class="term-value">${money(agreement.total_amount)}</div><div class="term-label">Total Contract Value</div></div>
+      <div class="term-card"><div class="term-value">${escapeHtml(agreement.start_date || '—')} → ${escapeHtml(agreement.end_date || '—')}</div><div class="term-label">Commencement → End Date</div></div>
+    </div>
+
+    <div class="section">
+      <div class="section-head">1. NATURE OF AGREEMENT AND OWNERSHIP</div>
+      <div class="section-body">
+        <p>The Lessor agrees to lease the Vehicle described above to the Lessee on a rent-to-own basis for the Initial Term and at the Weekly Rental set out above.</p>
+        <p>The Vehicle shall at all times remain the sole property of the Lessor until such time as the Lessee has paid the full Total Contract Value and all other amounts due under this Agreement in full. Possession of the Vehicle by the Lessee does not, under any circumstances, transfer ownership. Ownership shall only vest in the Lessee upon formal written confirmation of transfer by the Lessor following completion of all payments.</p>
+        <p>The Lessee acknowledges that no right, title, or interest in the Vehicle passes to the Lessee other than the right to use the Vehicle for the duration of this Agreement, subject to the terms hereof.</p>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-head">2. PAYMENTS</div>
+      <div class="section-body">
+        <p>The Lessee shall pay the Weekly Rental of <strong>${money(agreement.weekly_amount)}</strong> to the Lessor, in advance, on or before the last day of each week for the duration of the Initial Term.</p>
+        <p>All amounts are payable in South African Rand and are inclusive of VAT where applicable. Payments must be made via the platform or such other method as the Lessor may specify in writing from time to time.</p>
+        <p>A failure to make payment on the due date shall constitute a breach of this Agreement and shall entitle the Lessor to exercise its rights under clause 5 below.</p>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-head">3. WEAR AND TEAR — LESSEE'S RESPONSIBILITY</div>
+      <div class="section-body">
+        <p>The Lessee accepts full and sole responsibility for all wear and tear on the Vehicle throughout the term of this Agreement. This obligation is unconditional and not limited to fair or reasonable wear and tear.</p>
+        <ul>
+          <li>The Lessee shall maintain the Vehicle in good, safe, and roadworthy condition at all times and at the Lessee's own expense.</li>
+          <li>All tyres, brakes, chains, sprockets, batteries, lights, mirrors, indicators, and other consumable or wear components must be replaced by the Lessee as and when required, at the Lessee's cost.</li>
+          <li>Any mechanical failure, damage, or deterioration arising from the Lessee's use, neglect, misuse, or failure to maintain the Vehicle is the Lessee's sole responsibility.</li>
+          <li>The Lessee shall pay for all repairs, parts, and labour required to keep the Vehicle in roadworthy condition. The Lessor is not obligated to contribute to any repair or maintenance cost unless separately agreed in writing.</li>
+          <li>Upon return or repossession of the Vehicle, the Lessee shall be liable for the cost of restoring the Vehicle to the condition it was in at commencement, less an allowance only for normal mechanical depreciation consistent with proper use and maintenance. The Lessee bears the cost of any damage or deterioration beyond that allowance.</li>
+          <li>Traffic fines, impoundment fees, towing charges, and storage costs arising during the period of the Lessee's possession are the sole responsibility of the Lessee.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-head">4. INSURANCE AND RISK</div>
+      <div class="section-body">
+        <p>Risk in the Vehicle passes to the Lessee immediately upon taking possession of the Vehicle and remains with the Lessee until the Vehicle is returned to or recovered by the Lessor.</p>
+        <p>The Lessee shall, at the Lessee's own cost, insure the Vehicle for its full replacement value throughout the term of this Agreement. Proof of insurance must be provided to the Lessor upon request.</p>
+        <p>In the event of theft, accident, or total loss, the Lessee remains liable for any outstanding balance under this Agreement unless the insurance proceeds are sufficient to settle the full outstanding amount.</p>
+        <p>The Lessee must immediately report any theft, accident, damage, or seizure of the Vehicle to the Lessor and, where applicable, to the South African Police Service.</p>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-head">5. DEFAULT AND LESSOR'S RIGHT TO CANCEL</div>
+      <div class="section-body">
+        <div class="highlight"><strong>Important:</strong> The Lessor has the right to cancel this Agreement immediately upon the Lessee's failure to make any payment when due or upon any other material breach of this Agreement.</div>
+        <p>Without limiting the Lessor's rights, the following shall each constitute an event of default:</p>
+        <ul>
+          <li>Failure to pay any Weekly Rental amount on or before the due date;</li>
+          <li>Failure to maintain the Vehicle in roadworthy condition;</li>
+          <li>Use of the Vehicle for any unlawful purpose, racing, or carrying passengers for reward;</li>
+          <li>Allowing any unauthorised person to operate the Vehicle;</li>
+          <li>Failure to maintain valid insurance on the Vehicle;</li>
+          <li>Any misrepresentation or material omission made in connection with this Agreement;</li>
+          <li>Insolvency, sequestration, or liquidation of the Lessee.</li>
+        </ul>
+        <p>Upon default, the Lessor shall be entitled, without further notice, to:</p>
+        <ul>
+          <li>Cancel this Agreement with immediate effect;</li>
+          <li>Repossess the Vehicle, wherever it may be located, without legal process where permitted by law;</li>
+          <li>Claim all arrears, outstanding amounts for the unexpired term, and reasonable recovery costs;</li>
+          <li>Report the Lessee to any credit bureau as may be permitted by law.</li>
+        </ul>
+        <p>On cancellation or termination, the Lessee shall immediately return the Vehicle, together with all keys, accessories, tracking devices, and documents, in the condition required by clause 3 above.</p>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-head">6. LESSEE'S GENERAL OBLIGATIONS</div>
+      <div class="section-body">
+        <ul>
+          <li>The Lessee shall not sub-let, transfer, encumber, or otherwise deal with this Agreement or the Vehicle without the Lessor's prior written consent.</li>
+          <li>The Lessee shall comply with all applicable traffic laws, licensing requirements, and regulations.</li>
+          <li>The Lessee shall not operate the Vehicle outside the borders of the Republic of South Africa without the Lessor's prior written consent.</li>
+          <li>The Lessee shall keep all personal licences, identity documents, and permits valid for the full duration of this Agreement.</li>
+          <li>The Lessee shall immediately notify the Lessor of any change in address, phone number, or e-mail address.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-head">7. DOMICILIUM CITANDI ET EXECUTANDI</div>
+      <div class="section-body">
+        <p>The Parties choose the following addresses as their respective domicilium citandi et executandi for all purposes under this Agreement:</p>
+        <table class="details">
+          <tr><td>Lessor</td><td>${escapeHtml(orgAddress)}</td></tr>
+          <tr><td>Lessee (physical)</td><td>${escapeHtml(riderAddress || 'Not recorded')}</td></tr>
+          <tr><td>Lessee (e-mail)</td><td>${escapeHtml(rider.email || 'Not recorded')}</td></tr>
+        </table>
+        <p style="margin-top:10px">Any notice sent to the above addresses shall be deemed delivered: if by e-mail, on the date sent; if by registered post, 7 days after posting.</p>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-head">8. GOVERNING LAW AND JURISDICTION</div>
+      <div class="section-body">
+        <p>This Agreement shall be governed by the laws of the Republic of South Africa. The Parties consent to the jurisdiction of the Magistrate's Court having jurisdiction over the Lessor's domicilium for any dispute arising out of or in connection with this Agreement, notwithstanding that the matter may otherwise exceed the jurisdiction of the Magistrate's Court.</p>
+        <p>Each Party shall bear their own legal costs unless a court orders otherwise.</p>
+      </div>
+    </div>
+
+    <div class="sig-grid">
+      <div class="sig-card">
+        <div class="sig-title">Lessor — ${escapeHtml(orgName)}</div>
+        <table class="details" style="margin-bottom:8px">
+          <tr><td>Name</td><td></td></tr>
+          <tr><td>Capacity</td><td>Duly authorised signatory</td></tr>
+        </table>
+        <div class="sig-line"></div>
+        <div class="sig-label">Signature</div>
+        <div class="sig-date">
+          <div class="sig-line" style="margin-top:28px"></div>
+          <div class="sig-label">Date</div>
+        </div>
+      </div>
+      <div class="sig-card">
+        <div class="sig-title">Lessee — ${escapeHtml(rider.full_name)}</div>
+        <table class="details" style="margin-bottom:8px">
+          <tr><td>Full name</td><td>${escapeHtml(rider.full_name)}</td></tr>
+          <tr><td>ID / Passport</td><td>${escapeHtml(rider.id_number || 'Not recorded')}</td></tr>
+        </table>
+        <div class="sig-line"></div>
+        <div class="sig-label">Signature</div>
+        <div class="sig-date">
+          <div class="sig-line" style="margin-top:28px"></div>
+          <div class="sig-label">Date</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer-note">
+      Generated by the OnFleet platform on ${escapeHtml(today)} from the active agreement record. This document constitutes a legally binding agreement between the Lessor and Lessee named above. Each party should retain a signed copy.
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+function getFleetOwnerContractContext(agreementId, organizationId) {
+  const context = getAgreementContractContext(agreementId);
+  if (!context) return null;
+  const org = db.prepare('SELECT * FROM organizations WHERE id = ?').get(organizationId);
+  if (!org) return null;
+  return { ...context, org };
+}
+
+function writeFleetOwnerContractSnapshot(agreementId, organizationId) {
+  const context = getFleetOwnerContractContext(agreementId, organizationId);
+  if (!context) return null;
+  const { org, agreement, rider, bike } = context;
+  const filename = buildContractFilename(agreement.agreement_no, 'fleet-rto');
+  const filePath = path.join(contractDir, filename);
+  fs.writeFileSync(filePath, rentToOwnContractTemplate({ org, agreement, rider, bike }));
+  return publicPath(filename);
+}
+
 module.exports = {
   writeContractSnapshot,
   ensureContractSnapshotForAgreement,
   ensureContractSnapshotForRelativePath,
-  getAgreementContractContext
+  getAgreementContractContext,
+  writeFleetOwnerContractSnapshot,
+  getFleetOwnerContractContext
 };

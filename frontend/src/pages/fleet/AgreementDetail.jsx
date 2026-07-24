@@ -7,6 +7,26 @@ import { Loading, Badge, Modal, fmt, fmtDate, fmtDateTime } from '../../componen
 import { useAuth } from '../../auth';
 import { canManageFleetSection } from './access';
 
+function FleetContractBtn({ agreementId }) {
+  const [busy, setBusy] = useState(false);
+  const handle = async () => {
+    setBusy(true);
+    try {
+      const { data } = await api.get(`/fleet/agreements/${agreementId}/fleet-contract`);
+      window.open(data.url, '_blank');
+    } catch (e) {
+      toast.error(e?.message || 'Could not generate contract');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button className="btn btn-sm btn-secondary" onClick={handle} disabled={busy}>
+      {busy ? 'Generating…' : 'Rent-to-Own Contract'}
+    </button>
+  );
+}
+
 const creditedAmount = (payment) => Number(payment?.net_amount || payment?.amount || 0);
 const feeAmount = (payment) => Number(payment?.fee_amount || 0);
 const grossAmount = (payment) => Number(payment?.amount || 0);
@@ -203,6 +223,7 @@ export default function FleetAgreementDetail() {
             {agreement.signed_contract_path && (
               <a className="btn btn-sm btn-secondary" href={agreement.signed_contract_path} target="_blank" rel="noreferrer">Signed copy</a>
             )}
+            <FleetContractBtn agreementId={agreement.id} />
             {canManage && agreement.status === 'active' && (
               <button className="btn btn-sm btn-secondary" onClick={() => updateStatus('paused')} disabled={busyAction === 'paused'}>Pause</button>
             )}

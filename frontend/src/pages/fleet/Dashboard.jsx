@@ -4,7 +4,7 @@ import { AlertTriangle, Bike, Building2, CheckCircle2, Clock3, CreditCard, FileT
 import toast from 'react-hot-toast';
 import api from '../../api';
 import { useAuth } from '../../auth';
-import { Badge, EmptyState, Loading, fmt, fmtDate, fmtDateTime } from '../../components/ui';
+import { Badge, EmptyState, Loading, Modal, fmt, fmtDate, fmtDateTime } from '../../components/ui';
 import { canAccessFleetRoute } from './access';
 import { FleetHelpTip } from './helpSupport';
 import TourModal from '../../components/TourModal';
@@ -85,11 +85,59 @@ function ServiceUrgencyDot({ nextServiceDate, nextServiceKm, odometerKm }) {
   return <span className="urgency-dot urgency-ok" title="Service on track" />;
 }
 
+function OrgDetailsModal({ organization, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    address: organization.address || '',
+    registration_number: organization.registration_number || '',
+    vat_number: organization.vat_number || ''
+  });
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const { data } = await api.patch('/fleet/account/org', form);
+      toast.success('Company details saved');
+      onSaved(data.organization);
+      onClose();
+    } catch (e) {
+      toast.error(e?.response?.data?.error || 'Could not save details');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal title="Company details" onClose={onClose}>
+      <p className="muted text-sm" style={{ marginBottom: 16 }}>These details appear on rent-to-own contracts generated for your riders.</p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div>
+          <label className="form-label">Business address</label>
+          <input className="form-control" value={form.address} onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))} placeholder="e.g. 10 Main St, Johannesburg, 2001" />
+        </div>
+        <div>
+          <label className="form-label">Company registration number</label>
+          <input className="form-control" value={form.registration_number} onChange={(e) => setForm((f) => ({ ...f, registration_number: e.target.value }))} placeholder="e.g. 2021/123456/07" />
+        </div>
+        <div>
+          <label className="form-label">VAT number (optional)</label>
+          <input className="form-control" value={form.vat_number} onChange={(e) => setForm((f) => ({ ...f, vat_number: e.target.value }))} placeholder="e.g. 4123456789" />
+        </div>
+      </div>
+      <div className="row" style={{ gap: 10, marginTop: 20, justifyContent: 'flex-end' }}>
+        <button className="btn btn-secondary btn-sm" onClick={onClose} disabled={saving}>Cancel</button>
+        <button className="btn btn-sm" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save details'}</button>
+      </div>
+    </Modal>
+  );
+}
+
 export default function FleetDashboard() {
   const { user } = useAuth();
   const [portal, setPortal] = useState(emptyPortal);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [showOrgEdit, setShowOrgEdit] = useState(false);
 
   const loadPortal = async ({ silent = false } = {}) => {
     if (silent) setRefreshing(true);
@@ -297,6 +345,12 @@ export default function FleetDashboard() {
             <div className="fleet-demo-list-item"><CreditCard size={15} /> {String(organization.plan_key || 'trial').replace(/_/g, ' ')}</div>
             <div className="fleet-demo-list-item"><Clock3 size={15} /> Trial ends: {organization.trial_ends_at ? fmtDate(organization.trial_ends_at) : '—'}</div>
             <div className="fleet-demo-list-item"><CheckCircle2 size={15} /> {portal.members.length} team member{portal.members.length !== 1 ? 's' : ''}</div>
+            {organization.address && <div className="fleet-demo-list-item" style={{ fontSize: 12, color: 'var(--muted)' }}><Building2 size={13} /> {organization.address}</div>}
+            {organization.registration_number && <div className="fleet-demo-list-item" style={{ fontSize: 12, color: 'var(--muted)' }}>Reg: {organization.registration_number}</div>}
+            {organization.vat_number && <div className="fleet-demo-list-item" style={{ fontSize: 12, color: 'var(--muted)' }}>VAT: {organization.vat_number}</div>}
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <button className="btn btn-sm btn-secondary" onClick={() => setShowOrgEdit(true)}>Edit company details</button>
           </div>
         </div>
 
@@ -433,6 +487,13 @@ export default function FleetDashboard() {
           )}
         </div>
       </div>
+      {showOrgEdit && (
+        <OrgDetailsModal
+          organization={organization}
+          onClose={() => setShowOrgEdit(false)}
+          onSaved={(updatedOrg) => setPortal((p) => ({ ...p, organization: { ...p.organization, ...updatedOrg } }))}
+        />
+      )}
     </>
   );
 }

@@ -74,7 +74,9 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 .grid-2 { grid-template-columns: repeat(2, 1fr); }
 .grid-3 { grid-template-columns: repeat(3, 1fr); }
 .grid-4 { grid-template-columns: repeat(4, 1fr); }
+.kpi-grid { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
 @media(max-width: 900px) { .grid-2,.grid-3,.grid-4 { grid-template-columns: 1fr; } }
+@media(max-width: 640px) { .kpi-grid { grid-template-columns: repeat(2, 1fr); } }
 
 .row { display: flex; gap: 12px; align-items: center; }
 .flex-between { display: flex; justify-content: space-between; align-items: center; }
@@ -1119,7 +1121,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 
 /* Horizontal scroll table wrapper */
 .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 14px; }
-.table-wrap .table { min-width: 860px; }
+.table-wrap .table { min-width: 600px; }
 
 /* Urgency dots */
 .urgency-dot {
@@ -1312,28 +1314,39 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   .main { padding-bottom: 0; }
 
   /* Tighter content padding; extra bottom clears the fixed bottom nav */
-  .content { padding: 14px 14px 80px; }
+  .content { padding: 12px 12px 88px; }
 
-  /* Topbar: tighter padding, hide low-priority info */
+  /* Topbar: compact single-row with search filling available space */
   .topbar {
-    padding: 0 14px;
+    padding: 0 12px;
     min-height: 52px;
-    padding-top: max(12px, env(safe-area-inset-top));
+    padding-top: max(10px, env(safe-area-inset-top));
   }
   .topbar .hide-mobile { display: none !important; }
+  /* Search fills available topbar width on mobile */
+  .topbar > div[style*="position: relative"] { width: 100% !important; max-width: 100% !important; margin-left: 0 !important; }
 
   /* ── Typography ── */
-  .page-title { font-size: 20px; }
-  .page-sub   { font-size: 13px; margin-bottom: 14px; }
+  .page-title { font-size: 19px; }
+  .page-sub   { font-size: 13px; margin-bottom: 12px; }
   .stat       { padding: 12px 14px; }
   .stat-value { font-size: 20px; }
+
+  /* ── Page header: stack title + button on mobile ── */
+  .flex-between { flex-wrap: wrap; }
+  .flex-between > *:last-child { margin-left: auto; }
 
   /* ── Tables ── */
   /* Remove forced min-width so hidden-column tables can reflow */
   .table-wrap .table { min-width: 0; }
-  .table th, .table td { padding: 10px 8px; }
+  .table th, .table td { padding: 10px 8px; font-size: 13px; }
   /* Column visibility utility — add className="col-mobile-hide" to th/td */
   .col-mobile-hide { display: none !important; }
+
+  /* ── Touch targets: ensure all interactive elements are at least 44px tall ── */
+  .btn:not(.btn-sm) { min-height: 44px; }
+  .btn-sm { min-height: 36px; }
+  input, select, textarea { min-height: 44px; font-size: 16px !important; } /* 16px prevents iOS zoom */
 
   /* ── Visibility helpers (mobile) ── */
   .mobile-only { display: flex !important; }
@@ -1343,11 +1356,16 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
     flex-wrap: nowrap;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
-    padding-bottom: 2px;
-    /* hide scrollbar visually on webkit */
+    padding-bottom: 4px;
     scrollbar-width: none;
+    -ms-overflow-style: none;
   }
   .filter-pills::-webkit-scrollbar { display: none; }
+  .filter-pill { white-space: nowrap; min-height: 36px; }
+
+  /* ── Cards: tighter on small screens ── */
+  .card { padding: 14px; }
+  .card-title { margin-bottom: 12px; }
 
   /* ── Modals → top sheet on mobile ── */
   .modal-overlay {
@@ -1355,14 +1373,18 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
     align-items: flex-start;
   }
   .modal {
-    border-radius: 0 0 16px 16px;
-    max-height: 92dvh;
+    border-radius: 0 0 20px 20px;
+    max-height: 94dvh;
     max-width: 100%;
     width: 100%;
     margin: 0;
-    padding: max(16px, env(safe-area-inset-top)) 16px max(20px, env(safe-area-inset-bottom));
+    padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+    overflow-y: auto;
   }
   .modal h2 { font-size: 18px; }
+
+  /* ── Inline row inputs (share link, search) ── */
+  .row > input[readonly] { min-width: 0; flex: 1 1 0; }
 
   /* ── Bottom navigation bar ── */
   .mobile-bottom-nav {

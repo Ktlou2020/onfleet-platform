@@ -129,7 +129,7 @@ export default function Collections() {
           <h1 className="page-title">Collections</h1>
           <p className="page-sub">Manage overdue and defaulted agreements. Log contact attempts, escalate stages, and track recovery outcomes.</p>
         </div>
-        <SearchInput value={search} onChange={setSearch} placeholder="Search rider, agreement, registration" style={{ width: 320 }} />
+        <SearchInput value={search} onChange={setSearch} placeholder="Search rider, agreement, registration" style={{ flex: '1 1 220px', maxWidth: 380 }} />
       </div>
       <div className="filter-pills mb-3">
         <button className={`filter-pill ${stageFilter === '' ? 'active' : ''}`} onClick={() => setStageFilter('')}>All stages</button>
@@ -240,22 +240,24 @@ export default function Collections() {
                   ) : !itemActions.length ? (
                     <div className="muted text-sm">No actions logged yet.</div>
                   ) : (
-                    <table className="table">
-                      <thead><tr><th>Date</th><th>Stage</th><th>Type</th><th>Notes</th><th>Outcome</th><th>Next date</th><th>By</th></tr></thead>
-                      <tbody>
-                        {itemActions.map((action) => (
-                          <tr key={action.id}>
-                            <td>{fmtDate(action.created_at)}</td>
-                            <td><span style={{ padding: '2px 8px', borderRadius: 100, fontSize: 11, background: `${STAGE_COLORS[action.stage] || 'var(--muted)'}20`, color: STAGE_COLORS[action.stage] || 'var(--muted)' }}>{action.stage.replace(/_/g, ' ')}</span></td>
-                            <td>{action.action_type.replace(/_/g, ' ')}</td>
-                            <td className="text-xs">{action.notes || '—'}</td>
-                            <td className="text-xs">{action.outcome || '—'}</td>
-                            <td className="text-xs">{action.next_action_date ? fmtDate(action.next_action_date) : '—'}</td>
-                            <td className="text-xs muted">{action.created_by_name || '—'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                    <div className="table-wrap">
+                      <table className="table">
+                        <thead><tr><th>Date</th><th>Stage</th><th>Type</th><th className="col-mobile-hide">Notes</th><th className="col-mobile-hide">Outcome</th><th className="col-mobile-hide">Next date</th><th className="col-mobile-hide">By</th></tr></thead>
+                        <tbody>
+                          {itemActions.map((action) => (
+                            <tr key={action.id}>
+                              <td>{fmtDate(action.created_at)}</td>
+                              <td><span style={{ padding: '2px 8px', borderRadius: 100, fontSize: 11, background: `${STAGE_COLORS[action.stage] || 'var(--muted)'}20`, color: STAGE_COLORS[action.stage] || 'var(--muted)' }}>{action.stage.replace(/_/g, ' ')}</span></td>
+                              <td>{action.action_type.replace(/_/g, ' ')}</td>
+                              <td className="col-mobile-hide text-xs">{action.notes || '—'}</td>
+                              <td className="col-mobile-hide text-xs">{action.outcome || '—'}</td>
+                              <td className="col-mobile-hide text-xs">{action.next_action_date ? fmtDate(action.next_action_date) : '—'}</td>
+                              <td className="col-mobile-hide text-xs muted">{action.created_by_name || '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   )}
                 </div>
               )}

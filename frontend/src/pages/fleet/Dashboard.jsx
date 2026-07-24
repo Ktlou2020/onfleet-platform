@@ -235,7 +235,7 @@ export default function FleetDashboard() {
       )}
 
       {/* KPI row */}
-      <div className="grid mb-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
+      <div className="grid kpi-grid mb-4">
         <div className="stat">
           <div className="flex-between">
             <div className="stat-label">Active bikes</div>

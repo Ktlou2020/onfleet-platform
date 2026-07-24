@@ -441,7 +441,7 @@ export default function FleetOwnerRiders() {
             <div className="mt-2"><FleetHelpTip section="riders" tooltip="Use the public link when riders should complete their own application and upload their own compliance documents." label="When to use this link" compact /></div>
           </div>
           <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            <input value={shareUrl} readOnly style={{ minWidth: 320 }} />
+            <input value={shareUrl} readOnly style={{ flex: '1 1 200px', minWidth: 0 }} />
             <button className="btn btn-secondary" onClick={copyShareLink}>Copy link</button>
             {shareUrl ? <a className="btn btn-secondary" href={shareUrl} target="_blank" rel="noreferrer">Open</a> : null}
           </div>
@@ -621,20 +621,22 @@ export default function FleetOwnerRiders() {
                   <div className="field mt-3"><label className="label">Monthly amount on payslip (Rand) *</label><input type="number" min="0" step="0.01" placeholder="e.g. 8500" value={uploadForm.manual_amount} onChange={(event) => setUploadForm((current) => ({ ...current, manual_amount: event.target.value }))} /></div>
                 )}
               </div>
-              <table className="table">
-                <thead><tr><th>Type</th><th>File</th><th>Uploaded</th><th>Amount</th><th></th></tr></thead>
-                <tbody>
-                  {(detail.documents || []).map((doc) => (
-                    <tr key={doc.id}>
-                      <td>{doc.doc_type.replace(/_/g, ' ')}</td>
-                      <td>{doc.original_name}</td>
-                      <td>{fmtDate(doc.uploaded_at)}</td>
-                      <td>{doc.extracted_amount ? fmt(doc.extracted_amount) : '—'}</td>
-                      <td><a className="btn btn-sm btn-secondary" href={doc.file_path} target="_blank" rel="noreferrer">Open</a></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="table-wrap">
+                <table className="table">
+                  <thead><tr><th>Type</th><th>File</th><th className="col-mobile-hide">Uploaded</th><th className="col-mobile-hide">Amount</th><th></th></tr></thead>
+                  <tbody>
+                    {(detail.documents || []).map((doc) => (
+                      <tr key={doc.id}>
+                        <td>{doc.doc_type.replace(/_/g, ' ')}</td>
+                        <td style={{ wordBreak: 'break-all', maxWidth: 180 }}>{doc.original_name}</td>
+                        <td className="col-mobile-hide">{fmtDate(doc.uploaded_at)}</td>
+                        <td className="col-mobile-hide">{doc.extracted_amount ? fmt(doc.extracted_amount) : '—'}</td>
+                        <td><a className="btn btn-sm btn-secondary" href={doc.file_path} target="_blank" rel="noreferrer">Open</a></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
               {!(detail.documents || []).length && <div className="muted text-sm">No documents uploaded yet.</div>}
             </>
           ) : null}
@@ -652,7 +654,7 @@ export default function FleetOwnerRiders() {
             <strong>Rider applications</strong>
             <div className="mt-2"><FleetHelpTip section="common-questions" tooltip="Search by rider name, email, phone number, bike details, registration, application status, or earnings decision." label="Search tips" compact /></div>
           </div>
-          <SearchInput value={search} onChange={setSearch} placeholder="Search rider, email, bike, status" style={{ width: 320 }} />
+          <SearchInput value={search} onChange={setSearch} placeholder="Search rider, email, bike, status" style={{ flex: '1 1 220px', maxWidth: 380 }} />
         </div>
         <div className="filter-pills" style={{ padding: '0 16px 12px' }}>
           <button className={`filter-pill ${statusFilter === '' ? 'active' : ''}`} onClick={() => setStatusFilter('')}>All</button>
@@ -662,33 +664,35 @@ export default function FleetOwnerRiders() {
             </button>
           ))}
         </div>
-        <table className="table">
-          <thead><tr><th>Rider</th><th>Bike</th><th>Status</th><th>Score</th><th>Avg weekly</th><th>Docs</th><th>Submitted</th><th></th></tr></thead>
-          <tbody>
-            {pagination.items.map((item) => (
-              <tr key={item.id}>
-                <td>{item.full_name}<div className="text-xs muted">{item.email} · {item.phone || '—'}</div></td>
-                <td>{item.registration || 'No registration'}<div className="text-xs muted">{item.make ? `${item.make} ${item.model}` : '—'}</div></td>
-                <td><Badge status={item.status}>{item.auto_decision === 'pre_approved' ? 'pre-approved' : item.status}</Badge></td>
-                <td>
-                  {item.performance_score !== null && item.performance_score !== undefined ? (
-                    <span style={{
-                      padding: '3px 10px', borderRadius: 100, fontSize: 12, fontWeight: 600,
-                      background: item.performance_score >= 80 ? 'rgba(34,197,94,0.15)' : item.performance_score >= 60 ? 'rgba(234,179,8,0.15)' : item.performance_score >= 40 ? 'rgba(249,115,22,0.15)' : 'rgba(239,68,68,0.15)',
-                      color: item.performance_score >= 80 ? 'var(--success)' : item.performance_score >= 60 ? '#ca8a04' : item.performance_score >= 40 ? '#ea580c' : 'var(--danger)'
-                    }}>
-                      {item.performance_label} · {item.performance_score}
-                    </span>
-                  ) : <span className="muted text-xs">—</span>}
-                </td>
-                <td>{item.average_weekly_earnings ? fmt(item.average_weekly_earnings) : 'Pending'}</td>
-                <td>{item.document_count || 0}<div className="text-xs muted">Payslips: {item.payslip_count || 0}/3</div></td>
-                <td>{fmtDate(item.submitted_at)}</td>
-                <td>{canManage ? <button className="btn btn-sm btn-secondary" disabled={loadingDetail} onClick={() => openEdit(item.id)}>Manage</button> : <span className="muted text-sm">View only</span>}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="table-wrap">
+          <table className="table">
+            <thead><tr><th>Rider</th><th className="col-mobile-hide">Bike</th><th>Status</th><th className="col-mobile-hide">Score</th><th className="col-mobile-hide">Avg weekly</th><th className="col-mobile-hide">Docs</th><th className="col-mobile-hide">Submitted</th><th></th></tr></thead>
+            <tbody>
+              {pagination.items.map((item) => (
+                <tr key={item.id}>
+                  <td>{item.full_name}<div className="text-xs muted">{item.email} · {item.phone || '—'}</div></td>
+                  <td className="col-mobile-hide">{item.registration || 'No registration'}<div className="text-xs muted">{item.make ? `${item.make} ${item.model}` : '—'}</div></td>
+                  <td><Badge status={item.status}>{item.auto_decision === 'pre_approved' ? 'pre-approved' : item.status}</Badge></td>
+                  <td className="col-mobile-hide">
+                    {item.performance_score !== null && item.performance_score !== undefined ? (
+                      <span style={{
+                        padding: '3px 10px', borderRadius: 100, fontSize: 12, fontWeight: 600,
+                        background: item.performance_score >= 80 ? 'rgba(34,197,94,0.15)' : item.performance_score >= 60 ? 'rgba(234,179,8,0.15)' : item.performance_score >= 40 ? 'rgba(249,115,22,0.15)' : 'rgba(239,68,68,0.15)',
+                        color: item.performance_score >= 80 ? 'var(--success)' : item.performance_score >= 60 ? '#ca8a04' : item.performance_score >= 40 ? '#ea580c' : 'var(--danger)'
+                      }}>
+                        {item.performance_label} · {item.performance_score}
+                      </span>
+                    ) : <span className="muted text-xs">—</span>}
+                  </td>
+                  <td className="col-mobile-hide">{item.average_weekly_earnings ? fmt(item.average_weekly_earnings) : 'Pending'}</td>
+                  <td className="col-mobile-hide">{item.document_count || 0}<div className="text-xs muted">Payslips: {item.payslip_count || 0}/3</div></td>
+                  <td className="col-mobile-hide">{fmtDate(item.submitted_at)}</td>
+                  <td>{canManage ? <button className="btn btn-sm btn-secondary" disabled={loadingDetail} onClick={() => openEdit(item.id)}>Manage</button> : <span className="muted text-sm">View only</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
         {!pagination.items.length && <EmptyState title="No riders yet" sub="Create a rider application from the fleet console or share the public rider link above." action={canManage ? <button className="btn" onClick={openCreate}>Add rider</button> : null} />}
       </div>
       <Pagination page={pagination.currentPage} pageSize={pagination.pageSize} totalItems={pagination.totalItems} onPageChange={setPage} onPageSizeChange={setPageSize} label="riders" />

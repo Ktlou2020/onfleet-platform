@@ -308,7 +308,7 @@ export default function FleetOwnerAgreements() {
                   <td>
                     <button
                       className="btn btn-sm btn-secondary"
-                      style={{ fontWeight: 700, padding: '2px 8px', fontSize: 13 }}
+                      style={{ fontWeight: 700, fontSize: 13 }}
                       onClick={() => nav(`/fleet/app/agreements/${agreement.id}`)}
                       title="View agreement detail"
                     >
@@ -445,14 +445,14 @@ export default function FleetOwnerAgreements() {
             <>
               <div className="field">
                 <label className="label">Weekly payment amount</label>
-                <div className="row" style={{ gap: 8 }}>
+                <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
                   {PAY_LINK_AMOUNTS.map((amt) => (
                     <button
                       key={amt}
                       type="button"
                       onClick={() => setPayLinkAmount(String(amt))}
                       className={String(payLinkAmount) === String(amt) ? 'btn btn-sm' : 'btn btn-sm btn-secondary'}
-                      style={{ minWidth: 70 }}
+                      style={{ flex: '1 1 60px' }}
                     >
                       R{amt}
                     </button>

@@ -98,8 +98,8 @@ function PayoutModal({ wallet, bankDetails, onClose, onSuccess }) {
   };
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-      <div className="card" style={{ maxWidth: 480, width: '100%', maxHeight: '90vh', overflowY: 'auto' }}>
+    <div className="modal-overlay">
+      <div className="modal" style={{ maxWidth: 480 }}>
         <div className="flex-between" style={{ marginBottom: 20 }}>
           <h3 style={{ margin: 0 }}>Request Payout</h3>
           <button className="btn btn-secondary btn-sm" onClick={onClose}>Close</button>

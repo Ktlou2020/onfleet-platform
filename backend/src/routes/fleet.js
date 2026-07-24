@@ -990,6 +990,18 @@ router.get('/account', companyRoleAllowed(FLEET_RESOURCE_ACCESS.dashboard.view),
   res.json({ organization, members });
 });
 
+router.patch('/account/org', companyRoleAllowed(FLEET_RESOURCE_ACCESS.dashboard.view), (req, res) => {
+  try {
+    const { address, registration_number, vat_number } = req.body || {};
+    db.prepare(`UPDATE organizations SET address = ?, registration_number = ?, vat_number = ? WHERE id = ?`)
+      .run(address || null, registration_number || null, vat_number || null, req.user.organization_id);
+    const organization = getOrganization(req.user.organization_id);
+    res.json({ organization });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Could not update organization details' });
+  }
+});
+
 router.get('/portal-data', companyRoleAllowed(FLEET_RESOURCE_ACCESS.dashboard.view), (req, res) => {
   try {
     const organization = getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
@@ -1760,6 +1772,22 @@ router.get('/agreements/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreement
     });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Could not load agreement' });
+  }
+});
+
+router.get('/agreements/:id/fleet-contract', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.view), (req, res) => {
+  try {
+    const org = getOrganizationOrThrow(req.user.organization_id);
+    const agreementId = toInt(req.params.id);
+    if (!agreementId) return res.status(400).json({ error: 'Invalid agreement id' });
+    const agreement = getScopedAgreement(org, agreementId);
+    if (!agreement) return res.status(404).json({ error: 'Agreement not found in your fleet' });
+    const { writeFleetOwnerContractSnapshot } = require('../services/contracts');
+    const publicUrl = writeFleetOwnerContractSnapshot(agreementId, req.user.organization_id);
+    if (!publicUrl) return res.status(500).json({ error: 'Could not generate fleet contract' });
+    res.json({ url: publicUrl });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message || 'Could not generate fleet contract' });
   }
 });
 

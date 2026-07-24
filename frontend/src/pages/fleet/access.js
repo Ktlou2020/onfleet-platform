@@ -68,19 +68,18 @@ export const FLEET_RESOURCE_ACCESS = {
 };
 
 export const FLEET_NAV_ITEMS = [
-  { key: 'dashboard', to: '/fleet/app', label: 'Dashboard' },
-  { key: 'bikes', to: '/fleet/app/bikes', label: 'Bikes Fleet' },
-  { key: 'agreements', to: '/fleet/app/agreements', label: 'Agreements' },
-  { key: 'payments', to: '/fleet/app/payments', label: 'Payments' },
-  { key: 'reporting', to: '/fleet/app/reports', label: 'Reports' },
-  { key: 'riders', to: '/fleet/app/riders', label: 'Riders' },
-  { key: 'collections', to: '/fleet/app/collections', label: 'Collections' },
-  { key: 'hubs', to: '/fleet/app/hubs', label: 'Hubs' },
-  { key: 'wallet', to: '/fleet/app/wallet', label: 'Fleet Wallet' },
-  { key: 'team', to: '/fleet/app/team', label: 'Team' },
-  { key: 'billing', to: '/fleet/app/billing', label: 'Billing' },
-  { key: 'api_keys', to: '/fleet/app/api-keys', label: 'API Access' },
-  { key: 'help', to: '/fleet/app/help', label: 'Help' }
+  { key: 'dashboard',  to: '/fleet/app',              label: 'Dashboard' },
+  { key: 'bikes',      to: '/fleet/app/bikes',         label: 'Bikes' },
+  { key: 'agreements', to: '/fleet/app/agreements',    label: 'Agreements' },
+  { key: 'payments',   to: '/fleet/app/payments',      label: 'Payments' },
+  { key: 'riders',     to: '/fleet/app/riders',        label: 'Riders' },
+  { key: 'reporting',  to: '/fleet/app/reports',       label: 'Reports' },
+  { key: 'collections',to: '/fleet/app/collections',   label: 'Collections' },
+  { key: 'wallet',     to: '/fleet/app/wallet',        label: 'Wallet' },
+  { key: 'hubs',       to: '/fleet/app/hubs',          label: 'Hubs' },
+  { key: 'team',       to: '/fleet/app/team',          label: 'Team' },
+  { key: 'billing',    to: '/fleet/app/billing',       label: 'Billing' },
+  { key: 'help',       to: '/fleet/app/help',          label: 'Help' },
 ];
 
 export function isAdminPortalRole(role) {

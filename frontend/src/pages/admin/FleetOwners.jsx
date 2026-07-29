@@ -5,7 +5,151 @@ import api from '../../api';
 import { useAuth } from '../../auth';
 import { Badge, ConfirmModal, CopyableContactValue, EmptyState, Loading, Modal, Pagination, SearchInput, Stat, fmt, fmtDate, matchesSearch, paginateItems } from '../../components/ui';
 import { getFleetRoleLabel } from '../fleet/access';
-import { Building2, ShieldCheck, Users, Wallet, Settings, ChevronDown, ChevronRight, Mail, MapPin, Bike, CreditCard, KeyRound, Trash2 } from 'lucide-react';
+import { Building2, ShieldCheck, Users, Wallet, Settings, ChevronDown, ChevronRight, Mail, MapPin, Bike, CreditCard, KeyRound, Trash2, Send } from 'lucide-react';
+
+const EMAIL_TEMPLATES = [
+  { key: 'demo_invite',     label: 'Demo / call invite' },
+  { key: 'trial_ending',    label: 'Trial ending soon' },
+  { key: 'trial_expired',   label: 'Trial expired — re-engage' },
+  { key: 'check_in',        label: 'Check-in / how is it going?' },
+  { key: 'upgrade_prompt',  label: 'Upgrade prompt' },
+  { key: '__custom__',      label: 'Custom message…' },
+];
+
+function EmailModal({ orgs, onClose }) {
+  const [templateKey, setTemplateKey] = useState('demo_invite');
+  const [customSubject, setCustomSubject] = useState('');
+  const [customMessage, setCustomMessage] = useState('');
+  const [preview, setPreview] = useState(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(null);
+
+  const isCustom = templateKey === '__custom__';
+  const orgIds = orgs.map((o) => o.id);
+
+  const loadPreview = async () => {
+    setLoadingPreview(true);
+    try {
+      const payload = {
+        org_ids: orgIds,
+        template_key: isCustom ? undefined : templateKey,
+        custom_subject: isCustom ? customSubject : undefined,
+        custom_message: isCustom ? customMessage : undefined,
+        preview: true
+      };
+      const { data } = await api.post('/admin/fleet-owners/email', payload);
+      setPreview(data);
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Could not load preview');
+    } finally {
+      setLoadingPreview(false);
+    }
+  };
+
+  const send = async () => {
+    setSending(true);
+    try {
+      const payload = {
+        org_ids: orgIds,
+        template_key: isCustom ? undefined : templateKey,
+        custom_subject: isCustom ? customSubject : undefined,
+        custom_message: isCustom ? customMessage : undefined
+      };
+      const { data } = await api.post('/admin/fleet-owners/email', payload);
+      setSent(data);
+      toast.success(`Sent to ${data.sent} organisation${data.sent !== 1 ? 's' : ''}`);
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Could not send emails');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  if (sent) {
+    return (
+      <Modal title="Emails sent" onClose={onClose}>
+        <div style={{ textAlign: 'center', padding: '24px 0' }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>✅</div>
+          <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 8 }}>{sent.sent} email{sent.sent !== 1 ? 's' : ''} sent</div>
+          {sent.failed?.length > 0 && (
+            <div style={{ marginTop: 12, textAlign: 'left' }}>
+              <div className="muted text-sm" style={{ marginBottom: 8 }}>Failed ({sent.failed.length}):</div>
+              {sent.failed.map((f, i) => (
+                <div key={i} className="text-sm" style={{ color: 'var(--danger)', marginBottom: 4 }}>{f.org} — {f.reason}</div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <button className="btn btn-secondary btn-sm" onClick={onClose}>Close</button>
+        </div>
+      </Modal>
+    );
+  }
+
+  return (
+    <Modal title={`Send email · ${orgs.length} recipient${orgs.length !== 1 ? 's' : ''}`} onClose={onClose}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+        <div>
+          <label className="label">Recipients</label>
+          <div style={{ background: 'var(--bg-alt, #f8fafc)', border: '1px solid var(--border)', borderRadius: 6, padding: '8px 12px', maxHeight: 100, overflowY: 'auto' }}>
+            {orgs.map((o) => (
+              <div key={o.id} className="text-sm" style={{ display: 'flex', gap: 8, padding: '2px 0' }}>
+                <span style={{ fontWeight: 600 }}>{o.name}</span>
+                <span className="muted">{o.contact_email}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <label className="label">Template</label>
+          <select value={templateKey} onChange={(e) => { setTemplateKey(e.target.value); setPreview(null); }}>
+            {EMAIL_TEMPLATES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+          </select>
+        </div>
+
+        {isCustom && (
+          <>
+            <div>
+              <label className="label">Subject</label>
+              <input className="form-control" value={customSubject} onChange={(e) => { setCustomSubject(e.target.value); setPreview(null); }} placeholder="Email subject…" />
+            </div>
+            <div>
+              <label className="label">Message</label>
+              <textarea className="form-control" rows={6} value={customMessage} onChange={(e) => { setCustomMessage(e.target.value); setPreview(null); }} placeholder="Write your message here…" style={{ resize: 'vertical' }} />
+            </div>
+          </>
+        )}
+
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn btn-secondary btn-sm" onClick={loadPreview} disabled={loadingPreview || (isCustom && !customMessage)}>
+            {loadingPreview ? 'Loading…' : 'Preview email'}
+          </button>
+          <button className="btn btn-sm" style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={send} disabled={sending || (isCustom && !customMessage)}>
+            <Send size={13} /> {sending ? 'Sending…' : `Send to ${orgs.length}`}
+          </button>
+        </div>
+
+        {preview && (
+          <div style={{ marginTop: 8 }}>
+            <div className="label" style={{ marginBottom: 6 }}>Preview — <span className="muted">subject: {preview.subject}</span></div>
+            <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden', maxHeight: 420, overflowY: 'auto' }}>
+              <iframe
+                srcDoc={preview.html}
+                title="Email preview"
+                style={{ width: '100%', height: 420, border: 'none', display: 'block' }}
+                sandbox="allow-same-origin"
+              />
+            </div>
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
 
 const PLAN_OPTIONS = [
   { key: 'trial',      label: 'Trial',       defaultStatus: 'trialing', maxBikes: 10,  maxAdmins: 2  },
@@ -100,6 +244,7 @@ export default function AdminFleetOwners() {
   const [planModal, setPlanModal] = useState(null);
   const [expanded, setExpanded] = useState(new Set());
   const [confirmModal, setConfirmModal] = useState(null);
+  const [emailModal, setEmailModal] = useState(null);
   const orgParamApplied = useRef(false);
 
   const load = async () => {
@@ -161,6 +306,10 @@ export default function AdminFleetOwners() {
     active: organizations.filter((o) => o.status === 'active').length,
     nonPayers: organizations.filter((o) => o.payer_status === 'non_payer').length
   }), [accounts, organizations]);
+
+  const trialingOrgs = useMemo(() =>
+    organizations.filter((o) => o.status === 'trialing' && o.contact_email),
+  [organizations]);
 
   const toggleExpanded = (orgId) => {
     setExpanded((prev) => {
@@ -288,12 +437,27 @@ export default function AdminFleetOwners() {
         />
       )}
 
-      <div className="flex-between mb-2" style={{ alignItems: 'flex-start', gap: 12 }}>
+      {emailModal && (
+        <EmailModal orgs={emailModal} onClose={() => setEmailModal(null)} />
+      )}
+
+      <div className="flex-between mb-2" style={{ alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 className="page-title">Fleet owner management</h1>
           <p className="page-sub">Manage fleet-owner organizations — change plans, adjust team roles, and control account access.</p>
         </div>
-        <button className="btn btn-secondary btn-sm" onClick={load}>Refresh</button>
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+          {trialingOrgs.length > 0 && (
+            <button
+              className="btn btn-sm"
+              style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+              onClick={() => setEmailModal(trialingOrgs)}
+            >
+              <Send size={13} /> Email {trialingOrgs.length} trialing org{trialingOrgs.length !== 1 ? 's' : ''}
+            </button>
+          )}
+          <button className="btn btn-secondary btn-sm" onClick={load}>Refresh</button>
+        </div>
       </div>
 
       <div className="grid grid-4 mb-4">
@@ -374,6 +538,16 @@ export default function AdminFleetOwners() {
                       </div>
                     </div>
                     <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                      {org.contact_email && (
+                        <button
+                          className="btn btn-sm btn-secondary"
+                          onClick={() => setEmailModal([org])}
+                          title={`Email ${org.contact_email}`}
+                          style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+                        >
+                          <Mail size={13} /> Email
+                        </button>
+                      )}
                       <button
                         className="btn btn-sm btn-secondary"
                         onClick={() => setPlanModal({ orgId: org.id, orgName: org.name, currentPlan: org.plan_key, currentStatus: org.status })}

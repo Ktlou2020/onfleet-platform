@@ -174,6 +174,49 @@ async function sendEmail(to, subject, body) {
   console.log(`[EMAIL→${emailTo}] ${subject}: ${body}`);
 }
 
+async function sendHtmlEmail(to, subject, htmlContent) {
+  const emailTo = String(to || '').trim().replace(/[\r\n]/g, '');
+  if (!emailTo) return;
+
+  const provider = detectEmailProvider();
+
+  if (provider.name === 'brevo' && provider.configured) {
+    const apiKey = readEnv('BREVO_API_KEY', '');
+    const sender = getSenderIdentity();
+    const replyTo = getReplyToIdentity();
+    const payload = { sender, to: [{ email: emailTo }], subject, htmlContent };
+    if (replyTo?.email) payload.replyTo = replyTo;
+    try {
+      await axios.post('https://api.brevo.com/v3/smtp/email', payload, {
+        headers: { 'api-key': apiKey, 'content-type': 'application/json', accept: 'application/json' },
+        timeout: 30000
+      });
+    } catch (error) {
+      const status = error.response?.status;
+      const detail = error.response?.data?.message || error.response?.data?.code || error.message || 'unknown error';
+      throw new Error(status ? `Brevo API ${status}: ${detail}` : `Brevo API error: ${detail}`);
+    }
+    return;
+  }
+
+  if (provider.name === 'smtp' && provider.configured) {
+    const mailer = getTransporter();
+    if (!mailer) throw new Error('SMTP is not configured');
+    const sender = getSenderIdentity();
+    const replyTo = getReplyToIdentity();
+    await mailer.sendMail({
+      from: `${sender.name} <${sender.email}>`,
+      to: emailTo,
+      replyTo: replyTo?.email ? `${replyTo.name} <${replyTo.email}>` : undefined,
+      subject,
+      html: htmlContent
+    });
+    return;
+  }
+
+  console.log(`[HTML-EMAIL→${emailTo}] ${subject}`);
+}
+
 async function sendSMS(to, body) {
   console.log(`[SMS→${to}] ${body}`);
 }
@@ -200,4 +243,4 @@ async function sendNotification({ userId, channel, type, title, message, throwOn
   return info.lastInsertRowid;
 }
 
-module.exports = { sendEmail, sendNotification, detectEmailProvider };
+module.exports = { sendEmail, sendHtmlEmail, sendNotification, detectEmailProvider };

@@ -1570,17 +1570,15 @@ router.post('/record-paystack-payment', superadminOnly, (req, res) => {
   const dupCheck = db.prepare('SELECT id FROM payments WHERE paystack_reference = ? OR reference = ?').get(ref, ref);
   if (dupCheck) return res.status(409).json({ error: `Reference already exists: ${ref}` });
 
-  const fee = +(grossAmountZAR * 0.035 + 1).toFixed(2);
-  const net = +(grossAmountZAR - fee).toFixed(2);
-
+  // No platform fee for admin-recorded payments — the entered amount goes directly to the wallet.
   let paymentId;
   db.transaction(() => {
     const info = db.prepare(`
       INSERT INTO payments
         (agreement_id, user_id, amount, currency, method, reference, paystack_reference,
          status, fee_amount, net_amount, paid_at, notes)
-      VALUES (?,?,?,'ZAR','paystack',?,?,'success',?,?,?,'Admin-recorded Paystack payment')
-    `).run(Number(agreement_id), riderId, grossAmountZAR, ref, ref, fee, net, paymentDate);
+      VALUES (?,?,?,'ZAR','paystack',?,?,'success',0,?,?,'Admin-recorded Paystack payment')
+    `).run(Number(agreement_id), riderId, grossAmountZAR, ref, ref, grossAmountZAR, paymentDate);
     paymentId = info.lastInsertRowid;
 
     const weekIds = Array.isArray(schedule_week_ids)
@@ -1618,12 +1616,22 @@ router.post('/record-paystack-payment', superadminOnly, (req, res) => {
     }
   }
 
-  creditFleetWalletAdmin(orgId, grossAmountZAR, riderId, ref);
+  // Credit wallet with the full entered amount — no platform fee deduction for manual entries.
+  ensureFleetWalletAdmin(orgId);
+  db.transaction(() => {
+    const dup = db.prepare('SELECT id FROM fleet_wallet_transactions WHERE paystack_reference = ? AND organization_id = ?').get(ref, orgId);
+    if (dup) return;
+    db.prepare('UPDATE fleet_wallets SET balance = balance + ?, total_collected = total_collected + ?, updated_at = CURRENT_TIMESTAMP WHERE organization_id = ?')
+      .run(grossAmountZAR, grossAmountZAR, orgId);
+    db.prepare(`INSERT INTO fleet_wallet_transactions (organization_id, type, amount, fee_amount, net_amount, description, paystack_reference, rider_user_id, available_at)
+      VALUES (?,?,?,0,?,?,?,?, datetime('now', '+48 hours'))`)
+      .run(orgId, 'credit', grossAmountZAR, grossAmountZAR, 'Admin-recorded Paystack payment', ref, riderId || null);
+  })();
 
   logAudit(req.user.id, 'admin.record_paystack_payment', 'payments', paymentId,
     { agreement_id, org_id: orgId, amount: grossAmountZAR, reference: ref, paid_at: paymentDate }, req.ip);
 
-  res.json({ success: true, payment_id: paymentId, amount: grossAmountZAR, reference: ref, net_to_wallet: net });
+  res.json({ success: true, payment_id: paymentId, amount: grossAmountZAR, reference: ref, net_to_wallet: grossAmountZAR });
 });
 
 module.exports = router;

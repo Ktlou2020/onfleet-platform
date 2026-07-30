@@ -193,7 +193,23 @@ function listFleetOwnerOrganizations() {
         JOIN agreements a ON a.id = p.agreement_id
         JOIN bikes b ON b.id = a.bike_id
         WHERE ${scope}
-          AND p.status = 'success') AS last_payment_at
+          AND p.status = 'success') AS last_payment_at,
+      COALESCE((SELECT COUNT(*)
+        FROM payments p
+        JOIN agreements a ON a.id = p.agreement_id
+        JOIN bikes b ON b.id = a.bike_id
+        WHERE ${scope}
+          AND p.status = 'success'), 0) AS payment_count,
+      COALESCE((SELECT COUNT(*)
+        FROM agreements a
+        JOIN bikes b ON b.id = a.bike_id
+        WHERE ${scope}), 0) AS total_agreements,
+      COALESCE((SELECT COUNT(*)
+        FROM users u
+        WHERE u.organization_id = o.id AND u.role = 'rider' AND u.deleted_at IS NULL), 0) AS rider_count,
+      COALESCE((SELECT SUM(b.rental_weekly)
+        FROM bikes b
+        WHERE ${scope} AND b.status IN ('active', 'ready_to_go')), 0) AS weekly_potential
     FROM organizations o
     ORDER BY CASE
       WHEN o.status = 'past_due' THEN 0
@@ -204,19 +220,29 @@ function listFleetOwnerOrganizations() {
     END,
     o.created_at DESC`).all(...FLEET_OWNER_ROLE_VALUES, ...FLEET_OWNER_ROLE_VALUES);
 
-  return rows.map((row) => ({
-    ...row,
-    member_count: Number(row.member_count || 0),
-    active_member_count: Number(row.active_member_count || 0),
-    bike_count: Number(row.bike_count || 0),
-    active_bikes: Number(row.active_bikes || 0),
-    ready_bikes: Number(row.ready_bikes || 0),
-    open_agreements: Number(row.open_agreements || 0),
-    overdue_amount: Number(row.overdue_amount || 0),
-    revenue_30d: Number(row.revenue_30d || 0),
-    revenue_total: Number(row.revenue_total || 0),
-    payer_status: Number(row.revenue_30d || 0) > 0 ? 'payer' : 'non_payer'
-  }));
+  return rows.map((row) => {
+    const trialDaysLeft = row.trial_ends_at
+      ? Math.ceil((new Date(row.trial_ends_at) - Date.now()) / 86400000)
+      : null;
+    return {
+      ...row,
+      member_count: Number(row.member_count || 0),
+      active_member_count: Number(row.active_member_count || 0),
+      bike_count: Number(row.bike_count || 0),
+      active_bikes: Number(row.active_bikes || 0),
+      ready_bikes: Number(row.ready_bikes || 0),
+      open_agreements: Number(row.open_agreements || 0),
+      total_agreements: Number(row.total_agreements || 0),
+      payment_count: Number(row.payment_count || 0),
+      rider_count: Number(row.rider_count || 0),
+      weekly_potential: Number(row.weekly_potential || 0),
+      overdue_amount: Number(row.overdue_amount || 0),
+      revenue_30d: Number(row.revenue_30d || 0),
+      revenue_total: Number(row.revenue_total || 0),
+      trial_days_left: trialDaysLeft,
+      payer_status: Number(row.revenue_30d || 0) > 0 ? 'payer' : 'non_payer'
+    };
+  });
 }
 
 function listFleetOwnerUsers() {

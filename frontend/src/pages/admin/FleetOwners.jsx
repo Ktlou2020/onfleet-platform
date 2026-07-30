@@ -451,18 +451,27 @@ export default function AdminFleetOwners() {
     });
   };
 
-  const syncPaystack = async (org) => {
+  const [syncModal, setSyncModal] = useState(null); // { org, subCodesText }
+
+  const syncPaystack = async (org, subscriptionCodes) => {
     setBusyKey(`sync-${org.id}`);
     try {
-      const { data } = await api.post('/admin/paystack/sync-org', { org_id: org.id });
-      const { synced, checked, skipped, errors, note } = data;
+      const body = { org_id: org.id };
+      if (subscriptionCodes?.length) body.subscription_codes = subscriptionCodes;
+      const { data } = await api.post('/admin/paystack/sync-org', body);
+      const { synced, checked, skipped, errors, debug } = data;
+      console.log('[paystack sync debug]', debug);
       if (synced > 0) {
         toast.success(`Synced ${synced} payment${synced !== 1 ? 's' : ''} for ${org.name} · ${checked} checked, ${skipped} already recorded`);
         await load();
-      } else if (checked === 0 && note) {
-        toast.error(`No Paystack subscription data found for ${org.name} — ${note}`);
       } else if (errors?.length) {
-        toast.error(`Sync complete — 0 new payments, ${errors.length} error${errors.length !== 1 ? 's' : ''}: ${errors[0]?.reason || 'unknown'}`);
+        toast.error(`Sync — 0 new · ${errors.length} error${errors.length !== 1 ? 's' : ''}: ${errors[0]?.reason || 'unknown'}`);
+        console.error('[paystack sync errors]', errors);
+      } else if (checked === 0) {
+        const planInfo = debug?.plan_codes_found?.length
+          ? `Plan codes checked: ${debug.plan_codes_found.join(', ')}`
+          : 'No rider plan codes configured (PAYSTACK_RIDER_PLAN_xxx env vars missing)';
+        toast.error(`0 transactions found for ${org.name}. ${planInfo}. Use "Sync by codes" to enter subscription codes directly.`, { duration: 8000 });
       } else {
         toast.success(`All Paystack payments already recorded for ${org.name} (${checked} checked)`);
       }
@@ -503,6 +512,39 @@ export default function AdminFleetOwners() {
         />
       )}
       {emailModal && <EmailModal orgs={emailModal} onClose={() => setEmailModal(null)} />}
+      {syncModal && (
+        <Modal title={`Sync Paystack · ${syncModal.org.name}`} onClose={() => setSyncModal(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <p className="text-sm muted" style={{ margin: 0 }}>
+              Paste Paystack subscription codes (one per line, e.g. <code>SUB_abc123</code>).
+              The tool will fetch each subscription's payment history and replay any missing charges.
+            </p>
+            <textarea
+              className="form-control"
+              rows={5}
+              placeholder={'SUB_umbfan2iixtspk2\nSUB_scek35i9hkuvoky\nSUB_og5pmeife5h2wv9'}
+              value={syncModal.subCodesText}
+              onChange={(e) => setSyncModal((m) => ({ ...m, subCodesText: e.target.value }))}
+              style={{ fontFamily: 'monospace', fontSize: 13 }}
+            />
+            <div className="row" style={{ gap: 8 }}>
+              <button
+                className="btn btn-sm"
+                disabled={busyKey === `sync-${syncModal.org.id}` || !syncModal.subCodesText.trim()}
+                onClick={async () => {
+                  const codes = syncModal.subCodesText.split(/[\n,\s]+/).map((s) => s.trim()).filter((s) => s.startsWith('SUB_'));
+                  if (!codes.length) { toast.error('No valid SUB_ codes found'); return; }
+                  setSyncModal(null);
+                  await syncPaystack(syncModal.org, codes);
+                }}
+              >
+                {busyKey === `sync-${syncModal.org.id}` ? 'Syncing…' : `Sync ${syncModal.subCodesText.split(/[\n,\s]+/).filter((s) => s.trim().startsWith('SUB_')).length || ''} codes`}
+              </button>
+              <button className="btn btn-secondary btn-sm" onClick={() => setSyncModal(null)}>Cancel</button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       <div className="flex-between mb-2" style={{ alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
         <div>
@@ -636,6 +678,15 @@ export default function AdminFleetOwners() {
                       >
                         <RefreshCw size={13} style={busyKey === `sync-${org.id}` ? { animation: 'spin 1s linear infinite' } : {}} />
                         {busyKey === `sync-${org.id}` ? 'Syncing…' : 'Sync PS'}
+                      </button>
+                      <button
+                        className="btn btn-sm btn-secondary"
+                        disabled={busyKey === `sync-${org.id}`}
+                        onClick={() => setSyncModal({ org, subCodesText: '' })}
+                        title="Sync specific Paystack subscription codes"
+                        style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+                      >
+                        <RefreshCw size={13} /> Sync by codes
                       </button>
                       <button
                         className={`btn btn-sm ${isExpanded ? '' : 'btn-secondary'}`}

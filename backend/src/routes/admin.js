@@ -1205,7 +1205,67 @@ function processSubscriptionInvoices(psSub, orgId, riderId, agreementId, actorUs
   }
 }
 
+// Fetch a single Paystack subscription by code and process its invoices.
+async function syncOneSubscription(subCode, orgId, actorUserId, ip, results, seenSubCodes) {
+  if (seenSubCodes.has(subCode)) return;
+  seenSubCodes.add(subCode);
+  const { data: subResp } = await axios.get(`${PAYSTACK_BASE_URL}/subscription/${encodeURIComponent(subCode)}`, {
+    headers: paystackHeaders()
+  });
+  const psSub = subResp.data;
+  if (!psSub) return;
+
+  // Backfill customer code if we don't have it.
+  const localRow = db.prepare('SELECT id, paystack_customer_code FROM rider_subscriptions WHERE paystack_subscription_code = ?').get(subCode);
+  const customerCode = psSub.customer?.customer_code;
+  if (localRow && !localRow.paystack_customer_code && customerCode) {
+    db.prepare('UPDATE rider_subscriptions SET paystack_customer_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .run(customerCode, localRow.id);
+  }
+
+  // Resolve org match via email if we don't have a local row.
+  let riderId = localRow ? db.prepare('SELECT rider_user_id FROM rider_subscriptions WHERE id = ?').get(localRow.id)?.rider_user_id : null;
+  let agreementId = localRow ? db.prepare('SELECT agreement_id FROM rider_subscriptions WHERE id = ?').get(localRow.id)?.agreement_id : null;
+  if (!riderId || !agreementId) {
+    const match = resolveSubscriptionToAgreement(psSub, orgId);
+    if (match) { riderId = riderId || match.riderId; agreementId = agreementId || match.agreementId; }
+  }
+
+  if (!localRow && riderId && agreementId) {
+    db.prepare(`INSERT OR IGNORE INTO rider_subscriptions
+      (organization_id, rider_user_id, agreement_id, paystack_subscription_code, paystack_customer_code, plan_code, weekly_amount, status)
+      VALUES (?,?,?,?,?,?,?,?)`)
+      .run(orgId, riderId, agreementId, subCode, customerCode || null, psSub.plan?.plan_code || null,
+        (psSub.amount || 0) / 100, psSub.status === 'active' ? 'active' : 'cancelled');
+  }
+
+  processSubscriptionInvoices(psSub, orgId, riderId, agreementId, actorUserId, ip, results);
+
+  // Also sweep all customer transactions to catch charges not on the invoice list.
+  if (customerCode) {
+    try {
+      const txns = await fetchCustomerTxns(customerCode);
+      results.checked += txns.length;
+      for (const txn of txns) {
+        if (!txn.subscription) txn.subscription = { subscription_code: subCode };
+        try {
+          const outcome = replayPaystackTxn(txn, orgId, actorUserId, ip);
+          if (outcome.result === 'already_recorded') results.skipped++;
+          else results.synced++;
+        } catch (err) {
+          results.errors.push({ reference: txn.reference, reason: err.message });
+          results.skipped++;
+        }
+      }
+    } catch (_) { /* best-effort */ }
+  }
+}
+
 // ── POST /admin/paystack/sync-org ─────────────────────────────────────────────
+// Body: { org_id, subscription_codes?: string[] }
+// Pass subscription_codes to sync specific subscriptions directly (bypasses all
+// env-var and DB lookups — useful when Paystack has subscriptions that OnFleet
+// has no record of).
 router.post('/paystack/sync-org', superadminOnly, async (req, res) => {
   const orgId = Number(req.body?.org_id);
   if (!Number.isInteger(orgId) || orgId <= 0) return res.status(400).json({ error: 'org_id is required' });
@@ -1213,64 +1273,67 @@ router.post('/paystack/sync-org', superadminOnly, async (req, res) => {
   const secretKey = process.env.PAYSTACK_SECRET_KEY;
   if (!secretKey) return res.status(500).json({ error: 'PAYSTACK_SECRET_KEY not configured' });
 
-  const results = { checked: 0, synced: 0, skipped: 0, errors: [] };
+  const results = { checked: 0, synced: 0, skipped: 0, errors: [], debug: {} };
   const seenSubCodes = new Set();
 
-  // ── Path 1: rider_subscriptions rows with Paystack codes ───────────────────
-  // These are subscriptions OnFleet created or received webhooks for.
-  const localSubs = db.prepare(`SELECT * FROM rider_subscriptions
-    WHERE organization_id = ? AND (paystack_customer_code IS NOT NULL OR paystack_subscription_code IS NOT NULL)`).all(orgId);
+  // ── Path 0: explicit subscription codes passed by the caller ──────────────
+  const explicitCodes = Array.isArray(req.body?.subscription_codes)
+    ? req.body.subscription_codes.map((s) => String(s).trim()).filter(Boolean)
+    : [];
 
-  for (const sub of localSubs) {
-    let customerCode = sub.paystack_customer_code;
-
-    if (sub.paystack_subscription_code) seenSubCodes.add(sub.paystack_subscription_code);
-
-    if (!customerCode && sub.paystack_subscription_code) {
+  if (explicitCodes.length) {
+    results.debug.explicit_codes = explicitCodes;
+    for (const code of explicitCodes) {
       try {
-        const { data: subResp } = await axios.get(`${PAYSTACK_BASE_URL}/subscription/${encodeURIComponent(sub.paystack_subscription_code)}`, {
-          headers: paystackHeaders()
-        });
-        const psSub = subResp.data;
-        customerCode = psSub?.customer?.customer_code;
-        if (customerCode) {
-          db.prepare('UPDATE rider_subscriptions SET paystack_customer_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-            .run(customerCode, sub.id);
-        }
-        if (psSub) processSubscriptionInvoices(psSub, orgId, sub.rider_user_id, sub.agreement_id, req.user.id, req.ip, results);
-        if (!customerCode) continue;
+        await syncOneSubscription(code, orgId, req.user.id, req.ip, results, seenSubCodes);
       } catch (err) {
-        results.errors.push({ subscription_code: sub.paystack_subscription_code, reason: err.message });
-        continue;
+        results.errors.push({ subscription_code: code, reason: err.message });
       }
     }
+    logAudit(req.user.id, 'admin.paystack.sync_org', 'organizations', orgId, results, req.ip);
+    return res.json(results);
+  }
 
-    if (!customerCode) continue;
-    let txns;
-    try {
-      txns = await fetchCustomerTxns(customerCode);
-    } catch (err) {
-      results.errors.push({ customer_code: customerCode, reason: err.message });
+  // ── Path 1: rider_subscriptions rows with Paystack codes ──────────────────
+  const localSubs = db.prepare(`SELECT * FROM rider_subscriptions
+    WHERE organization_id = ? AND (paystack_customer_code IS NOT NULL OR paystack_subscription_code IS NOT NULL)`).all(orgId);
+  results.debug.local_sub_rows = localSubs.length;
+
+  for (const sub of localSubs) {
+    if (sub.paystack_subscription_code) {
+      try {
+        await syncOneSubscription(sub.paystack_subscription_code, orgId, req.user.id, req.ip, results, seenSubCodes);
+      } catch (err) {
+        results.errors.push({ subscription_code: sub.paystack_subscription_code, reason: err.message });
+      }
       continue;
     }
-    results.checked += txns.length;
-    for (const txn of txns) {
+    // Customer code only — no subscription code
+    if (sub.paystack_customer_code) {
+      seenSubCodes.add(`cus:${sub.paystack_customer_code}`);
       try {
-        const outcome = replayPaystackTxn(txn, orgId, req.user.id, req.ip);
-        if (outcome.result === 'already_recorded') results.skipped++;
-        else results.synced++;
+        const txns = await fetchCustomerTxns(sub.paystack_customer_code);
+        results.checked += txns.length;
+        for (const txn of txns) {
+          try {
+            const outcome = replayPaystackTxn(txn, orgId, req.user.id, req.ip);
+            if (outcome.result === 'already_recorded') results.skipped++;
+            else results.synced++;
+          } catch (err) {
+            results.errors.push({ reference: txn.reference, reason: err.message });
+            results.skipped++;
+          }
+        }
       } catch (err) {
-        results.errors.push({ reference: txn.reference, reason: err.message });
-        results.skipped++;
+        results.errors.push({ customer_code: sub.paystack_customer_code, reason: err.message });
       }
     }
   }
 
-  // ── Path 2: plan-code sweep ────────────────────────────────────────────────
-  // Pull every subscription for every rider plan code from Paystack and match
-  // customers to riders in this org by email. Catches subscriptions created
-  // directly on Paystack that have no rider_subscriptions row in OnFleet.
+  // ── Path 2: plan-code sweep ───────────────────────────────────────────────
   const planCodes = allRiderPlanCodes();
+  results.debug.plan_codes_found = planCodes;
+
   for (const planCode of planCodes) {
     let psSubs;
     try {
@@ -1279,27 +1342,17 @@ router.post('/paystack/sync-org', superadminOnly, async (req, res) => {
       results.errors.push({ plan_code: planCode, reason: err.message });
       continue;
     }
+    results.debug[`plan_${planCode}_subs`] = psSubs.length;
 
     for (const psSub of psSubs) {
       if (seenSubCodes.has(psSub.subscription_code)) continue;
-      seenSubCodes.add(psSub.subscription_code);
-
       const match = resolveSubscriptionToAgreement(psSub, orgId);
-      if (!match) continue; // subscription doesn't belong to this org
-
-      // Backfill a rider_subscriptions row so future webhook processing works.
-      const existing = db.prepare('SELECT id FROM rider_subscriptions WHERE paystack_subscription_code = ?').get(psSub.subscription_code);
-      if (!existing) {
-        db.prepare(`INSERT OR IGNORE INTO rider_subscriptions
-          (organization_id, rider_user_id, agreement_id, paystack_subscription_code, paystack_customer_code, plan_code, weekly_amount, status)
-          VALUES (?,?,?,?,?,?,?,?)`)
-          .run(orgId, match.riderId, match.agreementId, psSub.subscription_code,
-            psSub.customer?.customer_code || null, planCode,
-            (psSub.amount || 0) / 100,
-            psSub.status === 'active' ? 'active' : 'cancelled');
+      if (!match) continue;
+      try {
+        await syncOneSubscription(psSub.subscription_code, orgId, req.user.id, req.ip, results, seenSubCodes);
+      } catch (err) {
+        results.errors.push({ subscription_code: psSub.subscription_code, reason: err.message });
       }
-
-      processSubscriptionInvoices(psSub, orgId, match.riderId, match.agreementId, req.user.id, req.ip, results);
     }
   }
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Bike, FileText, CreditCard, HelpCircle, LogOut, Users, Wallet, AlertTriangle, PiggyBank, AlertCircle, MapPin, Key, Clock, CheckCircle2, ArrowRight, X, MoreHorizontal, BarChart2, UserCog } from 'lucide-react';
+import { LayoutDashboard, Bike, FileText, CreditCard, HelpCircle, LogOut, Users, Wallet, AlertTriangle, PiggyBank, AlertCircle, MapPin, Key, Clock, CheckCircle2, ArrowRight, X, MoreHorizontal, BarChart2, UserCog, Eye } from 'lucide-react';
 import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
 import { useAuth } from '../../auth';
@@ -180,7 +180,7 @@ function TrialBanner({ daysLeft, onSubscribe, onDismiss }) {
 }
 
 export default function FleetOwnerShell() {
-  const { user, logout } = useAuth();
+  const { user, logout, isImpersonating, exitImpersonation } = useAuth();
   const nav = useNavigate();
   const location = useLocation();
   const [search, setSearch] = useState('');
@@ -228,7 +228,30 @@ export default function FleetOwnerShell() {
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
+      {isImpersonating && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999,
+          background: '#b45309', color: '#fff',
+          padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 10,
+          fontSize: 13, fontWeight: 600, boxShadow: '0 2px 8px rgba(0,0,0,.25)'
+        }}>
+          <Eye size={15} />
+          Superadmin impersonating <strong style={{ marginLeft: 2 }}>{user?.organization_name || user?.full_name}</strong>
+          <span style={{ marginLeft: 'auto' }}>
+            <button
+              onClick={exitImpersonation}
+              style={{
+                background: 'rgba(255,255,255,.2)', border: 'none', color: '#fff',
+                borderRadius: 6, padding: '4px 12px', fontSize: 12, fontWeight: 700,
+                cursor: 'pointer'
+              }}
+            >
+              Exit impersonation
+            </button>
+          </span>
+        </div>
+      )}
+      <aside className="sidebar" style={isImpersonating ? { paddingTop: 40 } : undefined}>
         <div style={{ padding: '0 8px 24px' }}>
           <Logo />
         </div>

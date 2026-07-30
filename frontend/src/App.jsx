@@ -63,6 +63,7 @@ import WorkshopShell from './pages/workshop/WorkshopShell';
 import WorkshopDashboard from './pages/workshop/Dashboard';
 import WorkshopJobCards from './pages/workshop/JobCards';
 import WorkshopJobCard from './pages/workshop/JobCard';
+import FleetImpersonate from './pages/fleet/FleetImpersonate';
 import FleetRiderApply from './pages/FleetRiderApply';
 import Privacy from './pages/Privacy';
 import Terms from './pages/Terms';
@@ -116,6 +117,7 @@ export default function App() {
         <Route path="/rider-portal/:token" element={<RiderPortal />} />
         <Route path="/fleet/login" element={<FleetLogin />} />
         <Route path="/fleet/signup" element={<FleetSignup />} />
+        <Route path="/fleet/impersonate" element={<FleetImpersonate />} />
         <Route path="/fleet/workspace" element={<FleetOwnerWorkspace />} />
         <Route path="/fleet/rider-apply/:slug" element={<FleetRiderApply />} />
         <Route path="/fleet/app" element={<PrivateRoute role="fleet_owner"><FleetOwnerShell /></PrivateRoute>}>

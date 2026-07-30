@@ -17,6 +17,9 @@ function authRequired(req, res, next) {
       WHERE u.id = ? AND u.deleted_at IS NULL`).get(payload.uid);
     if (!user || user.status !== 'active') return res.status(401).json({ error: 'Invalid user' });
     req.user = user;
+    if (payload.impersonated_by) {
+      req.user = { ...user, is_impersonated: true, impersonated_by: payload.impersonated_by };
+    }
     next();
   } catch (e) {
     return res.status(401).json({ error: 'Invalid token' });

@@ -1,6 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -390,6 +391,37 @@ router.get('/fleet-owners', superadminOnly, (req, res) => {
     organizations: listFleetOwnerOrganizations(),
     users: listFleetOwnerUsers()
   });
+});
+
+router.post('/impersonate/:org_id', superadminOnly, (req, res) => {
+  const orgId = Number(req.params.org_id);
+  if (!Number.isInteger(orgId) || orgId <= 0) return res.status(400).json({ error: 'Invalid org id' });
+
+  const org = db.prepare('SELECT id, name FROM organizations WHERE id = ?').get(orgId);
+  if (!org) return res.status(404).json({ error: 'Organization not found' });
+
+  const target = db.prepare(
+    `SELECT u.id, u.email, u.full_name, u.role, u.organization_id,
+      o.name organization_name, o.slug organization_slug, o.status organization_status, o.plan_key organization_plan_key
+     FROM users u
+     LEFT JOIN organizations o ON o.id = u.organization_id
+     WHERE u.organization_id = ? AND u.deleted_at IS NULL AND u.status = 'active'
+     ORDER BY CASE u.role WHEN 'fleet_owner_admin' THEN 0 ELSE 1 END LIMIT 1`
+  ).get(orgId);
+
+  if (!target) return res.status(404).json({ error: 'No active users found in this organization' });
+
+  const token = jwt.sign(
+    { uid: target.id, role: target.role, impersonated_by: req.user.id },
+    process.env.JWT_SECRET,
+    { expiresIn: '1h', algorithms: ['HS256'] }
+  );
+
+  logAudit(req.user.id, 'superadmin.impersonate', 'organizations', orgId, {
+    org_name: org.name, target_user_id: target.id, target_email: target.email
+  }, req.ip);
+
+  res.json({ token, user: target });
 });
 
 const FLEET_PLAN_ENTITLEMENTS = {

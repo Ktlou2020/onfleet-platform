@@ -459,7 +459,7 @@ export default function AdminFleetOwners() {
       const body = { org_id: org.id };
       if (subscriptionCodes?.length) body.subscription_codes = subscriptionCodes;
       if (hintAgreementNumber) body.hint_agreement_number = hintAgreementNumber;
-      const { data } = await api.post('/admin/paystack/sync-org', body);
+      const { data } = await api.post('/admin/paystack/sync-org', body, { timeout: 120000 });
       const { synced, checked, skipped, errors, debug } = data;
       console.log('[paystack sync debug]', JSON.stringify(debug, null, 2));
       if (errors?.length) console.error('[paystack sync errors]', errors);
@@ -529,48 +529,58 @@ export default function AdminFleetOwners() {
       )}
       {emailModal && <EmailModal orgs={emailModal} onClose={() => setEmailModal(null)} />}
       {syncModal && (
-        <Modal title={`Sync Paystack · ${syncModal.org.name}`} onClose={() => setSyncModal(null)}>
+        <Modal title={`Sync Paystack · ${syncModal.org.name}`} onClose={syncModal.syncing ? undefined : () => setSyncModal(null)}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <p className="text-sm muted" style={{ margin: 0 }}>
-              Paste Paystack subscription codes (one per line, e.g. <code>SUB_abc123</code>). If the Paystack customer email doesn't match OnFleet, enter the agreement number below to override.
-              The tool will fetch each subscription's payment history and replay any missing charges.
-            </p>
-            <textarea
-              className="form-control"
-              rows={4}
-              placeholder={'SUB_umbfan2iixtspk2\nSUB_scek35i9hkuvoky\nSUB_og5pmeife5h2wv9'}
-              value={syncModal.subCodesText}
-              onChange={(e) => setSyncModal((m) => ({ ...m, subCodesText: e.target.value }))}
-              style={{ fontFamily: 'monospace', fontSize: 13 }}
-            />
-            <div>
-              <label className="text-sm" style={{ display: 'block', marginBottom: 4 }}>
-                Agreement number <span className="muted">(optional — override if email doesn't match)</span>
-              </label>
-              <input
-                className="form-control"
-                placeholder="e.g. OF-2026-895786"
-                value={syncModal.agreementNum || ''}
-                onChange={(e) => setSyncModal((m) => ({ ...m, agreementNum: e.target.value }))}
-                style={{ fontFamily: 'monospace', fontSize: 13 }}
-              />
-            </div>
-            <div className="row" style={{ gap: 8 }}>
-              <button
-                className="btn btn-sm"
-                disabled={busyKey === `sync-${syncModal.org.id}` || !syncModal.subCodesText.trim()}
-                onClick={async () => {
-                  const codes = syncModal.subCodesText.split(/[\n,\s]+/).map((s) => s.trim()).filter((s) => s.startsWith('SUB_'));
-                  if (!codes.length) { toast.error('No valid SUB_ codes found'); return; }
-                  const agreementNum = syncModal.agreementNum?.trim() || null;
-                  setSyncModal(null);
-                  await syncPaystack(syncModal.org, codes, agreementNum);
-                }}
-              >
-                {busyKey === `sync-${syncModal.org.id}` ? 'Syncing…' : `Sync ${syncModal.subCodesText.split(/[\n,\s]+/).filter((s) => s.trim().startsWith('SUB_')).length || ''} codes`}
-              </button>
-              <button className="btn btn-secondary btn-sm" onClick={() => setSyncModal(null)}>Cancel</button>
-            </div>
+            {syncModal.syncing ? (
+              <div style={{ textAlign: 'center', padding: '24px 0' }}>
+                <RefreshCw size={24} className="spin" style={{ marginBottom: 12 }} />
+                <p className="text-sm muted" style={{ margin: 0 }}>Fetching payments from Paystack — this may take up to a minute…</p>
+              </div>
+            ) : (
+              <>
+                <p className="text-sm muted" style={{ margin: 0 }}>
+                  Paste Paystack subscription codes (one per line, e.g. <code>SUB_abc123</code>). If the Paystack customer email doesn't match OnFleet, enter the agreement number below to override.
+                </p>
+                <textarea
+                  className="form-control"
+                  rows={4}
+                  placeholder={'SUB_umbfan2iixtspk2\nSUB_scek35i9hkuvoky\nSUB_og5pmeife5h2wv9'}
+                  value={syncModal.subCodesText}
+                  onChange={(e) => setSyncModal((m) => ({ ...m, subCodesText: e.target.value }))}
+                  style={{ fontFamily: 'monospace', fontSize: 13 }}
+                />
+                <div>
+                  <label className="text-sm" style={{ display: 'block', marginBottom: 4 }}>
+                    Agreement number <span className="muted">(optional — override if email doesn't match)</span>
+                  </label>
+                  <input
+                    className="form-control"
+                    placeholder="e.g. OF-2026-895786"
+                    value={syncModal.agreementNum || ''}
+                    onChange={(e) => setSyncModal((m) => ({ ...m, agreementNum: e.target.value }))}
+                    style={{ fontFamily: 'monospace', fontSize: 13 }}
+                  />
+                </div>
+                <div className="row" style={{ gap: 8 }}>
+                  <button
+                    className="btn btn-sm"
+                    disabled={!syncModal.subCodesText.trim()}
+                    onClick={async () => {
+                      const codes = syncModal.subCodesText.split(/[\n,\s]+/).map((s) => s.trim()).filter((s) => s.startsWith('SUB_'));
+                      if (!codes.length) { toast.error('No valid SUB_ codes found'); return; }
+                      const agreementNum = syncModal.agreementNum?.trim() || null;
+                      const org = syncModal.org;
+                      setSyncModal((m) => ({ ...m, syncing: true }));
+                      await syncPaystack(org, codes, agreementNum);
+                      setSyncModal(null);
+                    }}
+                  >
+                    Sync {syncModal.subCodesText.split(/[\n,\s]+/).filter((s) => s.trim().startsWith('SUB_')).length || ''} codes
+                  </button>
+                  <button className="btn btn-secondary btn-sm" onClick={() => setSyncModal(null)}>Cancel</button>
+                </div>
+              </>
+            )}
           </div>
         </Modal>
       )}

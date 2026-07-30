@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { PiggyBank, ArrowDownCircle, Clock, CheckCircle2, XCircle, AlertTriangle, Banknote, RefreshCw } from 'lucide-react';
+import { PiggyBank, ArrowDownCircle, Clock, CheckCircle2, XCircle, AlertTriangle, Banknote, RefreshCw, Hourglass } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../api';
 import { Badge, Loading, fmt, fmtDate } from '../../components/ui';
@@ -71,7 +71,7 @@ function PayoutModal({ wallet, bankDetails, onClose, onSuccess }) {
   const [busy, setBusy] = useState(false);
 
   const hasSavedBankDetails = bankDetails?.bank_account_name && bankDetails?.bank_name && bankDetails?.bank_account_number;
-  const balance = Number(wallet?.balance || 0);
+  const balance = Number(wallet?.available_balance ?? wallet?.balance ?? 0);
   const parsedAmount = Number(amount);
   const withdrawalFee = parsedAmount > 0 ? +(parsedAmount * 0.005).toFixed(2) : 0;
   const netPayout = parsedAmount > 0 ? +(parsedAmount - withdrawalFee).toFixed(2) : 0;
@@ -106,8 +106,13 @@ function PayoutModal({ wallet, bankDetails, onClose, onSuccess }) {
         </div>
 
         <div className="card" style={{ background: 'var(--surface-2)', marginBottom: 20 }}>
-          <div className="text-sm muted">Available balance</div>
+          <div className="text-sm muted">Available to withdraw</div>
           <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--primary-light)', fontFamily: "'Space Grotesk', sans-serif" }}>{fmt(balance)}</div>
+          {Number(wallet?.pending_balance || 0) > 0 && (
+            <div className="text-xs muted" style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 4 }}>
+              <Hourglass size={11} /> {fmt(wallet.pending_balance)} clearing (available in up to 48 hours)
+            </div>
+          )}
           <div className="text-xs muted" style={{ marginTop: 4 }}>0.5% withdrawal fee applies</div>
         </div>
 
@@ -215,7 +220,7 @@ export default function FleetWallet() {
 
   if (loading) return <Loading />;
 
-  const wallet = data?.wallet || { balance: 0, total_collected: 0, total_withdrawn: 0 };
+  const wallet = data?.wallet || { balance: 0, available_balance: 0, pending_balance: 0, total_collected: 0, total_withdrawn: 0 };
   const transactions = data?.transactions || [];
   const payoutRequests = data?.payout_requests || [];
   const hasBankDetails = bankDetails?.bank_account_name && bankDetails?.bank_name && bankDetails?.bank_account_number;
@@ -232,8 +237,14 @@ export default function FleetWallet() {
       {/* Balance cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, marginBottom: 24 }}>
         <div className="card" style={{ borderColor: 'rgba(30,136,209,0.4)', background: 'rgba(30,136,209,0.05)' }}>
-          <div className="text-sm muted">Available balance</div>
-          <div style={{ fontSize: 30, fontWeight: 800, color: 'var(--primary-light)', fontFamily: "'Space Grotesk', sans-serif" }}>{fmt(wallet.balance)}</div>
+          <div className="text-sm muted">Available to withdraw</div>
+          <div style={{ fontSize: 30, fontWeight: 800, color: 'var(--primary-light)', fontFamily: "'Space Grotesk', sans-serif" }}>{fmt(wallet.available_balance)}</div>
+          {Number(wallet.pending_balance) > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 6, fontSize: 12, color: 'var(--warn)' }}>
+              <Hourglass size={12} />
+              <span>{fmt(wallet.pending_balance)} clearing (48-hour hold)</span>
+            </div>
+          )}
         </div>
         <div className="card">
           <div className="text-sm muted">Total collected</div>
@@ -251,7 +262,7 @@ export default function FleetWallet() {
           <button
             className="btn"
             onClick={() => setShowPayout(true)}
-            disabled={Number(wallet.balance) <= 0}
+            disabled={Number(wallet.available_balance) <= 0}
           >
             <ArrowDownCircle size={15} /> Request Payout
           </button>
@@ -290,9 +301,10 @@ export default function FleetWallet() {
 
       {/* Fee info */}
       <div className="card" style={{ background: 'var(--surface-2)', marginBottom: 24, fontSize: 13 }}>
-        <div style={{ fontWeight: 600, marginBottom: 8 }}>Fee structure</div>
-        <div className="muted">Collection fee: 3.5% + R1.00 deducted per weekly rider payment before crediting your wallet.</div>
-        <div className="muted">Withdrawal fee: 0.5% deducted when you withdraw from your wallet.</div>
+        <div style={{ fontWeight: 600, marginBottom: 8 }}>Fee structure &amp; clearing</div>
+        <div className="muted" style={{ marginBottom: 4 }}>Collection fee: 3.5% + R1.00 deducted per weekly rider payment before crediting your wallet.</div>
+        <div className="muted" style={{ marginBottom: 4 }}>Withdrawal fee: 0.5% deducted when you withdraw from your wallet.</div>
+        <div className="muted">Clearing period: collected payments are held for 48 hours before becoming available to withdraw.</div>
       </div>
 
       {/* Payout requests */}
@@ -325,28 +337,42 @@ export default function FleetWallet() {
           </div>
         ) : (
           <div style={{ display: 'grid', gap: 0 }}>
-            {transactions.map((tx) => (
-              <div key={tx.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
-                <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-                  {tx.type === 'credit'
-                    ? <CheckCircle2 size={16} style={{ color: 'var(--success)', marginTop: 2, flexShrink: 0 }} />
-                    : <ArrowDownCircle size={16} style={{ color: 'var(--muted)', marginTop: 2, flexShrink: 0 }} />}
-                  <div>
-                    <div style={{ fontSize: 14, fontWeight: 500 }}>{TX_TYPE_LABEL[tx.type] || tx.type}</div>
-                    {tx.rider_name && <div className="text-xs muted">{tx.rider_name}</div>}
-                    <div className="text-xs muted">{fmtDate(tx.created_at)}</div>
+            {transactions.map((tx) => {
+              const isClearing = tx.type === 'credit' && tx.available_at && new Date(tx.available_at) > new Date();
+              const availableAt = tx.available_at ? new Date(tx.available_at) : null;
+              return (
+                <div key={tx.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
+                  <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                    {tx.type === 'credit'
+                      ? isClearing
+                        ? <Hourglass size={16} style={{ color: 'var(--warn)', marginTop: 2, flexShrink: 0 }} />
+                        : <CheckCircle2 size={16} style={{ color: 'var(--success)', marginTop: 2, flexShrink: 0 }} />
+                      : <ArrowDownCircle size={16} style={{ color: 'var(--muted)', marginTop: 2, flexShrink: 0 }} />}
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 500 }}>
+                        {TX_TYPE_LABEL[tx.type] || tx.type}
+                        {isClearing && <span className="muted" style={{ fontSize: 12, fontWeight: 400, marginLeft: 6 }}>— clearing</span>}
+                      </div>
+                      {tx.rider_name && <div className="text-xs muted">{tx.rider_name}</div>}
+                      <div className="text-xs muted">
+                        {fmtDate(tx.created_at)}
+                        {isClearing && availableAt && (
+                          <span> · Available {availableAt.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} at {availableAt.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontWeight: 600, color: tx.type === 'credit' ? (isClearing ? 'var(--warn)' : 'var(--success)') : 'var(--text)' }}>
+                      {tx.type === 'credit' ? '+' : '-'}{fmt(Math.abs(tx.net_amount))}
+                    </div>
+                    {tx.type === 'credit' && tx.fee_amount > 0 && (
+                      <div className="text-xs muted">Fee: {fmt(tx.fee_amount)}</div>
+                    )}
                   </div>
                 </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontWeight: 600, color: tx.type === 'credit' ? 'var(--success)' : 'var(--text)' }}>
-                    {tx.type === 'credit' ? '+' : '-'}{fmt(Math.abs(tx.net_amount))}
-                  </div>
-                  {tx.type === 'credit' && tx.fee_amount > 0 && (
-                    <div className="text-xs muted">Fee: {fmt(tx.fee_amount)}</div>
-                  )}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

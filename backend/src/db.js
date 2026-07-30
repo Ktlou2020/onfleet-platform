@@ -587,6 +587,7 @@ CREATE TABLE IF NOT EXISTS fleet_wallet_transactions (
   paystack_reference TEXT,
   rider_user_id INTEGER,
   payout_request_id INTEGER,
+  available_at DATETIME DEFAULT NULL,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(organization_id) REFERENCES organizations(id),
   FOREIGN KEY(rider_user_id) REFERENCES users(id)
@@ -1057,5 +1058,8 @@ function ensureJobCardQuotedStatus() {
   }
 }
 ensureJobCardQuotedStatus();
+
+// Add available_at to fleet_wallet_transactions so credits have a 48-hour hold
+ensureColumn('fleet_wallet_transactions', 'available_at', 'DATETIME DEFAULT NULL');
 
 module.exports = db;

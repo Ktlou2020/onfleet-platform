@@ -1058,8 +1058,9 @@ function replayPaystackTxn(txn, hintOrgId, actorUserId, ip) {
   const grossAmountZAR = (txn.amount || 0) / 100;
   if (grossAmountZAR <= 0) throw new Error('Zero-amount transaction');
 
-  // Only treat a prior Paystack payment as already recorded — a manual EFT entry with the
-  // same reference does NOT count because it never credited the fleet wallet.
+  // Only a prior Paystack payment (matched by paystack_reference) counts as already recorded.
+  // A manual EFT entry with a coincidentally identical reference is a separate payment and
+  // must not block this Paystack record from being created and crediting the wallet.
   const existing = db.prepare('SELECT id, status FROM payments WHERE paystack_reference = ?').get(reference);
   if (existing && existing.status === 'success') return { result: 'already_recorded', payment_id: existing.id };
 
@@ -1076,16 +1077,6 @@ function replayPaystackTxn(txn, hintOrgId, actorUserId, ip) {
   db.transaction(() => {
     const alreadyPs = db.prepare('SELECT id FROM payments WHERE paystack_reference = ?').get(reference);
     if (alreadyPs) { paymentId = alreadyPs.id; return; }
-
-    // A manual/EFT payment with the same reference may exist (someone reconciled it manually).
-    // Upgrade it to a Paystack record so it appears correctly and is eligible for wallet credit.
-    const manualEntry = db.prepare('SELECT id FROM payments WHERE reference = ?').get(reference);
-    if (manualEntry) {
-      db.prepare(`UPDATE payments SET method='paystack', paystack_reference=?, fee_amount=?, net_amount=?, notes='Converted to Paystack payment by admin sync' WHERE id=?`)
-        .run(reference, fee, net, manualEntry.id);
-      paymentId = manualEntry.id;
-      return;
-    }
 
     const info = db.prepare(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, paystack_reference, status, fee_amount, net_amount, paid_at, notes)
       VALUES (?,?,?,'ZAR','paystack',?,?,'success',?,?,CURRENT_TIMESTAMP,'Synced from Paystack admin tool')`)

@@ -414,7 +414,7 @@ router.post('/impersonate/:org_id', superadminOnly, (req, res) => {
   const token = jwt.sign(
     { uid: target.id, role: target.role, impersonated_by: req.user.id },
     process.env.JWT_SECRET,
-    { expiresIn: '1h', algorithms: ['HS256'] }
+    { expiresIn: '1h' }
   );
 
   logAudit(req.user.id, 'superadmin.impersonate', 'organizations', orgId, {

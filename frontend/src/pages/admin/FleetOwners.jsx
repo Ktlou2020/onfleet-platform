@@ -470,7 +470,7 @@ export default function AdminFleetOwners() {
       } else if (checked === 0) {
         const planInfo = debug?.plan_codes_found?.length
           ? `Plan codes checked: ${debug.plan_codes_found.join(', ')}`
-          : 'No rider plan codes configured (PAYSTACK_RIDER_PLAN_xxx env vars missing)';
+          : 'No fleet plan codes configured (PAYSTACK_FLEET_PLAN_xxx env vars missing)';
         toast.error(`0 transactions found for ${org.name}. ${planInfo}. Use "Sync by codes" to enter subscription codes directly.`, { duration: 8000 });
       } else {
         toast.success(`All Paystack payments already recorded for ${org.name} (${checked} checked)`);

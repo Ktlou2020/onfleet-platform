@@ -38,7 +38,7 @@ export default function FleetOwnerPayments() {
   const [payments, setPayments] = useState(null);
   const [total, setTotal] = useState(0);
   const [pages, setPages] = useState(1);
-  const [aggregates, setAggregates] = useState({ credited: 0, fees: 0, gross: 0 });
+  const [aggregates, setAggregates] = useState({ credited: 0, paystack_credited: 0, manual_credited: 0, fees: 0, gross: 0 });
   const [agreements, setAgreements] = useState([]);
 
   const [search, setSearch] = useState('');
@@ -212,7 +212,16 @@ export default function FleetOwnerPayments() {
         <div>
           <h1 className="page-title">Payments</h1>
           <p className="page-sub" style={{ marginBottom: 8 }}>
-            Rental received {fmt(aggregates.credited)} · Gateway fees {fmt(aggregates.fees)} · Gross {fmt(aggregates.gross)}
+            {aggregates.paystack_credited > 0 && (
+              <span title="Paystack card payments — deposited to your fleet wallet">Paystack {fmt(aggregates.paystack_credited)}</span>
+            )}
+            {aggregates.paystack_credited > 0 && aggregates.manual_credited > 0 && <span className="muted"> · </span>}
+            {aggregates.manual_credited > 0 && (
+              <span className="muted" title="EFT / cash — paid directly to you, not via wallet">Manual {fmt(aggregates.manual_credited)}</span>
+            )}
+            {aggregates.paystack_credited === 0 && aggregates.manual_credited === 0 && (
+              <span>Rental received {fmt(aggregates.credited)}</span>
+            )}
             {dateRange ? <span className="muted"> · Last {dateRange} days</span> : null}
           </p>
           <FleetHelpTip section="payments" tooltip="Record manual collections, review payment methods, and fix incorrect payment rows safely." label="Learn more about payments" />

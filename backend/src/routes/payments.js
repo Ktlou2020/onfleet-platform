@@ -398,15 +398,47 @@ router.post('/paystack/webhook', (req, res) => {
       }
     }
   } else if (event.event === 'charge.success' && !isFleetEvent) {
-    // Rider one-time payment
+    // One-time Paystack charge (no subscription plan, or unrecognised plan code)
     const ref = event.data.reference;
-    const payment = db.prepare('SELECT * FROM payments WHERE reference = ?').get(ref);
+    const grossAmountZAR = (event.data.amount || 0) / 100;
+    const meta = event.data.metadata || {};
+    const metaOrgId = Number(meta.organization_id) || null;
+    const metaRiderId = Number(meta.rider_user_id) || null;
+    const metaAgreementId = Number(meta.agreement_id) || null;
+
+    // Look up pre-existing payment record (used by the admin/rider portal path)
+    const payment = db.prepare('SELECT * FROM payments WHERE reference = ? OR paystack_reference = ?').get(ref, ref);
+
     if (payment && payment.status !== 'success') {
-      const grossAmount = event.data.amount / 100;
-      const netAmount = payment.net_amount || grossAmount;
+      const netAmount = payment.net_amount || grossAmountZAR;
       const fee = calcPaystackFee(netAmount);
-      db.prepare(`UPDATE payments SET status = 'success', paid_at = CURRENT_TIMESTAMP, amount = ?, fee_amount = ?, net_amount = ? WHERE id = ?`).run(grossAmount, fee, netAmount, payment.id);
+      db.prepare(`UPDATE payments SET status = 'success', paid_at = CURRENT_TIMESTAMP, amount = ?, fee_amount = ?, net_amount = ? WHERE id = ?`)
+        .run(grossAmountZAR, fee, netAmount, payment.id);
       applyPaymentToSchedule(payment.agreement_id, netAmount);
+      // Credit the fleet wallet if this agreement belongs to a fleet organisation
+      if (grossAmountZAR > 0) {
+        const agScope = db.prepare(
+          `SELECT b.organization_id FROM agreements a JOIN bikes b ON b.id = a.bike_id WHERE a.id = ?`
+        ).get(payment.agreement_id);
+        if (agScope?.organization_id) {
+          creditFleetWalletFromWebhook(agScope.organization_id, grossAmountZAR, payment.user_id, ref);
+        }
+      }
+    } else if (!payment && metaAgreementId && metaOrgId && grossAmountZAR > 0) {
+      // Fleet one-time payment link — no pre-inserted record; build from webhook metadata
+      const agreement = db.prepare('SELECT * FROM agreements WHERE id = ?').get(metaAgreementId);
+      if (agreement && agreement.status !== 'discontinued') {
+        const alreadyRecorded = db.prepare('SELECT id FROM payments WHERE paystack_reference = ?').get(ref);
+        if (!alreadyRecorded) {
+          const fee = +(grossAmountZAR * 0.015).toFixed(2);
+          const net = +(grossAmountZAR - fee).toFixed(2);
+          db.prepare(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, paystack_reference, status, fee_amount, net_amount, paid_at, notes)
+            VALUES (?,?,?,'ZAR','paystack',?,?,'success',?,?,CURRENT_TIMESTAMP,'Paystack payment')`)
+            .run(metaAgreementId, metaRiderId || agreement.user_id, grossAmountZAR, ref, ref, fee, net);
+          try { applyPaymentToSchedule(metaAgreementId, grossAmountZAR); } catch (_) {}
+          creditFleetWalletFromWebhook(metaOrgId, grossAmountZAR, metaRiderId || agreement.user_id, ref);
+        }
+      }
     }
   }
 

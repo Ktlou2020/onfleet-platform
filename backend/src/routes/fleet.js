@@ -831,6 +831,8 @@ function getFleetPaymentsPaged(org, { search, method, days, page, pageSize, all 
   const total = db.prepare(`SELECT COUNT(*) AS cnt ${baseFrom}`).get(...params).cnt;
   const agg = db.prepare(`SELECT
     COALESCE(SUM(CASE WHEN p.status='success' THEN COALESCE(p.net_amount,p.amount,0) ELSE 0 END),0) AS credited,
+    COALESCE(SUM(CASE WHEN p.status='success' AND p.method='paystack' THEN COALESCE(p.net_amount,p.amount,0) ELSE 0 END),0) AS paystack_credited,
+    COALESCE(SUM(CASE WHEN p.status='success' AND p.method!='paystack' THEN COALESCE(p.net_amount,p.amount,0) ELSE 0 END),0) AS manual_credited,
     COALESCE(SUM(CASE WHEN p.status='success' THEN COALESCE(p.fee_amount,0) ELSE 0 END),0) AS fees,
     COALESCE(SUM(CASE WHEN p.status='success' THEN COALESCE(p.amount,0) ELSE 0 END),0) AS gross
     ${baseFrom}`).get(...params);
@@ -853,7 +855,13 @@ function getFleetPaymentsPaged(org, { search, method, days, page, pageSize, all 
     page: safePage,
     pageSize: safeSize,
     pages: Math.ceil(total / safeSize) || 1,
-    aggregates: { credited: agg.credited, fees: agg.fees, gross: agg.gross }
+    aggregates: {
+      credited: agg.credited,
+      paystack_credited: agg.paystack_credited,
+      manual_credited: agg.manual_credited,
+      fees: agg.fees,
+      gross: agg.gross
+    }
   };
 }
 

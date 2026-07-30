@@ -1255,20 +1255,41 @@ function resolveSubscriptionToAgreement(psSub, orgId) {
 }
 
 // Process all invoices from a Paystack subscription object.
-// Each invoice's transaction is replayed if not already recorded.
-function processSubscriptionInvoices(psSub, orgId, riderId, agreementId, actorUserId, ip, results) {
-  const invoices = (psSub.invoices || []).filter((inv) => inv.transaction?.status === 'success');
+// Paystack returns inv.transaction as either a full object OR a bare integer ID.
+// We accept either, fetching the full transaction from Paystack when needed.
+async function processSubscriptionInvoices(psSub, orgId, riderId, agreementId, actorUserId, ip, results) {
+  // Filter by invoice status OR nested transaction status — don't require both.
+  const invoices = (psSub.invoices || []).filter((inv) =>
+    inv.status === 'success' || inv.transaction?.status === 'success'
+  );
   results.checked += invoices.length;
+
   for (const inv of invoices) {
-    const txn = inv.transaction;
+    let txn = (inv.transaction && typeof inv.transaction === 'object') ? inv.transaction : null;
+
+    // inv.transaction is a bare integer ID — fetch the full transaction from Paystack.
+    if (!txn && inv.transaction) {
+      try {
+        const { data: txnResp } = await axios.get(`${PAYSTACK_BASE_URL}/transaction/${inv.transaction}`, {
+          headers: paystackHeaders()
+        });
+        txn = txnResp.data;
+      } catch (e) {
+        results.errors.push({ invoice_code: inv.invoice_code, reason: `Could not fetch transaction ${inv.transaction}: ${e.message}` });
+        results.skipped++;
+        continue;
+      }
+    }
+
     if (!txn?.reference) { results.skipped++; continue; }
-    // Inject subscription + customer onto the txn so resolvePaystackTxnScope
-    // can find it via subscription code or fall back to the already-resolved IDs.
+
+    // Inject subscription + resolved IDs so resolvePaystackTxnScope can find the agreement.
     if (!txn.subscription) txn.subscription = { subscription_code: psSub.subscription_code };
     if (!txn.metadata) txn.metadata = {};
     if (agreementId && !txn.metadata.agreement_id) txn.metadata.agreement_id = agreementId;
     if (riderId && !txn.metadata.rider_user_id) txn.metadata.rider_user_id = riderId;
     if (orgId && !txn.metadata.organization_id) txn.metadata.organization_id = orgId;
+
     try {
       const outcome = replayPaystackTxn(txn, orgId, actorUserId, ip);
       if (outcome.result === 'already_recorded') results.skipped++;
@@ -1335,7 +1356,7 @@ async function syncOneSubscription(subCode, orgId, actorUserId, ip, results, see
         (psSub.amount || 0) / 100, psSub.status === 'active' ? 'active' : 'cancelled');
   }
 
-  processSubscriptionInvoices(psSub, orgId, riderId, agreementId, actorUserId, ip, results);
+  await processSubscriptionInvoices(psSub, orgId, riderId, agreementId, actorUserId, ip, results);
 
   // Also sweep all customer transactions to catch charges not on the invoice list.
   if (customerCode) {

@@ -1140,6 +1140,71 @@ async function fetchCustomerTxns(customerCode) {
   return txns;
 }
 
+// All configured rider plan codes (mirrors RIDER_PLAN_AMOUNTS in payments.js).
+const RIDER_PLAN_AMOUNTS = [500, 650, 700, 750, 800, 850, 1000, 1200];
+function allRiderPlanCodes() {
+  return RIDER_PLAN_AMOUNTS.map((amt) => process.env[`PAYSTACK_RIDER_PLAN_${amt}`]).filter(Boolean);
+}
+
+// Fetch every Paystack subscription for a given plan code, paginated.
+async function fetchPlanSubscriptions(planCode) {
+  const all = [];
+  let page = 1;
+  let hasMore = true;
+  while (hasMore) {
+    const { data: resp } = await axios.get(`${PAYSTACK_BASE_URL}/subscription`, {
+      params: { plan: planCode, perPage: 100, page },
+      headers: paystackHeaders()
+    });
+    const batch = resp.data || [];
+    all.push(...batch);
+    hasMore = batch.length === 100;
+    page++;
+  }
+  return all;
+}
+
+// Given a Paystack subscription object and a target org, find the matching
+// local rider + agreement by matching the customer's email to a user in our DB
+// who has an agreement on a bike belonging to this org.
+function resolveSubscriptionToAgreement(psSub, orgId) {
+  const email = psSub.customer?.email;
+  if (!email) return null;
+  const user = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1').get(email);
+  if (!user) return null;
+  const ag = db.prepare(`SELECT a.id FROM agreements a
+    JOIN bikes b ON b.id = a.bike_id
+    WHERE a.user_id = ? AND b.organization_id = ? AND a.status IN ('active','paused','defaulted','completed')
+    ORDER BY a.id DESC LIMIT 1`).get(user.id, orgId);
+  return ag ? { riderId: user.id, agreementId: ag.id } : null;
+}
+
+// Process all invoices from a Paystack subscription object.
+// Each invoice's transaction is replayed if not already recorded.
+function processSubscriptionInvoices(psSub, orgId, riderId, agreementId, actorUserId, ip, results) {
+  const invoices = (psSub.invoices || []).filter((inv) => inv.transaction?.status === 'success');
+  results.checked += invoices.length;
+  for (const inv of invoices) {
+    const txn = inv.transaction;
+    if (!txn?.reference) { results.skipped++; continue; }
+    // Inject subscription + customer onto the txn so resolvePaystackTxnScope
+    // can find it via subscription code or fall back to the already-resolved IDs.
+    if (!txn.subscription) txn.subscription = { subscription_code: psSub.subscription_code };
+    if (!txn.metadata) txn.metadata = {};
+    if (agreementId && !txn.metadata.agreement_id) txn.metadata.agreement_id = agreementId;
+    if (riderId && !txn.metadata.rider_user_id) txn.metadata.rider_user_id = riderId;
+    if (orgId && !txn.metadata.organization_id) txn.metadata.organization_id = orgId;
+    try {
+      const outcome = replayPaystackTxn(txn, orgId, actorUserId, ip);
+      if (outcome.result === 'already_recorded') results.skipped++;
+      else results.synced++;
+    } catch (err) {
+      results.errors.push({ reference: txn.reference, reason: err.message });
+      results.skipped++;
+    }
+  }
+}
+
 // ── POST /admin/paystack/sync-org ─────────────────────────────────────────────
 router.post('/paystack/sync-org', superadminOnly, async (req, res) => {
   const orgId = Number(req.body?.org_id);
@@ -1148,62 +1213,39 @@ router.post('/paystack/sync-org', superadminOnly, async (req, res) => {
   const secretKey = process.env.PAYSTACK_SECRET_KEY;
   if (!secretKey) return res.status(500).json({ error: 'PAYSTACK_SECRET_KEY not configured' });
 
-  // Include rows that have either customer code OR subscription code — customer code may be unpopulated
-  // if the subscription.create webhook was missed but the subscription itself exists on Paystack.
-  const subs = db.prepare(`SELECT * FROM rider_subscriptions
+  const results = { checked: 0, synced: 0, skipped: 0, errors: [] };
+  const seenSubCodes = new Set();
+
+  // ── Path 1: rider_subscriptions rows with Paystack codes ───────────────────
+  // These are subscriptions OnFleet created or received webhooks for.
+  const localSubs = db.prepare(`SELECT * FROM rider_subscriptions
     WHERE organization_id = ? AND (paystack_customer_code IS NOT NULL OR paystack_subscription_code IS NOT NULL)`).all(orgId);
 
-  if (!subs.length) return res.json({ checked: 0, synced: 0, skipped: 0, errors: [], note: 'No rider_subscriptions rows with Paystack codes found for this org' });
-
-  const results = { checked: 0, synced: 0, skipped: 0, errors: [] };
-
-  for (const sub of subs) {
+  for (const sub of localSubs) {
     let customerCode = sub.paystack_customer_code;
 
-    // If customer code is missing but we have a subscription code, fetch it from Paystack
-    // and backfill the DB row so future syncs are fast.
+    if (sub.paystack_subscription_code) seenSubCodes.add(sub.paystack_subscription_code);
+
     if (!customerCode && sub.paystack_subscription_code) {
       try {
         const { data: subResp } = await axios.get(`${PAYSTACK_BASE_URL}/subscription/${encodeURIComponent(sub.paystack_subscription_code)}`, {
           headers: paystackHeaders()
         });
-        customerCode = subResp.data?.customer?.customer_code;
+        const psSub = subResp.data;
+        customerCode = psSub?.customer?.customer_code;
         if (customerCode) {
-          db.prepare(`UPDATE rider_subscriptions SET paystack_customer_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+          db.prepare('UPDATE rider_subscriptions SET paystack_customer_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
             .run(customerCode, sub.id);
         }
-
-        // Paystack also returns invoices on the subscription object — process those directly
-        // so we don't need a separate transaction list call.
-        const invoices = (subResp.data?.invoices || []).filter((inv) => inv.transaction?.status === 'success');
-        results.checked += invoices.length;
-        for (const inv of invoices) {
-          const txn = inv.transaction;
-          if (!txn?.reference) { results.skipped++; continue; }
-          // Enrich the transaction object with subscription metadata so resolvePaystackTxnScope
-          // can find the agreement via subscription code.
-          if (!txn.subscription) txn.subscription = { subscription_code: sub.paystack_subscription_code };
-          try {
-            const outcome = replayPaystackTxn(txn, orgId, req.user.id, req.ip);
-            if (outcome.result === 'already_recorded') results.skipped++;
-            else results.synced++;
-          } catch (err) {
-            results.errors.push({ reference: txn.reference, reason: err.message });
-            results.skipped++;
-          }
-        }
-
-        // If we got a customer code, also do a full transaction list query to catch
-        // any charges that aren't on the subscription's invoice list.
+        if (psSub) processSubscriptionInvoices(psSub, orgId, sub.rider_user_id, sub.agreement_id, req.user.id, req.ip, results);
         if (!customerCode) continue;
       } catch (err) {
-        results.errors.push({ subscription_code: sub.paystack_subscription_code, reason: `Could not fetch subscription from Paystack: ${err.message}` });
+        results.errors.push({ subscription_code: sub.paystack_subscription_code, reason: err.message });
         continue;
       }
     }
 
     if (!customerCode) continue;
-
     let txns;
     try {
       txns = await fetchCustomerTxns(customerCode);
@@ -1211,7 +1253,6 @@ router.post('/paystack/sync-org', superadminOnly, async (req, res) => {
       results.errors.push({ customer_code: customerCode, reason: err.message });
       continue;
     }
-
     results.checked += txns.length;
     for (const txn of txns) {
       try {
@@ -1222,6 +1263,43 @@ router.post('/paystack/sync-org', superadminOnly, async (req, res) => {
         results.errors.push({ reference: txn.reference, reason: err.message });
         results.skipped++;
       }
+    }
+  }
+
+  // ── Path 2: plan-code sweep ────────────────────────────────────────────────
+  // Pull every subscription for every rider plan code from Paystack and match
+  // customers to riders in this org by email. Catches subscriptions created
+  // directly on Paystack that have no rider_subscriptions row in OnFleet.
+  const planCodes = allRiderPlanCodes();
+  for (const planCode of planCodes) {
+    let psSubs;
+    try {
+      psSubs = await fetchPlanSubscriptions(planCode);
+    } catch (err) {
+      results.errors.push({ plan_code: planCode, reason: err.message });
+      continue;
+    }
+
+    for (const psSub of psSubs) {
+      if (seenSubCodes.has(psSub.subscription_code)) continue;
+      seenSubCodes.add(psSub.subscription_code);
+
+      const match = resolveSubscriptionToAgreement(psSub, orgId);
+      if (!match) continue; // subscription doesn't belong to this org
+
+      // Backfill a rider_subscriptions row so future webhook processing works.
+      const existing = db.prepare('SELECT id FROM rider_subscriptions WHERE paystack_subscription_code = ?').get(psSub.subscription_code);
+      if (!existing) {
+        db.prepare(`INSERT OR IGNORE INTO rider_subscriptions
+          (organization_id, rider_user_id, agreement_id, paystack_subscription_code, paystack_customer_code, plan_code, weekly_amount, status)
+          VALUES (?,?,?,?,?,?,?,?)`)
+          .run(orgId, match.riderId, match.agreementId, psSub.subscription_code,
+            psSub.customer?.customer_code || null, planCode,
+            (psSub.amount || 0) / 100,
+            psSub.status === 'active' ? 'active' : 'cancelled');
+      }
+
+      processSubscriptionInvoices(psSub, orgId, match.riderId, match.agreementId, req.user.id, req.ip, results);
     }
   }
 

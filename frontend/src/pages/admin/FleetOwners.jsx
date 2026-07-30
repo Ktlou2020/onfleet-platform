@@ -455,12 +455,14 @@ export default function AdminFleetOwners() {
     setBusyKey(`sync-${org.id}`);
     try {
       const { data } = await api.post('/admin/paystack/sync-org', { org_id: org.id });
-      const { synced, checked, skipped, errors } = data;
+      const { synced, checked, skipped, errors, note } = data;
       if (synced > 0) {
         toast.success(`Synced ${synced} payment${synced !== 1 ? 's' : ''} for ${org.name} · ${checked} checked, ${skipped} already recorded`);
         await load();
+      } else if (checked === 0 && note) {
+        toast.error(`No Paystack subscription data found for ${org.name} — ${note}`);
       } else if (errors?.length) {
-        toast.error(`Sync complete — 0 new payments, ${errors.length} error${errors.length !== 1 ? 's' : ''} (${errors[0]?.reason || 'unknown'})`);
+        toast.error(`Sync complete — 0 new payments, ${errors.length} error${errors.length !== 1 ? 's' : ''}: ${errors[0]?.reason || 'unknown'}`);
       } else {
         toast.success(`All Paystack payments already recorded for ${org.name} (${checked} checked)`);
       }

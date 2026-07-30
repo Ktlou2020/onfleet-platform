@@ -1122,6 +1122,24 @@ router.post('/paystack/replay-charge', superadminOnly, async (req, res) => {
   }
 });
 
+// Fetch all successful Paystack transactions for a customer code, handling pagination.
+async function fetchCustomerTxns(customerCode) {
+  const txns = [];
+  let page = 1;
+  let hasMore = true;
+  while (hasMore) {
+    const { data: psResp } = await axios.get(`${PAYSTACK_BASE_URL}/transaction`, {
+      params: { customer: customerCode, perPage: 100, page, status: 'success' },
+      headers: paystackHeaders()
+    });
+    const batch = psResp.data || [];
+    txns.push(...batch);
+    hasMore = batch.length === 100;
+    page++;
+  }
+  return txns;
+}
+
 // ── POST /admin/paystack/sync-org ─────────────────────────────────────────────
 router.post('/paystack/sync-org', superadminOnly, async (req, res) => {
   const orgId = Number(req.body?.org_id);
@@ -1130,41 +1148,79 @@ router.post('/paystack/sync-org', superadminOnly, async (req, res) => {
   const secretKey = process.env.PAYSTACK_SECRET_KEY;
   if (!secretKey) return res.status(500).json({ error: 'PAYSTACK_SECRET_KEY not configured' });
 
-  const subs = db.prepare('SELECT * FROM rider_subscriptions WHERE organization_id = ? AND paystack_customer_code IS NOT NULL').all(orgId);
-  if (!subs.length) return res.json({ checked: 0, synced: 0, skipped: 0, errors: [] });
+  // Include rows that have either customer code OR subscription code — customer code may be unpopulated
+  // if the subscription.create webhook was missed but the subscription itself exists on Paystack.
+  const subs = db.prepare(`SELECT * FROM rider_subscriptions
+    WHERE organization_id = ? AND (paystack_customer_code IS NOT NULL OR paystack_subscription_code IS NOT NULL)`).all(orgId);
+
+  if (!subs.length) return res.json({ checked: 0, synced: 0, skipped: 0, errors: [], note: 'No rider_subscriptions rows with Paystack codes found for this org' });
 
   const results = { checked: 0, synced: 0, skipped: 0, errors: [] };
 
   for (const sub of subs) {
-    let page = 1;
-    let hasMore = true;
+    let customerCode = sub.paystack_customer_code;
 
-    while (hasMore) {
-      let txns;
+    // If customer code is missing but we have a subscription code, fetch it from Paystack
+    // and backfill the DB row so future syncs are fast.
+    if (!customerCode && sub.paystack_subscription_code) {
       try {
-        const { data: psResp } = await axios.get(`${PAYSTACK_BASE_URL}/transaction`, {
-          params: { customer: sub.paystack_customer_code, perPage: 100, page, status: 'success' },
+        const { data: subResp } = await axios.get(`${PAYSTACK_BASE_URL}/subscription/${encodeURIComponent(sub.paystack_subscription_code)}`, {
           headers: paystackHeaders()
         });
-        txns = psResp.data || [];
-        hasMore = txns.length === 100;
-        page++;
-      } catch (err) {
-        results.errors.push({ customer_code: sub.paystack_customer_code, reason: err.message });
-        break;
-      }
-
-      results.checked += txns.length;
-
-      for (const txn of txns) {
-        try {
-          const outcome = replayPaystackTxn(txn, orgId, req.user.id, req.ip);
-          if (outcome.result === 'already_recorded') results.skipped++;
-          else results.synced++;
-        } catch (err) {
-          results.errors.push({ reference: txn.reference, reason: err.message });
-          results.skipped++;
+        customerCode = subResp.data?.customer?.customer_code;
+        if (customerCode) {
+          db.prepare(`UPDATE rider_subscriptions SET paystack_customer_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+            .run(customerCode, sub.id);
         }
+
+        // Paystack also returns invoices on the subscription object — process those directly
+        // so we don't need a separate transaction list call.
+        const invoices = (subResp.data?.invoices || []).filter((inv) => inv.transaction?.status === 'success');
+        results.checked += invoices.length;
+        for (const inv of invoices) {
+          const txn = inv.transaction;
+          if (!txn?.reference) { results.skipped++; continue; }
+          // Enrich the transaction object with subscription metadata so resolvePaystackTxnScope
+          // can find the agreement via subscription code.
+          if (!txn.subscription) txn.subscription = { subscription_code: sub.paystack_subscription_code };
+          try {
+            const outcome = replayPaystackTxn(txn, orgId, req.user.id, req.ip);
+            if (outcome.result === 'already_recorded') results.skipped++;
+            else results.synced++;
+          } catch (err) {
+            results.errors.push({ reference: txn.reference, reason: err.message });
+            results.skipped++;
+          }
+        }
+
+        // If we got a customer code, also do a full transaction list query to catch
+        // any charges that aren't on the subscription's invoice list.
+        if (!customerCode) continue;
+      } catch (err) {
+        results.errors.push({ subscription_code: sub.paystack_subscription_code, reason: `Could not fetch subscription from Paystack: ${err.message}` });
+        continue;
+      }
+    }
+
+    if (!customerCode) continue;
+
+    let txns;
+    try {
+      txns = await fetchCustomerTxns(customerCode);
+    } catch (err) {
+      results.errors.push({ customer_code: customerCode, reason: err.message });
+      continue;
+    }
+
+    results.checked += txns.length;
+    for (const txn of txns) {
+      try {
+        const outcome = replayPaystackTxn(txn, orgId, req.user.id, req.ip);
+        if (outcome.result === 'already_recorded') results.skipped++;
+        else results.synced++;
+      } catch (err) {
+        results.errors.push({ reference: txn.reference, reason: err.message });
+        results.skipped++;
       }
     }
   }

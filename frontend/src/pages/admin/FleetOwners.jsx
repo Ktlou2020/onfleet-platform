@@ -16,6 +16,185 @@ const EMAIL_TEMPLATES = [
   { key: '__custom__',      label: 'Custom message…' },
 ];
 
+function RecordPaymentModal({ org, onClose }) {
+  const [step, setStep] = useState('loading'); // loading | form | submitting
+  const [agreements, setAgreements] = useState([]);
+  const [selectedAgreementId, setSelectedAgreementId] = useState('');
+  const [schedule, setSchedule] = useState([]);
+  const [loadingSchedule, setLoadingSchedule] = useState(false);
+  const [selectedWeekIds, setSelectedWeekIds] = useState(new Set());
+  const [amount, setAmount] = useState('');
+  const [amountManual, setAmountManual] = useState(false);
+  const [reference, setReference] = useState('');
+  const [paidAt, setPaidAt] = useState(new Date().toISOString().slice(0, 10));
+
+  useEffect(() => {
+    api.get(`/admin/org-agreements?org_id=${org.id}`)
+      .then(({ data }) => { setAgreements(data); setStep('form'); })
+      .catch(() => { toast.error('Could not load agreements'); onClose(); });
+  }, [org.id]);
+
+  useEffect(() => {
+    if (!selectedAgreementId) { setSchedule([]); setSelectedWeekIds(new Set()); return; }
+    setLoadingSchedule(true);
+    api.get(`/admin/agreement-schedule?agreement_id=${selectedAgreementId}`)
+      .then(({ data }) => { setSchedule(data); setSelectedWeekIds(new Set()); setAmountManual(false); setLoadingSchedule(false); })
+      .catch(() => { setLoadingSchedule(false); toast.error('Could not load schedule'); });
+  }, [selectedAgreementId]);
+
+  const unpaidWeeks = schedule.filter(w => w.status !== 'paid' && w.status !== 'waived');
+  const selectedTotal = unpaidWeeks
+    .filter(w => selectedWeekIds.has(w.id))
+    .reduce((s, w) => +(s + w.amount_due - w.amount_paid).toFixed(2), 0);
+
+  useEffect(() => {
+    if (!amountManual && selectedWeekIds.size > 0) setAmount(selectedTotal.toFixed(2));
+  }, [selectedTotal, amountManual, selectedWeekIds.size]);
+
+  const toggleWeek = (id) => {
+    setSelectedWeekIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+    setAmountManual(false);
+  };
+
+  const gross = Math.max(0, Number(amount) || 0);
+  const platformFee = +(gross * 0.035 + 1).toFixed(2);
+  const walletCredit = +(gross - platformFee).toFixed(2);
+
+  const submit = async () => {
+    if (!selectedAgreementId) { toast.error('Select an agreement'); return; }
+    if (!gross) { toast.error('Enter an amount'); return; }
+    setStep('submitting');
+    try {
+      const body = {
+        org_id: org.id,
+        agreement_id: Number(selectedAgreementId),
+        amount: gross,
+        paid_at: paidAt ? new Date(paidAt).toISOString() : undefined,
+        schedule_week_ids: selectedWeekIds.size > 0 ? [...selectedWeekIds] : undefined,
+      };
+      if (reference.trim()) body.reference = reference.trim();
+      const { data } = await api.post('/admin/record-paystack-payment', body);
+      toast.success(`R${gross.toFixed(2)} recorded · ref: ${data.reference} · wallet +R${data.net_to_wallet?.toFixed(2) || walletCredit.toFixed(2)}`);
+      onClose(true);
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Failed to record payment');
+      setStep('form');
+    }
+  };
+
+  if (step === 'loading' || step === 'submitting') {
+    return (
+      <Modal title={`Record Paystack Payment · ${org.name}`} onClose={undefined}>
+        <div style={{ textAlign: 'center', padding: 32 }}>
+          <RefreshCw size={22} className="spin" style={{ marginBottom: 10 }} />
+          <p className="text-sm muted" style={{ margin: 0 }}>
+            {step === 'loading' ? 'Loading agreements…' : 'Recording payment…'}
+          </p>
+        </div>
+      </Modal>
+    );
+  }
+
+  return (
+    <Modal title={`Record Paystack Payment · ${org.name}`} onClose={() => onClose()}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div>
+          <label className="text-sm" style={{ display: 'block', marginBottom: 4 }}>Agreement *</label>
+          <select className="form-control" value={selectedAgreementId} onChange={e => setSelectedAgreementId(e.target.value)}>
+            <option value="">Select agreement…</option>
+            {agreements.map(ag => (
+              <option key={ag.id} value={ag.id}>
+                {ag.agreement_number} · {ag.rider_name} · {ag.bike_reg} ({ag.status})
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {selectedAgreementId && (
+          <div>
+            <label className="text-sm" style={{ display: 'block', marginBottom: 4 }}>
+              Payment weeks <span className="muted">(select weeks to mark paid)</span>
+            </label>
+            {loadingSchedule ? (
+              <p className="text-sm muted">Loading schedule…</p>
+            ) : unpaidWeeks.length === 0 ? (
+              <p className="text-sm muted">No unpaid weeks for this agreement.</p>
+            ) : (
+              <div style={{ maxHeight: 180, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 10px' }}>
+                {unpaidWeeks.map(w => {
+                  const owed = +(w.amount_due - w.amount_paid).toFixed(2);
+                  return (
+                    <label key={w.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0', cursor: 'pointer' }}>
+                      <input type="checkbox" checked={selectedWeekIds.has(w.id)} onChange={() => toggleWeek(w.id)} />
+                      <span className="text-sm">
+                        Week {w.week_number}
+                        {w.due_date ? ` · ${new Date(w.due_date).toLocaleDateString('en-ZA')}` : ''}
+                        {' · '}R{owed.toFixed(2)} owed
+                        {w.status === 'partial' && <span className="muted"> (partial)</span>}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+            {selectedWeekIds.size > 0 && (
+              <p className="text-sm muted" style={{ marginTop: 4 }}>
+                {selectedWeekIds.size} week{selectedWeekIds.size !== 1 ? 's' : ''} selected · R{selectedTotal.toFixed(2)} total owed
+              </p>
+            )}
+          </div>
+        )}
+
+        <div>
+          <label className="text-sm" style={{ display: 'block', marginBottom: 4 }}>Amount (ZAR) *</label>
+          <input
+            className="form-control"
+            type="number" step="0.01" min="0.01"
+            placeholder="850.00"
+            value={amount}
+            onChange={e => { setAmount(e.target.value); setAmountManual(true); }}
+          />
+        </div>
+
+        <div>
+          <label className="text-sm" style={{ display: 'block', marginBottom: 4 }}>Date of payment *</label>
+          <input className="form-control" type="date" value={paidAt} onChange={e => setPaidAt(e.target.value)} />
+        </div>
+
+        <div>
+          <label className="text-sm" style={{ display: 'block', marginBottom: 4 }}>
+            Paystack reference <span className="muted">(optional — auto-generated if blank)</span>
+          </label>
+          <input
+            className="form-control"
+            placeholder="e.g. txn_abc123"
+            value={reference}
+            onChange={e => setReference(e.target.value)}
+            style={{ fontFamily: 'monospace', fontSize: 13 }}
+          />
+        </div>
+
+        {gross > 0 && (
+          <div style={{ background: 'var(--surface-2)', borderRadius: 6, padding: '10px 14px', fontSize: 13 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span className="muted">Gross</span><span>R{gross.toFixed(2)}</span></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span className="muted">Platform fee (3.5% + R1)</span><span>−R{platformFee.toFixed(2)}</span></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 600, marginTop: 4, borderTop: '1px solid var(--border)', paddingTop: 4 }}>
+              <span>Wallet credit</span><span>R{walletCredit.toFixed(2)}</span>
+            </div>
+          </div>
+        )}
+
+        <div className="row" style={{ gap: 8, marginTop: 2 }}>
+          <button className="btn btn-sm" disabled={!selectedAgreementId || !gross} onClick={submit}>
+            Record payment
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={() => onClose()}>Cancel</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function EmailModal({ orgs, onClose }) {
   const [templateKey, setTemplateKey] = useState('demo_invite');
   const [customSubject, setCustomSubject] = useState('');
@@ -452,6 +631,7 @@ export default function AdminFleetOwners() {
   };
 
   const [syncModal, setSyncModal] = useState(null); // { org, subCodesText, agreementNum }
+  const [recordPaymentOrg, setRecordPaymentOrg] = useState(null);
 
   const syncPaystack = async (org, subscriptionCodes, hintAgreementNumber) => {
     setBusyKey(`sync-${org.id}`);
@@ -528,6 +708,12 @@ export default function AdminFleetOwners() {
         />
       )}
       {emailModal && <EmailModal orgs={emailModal} onClose={() => setEmailModal(null)} />}
+      {recordPaymentOrg && (
+        <RecordPaymentModal
+          org={recordPaymentOrg}
+          onClose={async (refresh) => { setRecordPaymentOrg(null); if (refresh) await load(); }}
+        />
+      )}
       {syncModal && (
         <Modal title={`Sync Paystack · ${syncModal.org.name}`} onClose={syncModal.syncing ? undefined : () => setSyncModal(null)}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -726,6 +912,14 @@ export default function AdminFleetOwners() {
                         style={{ display: 'flex', alignItems: 'center', gap: 4 }}
                       >
                         <RefreshCw size={13} /> Sync by codes
+                      </button>
+                      <button
+                        className="btn btn-sm btn-secondary"
+                        onClick={() => setRecordPaymentOrg(org)}
+                        title="Manually record a Paystack payment for this fleet owner"
+                        style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+                      >
+                        <CreditCard size={13} /> Record PS payment
                       </button>
                       <button
                         className={`btn btn-sm ${isExpanded ? '' : 'btn-secondary'}`}

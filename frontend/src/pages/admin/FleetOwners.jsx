@@ -104,7 +104,7 @@ function RecordPaymentModal({ org, onClose }) {
             <option value="">Select agreement…</option>
             {agreements.map(ag => (
               <option key={ag.id} value={ag.id}>
-                {ag.agreement_number} · {ag.rider_name} · {ag.bike_reg} ({ag.status})
+                {ag.agreement_no} · {ag.rider_name} · {ag.bike_reg} ({ag.status})
               </option>
             ))}
           </select>

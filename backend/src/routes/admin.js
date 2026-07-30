@@ -1070,8 +1070,11 @@ function replayPaystackTxn(txn, hintOrgId, actorUserId, ip) {
   const agreement = db.prepare('SELECT status FROM agreements WHERE id = ?').get(agreementId);
   if (!agreement) throw new Error('Agreement not found');
 
-  const fee = +(grossAmountZAR * 0.015).toFixed(2);
+  // Use same fee formula as creditFleetWalletAdmin so the payment record matches the wallet credit.
+  const fee = +(grossAmountZAR * 0.035 + 1).toFixed(2);
   const net = +(grossAmountZAR - fee).toFixed(2);
+  // Use the actual Paystack payment date so payments appear correctly in history.
+  const paidAt = txn.paid_at || txn.created_at || new Date().toISOString();
 
   let paymentId;
   db.transaction(() => {
@@ -1079,8 +1082,8 @@ function replayPaystackTxn(txn, hintOrgId, actorUserId, ip) {
     if (alreadyPs) { paymentId = alreadyPs.id; return; }
 
     const info = db.prepare(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, paystack_reference, status, fee_amount, net_amount, paid_at, notes)
-      VALUES (?,?,?,'ZAR','paystack',?,?,'success',?,?,CURRENT_TIMESTAMP,'Synced from Paystack admin tool')`)
-      .run(agreementId, riderId, grossAmountZAR, reference, reference, fee, net);
+      VALUES (?,?,?,'ZAR','paystack',?,?,'success',?,?,?,'Synced from Paystack admin tool')`)
+      .run(agreementId, riderId, grossAmountZAR, reference, reference, fee, net, paidAt);
     paymentId = info.lastInsertRowid;
   })();
 
@@ -1306,7 +1309,7 @@ async function processSubscriptionInvoices(psSub, orgId, riderId, agreementId, a
 }
 
 // Fetch a single Paystack subscription by code and process its invoices.
-async function syncOneSubscription(subCode, orgId, actorUserId, ip, results, seenSubCodes) {
+async function syncOneSubscription(subCode, orgId, actorUserId, ip, results, seenSubCodes, hintAgreementId = null) {
   if (seenSubCodes.has(subCode)) return;
   seenSubCodes.add(subCode);
 
@@ -1343,11 +1346,20 @@ async function syncOneSubscription(subCode, orgId, actorUserId, ip, results, see
   }
 
   // Resolve org match via email if we don't have a local row.
+  // Fall back to hintAgreementId when email lookup fails (Paystack email ≠ OnFleet email).
   let riderId = localRow?.rider_user_id || null;
   let agreementId = localRow?.agreement_id || null;
   if (!riderId || !agreementId) {
     const match = resolveSubscriptionToAgreement(psSub, orgId);
     if (match) { riderId = riderId || match.riderId; agreementId = agreementId || match.agreementId; }
+  }
+  if (!agreementId && hintAgreementId) {
+    agreementId = hintAgreementId;
+    if (!riderId) {
+      const ag = db.prepare('SELECT user_id FROM agreements WHERE id = ?').get(agreementId);
+      if (ag) riderId = ag.user_id;
+    }
+    diag.hint_agreement_used = true;
   }
   diag.rider_id = riderId;
   diag.agreement_id = agreementId;
@@ -1392,16 +1404,25 @@ async function syncOneSubscription(subCode, orgId, actorUserId, ip, results, see
 }
 
 // ── POST /admin/paystack/sync-org ─────────────────────────────────────────────
-// Body: { org_id, subscription_codes?: string[] }
-// Pass subscription_codes to sync specific subscriptions directly (bypasses all
-// env-var and DB lookups — useful when Paystack has subscriptions that OnFleet
-// has no record of).
+// Body: { org_id, subscription_codes?: string[], hint_agreement_number?: string }
+// Pass subscription_codes to sync specific subscriptions directly.
+// Pass hint_agreement_number (e.g. "OF-2026-895786") when the Paystack customer
+// email doesn't match OnFleet records — bypasses email-based agreement resolution.
 router.post('/paystack/sync-org', superadminOnly, async (req, res) => {
   const orgId = Number(req.body?.org_id);
   if (!Number.isInteger(orgId) || orgId <= 0) return res.status(400).json({ error: 'org_id is required' });
 
   const secretKey = process.env.PAYSTACK_SECRET_KEY;
   if (!secretKey) return res.status(500).json({ error: 'PAYSTACK_SECRET_KEY not configured' });
+
+  // Resolve optional agreement hint so the caller can bypass email-match failures.
+  let hintAgreementId = null;
+  const hintAgreementNumber = req.body?.hint_agreement_number ? String(req.body.hint_agreement_number).trim() : null;
+  if (hintAgreementNumber) {
+    const ag = db.prepare('SELECT id FROM agreements WHERE agreement_number = ?').get(hintAgreementNumber);
+    if (ag) hintAgreementId = ag.id;
+    else return res.status(400).json({ error: `Agreement not found: ${hintAgreementNumber}` });
+  }
 
   const results = { checked: 0, synced: 0, skipped: 0, errors: [], debug: {} };
   const seenSubCodes = new Set();
@@ -1415,7 +1436,7 @@ router.post('/paystack/sync-org', superadminOnly, async (req, res) => {
     results.debug.explicit_codes = explicitCodes;
     for (const code of explicitCodes) {
       try {
-        await syncOneSubscription(code, orgId, req.user.id, req.ip, results, seenSubCodes);
+        await syncOneSubscription(code, orgId, req.user.id, req.ip, results, seenSubCodes, hintAgreementId);
       } catch (err) {
         results.errors.push({ subscription_code: code, reason: err.message });
       }

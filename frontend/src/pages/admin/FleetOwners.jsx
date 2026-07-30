@@ -460,18 +460,31 @@ export default function AdminFleetOwners() {
       if (subscriptionCodes?.length) body.subscription_codes = subscriptionCodes;
       const { data } = await api.post('/admin/paystack/sync-org', body);
       const { synced, checked, skipped, errors, debug } = data;
-      console.log('[paystack sync debug]', debug);
+      console.log('[paystack sync debug]', JSON.stringify(debug, null, 2));
+      if (errors?.length) console.error('[paystack sync errors]', errors);
       if (synced > 0) {
         toast.success(`Synced ${synced} payment${synced !== 1 ? 's' : ''} for ${org.name} · ${checked} checked, ${skipped} already recorded`);
         await load();
+      } else if (errors?.length && checked === 0) {
+        toast.error(`Sync error: ${errors[0]?.reason || 'unknown'} — check console for details`, { duration: 8000 });
       } else if (errors?.length) {
         toast.error(`Sync — 0 new · ${errors.length} error${errors.length !== 1 ? 's' : ''}: ${errors[0]?.reason || 'unknown'}`);
-        console.error('[paystack sync errors]', errors);
       } else if (checked === 0) {
-        const planInfo = debug?.plan_codes_found?.length
-          ? `Plan codes checked: ${debug.plan_codes_found.join(', ')}`
-          : 'No fleet plan codes configured (PAYSTACK_FLEET_PLAN_xxx env vars missing)';
-        toast.error(`0 transactions found for ${org.name}. ${planInfo}. Use "Sync by codes" to enter subscription codes directly.`, { duration: 8000 });
+        const usingCodes = subscriptionCodes?.length > 0;
+        if (usingCodes && debug?.subscriptions?.length) {
+          const sub = debug.subscriptions[0];
+          const detail = sub.error
+            ? `Paystack error: ${sub.error}`
+            : sub.ps_found
+              ? `Found on Paystack (${sub.invoice_count} invoices, ${sub.txn_count} txns) · customer: ${sub.customer_email || 'no email'} · email match: ${sub.email_match ? sub.email_match.name : 'none'}`
+              : `Not found on Paystack — check the subscription codes`;
+          toast.error(`0 transactions for ${org.name}. ${detail}. Check browser console for full detail.`, { duration: 10000 });
+        } else {
+          const planInfo = debug?.plan_codes_found?.length
+            ? `Plan codes checked: ${debug.plan_codes_found.join(', ')}`
+            : 'No fleet plan codes configured (PAYSTACK_FLEET_PLAN_xxx env vars missing)';
+          toast.error(`0 transactions found for ${org.name}. ${planInfo}. Use "Sync by codes" to enter subscription codes directly.`, { duration: 8000 });
+        }
       } else {
         toast.success(`All Paystack payments already recorded for ${org.name} (${checked} checked)`);
       }

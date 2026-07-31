@@ -1225,7 +1225,7 @@ async function fetchCustomerTxns(customerCode) {
 // All configured rider plan codes (mirrors RIDER_PLAN_AMOUNTS in payments.js).
 const RIDER_PLAN_AMOUNTS = [500, 650, 700, 750, 800, 850, 1000, 1200];
 function allRiderPlanCodes() {
-  return RIDER_PLAN_AMOUNTS.map((amt) => process.env[`PAYSTACK_FLEET_PLAN_${amt}`]).filter(Boolean);
+  return RIDER_PLAN_AMOUNTS.map((amt) => process.env[`PAYSTACK_FlEET_PLAN_${amt}`]).filter(Boolean);
 }
 
 // Fetch every Paystack subscription for a given plan code, paginated.

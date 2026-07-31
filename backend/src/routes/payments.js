@@ -475,8 +475,9 @@ const RIDER_PLAN_AMOUNTS = [500, 650, 700, 750, 800, 850, 1000, 1200];
 
 function isRiderPlanCode(planCode) {
   return RIDER_PLAN_AMOUNTS.some((amt) => {
-    const code = process.env[`PAYSTACK_FLEET_PLAN_${amt}`];
-    return code && code === planCode;
+    const riderCode = process.env[`PAYSTACK_RIDER_PLAN_${amt}`];
+    const fleetCode = process.env[`PAYSTACK_FlEET_PLAN_${amt}`];
+    return (riderCode && riderCode === planCode) || (fleetCode && fleetCode === planCode);
   });
 }
 

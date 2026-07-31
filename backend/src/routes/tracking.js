@@ -208,11 +208,19 @@ router.post('/devices/:id/commands', authRequired, adminOnly, async (req, res) =
   );
   const cmdId = cmdRows[0].id;
   const sentNow = teltonikaServer.sendCommand(device.imei, cmdId, command);
+  let woke = false;
+  if (!sentNow && command === 'getgps') {
+    woke = teltonikaServer.sendWakePacket(device.imei);
+  }
   res.json({
     id: cmdId,
     command,
     status: sentNow ? 'sent' : 'pending',
-    note: sentNow ? 'Command sent to device' : 'Device offline — command will be sent when it reconnects',
+    note: sentNow
+      ? 'Command sent to device'
+      : woke
+        ? 'Wake signal sent — device will respond shortly'
+        : 'Device offline — command queued for next connection',
   });
 });
 

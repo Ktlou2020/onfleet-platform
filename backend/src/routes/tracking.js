@@ -20,14 +20,26 @@ const PRESET_COMMANDS = {
   get_param:      () => 'getparam 2004',
 };
 
-// A device is "online" if it has an active socket OR was seen within the last 10 minutes.
-// FMB920/FMB965 units connect briefly to push data then drop the TCP link, so we apply
-// a grace window so they don't flicker offline between transmissions.
-const ONLINE_GRACE_MS = 10 * 60 * 1000;
+// Device status thresholds.
+// FMB920/FMB965 connect briefly to push data then drop the TCP link.
+// "active"   = live socket open OR last seen < 10 min (normal reporting cadence)
+// "sleeping" = last seen 10 min – 1 hour (idle/stationary sleep mode)
+// "offline"  = last seen > 1 hour or never
+const ACTIVE_GRACE_MS   = 10 * 60 * 1000;  // 10 min
+const SLEEPING_GRACE_MS = 60 * 60 * 1000;  // 1 hour
+
+function deviceStatus(imei, lastSeenAt, connectedImeis) {
+  if (connectedImeis.includes(imei)) return 'active';
+  if (!lastSeenAt) return 'offline';
+  const age = Date.now() - new Date(lastSeenAt).getTime();
+  if (age < ACTIVE_GRACE_MS)   return 'active';
+  if (age < SLEEPING_GRACE_MS) return 'sleeping';
+  return 'offline';
+}
+
 function isOnline(imei, lastSeenAt, connectedImeis) {
-  if (connectedImeis.includes(imei)) return 1;
-  if (lastSeenAt && (Date.now() - new Date(lastSeenAt).getTime()) < ONLINE_GRACE_MS) return 1;
-  return 0;
+  const s = deviceStatus(imei, lastSeenAt, connectedImeis);
+  return s !== 'offline' ? 1 : 0;
 }
 
 // All known alert types with defaults
@@ -67,6 +79,7 @@ router.get('/devices', authRequired, adminOnly, async (req, res) => {
   const bikeMap = getBikeMap(bikeIds);
   const result = devices.map(d => ({
     ...d,
+    device_status: deviceStatus(d.imei, d.last_seen_at, connected),
     connected: isOnline(d.imei, d.last_seen_at, connected),
     ...(d.bike_id && bikeMap[d.bike_id] ? {
       registration: bikeMap[d.bike_id].registration,
@@ -98,8 +111,8 @@ router.get('/devices/:id', authRequired, adminOnly, async (req, res) => {
     FROM bikes b WHERE b.id = ?
   `).get(d.bike_id) : null;
   const connImeis = teltonikaServer.getConnectedIMEIs();
-  const connected = isOnline(d.imei, d.last_seen_at, connImeis);
-  res.json({ ...d, connected, ...(bike || {}) });
+  const status = deviceStatus(d.imei, d.last_seen_at, connImeis);
+  res.json({ ...d, device_status: status, connected: status !== 'offline' ? 1 : 0, ...(bike || {}) });
 });
 
 router.post('/devices', authRequired, adminOnly, async (req, res) => {
@@ -262,6 +275,7 @@ router.get('/map', authRequired, adminOnly, async (req, res) => {
         satellites: p.satellites, altitude: p.altitude, io_data: p.io_data,
         rider_name: b.rider_name, rider_phone: b.rider_phone,
         rider_address: b.rider_address, rider_city: b.rider_city,
+        device_status: deviceStatus(d.imei, d.last_seen_at, connected),
         connected: isOnline(d.imei, d.last_seen_at, connected),
       };
     });

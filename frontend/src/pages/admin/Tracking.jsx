@@ -6,7 +6,7 @@ import {
   Wifi, WifiOff, Zap, ZapOff, Radio, Info, RefreshCw, Plus, Trash2,
   CheckCircle, Clock, XCircle, AlertCircle, X, Search, Layers,
   Maximize2, Navigation, Gauge, Mountain, MapPin, Activity,
-  Shield, Bell, Route, BellOff, Pencil, Settings, Mail, Users,
+  Shield, Bell, Route, BellOff, Pencil, Settings, Mail, Users, Moon,
   Battery, BatteryLow, BatteryMedium, BatteryFull, BatteryCharging,
   Signal, SignalZero, SignalLow, SignalMedium, SignalHigh, Satellite,
 } from 'lucide-react';
@@ -50,9 +50,17 @@ function speedColor(kmh) {
 }
 
 function deviceIcon(d) {
-  if (!d.connected) return makeIcon('#94a3b8');
+  const status = d.device_status || (d.connected ? 'active' : 'offline');
+  if (status === 'offline') return makeIcon('#94a3b8');
+  if (status === 'sleeping') return makeIcon('#6366f1'); // indigo — sleeping
   const moving = (Number(d.speed_kmh) || 0) > 5;
   return d.ignition ? makeIcon('#22c55e', moving) : makeIcon('#f97316');
+}
+
+function DeviceStatusIcon({ status, size = 12 }) {
+  if (status === 'sleeping') return <Moon size={size} color="#6366f1" />;
+  if (status === 'active')   return <Wifi size={size} color="#22c55e" />;
+  return <WifiOff size={size} color="#94a3b8" />;
 }
 
 function FlyTo({ position }) {
@@ -443,10 +451,12 @@ export default function Tracking() {
   const [detailTab, setDetailTab] = useState('activity');
   const [trips,     setTrips]     = useState([]);
 
-  const selectedRef       = useRef(null);
-  const mountedRef        = useRef(true);
-  const geocodeVersionRef = useRef(0);
-  const selectVersionRef  = useRef(0);
+  const selectedRef         = useRef(null);
+  const mountedRef          = useRef(true);
+  const geocodeVersionRef   = useRef(0);
+  const selectVersionRef    = useRef(0);
+  const doDeviceRefreshRef  = useRef(null);
+  const scheduleNextPollRef = useRef(null);
 
   useEffect(() => { selectedRef.current = selected; }, [selected]);
   useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
@@ -582,11 +592,18 @@ export default function Tracking() {
               if (!mountedRef.current) continue;
 
               if (evtType === 'ping') {
+                const wasAsleep = Date.now() - lastSsePingRef.current > 10 * 60 * 1000;
+                lastSsePingRef.current = Date.now();
+                if (wasAsleep) {
+                  // Device just woke up — refresh device list immediately and reset to 10 s cadence
+                  doDeviceRefreshRef.current?.();
+                  scheduleNextPollRef.current?.(true);
+                }
                 setMapDevices(prev => {
                   const idx = prev.findIndex(d => d.id === p.device_id);
                   if (idx === -1) return prev;
                   const next = [...prev];
-                  next[idx] = { ...next[idx], lat: p.lat, lng: p.lng, speed_kmh: p.speed, heading: p.heading, altitude: p.altitude, satellites: p.satellites, ignition: p.ignition, last_location_at: new Date(p.ts).toISOString(), connected: 1, gsm_signal: p.gsm_signal, battery_mv: p.battery_mv, ext_voltage_mv: p.ext_voltage_mv };
+                  next[idx] = { ...next[idx], lat: p.lat, lng: p.lng, speed_kmh: p.speed, heading: p.heading, altitude: p.altitude, satellites: p.satellites, ignition: p.ignition, last_location_at: new Date(p.ts).toISOString(), connected: 1, device_status: 'active', gsm_signal: p.gsm_signal, battery_mv: p.battery_mv, ext_voltage_mv: p.ext_voltage_mv };
                   return next;
                 });
                 if (selectedRef.current === p.device_id) {
@@ -624,29 +641,50 @@ export default function Tracking() {
     return () => { abort.abort(); clearTimeout(retryTimer); setSseOnline(false); };
   }, []);
 
-  // ── 3-second device list refresh (connected status, io data) ────
-  useEffect(() => {
-    const tick = setInterval(async () => {
+  // ── Adaptive device-list refresh ─────────────────────────────────
+  // Active devices: poll every 10 s. When no movement is detected for
+  // 10 min (last SSE ping is old), switch to hourly polling so we don't
+  // hammer the server while everything is sleeping. Any SSE ping with
+  // movement triggers an immediate refresh and resets to 10 s cadence.
+  const lastSsePingRef  = useRef(0);       // epoch ms of last movement ping
+  const adaptivePollRef = useRef(null);    // current timeout handle
+
+  const doDeviceRefresh = useCallback(async () => {
+    if (!mountedRef.current || document.hidden) return;
+    try {
+      const [{ data: devs }, { data: map }] = await Promise.all([
+        api.get('/tracking/devices'),
+        api.get('/tracking/map'),
+      ]);
       if (!mountedRef.current) return;
-      if (document.hidden) return; // don't poll when tab is not visible
-      try {
-        const [{ data: devs }, { data: map }] = await Promise.all([
-          api.get('/tracking/devices'),
-          api.get('/tracking/map'),
-        ]);
-        if (!mountedRef.current) return;
-        setDevices(devs);
-        // Merge map refresh without overwriting SSE-written fields that are newer
-        setMapDevices(prev => map.map(incoming => {
-          const live = prev.find(p => p.id === incoming.id);
-          if (!live) return incoming;
-          // Keep SSE-pushed fields if they exist (SSE gives real-time; API gives stale lat/lng)
-          return { ...incoming, lat: live.lat ?? incoming.lat, lng: live.lng ?? incoming.lng, speed_kmh: live.speed_kmh ?? incoming.speed_kmh, heading: live.heading ?? incoming.heading, satellites: live.satellites ?? incoming.satellites, ignition: live.ignition ?? incoming.ignition, gsm_signal: live.gsm_signal ?? incoming.gsm_signal, battery_mv: live.battery_mv ?? incoming.battery_mv, ext_voltage_mv: live.ext_voltage_mv ?? incoming.ext_voltage_mv };
-        }));
-      } catch { /* silent */ }
-    }, 10000);
-    return () => clearInterval(tick);
+      setDevices(devs);
+      setMapDevices(prev => map.map(incoming => {
+        const live = prev.find(p => p.id === incoming.id);
+        if (!live) return incoming;
+        return { ...incoming, lat: live.lat ?? incoming.lat, lng: live.lng ?? incoming.lng, speed_kmh: live.speed_kmh ?? incoming.speed_kmh, heading: live.heading ?? incoming.heading, satellites: live.satellites ?? incoming.satellites, ignition: live.ignition ?? incoming.ignition, gsm_signal: live.gsm_signal ?? incoming.gsm_signal, battery_mv: live.battery_mv ?? incoming.battery_mv, ext_voltage_mv: live.ext_voltage_mv ?? incoming.ext_voltage_mv };
+      }));
+    } catch { /* silent */ }
   }, []);
+
+  const scheduleNextPoll = useCallback((forceActive = false) => {
+    clearTimeout(adaptivePollRef.current);
+    const timeSincePing = Date.now() - lastSsePingRef.current;
+    const sleeping = !forceActive && timeSincePing > 10 * 60 * 1000;
+    const delay = sleeping ? 60 * 60 * 1000 : 10_000;
+    adaptivePollRef.current = setTimeout(async () => {
+      await doDeviceRefresh();
+      scheduleNextPoll();
+    }, delay);
+  }, [doDeviceRefresh]);
+
+  // Keep refs in sync so the SSE closure (deps=[]) can call latest versions
+  useEffect(() => { doDeviceRefreshRef.current = doDeviceRefresh; }, [doDeviceRefresh]);
+  useEffect(() => { scheduleNextPollRef.current = scheduleNextPoll; }, [scheduleNextPoll]);
+
+  useEffect(() => {
+    scheduleNextPoll(true);
+    return () => clearTimeout(adaptivePollRef.current);
+  }, [scheduleNextPoll]);
 
   // ── trail ────────────────────────────────────────────────────────
 
@@ -937,14 +975,17 @@ export default function Tracking() {
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    {d.connected ? <Wifi size={12} color="#22c55e" /> : <WifiOff size={12} color="#94a3b8" />}
+                    <DeviceStatusIcon status={d.device_status} size={12} />
                     <span style={{ fontWeight: 600, fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {d.label || d.registration || d.imei}
                     </span>
-                    {d.connected && kmh > 5 && (
+                    {d.device_status === 'sleeping' && (
+                      <span style={{ fontSize: 10, color: '#6366f1', fontWeight: 600, flexShrink: 0 }}>Sleep</span>
+                    )}
+                    {d.device_status === 'active' && kmh > 5 && (
                       <span style={{ fontSize: 10, color: speedColor(kmh), fontWeight: 700, flexShrink: 0 }}>{Math.round(kmh)} km/h</span>
                     )}
-                    {d.connected && kmh <= 5 && mapD?.ignition !== null && (
+                    {d.device_status === 'active' && kmh <= 5 && mapD?.ignition !== null && (
                       <span style={{ fontSize: 10, color: mapD?.ignition ? '#22c55e' : 'var(--muted)', flexShrink: 0 }}>{mapD?.ignition ? 'IGN' : 'idle'}</span>
                     )}
                     <button className="btn btn-sm" style={{ padding: '2px 4px', opacity: 0.45, background: 'transparent', minWidth: 0 }}
@@ -954,7 +995,7 @@ export default function Tracking() {
                   {d.organization_name && <div style={{ fontSize: 10, color: 'var(--primary)', marginTop: 2, paddingLeft: 18, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.organization_name}</div>}
                   {!d.bike_id && <div style={{ fontSize: 10, color: '#f97316', marginTop: 2, paddingLeft: 18 }}>⚠ No bike linked — positions not stored</div>}
                   <div style={{ fontSize: 10, marginTop: 2, paddingLeft: 18, display: 'flex', alignItems: 'center', gap: 6 }}>
-                    {d.connected ? (
+                    {d.device_status === 'active' ? (
                       <>
                         <span style={{ color: '#22c55e' }}>● Online · {d.model}</span>
                         <span style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 2 }}>
@@ -965,6 +1006,8 @@ export default function Tracking() {
                           </>); })()}
                         </span>
                       </>
+                    ) : d.device_status === 'sleeping' ? (
+                      <span style={{ color: '#6366f1' }}>◐ Sleeping · last seen {d.last_seen_at ? fmtSASTshort(d.last_seen_at) : 'never'}</span>
                     ) : (
                       <span style={{ color: 'var(--muted)' }}>Last seen {d.last_seen_at ? fmtSASTshort(d.last_seen_at) : 'never'}</span>
                     )}
@@ -975,7 +1018,10 @@ export default function Tracking() {
           </div>
 
           <div style={{ padding: '7px 12px', borderTop: '1px solid var(--border)', background: 'var(--surface)', display: 'flex', gap: 12, fontSize: 11, color: 'var(--muted)' }}>
-            <span><span style={{ color: '#22c55e', fontWeight: 700 }}>{devices.filter(d => d.connected).length}</span> online</span>
+            <span><span style={{ color: '#22c55e', fontWeight: 700 }}>{devices.filter(d => d.device_status === 'active').length}</span> online</span>
+            {devices.some(d => d.device_status === 'sleeping') && (
+              <span><span style={{ color: '#6366f1', fontWeight: 700 }}>{devices.filter(d => d.device_status === 'sleeping').length}</span> sleeping</span>
+            )}
             <span><span style={{ color: 'var(--text)', fontWeight: 600 }}>{devices.length}</span> total</span>
           </div>
         </>}
@@ -1130,9 +1176,9 @@ export default function Tracking() {
                 <strong>{d.label || d.registration || d.imei}</strong><br />
                 {d.organization_name && <><span style={{ color: '#1E88D1' }}>{d.organization_name}</span><br /></>}
                 {d.bike_model} {d.registration}<br />
-                {d.connected ? (
+                {d.device_status === 'active' ? (
                   <>🟢 Online<br />{Math.round(d.speed_kmh || 0)} km/h · {d.heading || 0}° · {d.satellites || '?'} sats</>
-                ) : '⚫ Offline'}<br />
+                ) : d.device_status === 'sleeping' ? '🟣 Sleeping' : '⚫ Offline'}<br />
                 {d.last_location_at ? fmtSAST(d.last_location_at) : '—'}
               </Popup>
             </Marker>
@@ -1174,7 +1220,7 @@ export default function Tracking() {
         {/* Legend */}
         <div style={{ position: 'absolute', bottom: 30, right: 10, zIndex: 1000, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 11, backdropFilter: 'blur(8px)' }}>
           <div style={{ fontWeight: 700, color: 'var(--muted)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 6 }}>Markers</div>
-          {[['#22c55e', 'Online · ignition on'], ['#f97316', 'Online · idle'], ['#94a3b8', 'Offline']].map(([c, l]) => (
+          {[['#22c55e', 'Online · ignition on'], ['#f97316', 'Online · idle'], ['#6366f1', 'Sleeping'], ['#94a3b8', 'Offline']].map(([c, l]) => (
             <div key={l} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
               <div style={{ width: 10, height: 10, borderRadius: '50%', background: c, flexShrink: 0 }} />{l}
             </div>
@@ -1197,7 +1243,7 @@ export default function Tracking() {
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
-                  {selectedDevice.connected ? <Wifi size={13} color="#22c55e" /> : <WifiOff size={13} color="#94a3b8" />}
+                  <DeviceStatusIcon status={selectedDevice.device_status} size={13} />
                   <span style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {selectedDevice.label || selectedDevice.registration || selectedDevice.imei}
                   </span>
@@ -1205,9 +1251,11 @@ export default function Tracking() {
                 <div style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'monospace', marginBottom: 1 }}>{selectedDevice.imei}</div>
                 <div style={{ fontSize: 11, color: 'var(--muted)' }}>{selectedDevice.model}{selectedDevice.registration ? ` · ${selectedDevice.registration}` : ''}</div>
                 <div style={{ fontSize: 11, marginTop: 4 }}>
-                  {selectedDevice.connected
+                  {selectedDevice.device_status === 'active'
                     ? <span style={{ color: '#22c55e', fontWeight: 600 }}>● Online</span>
-                    : <span style={{ color: 'var(--muted)' }}>Last seen {selectedDevice.last_seen_at ? fmtSAST(selectedDevice.last_seen_at) : 'never'}</span>}
+                    : selectedDevice.device_status === 'sleeping'
+                    ? <span style={{ color: '#6366f1', fontWeight: 600 }}>◐ Sleeping · last seen {selectedDevice.last_seen_at ? fmtSAST(selectedDevice.last_seen_at) : 'never'}</span>
+                    : <span style={{ color: 'var(--muted)' }}>Offline · last seen {selectedDevice.last_seen_at ? fmtSAST(selectedDevice.last_seen_at) : 'never'}</span>}
                 </div>
               </div>
               <button className="btn btn-sm btn-secondary" style={{ padding: '3px 6px', flexShrink: 0 }}
@@ -1847,74 +1895,120 @@ export default function Tracking() {
       )}
 
       {/* ── Alert Settings Modal ─────────────────────────────────────── */}
-      {showAlertSettings && (
-        <Modal onClose={() => setShowAlertSettings(false)} title="Alert Settings">
-          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 16 }}>
-            Enable or disable each alert type and choose who receives email notifications.
-          </div>
+      {showAlertSettings && (() => {
+        // Pill toggle component
+        const Toggle = ({ checked, onChange, disabled }) => (
+          <button type="button" onClick={() => !disabled && onChange(!checked)} style={{
+            width: 38, height: 22, borderRadius: 11, border: 'none', padding: 0, flexShrink: 0,
+            background: checked ? (disabled ? '#86efac' : '#22c55e') : 'var(--border)',
+            cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.5 : 1,
+            position: 'relative', transition: 'background .18s',
+          }}>
+            <span style={{
+              position: 'absolute', top: 3, left: checked ? 19 : 3,
+              width: 16, height: 16, borderRadius: 8, background: '#fff',
+              boxShadow: '0 1px 4px rgba(0,0,0,.25)', transition: 'left .18s',
+            }} />
+          </button>
+        );
 
-          {/* Notification recipients */}
-          <div style={{ marginBottom: 20 }}>
-            <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Users size={13} /> Email notification recipients
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 8 }}>
-              Select who receives email notifications. Leave empty to notify all superadmins for critical alerts only (default).
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 120, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 10px' }}>
-              {notifUsers.map(u => {
-                const isChecked = alertSettings.some(s => s.recipient_user_ids?.includes(u.id));
-                return (
-                  <label key={u.id} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 12 }}>
-                    <input
-                      type="checkbox"
-                      checked={isChecked}
-                      onChange={e => {
+        // User avatar initial
+        const Avatar = ({ name }) => (
+          <div style={{
+            width: 30, height: 30, borderRadius: 15, flexShrink: 0,
+            background: 'var(--primary)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: '#fff', fontWeight: 700, fontSize: 12,
+          }}>{(name || '?')[0].toUpperCase()}</div>
+        );
+
+        return (
+          <Modal onClose={() => setShowAlertSettings(false)} title="Alert Settings">
+
+            {/* ── Recipients ── */}
+            <div style={{ marginBottom: 24 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                <Mail size={13} style={{ color: 'var(--muted)' }} />
+                <span style={{ fontWeight: 700, fontSize: 12 }}>Email notification recipients</span>
+              </div>
+              <p style={{ fontSize: 11, color: 'var(--muted)', margin: '0 0 10px', lineHeight: 1.5 }}>
+                Who receives emails when an alert fires. Empty = only superadmins on critical events.
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {notifUsers.map(u => {
+                  const isChecked = alertSettings.some(s => s.recipient_user_ids?.includes(u.id));
+                  return (
+                    <div key={u.id} onClick={() => {
+                      setAlertSettings(prev => prev.map(s => ({
+                        ...s,
+                        recipient_user_ids: !isChecked
+                          ? [...new Set([...(s.recipient_user_ids || []), u.id])]
+                          : (s.recipient_user_ids || []).filter(id => id !== u.id),
+                      })));
+                    }} style={{
+                      display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px',
+                      borderRadius: 8, cursor: 'pointer',
+                      background: isChecked ? 'rgba(34,197,94,.08)' : 'transparent',
+                      border: `1px solid ${isChecked ? 'rgba(34,197,94,.25)' : 'transparent'}`,
+                      transition: 'background .12s',
+                    }}>
+                      <Avatar name={u.full_name} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.full_name}</div>
+                        <div style={{ fontSize: 11, color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.email}</div>
+                      </div>
+                      <Toggle checked={isChecked} onChange={() => {
                         setAlertSettings(prev => prev.map(s => ({
                           ...s,
-                          recipient_user_ids: e.target.checked
+                          recipient_user_ids: !isChecked
                             ? [...new Set([...(s.recipient_user_ids || []), u.id])]
                             : (s.recipient_user_ids || []).filter(id => id !== u.id),
                         })));
-                      }}
-                    />
-                    <span>{u.full_name}</span>
-                    <span style={{ color: 'var(--muted)', fontSize: 10 }}>{u.email}</span>
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Per-type settings */}
-          <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 8 }}>Alert types</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 340, overflowY: 'auto' }}>
-            {alertSettings.map((s, idx) => (
-              <div key={s.alert_type} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderBottom: '1px solid var(--border)' }}>
-                <div style={{ width: 8, height: 8, borderRadius: '50%', background: ALERT_COLORS[s.alert_type] || '#94a3b8', flexShrink: 0 }} />
-                <span style={{ flex: 1, fontSize: 12, color: s.enabled ? 'inherit' : 'var(--muted)' }}>
-                  {ALERT_LABELS[s.alert_type] || s.alert_type}
-                </span>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, cursor: 'pointer', color: 'var(--muted)' }} title="Trigger alert">
-                  <input type="checkbox" checked={s.enabled} onChange={e => setAlertSettings(prev => prev.map((x, i) => i === idx ? { ...x, enabled: e.target.checked } : x))} />
-                  Active
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, cursor: 'pointer', color: 'var(--muted)' }} title="Send email notification">
-                  <input type="checkbox" checked={s.notify_enabled} disabled={!s.enabled} onChange={e => setAlertSettings(prev => prev.map((x, i) => i === idx ? { ...x, notify_enabled: e.target.checked } : x))} />
-                  <Mail size={11} />
-                </label>
+                      }} />
+                    </div>
+                  );
+                })}
               </div>
-            ))}
-          </div>
+            </div>
 
-          <div style={{ display: 'flex', gap: 8, marginTop: 18 }}>
-            <button className="btn btn-primary" onClick={saveAlertSettings} disabled={savingAlertSettings}>
-              {savingAlertSettings ? 'Saving…' : 'Save settings'}
-            </button>
-            <button className="btn btn-secondary" onClick={() => setShowAlertSettings(false)}>Cancel</button>
-          </div>
-        </Modal>
-      )}
+            {/* ── Alert types ── */}
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
+                <Bell size={13} style={{ color: 'var(--muted)', marginRight: 6 }} />
+                <span style={{ fontWeight: 700, fontSize: 12, flex: 1 }}>Alert types</span>
+                <span style={{ fontSize: 10, color: 'var(--muted)', width: 54, textAlign: 'center' }}>Active</span>
+                <span style={{ fontSize: 10, color: 'var(--muted)', width: 54, textAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3 }}><Mail size={10} /> Email</span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 0, maxHeight: 310, overflowY: 'auto', borderRadius: 8, border: '1px solid var(--border)' }}>
+                {alertSettings.map((s, idx) => (
+                  <div key={s.alert_type} style={{
+                    display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px',
+                    borderBottom: idx < alertSettings.length - 1 ? '1px solid var(--border)' : 'none',
+                    background: !s.enabled ? 'rgba(148,163,184,.04)' : 'transparent',
+                  }}>
+                    <div style={{ width: 8, height: 8, borderRadius: 4, background: s.enabled ? (ALERT_COLORS[s.alert_type] || '#94a3b8') : '#94a3b8', flexShrink: 0 }} />
+                    <span style={{ flex: 1, fontSize: 12, color: s.enabled ? 'var(--text)' : 'var(--muted)' }}>
+                      {ALERT_LABELS[s.alert_type] || s.alert_type}
+                    </span>
+                    <div style={{ width: 54, display: 'flex', justifyContent: 'center' }}>
+                      <Toggle checked={s.enabled} onChange={v => setAlertSettings(prev => prev.map((x, i) => i === idx ? { ...x, enabled: v } : x))} />
+                    </div>
+                    <div style={{ width: 54, display: 'flex', justifyContent: 'center' }}>
+                      <Toggle checked={s.notify_enabled} disabled={!s.enabled} onChange={v => setAlertSettings(prev => prev.map((x, i) => i === idx ? { ...x, notify_enabled: v } : x))} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, marginTop: 20 }}>
+              <button className="btn btn-primary" onClick={saveAlertSettings} disabled={savingAlertSettings} style={{ flex: 1 }}>
+                {savingAlertSettings ? 'Saving…' : 'Save settings'}
+              </button>
+              <button className="btn btn-secondary" onClick={() => setShowAlertSettings(false)}>Cancel</button>
+            </div>
+          </Modal>
+        );
+      })()}
     </div>
   );
 }

@@ -114,6 +114,17 @@ async function runTrackingSchema() {
         updated_at          TIMESTAMPTZ DEFAULT NOW()
       )
     `);
+    await pgDb.query(`
+      CREATE TABLE IF NOT EXISTS device_alert_settings (
+        device_id           INTEGER NOT NULL REFERENCES tracking_devices(id) ON DELETE CASCADE,
+        alert_type          TEXT NOT NULL,
+        enabled             BOOLEAN DEFAULT TRUE,
+        notify_enabled      BOOLEAN DEFAULT TRUE,
+        recipient_user_ids  TEXT DEFAULT '[]',
+        updated_at          TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (device_id, alert_type)
+      )
+    `);
     console.log('[pgDb] Tracking schema ready');
   } catch (err) {
     console.error('[pgDb] Schema migration failed:', err.message);

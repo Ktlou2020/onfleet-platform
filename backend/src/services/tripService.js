@@ -14,6 +14,9 @@ const prevExtVoltage = new Map();
 
 // Alert settings cache: alertType → { enabled, notify_enabled, recipientIds: number[] }
 let alertSettingsCache = {};
+// Per-device alert settings: deviceId → alertType → { enabled, notify_enabled, recipientIds }
+let deviceAlertSettings = {};
+
 async function loadAlertSettings() {
   try {
     const { rows } = await pgDb.query('SELECT * FROM alert_settings');
@@ -25,6 +28,18 @@ async function loadAlertSettings() {
     }
     alertSettingsCache = next;
   } catch { /* table may not exist yet on first boot; use defaults */ }
+
+  try {
+    const { rows: deviceRows } = await pgDb.query('SELECT * FROM device_alert_settings');
+    const deviceNext = {};
+    for (const r of deviceRows) {
+      if (!deviceNext[r.device_id]) deviceNext[r.device_id] = {};
+      let recipientIds = [];
+      try { recipientIds = JSON.parse(r.recipient_user_ids || '[]'); } catch { /* ignore */ }
+      deviceNext[r.device_id][r.alert_type] = { enabled: r.enabled, notify_enabled: r.notify_enabled, recipientIds };
+    }
+    deviceAlertSettings = deviceNext;
+  } catch { /* table may not exist yet */ }
 }
 // Called by tracking.js after a PUT /alert-settings
 function reloadAlertSettings() { loadAlertSettings().catch(() => {}); }
@@ -93,7 +108,8 @@ async function emitAlert(id, bikeId, deviceId, alertType, payload, recordedAt) {
     created_at: recordedAt,
     acknowledged_at: null,
   });
-  const setting = alertSettingsCache[alertType];
+  const deviceSetting = deviceId != null ? deviceAlertSettings[deviceId]?.[alertType] : undefined;
+  const setting = deviceSetting !== undefined ? deviceSetting : alertSettingsCache[alertType];
   const notifyEnabled = setting ? setting.notify_enabled : true;
   if (!notifyEnabled) return;
 
@@ -118,7 +134,8 @@ async function emitAlert(id, bikeId, deviceId, alertType, payload, recordedAt) {
 }
 
 async function fireAlert(bikeId, deviceId, alertType, payload, recordedAt, nowMs) {
-  const setting = alertSettingsCache[alertType];
+  const deviceSetting = deviceId != null ? deviceAlertSettings[deviceId]?.[alertType] : undefined;
+  const setting = deviceSetting !== undefined ? deviceSetting : alertSettingsCache[alertType];
   if (setting && setting.enabled === false) return; // alert type disabled
   if (!canFire(bikeId, alertType, nowMs)) return;
   const { rows } = await pgDb.query(

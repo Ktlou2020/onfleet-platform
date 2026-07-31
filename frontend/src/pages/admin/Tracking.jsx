@@ -450,6 +450,7 @@ export default function Tracking() {
   // ── detail panel tabs ─────────────────────────────────────────────
   const [detailTab, setDetailTab] = useState('activity');
   const [trips,     setTrips]     = useState([]);
+  const [pings,     setPings]     = useState([]);  // newest-first, full ping objects
 
   const selectedRef         = useRef(null);
   const mountedRef          = useRef(true);
@@ -612,6 +613,11 @@ export default function Tracking() {
                     if (t.length && t[t.length - 1].lat === pt.lat && t[t.length - 1].lng === pt.lng) return t;
                     return [...t, pt];
                   });
+                  setPings(prev => {
+                    const pt = { lat: p.lat, lng: p.lng, speed_kmh: p.speed, recorded_at: new Date(p.ts).toISOString(), ignition: p.ignition };
+                    if (prev.length && prev[0].lat === pt.lat && prev[0].lng === pt.lng) return prev;
+                    return [pt, ...prev].slice(0, 1000); // newest-first, cap at 1000
+                  });
                 }
               } else if (evtType === 'alert') {
                 setAlertsUnread(n => n + 1);
@@ -695,6 +701,7 @@ export default function Tracking() {
       const { data } = await api.get(`/tracking/devices/${deviceId}/positions?limit=500&from=${encodeURIComponent(from)}`);
       if (version === undefined || selectVersionRef.current === version) {
         setTrail(data.map(p => ({ lat: p.lat, lng: p.lng, speed_kmh: p.speed_kmh })));
+        setPings([...data].reverse()); // newest-first for activity log
       }
     } catch { /* silent */ }
   }, []);
@@ -704,6 +711,7 @@ export default function Tracking() {
     setSelected(device.id);
     setDetailTab('activity');
     setTrips([]);
+    setPings([]);
     setAddress(null);
     if (device.lat && device.lng) {
       setFlyTo([device.lat, device.lng]);
@@ -798,7 +806,7 @@ export default function Tracking() {
     if (!window.confirm(`Remove ${dev?.label || dev?.imei}?`)) return;
     try {
       await api.delete(`/tracking/devices/${id}`);
-      if (selected === id) { setSelected(null); setTrail([]); setCommands([]); setAddress(null); setTrips([]); }
+      if (selected === id) { setSelected(null); setTrail([]); setCommands([]); setAddress(null); setTrips([]); setPings([]); }
       await loadDevices();
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed');
@@ -1267,7 +1275,7 @@ export default function Tracking() {
                 <Pencil size={12} />
               </button>
               <button className="btn btn-sm btn-secondary" style={{ padding: '3px 6px', flexShrink: 0 }}
-                onClick={() => { setSelected(null); setTrail([]); setCommands([]); setAddress(null); setTrips([]); }} title="Close">
+                onClick={() => { setSelected(null); setTrail([]); setCommands([]); setAddress(null); setTrips([]); setPings([]); }} title="Close">
                 <X size={12} />
               </button>
             </div>
@@ -1310,6 +1318,11 @@ export default function Tracking() {
             });
             const todayKm   = todayTrips.reduce((s, t) => s + (t.distance_km || 0), 0);
             const todaySec  = todayTrips.reduce((s, t) => s + (t.duration_sec || 0), 0);
+            const now = new Date();
+            const todayPings = pings.filter(p => {
+              const d = new Date(p.recorded_at);
+              return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+            });
             const telemetryRows = [
               {
                 icon: extMv != null && extMv > 9000
@@ -1442,6 +1455,45 @@ export default function Tracking() {
                         );
                       })}
                     </>
+                  )}
+                </div>
+
+                {/* Location ping log */}
+                <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    Location pings
+                    <span style={{ marginLeft: 4, fontSize: 10, fontWeight: 600, color: 'var(--muted)', background: 'var(--surface2)', padding: '0 5px', borderRadius: 8 }}>
+                      {todayPings.length}
+                    </span>
+                  </div>
+                  {todayPings.length === 0 ? (
+                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>No pings recorded today.</div>
+                  ) : (
+                    <div style={{ maxHeight: 220, overflowY: 'auto', overflowX: 'hidden' }}>
+                      {todayPings.slice(0, 100).map((p, i) => {
+                        const ignOn = p.ignition === 1 || p.ignition === true;
+                        const spd = p.speed_kmh != null ? Math.round(p.speed_kmh) : null;
+                        return (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0', borderTop: i > 0 ? '1px solid var(--border)' : 'none', fontSize: 11 }}>
+                            <div style={{ width: 6, height: 6, borderRadius: '50%', flexShrink: 0, background: ignOn ? '#22c55e' : 'var(--muted)' }} title={ignOn ? 'Ignition on' : 'Ignition off'} />
+                            <span style={{ color: 'var(--muted)', minWidth: 58, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{fmtSASTtime(p.recorded_at)}</span>
+                            <span style={{ flex: 1, fontFamily: 'monospace', fontSize: 10, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {p.lat?.toFixed(5)}, {p.lng?.toFixed(5)}
+                            </span>
+                            {spd != null && (
+                              <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 700, color: spd > 60 ? '#f97316' : spd > 0 ? 'var(--text)' : 'var(--muted)', fontVariantNumeric: 'tabular-nums' }}>
+                                {spd} km/h
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                      {todayPings.length > 100 && (
+                        <div style={{ fontSize: 11, color: 'var(--muted)', padding: '4px 0', textAlign: 'center' }}>
+                          Showing 100 of {todayPings.length} pings
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>

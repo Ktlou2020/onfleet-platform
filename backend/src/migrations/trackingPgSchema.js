@@ -105,6 +105,15 @@ async function runTrackingSchema() {
     await pgDb.query(`
       CREATE INDEX IF NOT EXISTS idx_tracking_alerts_bike_time ON tracking_alerts(bike_id, created_at DESC)
     `);
+    await pgDb.query(`
+      CREATE TABLE IF NOT EXISTS alert_settings (
+        alert_type          TEXT PRIMARY KEY,
+        enabled             BOOLEAN DEFAULT TRUE,
+        notify_enabled      BOOLEAN DEFAULT TRUE,
+        recipient_user_ids  TEXT DEFAULT '[]',
+        updated_at          TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
     console.log('[pgDb] Tracking schema ready');
   } catch (err) {
     console.error('[pgDb] Schema migration failed:', err.message);

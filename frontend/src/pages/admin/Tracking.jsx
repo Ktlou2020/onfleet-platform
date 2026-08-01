@@ -285,6 +285,13 @@ const SAST = { timeZone: 'Africa/Johannesburg' };
 const fmtSASTtime = (d) => d ? new Date(d).toLocaleTimeString('en-ZA', { ...SAST, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '—';
 const fmtSAST     = (d) => d ? new Date(d).toLocaleString('en-ZA',     { ...SAST, day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '—';
 const fmtSASTshort = (d) => d ? new Date(d).toLocaleString('en-ZA',    { ...SAST, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }) : '—';
+const todayInSAST = () => new Date().toLocaleDateString('en-CA', SAST); // en-CA → YYYY-MM-DD
+const fmtPingDate = (dateStr) => {
+  const today = todayInSAST();
+  if (dateStr === today) return 'Today';
+  const d = new Date(dateStr + 'T12:00:00+02:00');
+  return d.toLocaleDateString('en-ZA', { ...SAST, weekday: 'short', day: 'numeric', month: 'short' });
+};
 
 // ── Parse Teltonika IO data JSON to useful values ─────────────────────────────
 function parseIo(ioData) {
@@ -472,8 +479,11 @@ export default function Tracking() {
 
   // ── detail panel tabs ─────────────────────────────────────────────
   const [detailTab, setDetailTab] = useState('activity');
-  const [trips,     setTrips]     = useState([]);
-  const [pings,     setPings]     = useState([]);  // newest-first, full ping objects
+  const [trips,        setTrips]        = useState([]);
+  const [pings,        setPings]        = useState([]);  // newest-first, trail pings from SSE
+  const [dayPings,     setDayPings]     = useState([]);  // newest-first, pings for pingDate
+  const [pingDate,     setPingDate]     = useState(() => todayInSAST());
+  const [pingDateLoading, setPingDateLoading] = useState(false);
 
   const selectedRef         = useRef(null);
   const mountedRef          = useRef(true);
@@ -482,8 +492,10 @@ export default function Tracking() {
   const doDeviceRefreshRef  = useRef(null);
   const scheduleNextPollRef = useRef(null);
   const awaitingPositionRef = useRef(new Set()); // device IDs waiting for getgps response
+  const pingDateRef = useRef(todayInSAST()); // mirrors pingDate for use inside SSE closure
 
   useEffect(() => { selectedRef.current = selected; }, [selected]);
+  useEffect(() => { pingDateRef.current = pingDate; }, [pingDate]);
   useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
 
   // Remove .content padding for edge-to-edge layout
@@ -672,11 +684,19 @@ export default function Tracking() {
                     if (t.length && t[t.length - 1].lat === pt.lat && t[t.length - 1].lng === pt.lng) return t;
                     return [...t, pt];
                   });
+                  const pingObj = { lat: p.lat, lng: p.lng, speed_kmh: p.speed, recorded_at: new Date(p.ts).toISOString(), ignition: p.ignition };
                   setPings(prev => {
-                    const pt = { lat: p.lat, lng: p.lng, speed_kmh: p.speed, recorded_at: new Date(p.ts).toISOString(), ignition: p.ignition };
-                    if (prev.length && prev[0].lat === pt.lat && prev[0].lng === pt.lng) return prev;
-                    return [pt, ...prev].slice(0, 1000); // newest-first, cap at 1000
+                    if (prev.length && prev[0].lat === pingObj.lat && prev[0].lng === pingObj.lng) return prev;
+                    return [pingObj, ...prev].slice(0, 1000); // newest-first, cap at 1000
                   });
+                  // Add to day pings if the ping falls on the currently viewed day
+                  const pingDay = new Date(p.ts).toLocaleDateString('en-CA', SAST);
+                  if (pingDay === pingDateRef.current) {
+                    setDayPings(prev => {
+                      if (prev.length && prev[0].lat === pingObj.lat && prev[0].lng === pingObj.lng) return prev;
+                      return [pingObj, ...prev].slice(0, 1000);
+                    });
+                  }
                 }
               } else if (evtType === 'alert') {
                 setAlertsUnread(n => n + 1);
@@ -760,17 +780,34 @@ export default function Tracking() {
       const { data } = await api.get(`/tracking/devices/${deviceId}/positions?limit=500&from=${encodeURIComponent(from)}`);
       if (version === undefined || selectVersionRef.current === version) {
         setTrail(data.map(p => ({ lat: p.lat, lng: p.lng, speed_kmh: p.speed_kmh })));
-        setPings([...data].reverse()); // newest-first for activity log
+        setPings([...data].reverse()); // newest-first for SSE dedup
       }
     } catch { /* silent */ }
   }, []);
 
+  const loadDayPings = useCallback(async (deviceId, dateStr) => {
+    if (!deviceId) return;
+    setPingDateLoading(true);
+    try {
+      const from = encodeURIComponent(new Date(dateStr + 'T00:00:00+02:00').toISOString());
+      const to   = encodeURIComponent(new Date(dateStr + 'T23:59:59+02:00').toISOString());
+      const { data } = await api.get(`/tracking/devices/${deviceId}/positions?limit=1000&from=${from}&to=${to}`);
+      setDayPings([...data].reverse()); // newest-first
+    } catch { /* silent */ } finally {
+      setPingDateLoading(false);
+    }
+  }, []);
+
   const selectDevice = useCallback(async (device) => {
     const version = ++selectVersionRef.current;
+    const todayStr = todayInSAST();
     setSelected(device.id);
     setDetailTab('activity');
     setTrips([]);
     setPings([]);
+    setDayPings([]);
+    setPingDate(todayStr);
+    pingDateRef.current = todayStr;
     setAddress(null);
     if (device.lat && device.lng) {
       setFlyTo([device.lat, device.lng]);
@@ -791,11 +828,16 @@ export default function Tracking() {
         setTrips(tripsRes.data);
       }
     } catch { /* silent */ }
-  }, [loadTrail, trailRange]);
+    loadDayPings(device.id, todayStr);
+  }, [loadTrail, loadDayPings, trailRange]);
 
   useEffect(() => {
     if (selected) loadTrail(selected, trailRange);
   }, [trailRange, selected, loadTrail]);
+
+  useEffect(() => {
+    if (selected) loadDayPings(selected, pingDate);
+  }, [pingDate, selected, loadDayPings]);
 
   const refreshCommands = useCallback(async () => {
     if (!selected) return;
@@ -884,7 +926,7 @@ export default function Tracking() {
     if (!window.confirm(`Remove ${dev?.label || dev?.imei}?`)) return;
     try {
       await api.delete(`/tracking/devices/${id}`);
-      if (selected === id) { setSelected(null); setTrail([]); setCommands([]); setAddress(null); setTrips([]); setPings([]); }
+      if (selected === id) { setSelected(null); setTrail([]); setCommands([]); setAddress(null); setTrips([]); setPings([]); setDayPings([]); }
       await loadDevices();
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed');
@@ -1364,7 +1406,7 @@ export default function Tracking() {
                 <Pencil size={12} />
               </button>
               <button className="btn btn-sm btn-secondary" style={{ padding: '3px 6px', flexShrink: 0 }}
-                onClick={() => { setSelected(null); setTrail([]); setCommands([]); setAddress(null); setTrips([]); setPings([]); }} title="Close">
+                onClick={() => { setSelected(null); setTrail([]); setCommands([]); setAddress(null); setTrips([]); setPings([]); setDayPings([]); }} title="Close">
                 <X size={12} />
               </button>
             </div>
@@ -1407,11 +1449,7 @@ export default function Tracking() {
             });
             const todayKm   = todayTrips.reduce((s, t) => s + (t.distance_km || 0), 0);
             const todaySec  = todayTrips.reduce((s, t) => s + (t.duration_sec || 0), 0);
-            const now = new Date();
-            const todayPings = pings.filter(p => {
-              const d = new Date(p.recorded_at);
-              return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
-            });
+            const todayStr = todayInSAST();
             const telemetryRows = [
               {
                 icon: extMv != null && extMv > 9000
@@ -1549,17 +1587,46 @@ export default function Tracking() {
 
                 {/* Location ping log */}
                 <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border)' }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {/* Header row: label + count + refresh */}
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
                     Location pings
-                    <span style={{ marginLeft: 4, fontSize: 10, fontWeight: 600, color: 'var(--muted)', background: 'var(--surface2)', padding: '0 5px', borderRadius: 8 }}>
-                      {todayPings.length}
+                    <span style={{ marginLeft: 2, fontSize: 10, fontWeight: 600, color: 'var(--muted)', background: 'var(--surface2)', padding: '0 5px', borderRadius: 8 }}>
+                      {pingDateLoading ? '…' : dayPings.length}
                     </span>
+                    <button className="btn btn-sm" style={{ padding: '1px 5px', marginLeft: 'auto', background: 'transparent' }}
+                      onClick={() => loadDayPings(selected, pingDate)} title="Refresh pings">
+                      <RefreshCw size={10} />
+                    </button>
                   </div>
-                  {todayPings.length === 0 ? (
-                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>No pings recorded today.</div>
+                  {/* Day navigation */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 8 }}>
+                    <button className="btn btn-sm btn-secondary" style={{ padding: '2px 7px', fontSize: 11 }}
+                      onClick={() => {
+                        const d = new Date(pingDate + 'T12:00:00+02:00');
+                        d.setDate(d.getDate() - 1);
+                        setPingDate(d.toLocaleDateString('en-CA', SAST));
+                      }}>‹</button>
+                    <span style={{ flex: 1, textAlign: 'center', fontSize: 12, fontWeight: 600 }}>{fmtPingDate(pingDate)}</span>
+                    <button className="btn btn-sm btn-secondary" style={{ padding: '2px 7px', fontSize: 11 }}
+                      disabled={pingDate >= todayStr}
+                      onClick={() => {
+                        const d = new Date(pingDate + 'T12:00:00+02:00');
+                        d.setDate(d.getDate() + 1);
+                        const next = d.toLocaleDateString('en-CA', SAST);
+                        setPingDate(next > todayStr ? todayStr : next);
+                      }}>›</button>
+                    {pingDate !== todayStr && (
+                      <button className="btn btn-sm" style={{ padding: '2px 7px', fontSize: 10, background: 'transparent', color: 'var(--primary)', marginLeft: 2 }}
+                        onClick={() => setPingDate(todayStr)}>Today</button>
+                    )}
+                  </div>
+                  {pingDateLoading ? (
+                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>Loading…</div>
+                  ) : dayPings.length === 0 ? (
+                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>No pings recorded on this day.</div>
                   ) : (
                     <div style={{ maxHeight: 220, overflowY: 'auto', overflowX: 'hidden' }}>
-                      {todayPings.slice(0, 100).map((p, i) => {
+                      {dayPings.slice(0, 200).map((p, i) => {
                         const ignOn = p.ignition === 1 || p.ignition === true;
                         const spd = p.speed_kmh != null ? Math.round(p.speed_kmh) : null;
                         return (
@@ -1577,9 +1644,9 @@ export default function Tracking() {
                           </div>
                         );
                       })}
-                      {todayPings.length > 100 && (
+                      {dayPings.length > 200 && (
                         <div style={{ fontSize: 11, color: 'var(--muted)', padding: '4px 0', textAlign: 'center' }}>
-                          Showing 100 of {todayPings.length} pings
+                          Showing 200 of {dayPings.length} pings
                         </div>
                       )}
                     </div>

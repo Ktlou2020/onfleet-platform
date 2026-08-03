@@ -1517,15 +1517,15 @@ router.get('/org-agreements', superadminOnly, (req, res) => {
   const orgId = Number(req.query.org_id);
   if (!orgId) return res.status(400).json({ error: 'org_id required' });
   const agreements = db.prepare(`
-    SELECT a.id, a.agreement_number, a.status, a.created_at,
+    SELECT a.id, a.agreement_no, a.status, a.created_at,
            u.id as rider_id, u.full_name as rider_name, u.email as rider_email,
-           b.registration_number as bike_reg
+           b.registration as bike_reg
     FROM agreements a
     JOIN users u ON u.id = a.user_id
     JOIN bikes b ON b.id = a.bike_id
     WHERE b.organization_id = ?
       AND a.status IN ('active','paused','defaulted')
-    ORDER BY a.status = 'active' DESC, a.id DESC
+    ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.id DESC
   `).all(orgId);
   res.json(agreements);
 });

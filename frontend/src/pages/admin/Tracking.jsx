@@ -435,10 +435,12 @@ export default function Tracking() {
   const [alertTypeFilter, setAlertTypeFilter] = useState('');
 
   // ── alert settings modal ──────────────────────────────────────────
-  const [showAlertSettings,  setShowAlertSettings]  = useState(false);
-  const [alertSettings,      setAlertSettings]      = useState([]);
-  const [notifUsers,         setNotifUsers]         = useState([]);
-  const [savingAlertSettings,setSavingAlertSettings]= useState(false);
+  const [showAlertSettings,    setShowAlertSettings]    = useState(false);
+  const [alertSettings,        setAlertSettings]        = useState([]);
+  const [notifUsers,           setNotifUsers]           = useState([]);
+  const [savingAlertSettings,  setSavingAlertSettings]  = useState(false);
+  const [alertSettingsDeviceId,setAlertSettingsDeviceId]= useState(null); // null = global
+  const [applySettingsToAll,   setApplySettingsToAll]   = useState(false);
 
   // ── geofences ────────────────────────────────────────────────────
   const [geofences,     setGeofences]     = useState([]);
@@ -521,27 +523,56 @@ export default function Tracking() {
     } catch { /* silent */ }
   }, []);
 
-  const openAlertSettings = useCallback(async () => {
+  const openAlertSettings = useCallback(async (deviceId = null) => {
     try {
+      const url = deviceId ? `/tracking/alert-settings?device_id=${deviceId}` : '/tracking/alert-settings';
       const [{ data: settings }, { data: users }] = await Promise.all([
-        api.get('/tracking/alert-settings'),
+        api.get(url),
         api.get('/tracking/notification-users'),
       ]);
       setAlertSettings(settings);
       setNotifUsers(users);
+      setAlertSettingsDeviceId(deviceId);
+      setApplySettingsToAll(false);
       setShowAlertSettings(true);
     } catch { toast.error('Could not load alert settings'); }
   }, []);
 
-  const saveAlertSettings = useCallback(async () => {
+  const changeAlertSettingsDevice = useCallback(async (newDeviceId) => {
+    try {
+      const url = newDeviceId ? `/tracking/alert-settings?device_id=${newDeviceId}` : '/tracking/alert-settings';
+      const { data: settings } = await api.get(url);
+      setAlertSettings(settings);
+      setAlertSettingsDeviceId(newDeviceId);
+      setApplySettingsToAll(false);
+    } catch { toast.error('Could not load settings for device'); }
+  }, []);
+
+  const saveAlertSettings = useCallback(async (applyToAll) => {
     setSavingAlertSettings(true);
     try {
-      await api.put('/tracking/alert-settings', alertSettings);
-      toast.success('Alert settings saved');
+      const body = applyToAll
+        ? { settings: alertSettings, apply_to_all: true }
+        : alertSettingsDeviceId
+          ? { settings: alertSettings, device_id: alertSettingsDeviceId }
+          : { settings: alertSettings };
+      await api.put('/tracking/alert-settings', body);
+      toast.success(applyToAll ? 'Applied to all devices' : 'Alert settings saved');
       setShowAlertSettings(false);
     } catch { toast.error('Failed to save settings'); }
     finally { setSavingAlertSettings(false); }
-  }, [alertSettings]);
+  }, [alertSettings, alertSettingsDeviceId]);
+
+  const resetDeviceAlertSettings = useCallback(async () => {
+    if (!alertSettingsDeviceId) return;
+    try {
+      await api.delete(`/tracking/alert-settings/device/${alertSettingsDeviceId}`);
+      // Reload to show inherited global values
+      const { data: settings } = await api.get('/tracking/alert-settings');
+      setAlertSettings(settings.map(s => ({ ...s, device_override: false })));
+      toast.success('Reset to global defaults');
+    } catch { toast.error('Failed to reset'); }
+  }, [alertSettingsDeviceId]);
 
   const loadTrips = useCallback(async (bikeId) => {
     try {
@@ -1267,6 +1298,11 @@ export default function Tracking() {
                 </div>
               </div>
               <button className="btn btn-sm btn-secondary" style={{ padding: '3px 6px', flexShrink: 0 }}
+                title="Alert settings for this device"
+                onClick={() => openAlertSettings(selectedDevice.id)}>
+                <Bell size={12} />
+              </button>
+              <button className="btn btn-sm btn-secondary" style={{ padding: '3px 6px', flexShrink: 0 }}
                 title="Edit device"
                 onClick={() => {
                   setEditDeviceForm({ model: selectedDevice.model || 'FMB920', label: selectedDevice.label || '', bike_id: selectedDevice.bike_id || null, speed_limit_kmh: selectedDevice.speed_limit_kmh || 120 });
@@ -1976,6 +2012,36 @@ export default function Tracking() {
         return (
           <Modal onClose={() => setShowAlertSettings(false)} title="Alert Settings">
 
+            {/* ── Device scope selector ── */}
+            <div style={{ marginBottom: 20 }}>
+              <label style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', display: 'block', marginBottom: 6 }}>
+                Apply settings to
+              </label>
+              <select
+                value={alertSettingsDeviceId || ''}
+                onChange={e => changeAlertSettingsDevice(e.target.value ? Number(e.target.value) : null)}
+                style={{ width: '100%', fontSize: 12, padding: '7px 10px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', cursor: 'pointer' }}
+              >
+                <option value="">All devices (global default)</option>
+                {devices.map(d => (
+                  <option key={d.id} value={d.id}>
+                    {d.label || d.imei}{d.registration ? ` — ${d.registration}` : ''}
+                  </option>
+                ))}
+              </select>
+              {alertSettingsDeviceId && alertSettings.some(s => s.device_override) && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+                  <span style={{ fontSize: 11, color: '#6366f1' }}>
+                    {alertSettings.filter(s => s.device_override).length} custom override{alertSettings.filter(s => s.device_override).length !== 1 ? 's' : ''} for this device
+                  </span>
+                  <button type="button" onClick={resetDeviceAlertSettings}
+                    style={{ fontSize: 11, color: 'var(--muted)', background: 'none', border: 'none', padding: 0, cursor: 'pointer', textDecoration: 'underline' }}>
+                    Reset to global
+                  </button>
+                </div>
+              )}
+            </div>
+
             {/* ── Recipients ── */}
             <div style={{ marginBottom: 24 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
@@ -2038,8 +2104,14 @@ export default function Tracking() {
                     background: !s.enabled ? 'rgba(148,163,184,.04)' : 'transparent',
                   }}>
                     <div style={{ width: 8, height: 8, borderRadius: 4, background: s.enabled ? (ALERT_COLORS[s.alert_type] || '#94a3b8') : '#94a3b8', flexShrink: 0 }} />
-                    <span style={{ flex: 1, fontSize: 12, color: s.enabled ? 'var(--text)' : 'var(--muted)' }}>
+                    <span style={{ flex: 1, fontSize: 12, color: s.enabled ? 'var(--text)' : 'var(--muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
                       {ALERT_LABELS[s.alert_type] || s.alert_type}
+                      {alertSettingsDeviceId && s.device_override && (
+                        <span style={{ fontSize: 9, fontWeight: 700, color: '#6366f1', background: 'rgba(99,102,241,.12)', padding: '1px 5px', borderRadius: 4 }}>custom</span>
+                      )}
+                      {alertSettingsDeviceId && !s.device_override && (
+                        <span style={{ fontSize: 9, color: 'var(--muted)', padding: '1px 5px' }}>global</span>
+                      )}
                     </span>
                     <div style={{ width: 54, display: 'flex', justifyContent: 'center' }}>
                       <Toggle checked={s.enabled} onChange={v => setAlertSettings(prev => prev.map((x, i) => i === idx ? { ...x, enabled: v } : x))} />
@@ -2052,9 +2124,18 @@ export default function Tracking() {
               </div>
             </div>
 
-            <div style={{ display: 'flex', gap: 8, marginTop: 20 }}>
-              <button className="btn btn-primary" onClick={saveAlertSettings} disabled={savingAlertSettings} style={{ flex: 1 }}>
-                {savingAlertSettings ? 'Saving…' : 'Save settings'}
+            {alertSettingsDeviceId && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, padding: '10px 12px', borderRadius: 8, background: 'rgba(99,102,241,.07)', border: '1px solid rgba(99,102,241,.18)' }}>
+                <Toggle checked={applySettingsToAll} onChange={setApplySettingsToAll} />
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>Apply to all devices</div>
+                  <div style={{ fontSize: 11, color: 'var(--muted)' }}>Save as global default and clear all device overrides</div>
+                </div>
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+              <button className="btn btn-primary" onClick={() => saveAlertSettings(applySettingsToAll)} disabled={savingAlertSettings} style={{ flex: 1 }}>
+                {savingAlertSettings ? 'Saving…' : applySettingsToAll ? 'Apply to all devices' : alertSettingsDeviceId ? 'Save for this device' : 'Save global defaults'}
               </button>
               <button className="btn btn-secondary" onClick={() => setShowAlertSettings(false)}>Cancel</button>
             </div>

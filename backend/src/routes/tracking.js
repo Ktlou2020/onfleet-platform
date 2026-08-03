@@ -415,35 +415,97 @@ router.post('/alerts/acknowledge-all', authRequired, adminOnly, async (req, res)
 // ---------- Alert settings ----------
 
 router.get('/alert-settings', authRequired, adminOnly, async (req, res) => {
-  const { rows } = await pgDb.query('SELECT * FROM alert_settings');
-  const map = {};
-  for (const r of rows) map[r.alert_type] = r;
-  const result = ALL_ALERT_TYPES.map(t => ({
-    alert_type: t,
-    enabled: map[t] ? map[t].enabled : true,
-    notify_enabled: map[t] ? map[t].notify_enabled : true,
-    recipient_user_ids: (() => { try { return JSON.parse(map[t]?.recipient_user_ids || '[]'); } catch { return []; } })(),
-  }));
+  const deviceId = req.query.device_id ? Number(req.query.device_id) : null;
+
+  const { rows: globalRows } = await pgDb.query('SELECT * FROM alert_settings');
+  const globalMap = {};
+  for (const r of globalRows) globalMap[r.alert_type] = r;
+
+  let deviceMap = {};
+  if (deviceId) {
+    try {
+      const { rows: deviceRows } = await pgDb.query(
+        'SELECT * FROM device_alert_settings WHERE device_id=$1', [deviceId]
+      );
+      for (const r of deviceRows) deviceMap[r.alert_type] = r;
+    } catch { /* table may not exist yet */ }
+  }
+
+  const result = ALL_ALERT_TYPES.map(t => {
+    const g = globalMap[t];
+    const d = deviceMap[t];
+    const active = d || g;
+    return {
+      alert_type: t,
+      enabled: active ? active.enabled : true,
+      notify_enabled: active ? active.notify_enabled : true,
+      recipient_user_ids: (() => { try { return JSON.parse(active?.recipient_user_ids || '[]'); } catch { return []; } })(),
+      device_override: !!d,
+    };
+  });
   res.json(result);
 });
 
 router.put('/alert-settings', authRequired, adminOnly, async (req, res) => {
-  const settings = req.body; // array of { alert_type, enabled, notify_enabled, recipient_user_ids }
-  if (!Array.isArray(settings)) return res.status(400).json({ error: 'Expected array of settings' });
-  for (const s of settings) {
-    if (!ALL_ALERT_TYPES.includes(s.alert_type)) continue;
-    const recipIds = JSON.stringify(Array.isArray(s.recipient_user_ids) ? s.recipient_user_ids : []);
-    await pgDb.query(`
-      INSERT INTO alert_settings (alert_type, enabled, notify_enabled, recipient_user_ids, updated_at)
-      VALUES ($1, $2, $3, $4, NOW())
-      ON CONFLICT (alert_type) DO UPDATE SET
-        enabled = EXCLUDED.enabled,
-        notify_enabled = EXCLUDED.notify_enabled,
-        recipient_user_ids = EXCLUDED.recipient_user_ids,
-        updated_at = NOW()
-    `, [s.alert_type, s.enabled !== false, s.notify_enabled !== false, recipIds]);
+  // Accept array (legacy) or { settings, device_id, apply_to_all }
+  let settings, deviceId, applyToAll;
+  if (Array.isArray(req.body)) {
+    settings = req.body;
+    deviceId = null;
+    applyToAll = false;
+  } else {
+    settings = req.body.settings;
+    deviceId = req.body.device_id || null;
+    applyToAll = req.body.apply_to_all || false;
   }
+  if (!Array.isArray(settings)) return res.status(400).json({ error: 'Expected settings array' });
+
+  if (!deviceId || applyToAll) {
+    // Save to global alert_settings
+    for (const s of settings) {
+      if (!ALL_ALERT_TYPES.includes(s.alert_type)) continue;
+      const recipIds = JSON.stringify(Array.isArray(s.recipient_user_ids) ? s.recipient_user_ids : []);
+      await pgDb.query(`
+        INSERT INTO alert_settings (alert_type, enabled, notify_enabled, recipient_user_ids, updated_at)
+        VALUES ($1,$2,$3,$4,NOW())
+        ON CONFLICT (alert_type) DO UPDATE SET
+          enabled=EXCLUDED.enabled, notify_enabled=EXCLUDED.notify_enabled,
+          recipient_user_ids=EXCLUDED.recipient_user_ids, updated_at=NOW()
+      `, [s.alert_type, s.enabled !== false, s.notify_enabled !== false, recipIds]);
+    }
+    if (applyToAll) {
+      // Clear all device overrides so everything falls back to global
+      try {
+        const types = settings.map(s => s.alert_type).filter(t => ALL_ALERT_TYPES.includes(t));
+        if (types.length) await pgDb.query('DELETE FROM device_alert_settings WHERE alert_type = ANY($1)', [types]);
+      } catch { /* table may not exist */ }
+    }
+  }
+
+  if (deviceId && !applyToAll) {
+    // Save device-specific overrides
+    for (const s of settings) {
+      if (!ALL_ALERT_TYPES.includes(s.alert_type)) continue;
+      const recipIds = JSON.stringify(Array.isArray(s.recipient_user_ids) ? s.recipient_user_ids : []);
+      await pgDb.query(`
+        INSERT INTO device_alert_settings (device_id, alert_type, enabled, notify_enabled, recipient_user_ids, updated_at)
+        VALUES ($1,$2,$3,$4,$5,NOW())
+        ON CONFLICT (device_id, alert_type) DO UPDATE SET
+          enabled=EXCLUDED.enabled, notify_enabled=EXCLUDED.notify_enabled,
+          recipient_user_ids=EXCLUDED.recipient_user_ids, updated_at=NOW()
+      `, [deviceId, s.alert_type, s.enabled !== false, s.notify_enabled !== false, recipIds]);
+    }
+  }
+
   require('../services/tripService').reloadAlertSettings();
+  res.json({ ok: true });
+});
+
+router.delete('/alert-settings/device/:device_id', authRequired, adminOnly, async (req, res) => {
+  try {
+    await pgDb.query('DELETE FROM device_alert_settings WHERE device_id=$1', [Number(req.params.device_id)]);
+    require('../services/tripService').reloadAlertSettings();
+  } catch { /* ignore if table missing */ }
   res.json({ ok: true });
 });
 

@@ -57,8 +57,6 @@ function RecordPaymentModal({ org, onClose }) {
   };
 
   const gross = Math.max(0, Number(amount) || 0);
-  const platformFee = +(gross * 0.035 + 1).toFixed(2);
-  const walletCredit = +(gross - platformFee).toFixed(2);
 
   const submit = async () => {
     if (!selectedAgreementId) { toast.error('Select an agreement'); return; }
@@ -74,7 +72,7 @@ function RecordPaymentModal({ org, onClose }) {
       };
       if (reference.trim()) body.reference = reference.trim();
       const { data } = await api.post('/admin/record-paystack-payment', body);
-      toast.success(`R${gross.toFixed(2)} recorded · ref: ${data.reference} · wallet +R${data.net_to_wallet?.toFixed(2) || walletCredit.toFixed(2)}`);
+      toast.success(`R${gross.toFixed(2)} recorded · ref: ${data.reference} · wallet +R${gross.toFixed(2)}`);
       onClose(true);
     } catch (e) {
       toast.error(e.response?.data?.error || 'Failed to record payment');
@@ -175,12 +173,8 @@ function RecordPaymentModal({ org, onClose }) {
         </div>
 
         {gross > 0 && (
-          <div style={{ background: 'var(--surface-2)', borderRadius: 6, padding: '10px 14px', fontSize: 13 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span className="muted">Gross</span><span>R{gross.toFixed(2)}</span></div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span className="muted">Platform fee (3.5% + R1)</span><span>−R{platformFee.toFixed(2)}</span></div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 600, marginTop: 4, borderTop: '1px solid var(--border)', paddingTop: 4 }}>
-              <span>Wallet credit</span><span>R{walletCredit.toFixed(2)}</span>
-            </div>
+          <div style={{ background: 'var(--surface-2)', borderRadius: 6, padding: '10px 14px', fontSize: 13, display: 'flex', justifyContent: 'space-between' }}>
+            <span>Wallet credit</span><span style={{ fontWeight: 600 }}>R{gross.toFixed(2)}</span>
           </div>
         )}
 

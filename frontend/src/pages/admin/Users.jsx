@@ -305,7 +305,7 @@ export default function AdminUsers() {
       </div>
 
       <div className="row mb-4" style={{ flexWrap: 'wrap' }}>
-        {[['', 'All'], ['rider', 'Riders'], ['technician', 'Technicians'], ['admin', 'Admins'], ['superadmin', 'Superadmins']].map(([value, label]) => (
+        {[['', 'All'], ['rider', 'Riders'], ['technician', 'Technicians'], ['control_room', 'Control Room'], ['admin', 'Admins'], ['superadmin', 'Superadmins']].map(([value, label]) => (
           <button key={value} onClick={() => setFilter(value)} className={`btn btn-sm ${filter === value ? '' : 'btn-secondary'}`}>{label}</button>
         ))}
         {user?.role === 'superadmin' && dirtyRoles > 0 && <span className="muted text-sm">Unsaved role changes are highlighted per user.</span>}
@@ -362,9 +362,10 @@ export default function AdminUsers() {
                   <td>
                     {user?.role === 'superadmin' && account.id !== user.id ? (
                       <div className="row" style={{ gap: 8 }}>
-                        <select value={pendingRole} onChange={(e) => setRoleEdits((prev) => ({ ...prev, [account.id]: e.target.value }))} style={{ minWidth: 120, borderColor: roleChanged ? 'var(--primary)' : undefined }}>
+                        <select value={pendingRole} onChange={(e) => setRoleEdits((prev) => ({ ...prev, [account.id]: e.target.value }))} style={{ minWidth: 140, borderColor: roleChanged ? 'var(--primary)' : undefined }}>
                           <option value="rider">Rider</option>
                           <option value="technician">Technician</option>
+                          <option value="control_room">Control Room</option>
                           <option value="admin">Admin</option>
                           <option value="superadmin">Superadmin</option>
                         </select>
@@ -398,7 +399,7 @@ export default function AdminUsers() {
             <div className="field"><label className="label">Email</label><input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></div>
             <div className="field"><label className="label">Phone</label><input type="tel" autoComplete="tel" inputMode="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: normalizePhoneInput(e.target.value) })} /></div>
             <div className="field"><label className="label">Password</label><input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></div>
-            <div className="field"><label className="label">Role</label><select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}><option value="rider">Rider</option><option value="technician">Technician</option><option value="admin">Admin</option>{user?.role === 'superadmin' && <option value="superadmin">Superadmin</option>}</select></div>
+            <div className="field"><label className="label">Role</label><select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}><option value="rider">Rider</option><option value="technician">Technician</option><option value="control_room">Control Room</option><option value="admin">Admin</option>{user?.role === 'superadmin' && <option value="superadmin">Superadmin</option>}</select></div>
           </div>
           <div className="row"><button className="btn" onClick={createUser}>Create</button><button className="btn btn-secondary" onClick={() => setShowCreate(false)}>Cancel</button></div>
         </Modal>

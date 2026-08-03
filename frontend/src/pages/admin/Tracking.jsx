@@ -476,7 +476,7 @@ function parseCommandResponse(command, raw) {
   return null; // fall back to raw monospace display
 }
 
-export default function Tracking() {
+export default function Tracking({ readOnly = false }) {
   // ── device list & selection ──────────────────────────────────────
   const [devices,      setDevices]      = useState([]);
   const [mapDevices,   setMapDevices]   = useState([]);
@@ -1224,7 +1224,7 @@ export default function Tracking() {
               <span style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 600 }}>{sseOnline ? 'LIVE' : 'offline'}</span>
             </div>
             <button className="btn btn-sm btn-secondary" title="Refresh" onClick={loadDevices}><RefreshCw size={12} /></button>
-            <button className="btn btn-sm btn-primary" onClick={() => setShowAdd(true)}><Plus size={12} /> Add</button>
+            {!readOnly && <button className="btn btn-sm btn-primary" onClick={() => setShowAdd(true)}><Plus size={12} /> Add</button>}
           </div>
 
           {/* Tab bar */}
@@ -1280,7 +1280,7 @@ export default function Tracking() {
                     <div style={{ fontSize: 36, marginBottom: 10 }}>📡</div>
                     <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>No trackers yet</div>
                     <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 16, lineHeight: 1.5 }}>Register a Teltonika device to start tracking bikes</div>
-                    <button className="btn btn-sm btn-primary" onClick={() => setShowAdd(true)}><Plus size={12} /> Register device</button>
+                    {!readOnly && <button className="btn btn-sm btn-primary" onClick={() => setShowAdd(true)}><Plus size={12} /> Register device</button>}
                   </>
                 ) : (
                   <div style={{ fontSize: 12, color: 'var(--muted)' }}>No devices match "{deviceSearch}"</div>
@@ -1321,8 +1321,8 @@ export default function Tracking() {
                       disabled={requestingPos.has(d.id)}>
                       <MapPin size={10} />
                     </button>
-                    <button className="btn btn-sm" style={{ padding: '2px 4px', opacity: 0.45, background: 'transparent', minWidth: 0 }}
-                      onClick={e => deleteDevice(e, d.id)} title="Remove"><Trash2 size={10} /></button>
+                    {!readOnly && <button className="btn btn-sm" style={{ padding: '2px 4px', opacity: 0.45, background: 'transparent', minWidth: 0 }}
+                      onClick={e => deleteDevice(e, d.id)} title="Remove"><Trash2 size={10} /></button>}
                   </div>
                   <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2, paddingLeft: 18, fontFamily: 'monospace', letterSpacing: '.3px' }}>{d.imei}</div>
                   {d.organization_name && <div style={{ fontSize: 10, color: 'var(--primary)', marginTop: 2, paddingLeft: 18, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.organization_name}</div>}
@@ -1363,7 +1363,7 @@ export default function Tracking() {
         {sideTab === 'alerts' && <>
           <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)', display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={{ fontSize: 11, color: 'var(--muted)', flex: 1 }}>Recent events</span>
-            <button className="btn btn-sm btn-secondary" title="Alert settings" onClick={openAlertSettings}><Settings size={11} /></button>
+            {!readOnly && <button className="btn btn-sm btn-secondary" title="Alert settings" onClick={openAlertSettings}><Settings size={11} /></button>}
             <button className="btn btn-sm btn-secondary" onClick={loadAlerts}><RefreshCw size={11} /></button>
             {alerts.some(a => !a.acknowledged_at) && (
               <button className="btn btn-sm btn-secondary" style={{ fontSize: 11 }} onClick={acknowledgeAll}>Ack all</button>
@@ -1456,7 +1456,7 @@ export default function Tracking() {
           <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)', display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={{ fontSize: 11, color: 'var(--muted)', flex: 1 }}>{geofences.length} geofence{geofences.length !== 1 ? 's' : ''}</span>
             <button className="btn btn-sm btn-secondary" onClick={loadGeofences}><RefreshCw size={11} /></button>
-            <button className="btn btn-sm btn-primary" onClick={() => setShowGeoForm(true)}><Plus size={11} /> Add</button>
+            {!readOnly && <button className="btn btn-sm btn-primary" onClick={() => setShowGeoForm(true)}><Plus size={11} /> Add</button>}
           </div>
           <div style={{ flex: 1, overflowY: 'auto' }}>
             {geofences.length === 0 ? (
@@ -1464,7 +1464,7 @@ export default function Tracking() {
                 <Shield size={28} style={{ color: 'var(--muted)', marginBottom: 8 }} />
                 <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>No geofences</div>
                 <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 16, lineHeight: 1.5 }}>Add zones to get entry/exit alerts when bikes cross the boundary</div>
-                <button className="btn btn-sm btn-primary" onClick={() => setShowGeoForm(true)}><Plus size={11} /> Add geofence</button>
+                {!readOnly && <button className="btn btn-sm btn-primary" onClick={() => setShowGeoForm(true)}><Plus size={11} /> Add geofence</button>}
               </div>
             ) : geofences.map(gf => {
               const zt = ZONE_TYPES.find(z => z.value === gf.zone_type) || ZONE_TYPES[0];
@@ -1480,14 +1480,16 @@ export default function Tracking() {
                       {gf.polygon_coords ? `Polygon · ${gf.polygon_coords.length} pts` : (gf.radius_m >= 1000 ? `${(gf.radius_m / 1000).toFixed(1)} km radius` : `${gf.radius_m} m radius`)}{gf.bike_registration ? ` · ${gf.bike_registration}` : ' · all bikes'}
                     </div>
                   </div>
-                  <div style={{ display: 'flex', gap: 3, flexShrink: 0 }}>
-                    <button className="btn btn-sm" style={{ padding: '2px 5px', fontSize: 10, color: '#7c3aed', borderColor: '#7c3aed', background: 'transparent', minWidth: 0 }}
-                      onClick={() => drawPolygonForGeofence(gf)} title="Draw polygon outline">
-                      <Pencil size={10} />
-                    </button>
-                    <button className="btn btn-sm" style={{ padding: '2px 4px', opacity: 0.5, background: 'transparent', minWidth: 0 }}
-                      onClick={() => deleteGeofence(gf.id)} title="Delete"><Trash2 size={10} /></button>
-                  </div>
+                  {!readOnly && (
+                    <div style={{ display: 'flex', gap: 3, flexShrink: 0 }}>
+                      <button className="btn btn-sm" style={{ padding: '2px 5px', fontSize: 10, color: '#7c3aed', borderColor: '#7c3aed', background: 'transparent', minWidth: 0 }}
+                        onClick={() => drawPolygonForGeofence(gf)} title="Draw polygon outline">
+                        <Pencil size={10} />
+                      </button>
+                      <button className="btn btn-sm" style={{ padding: '2px 4px', opacity: 0.5, background: 'transparent', minWidth: 0 }}
+                        onClick={() => deleteGeofence(gf.id)} title="Delete"><Trash2 size={10} /></button>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1737,19 +1739,21 @@ export default function Tracking() {
                     : <span style={{ color: 'var(--muted)' }}>Offline · last seen {selectedDevice.last_seen_at ? fmtSAST(selectedDevice.last_seen_at) : 'never'}</span>}
                 </div>
               </div>
-              <button className="btn btn-sm btn-secondary" style={{ padding: '3px 6px', flexShrink: 0 }}
-                title="Alert settings for this device"
-                onClick={() => openAlertSettings(selectedDevice.id)}>
-                <Bell size={12} />
-              </button>
-              <button className="btn btn-sm btn-secondary" style={{ padding: '3px 6px', flexShrink: 0 }}
-                title="Edit device"
-                onClick={() => {
-                  setEditDeviceForm({ model: selectedDevice.model || 'FMB920', label: selectedDevice.label || '', bike_id: selectedDevice.bike_id || null, speed_limit_kmh: selectedDevice.speed_limit_kmh || 120 });
-                  setShowEditDevice(true);
-                }}>
-                <Pencil size={12} />
-              </button>
+              {!readOnly && <>
+                <button className="btn btn-sm btn-secondary" style={{ padding: '3px 6px', flexShrink: 0 }}
+                  title="Alert settings for this device"
+                  onClick={() => openAlertSettings(selectedDevice.id)}>
+                  <Bell size={12} />
+                </button>
+                <button className="btn btn-sm btn-secondary" style={{ padding: '3px 6px', flexShrink: 0 }}
+                  title="Edit device"
+                  onClick={() => {
+                    setEditDeviceForm({ model: selectedDevice.model || 'FMB920', label: selectedDevice.label || '', bike_id: selectedDevice.bike_id || null, speed_limit_kmh: selectedDevice.speed_limit_kmh || 120 });
+                    setShowEditDevice(true);
+                  }}>
+                  <Pencil size={12} />
+                </button>
+              </>}
               <button className="btn btn-sm btn-secondary" style={{ padding: '3px 6px', flexShrink: 0 }}
                 onClick={() => { setSelected(null); setTrail([]); setCommands([]); setAddress(null); setTrips([]); setPings([]); setDayPings([]); }} title="Close">
                 <X size={12} />
@@ -1758,7 +1762,7 @@ export default function Tracking() {
 
             {/* Detail tabs */}
             <div style={{ display: 'flex', marginTop: 10, marginBottom: -14, marginLeft: -14, marginRight: -14, borderTop: '1px solid var(--border)', paddingTop: 2 }}>
-              {[['activity', 'Activity'], ['trips', 'Trips'], ['bike', 'Bike'], ['driver', 'Driver'], ['info', 'Controls']].map(([tab, label]) => (
+              {[['activity', 'Activity'], ['trips', 'Trips'], ['bike', 'Bike'], ['driver', 'Driver'], ...(!readOnly ? [['info', 'Controls']] : [])].map(([tab, label]) => (
                 <button
                   key={tab}
                   onClick={() => {
@@ -2203,7 +2207,7 @@ export default function Tracking() {
             </div>
 
             {/* Engine control */}
-            <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
+            {!readOnly && <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8 }}>Engine control</div>
               {!selectedDevice.connected && (
                 <div style={{ fontSize: 11, color: '#f97316', marginBottom: 8, padding: '6px 8px', background: 'rgba(249,115,22,.1)', borderRadius: 6, border: '1px solid rgba(249,115,22,.2)' }}>
@@ -2221,7 +2225,7 @@ export default function Tracking() {
                   </button>
                 ))}
               </div>
-            </div>
+            </div>}
 
             {/* Diagnostics */}
             <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>

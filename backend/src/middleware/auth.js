@@ -34,6 +34,15 @@ function adminOnly(req, res, next) {
   next();
 }
 
+// Read-only tracking access: admins + control room operators
+function trackingReadOnly(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+  if (!['admin', 'superadmin', 'control_room'].includes(req.user.role)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+  next();
+}
+
 function fleetOwnerOnly(req, res, next) {
   if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
   if (!FLEET_OWNER_ROLES.includes(req.user.role) || !req.user.organization_id) {
@@ -55,4 +64,4 @@ function companyRoleAllowed(roles = []) {
   };
 }
 
-module.exports = { authRequired, adminOnly, fleetOwnerOnly, companyRoleAllowed, FLEET_OWNER_ROLES };
+module.exports = { authRequired, adminOnly, trackingReadOnly, fleetOwnerOnly, companyRoleAllowed, FLEET_OWNER_ROLES };

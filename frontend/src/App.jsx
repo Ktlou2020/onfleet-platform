@@ -68,6 +68,7 @@ import FleetRiderApply from './pages/FleetRiderApply';
 import Privacy from './pages/Privacy';
 import Terms from './pages/Terms';
 import { canViewFleetSection, getDefaultFleetRoute, isAdminPortalRole } from './pages/fleet/access';
+import ControlRoom from './pages/ControlRoom';
 
 const WORKSHOP_ROLES = ['technician', 'admin', 'superadmin'];
 
@@ -79,6 +80,7 @@ function PrivateRoute({ children, role }) {
   if (role === 'admin' && !['admin', 'superadmin'].includes(user.role)) return <Navigate to={String(user.role || '').startsWith('fleet_owner_') ? '/fleet/app' : '/dashboard'} replace />;
   if (role === 'fleet_owner' && !String(user.role || '').startsWith('fleet_owner_')) return <Navigate to={['admin', 'superadmin'].includes(user.role) ? '/admin' : '/dashboard'} replace />;
   if (role === 'workshop' && !WORKSHOP_ROLES.includes(user.role)) return <Navigate to="/login" replace />;
+  if (role === 'control_room' && user.role !== 'control_room') return <Navigate to="/login" replace />;
   return children;
 }
 
@@ -96,6 +98,7 @@ function HomeRoute() {
   if (loading) return null;
   if (!user) return <Landing />;
   if (user.role === 'technician') return <Navigate to="/workshop/app" replace />;
+  if (user.role === 'control_room') return <Navigate to="/control-room" replace />;
   if (isAdminPortalRole(user.role)) return <Navigate to="/admin" replace />;
   if (String(user.role || '').startsWith('fleet_owner_')) return <Navigate to={getDefaultFleetRoute(user.role)} replace />;
   return <Navigate to="/dashboard" replace />;
@@ -172,6 +175,8 @@ export default function App() {
           <Route path="users" element={<AdminUsers />} />
           <Route path="audit" element={<AdminAuditLogs />} />
         </Route>
+
+        <Route path="/control-room" element={<PrivateRoute role="control_room"><ControlRoom /></PrivateRoute>} />
 
         <Route path="/workshop/login" element={<WorkshopLogin />} />
         <Route path="/workshop/app" element={<PrivateRoute role="workshop"><WorkshopShell /></PrivateRoute>}>

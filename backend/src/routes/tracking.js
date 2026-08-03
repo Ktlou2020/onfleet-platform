@@ -4,7 +4,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const pgDb = require('../pgDb');
-const { authRequired, adminOnly } = require('../middleware/auth');
+const { authRequired, adminOnly, trackingReadOnly } = require('../middleware/auth');
 const teltonikaServer = require('../tcp/teltonikaServer');
 const trackingEvents = require('../trackingEvents');
 
@@ -71,7 +71,7 @@ function getBikeMap(bikeIds) {
 
 // ---------- Devices ----------
 
-router.get('/devices', authRequired, adminOnly, async (req, res) => {
+router.get('/devices', authRequired, trackingReadOnly, async (req, res) => {
   const { rows: devices } = await pgDb.query(
     `SELECT * FROM tracking_devices ORDER BY connected DESC, last_seen_at DESC`
   );
@@ -103,7 +103,7 @@ router.get('/devices', authRequired, adminOnly, async (req, res) => {
   res.json(result);
 });
 
-router.get('/devices/:id', authRequired, adminOnly, async (req, res) => {
+router.get('/devices/:id', authRequired, trackingReadOnly, async (req, res) => {
   const { rows } = await pgDb.query('SELECT * FROM tracking_devices WHERE id=$1', [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Device not found' });
   const d = rows[0];
@@ -164,7 +164,7 @@ router.delete('/devices/:id', authRequired, adminOnly, async (req, res) => {
 
 // ---------- Positions ----------
 
-router.get('/devices/:id/positions', authRequired, adminOnly, async (req, res) => {
+router.get('/devices/:id/positions', authRequired, trackingReadOnly, async (req, res) => {
   const { rows: devRows } = await pgDb.query('SELECT * FROM tracking_devices WHERE id=$1', [req.params.id]);
   if (!devRows[0]) return res.status(404).json({ error: 'Device not found' });
   if (!devRows[0].bike_id) return res.json([]);
@@ -224,7 +224,7 @@ router.post('/devices/:id/commands', authRequired, adminOnly, async (req, res) =
   });
 });
 
-router.get('/devices/:id/commands', authRequired, adminOnly, async (req, res) => {
+router.get('/devices/:id/commands', authRequired, trackingReadOnly, async (req, res) => {
   const { rows: devRows } = await pgDb.query('SELECT id FROM tracking_devices WHERE id=$1', [req.params.id]);
   if (!devRows[0]) return res.status(404).json({ error: 'Device not found' });
   const { rows } = await pgDb.query(
@@ -243,7 +243,7 @@ router.get('/devices/:id/commands', authRequired, adminOnly, async (req, res) =>
 
 // ---------- Map overview ----------
 
-router.get('/map', authRequired, adminOnly, async (req, res) => {
+router.get('/map', authRequired, trackingReadOnly, async (req, res) => {
   const connected = teltonikaServer.getConnectedIMEIs();
 
   // Get all devices with a linked bike
@@ -293,7 +293,7 @@ router.get('/map', authRequired, adminOnly, async (req, res) => {
 
 // ---------- SSE live stream ----------
 
-router.get('/live', authRequired, adminOnly, (req, res) => {
+router.get('/live', authRequired, trackingReadOnly, (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -317,7 +317,7 @@ router.get('/live', authRequired, adminOnly, (req, res) => {
 
 // ---------- Geofences ----------
 
-router.get('/geofences', authRequired, adminOnly, async (req, res) => {
+router.get('/geofences', authRequired, trackingReadOnly, async (req, res) => {
   const { rows } = await pgDb.query(`SELECT * FROM geofences ORDER BY created_at DESC`);
   for (const gf of rows) {
     if (gf.bike_id) {
@@ -382,7 +382,7 @@ router.delete('/geofences/:id', authRequired, adminOnly, async (req, res) => {
 
 // ---------- Trips ----------
 
-router.get('/trips', authRequired, adminOnly, async (req, res) => {
+router.get('/trips', authRequired, trackingReadOnly, async (req, res) => {
   const limit  = Math.min(Number(req.query.limit) || 50, 200);
   const bikeId = req.query.bike_id ? Number(req.query.bike_id) : null;
   const params = [];
@@ -400,7 +400,7 @@ router.get('/trips', authRequired, adminOnly, async (req, res) => {
 
 // ---------- Alerts ----------
 
-router.get('/alerts', authRequired, adminOnly, async (req, res) => {
+router.get('/alerts', authRequired, trackingReadOnly, async (req, res) => {
   const limit      = Math.min(Number(req.query.limit) || 100, 500);
   const bikeId     = req.query.bike_id ? Number(req.query.bike_id) : null;
   const unackedOnly = req.query.unacked === '1';
@@ -418,14 +418,14 @@ router.get('/alerts', authRequired, adminOnly, async (req, res) => {
   res.json(rows);
 });
 
-router.put('/alerts/:id/acknowledge', authRequired, adminOnly, async (req, res) => {
+router.put('/alerts/:id/acknowledge', authRequired, trackingReadOnly, async (req, res) => {
   const { rows } = await pgDb.query('SELECT id FROM tracking_alerts WHERE id=$1', [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Alert not found' });
   await pgDb.query('UPDATE tracking_alerts SET acknowledged_at=NOW() WHERE id=$1', [rows[0].id]);
   res.json({ ok: true });
 });
 
-router.post('/alerts/acknowledge-all', authRequired, adminOnly, async (req, res) => {
+router.post('/alerts/acknowledge-all', authRequired, trackingReadOnly, async (req, res) => {
   const bikeId = req.body.bike_id ? Number(req.body.bike_id) : null;
   if (bikeId) {
     await pgDb.query('UPDATE tracking_alerts SET acknowledged_at=NOW() WHERE bike_id=$1 AND acknowledged_at IS NULL', [bikeId]);
@@ -437,7 +437,7 @@ router.post('/alerts/acknowledge-all', authRequired, adminOnly, async (req, res)
 
 // ---------- Alert settings ----------
 
-router.get('/alert-settings', authRequired, adminOnly, async (req, res) => {
+router.get('/alert-settings', authRequired, trackingReadOnly, async (req, res) => {
   const deviceId = req.query.device_id ? Number(req.query.device_id) : null;
 
   const { rows: globalRows } = await pgDb.query('SELECT * FROM alert_settings');
@@ -536,7 +536,7 @@ router.delete('/alert-settings/device/:device_id', authRequired, adminOnly, asyn
   res.json({ ok: true });
 });
 
-router.get('/notification-users', authRequired, adminOnly, (req, res) => {
+router.get('/notification-users', authRequired, trackingReadOnly, (req, res) => {
   const users = db.prepare(
     `SELECT id, full_name, email, role FROM users WHERE role IN ('superadmin','admin') AND deleted_at IS NULL ORDER BY full_name`
   ).all();

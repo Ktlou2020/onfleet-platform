@@ -7,7 +7,8 @@ const path = require('path');
 const fs = require('fs');
 const db = require('../db');
 const { authRequired, adminOnly } = require('../middleware/auth');
-const { logAudit } = require('../utils/helpers');
+const axios = require('axios');
+const { logAudit, recalcScheduleStatuses } = require('../utils/helpers');
 const { generateStrategicReport } = require('../services/strategicReport');
 const { requireValidMime } = require('../utils/validateUpload');
 const { sendNotification, sendHtmlEmail, detectEmailProvider } = require('../services/notifier');
@@ -956,6 +957,219 @@ router.post('/fleet-owners/email', superadminOnly, async (req, res) => {
   logAudit(req.user.id, 'admin.fleet_owner.email', 'organizations', null,
     { template_key, org_ids, sent: results.sent, failed: results.failed.length }, req.ip);
 
+  res.json(results);
+});
+
+// ── Paystack sync helpers ─────────────────────────────────────────────────────
+
+const PAYSTACK_BASE_URL = 'https://api.paystack.co';
+
+function paystackHeaders() {
+  return { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` };
+}
+
+function ensureFleetWalletAdmin(organizationId) {
+  db.prepare('INSERT OR IGNORE INTO fleet_wallets (organization_id) VALUES (?)').run(organizationId);
+}
+
+function creditFleetWalletAdmin(organizationId, grossAmountZAR, riderId, reference) {
+  const fee = +(grossAmountZAR * 0.035 + 1).toFixed(2);
+  const net = +(grossAmountZAR - fee).toFixed(2);
+  ensureFleetWalletAdmin(organizationId);
+  db.transaction(() => {
+    if (reference) {
+      const dup = db.prepare('SELECT id FROM fleet_wallet_transactions WHERE paystack_reference = ? AND organization_id = ?').get(reference, organizationId);
+      if (dup) return;
+    }
+    db.prepare('UPDATE fleet_wallets SET balance = balance + ?, total_collected = total_collected + ?, updated_at = CURRENT_TIMESTAMP WHERE organization_id = ?')
+      .run(net, net, organizationId);
+    db.prepare(`INSERT INTO fleet_wallet_transactions (organization_id, type, amount, fee_amount, net_amount, description, paystack_reference, rider_user_id, available_at)
+      VALUES (?,?,?,?,?,?,?,?, datetime('now', '+48 hours'))`)
+      .run(organizationId, 'credit', grossAmountZAR, fee, net, 'Weekly rider rental payment (admin sync)', reference || null, riderId || null);
+  })();
+}
+
+function applyPaymentToScheduleAdmin(agreementId, amountZAR) {
+  const agreement = db.prepare('SELECT status FROM agreements WHERE id = ?').get(agreementId);
+  if (!agreement) throw new Error('Agreement not found');
+  if (agreement.status === 'discontinued') throw new Error('Agreement discontinued');
+  const schedule = db.prepare(`SELECT * FROM payment_schedules WHERE agreement_id = ? AND status != 'paid' AND status != 'waived' ORDER BY week_number ASC`).all(agreementId);
+  let remaining = amountZAR;
+  const upd = db.prepare('UPDATE payment_schedules SET amount_paid = ?, status = ?, paid_at = ? WHERE id = ?');
+  for (const row of schedule) {
+    if (remaining <= 0) break;
+    const owe = +(row.amount_due - row.amount_paid).toFixed(2);
+    const apply = Math.min(remaining, owe);
+    const newPaid = +(row.amount_paid + apply).toFixed(2);
+    const status = newPaid >= row.amount_due ? 'paid' : 'partial';
+    const paidAt = status === 'paid' ? new Date().toISOString() : row.paid_at;
+    upd.run(newPaid, status, paidAt, row.id);
+    remaining = +(remaining - apply).toFixed(2);
+  }
+  recalcScheduleStatuses(agreementId);
+  return remaining;
+}
+
+// Resolve agreementId + orgId + riderId from a Paystack transaction object.
+// Returns null values for fields that cannot be resolved.
+function resolvePaystackTxnScope(txn, hintOrgId) {
+  const meta = txn.metadata || {};
+  const customerCode = txn.customer?.customer_code;
+  const subscriptionCode = txn.subscription?.subscription_code;
+
+  let agreementId = Number(meta.agreement_id) || null;
+  let orgId = Number(meta.organization_id) || hintOrgId || null;
+  let riderId = Number(meta.rider_user_id) || null;
+
+  if (agreementId) {
+    const ag = db.prepare('SELECT id, user_id FROM agreements WHERE id = ?').get(agreementId);
+    if (!ag) agreementId = null;
+    else if (!riderId) riderId = ag.user_id;
+  }
+
+  if ((!agreementId || !orgId) && customerCode) {
+    const sub = subscriptionCode
+      ? db.prepare('SELECT agreement_id, organization_id, rider_user_id FROM rider_subscriptions WHERE paystack_subscription_code = ? LIMIT 1').get(subscriptionCode)
+      : db.prepare('SELECT agreement_id, organization_id, rider_user_id FROM rider_subscriptions WHERE paystack_customer_code = ? ORDER BY id DESC LIMIT 1').get(customerCode);
+    if (sub) {
+      if (!agreementId && sub.agreement_id) agreementId = sub.agreement_id;
+      if (!orgId && sub.organization_id) orgId = sub.organization_id;
+      if (!riderId && sub.rider_user_id) riderId = sub.rider_user_id;
+    }
+  }
+
+  if (!orgId && agreementId) {
+    const scope = db.prepare('SELECT b.organization_id FROM agreements a JOIN bikes b ON b.id = a.bike_id WHERE a.id = ?').get(agreementId);
+    if (scope?.organization_id) orgId = scope.organization_id;
+  }
+
+  if (!riderId && agreementId) {
+    const ag = db.prepare('SELECT user_id FROM agreements WHERE id = ?').get(agreementId);
+    if (ag) riderId = ag.user_id;
+  }
+
+  return { agreementId, orgId, riderId };
+}
+
+// Insert payment row + apply to schedule + credit wallet for a verified Paystack transaction.
+// Returns { result, payment_id } where result is 'synced' or 'already_recorded'.
+function replayPaystackTxn(txn, hintOrgId, actorUserId, ip) {
+  const reference = txn.reference;
+  const grossAmountZAR = (txn.amount || 0) / 100;
+  if (grossAmountZAR <= 0) throw new Error('Zero-amount transaction');
+
+  const existing = db.prepare('SELECT id, status FROM payments WHERE paystack_reference = ? OR reference = ?').get(reference, reference);
+  if (existing && existing.status === 'success') return { result: 'already_recorded', payment_id: existing.id };
+
+  const { agreementId, orgId, riderId } = resolvePaystackTxnScope(txn, hintOrgId);
+  if (!agreementId) throw new Error('Could not resolve agreement_id for this transaction');
+
+  const agreement = db.prepare('SELECT status FROM agreements WHERE id = ?').get(agreementId);
+  if (!agreement) throw new Error('Agreement not found');
+
+  const fee = +(grossAmountZAR * 0.015).toFixed(2);
+  const net = +(grossAmountZAR - fee).toFixed(2);
+
+  let paymentId;
+  db.transaction(() => {
+    const already = db.prepare('SELECT id FROM payments WHERE paystack_reference = ? OR reference = ?').get(reference, reference);
+    if (already) { paymentId = already.id; return; }
+    const info = db.prepare(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, paystack_reference, status, fee_amount, net_amount, paid_at, notes)
+      VALUES (?,?,?,'ZAR','paystack',?,?,'success',?,?,CURRENT_TIMESTAMP,'Synced from Paystack admin tool')`)
+      .run(agreementId, riderId, grossAmountZAR, reference, reference, fee, net);
+    paymentId = info.lastInsertRowid;
+  })();
+
+  if (agreement.status !== 'discontinued') {
+    try { applyPaymentToScheduleAdmin(agreementId, grossAmountZAR); } catch (e) {
+      console.error(`[admin sync] schedule apply error for agreement ${agreementId}:`, e.message);
+    }
+  }
+
+  if (orgId) creditFleetWalletAdmin(orgId, grossAmountZAR, riderId, reference);
+
+  if (actorUserId) {
+    logAudit(actorUserId, 'admin.paystack.replay_charge', 'payments', paymentId,
+      { reference, agreement_id: agreementId, org_id: orgId, amount: grossAmountZAR }, ip);
+  }
+
+  return { result: 'synced', payment_id: paymentId, amount: grossAmountZAR, agreement_id: agreementId, org_id: orgId };
+}
+
+// ── POST /admin/paystack/replay-charge ────────────────────────────────────────
+router.post('/paystack/replay-charge', superadminOnly, async (req, res) => {
+  const { reference } = req.body || {};
+  if (!reference) return res.status(400).json({ error: 'reference is required' });
+
+  const secretKey = process.env.PAYSTACK_SECRET_KEY;
+  if (!secretKey) return res.status(500).json({ error: 'PAYSTACK_SECRET_KEY not configured' });
+
+  try {
+    const { data: psResp } = await axios.get(`${PAYSTACK_BASE_URL}/transaction/verify/${encodeURIComponent(reference)}`, {
+      headers: paystackHeaders()
+    });
+
+    if (!psResp.status || psResp.data?.status !== 'success') {
+      return res.status(400).json({ error: 'Transaction is not successful on Paystack', ps_status: psResp.data?.status });
+    }
+
+    const result = replayPaystackTxn(psResp.data, null, req.user.id, req.ip);
+    res.json(result);
+  } catch (err) {
+    if (err.response?.status === 404) return res.status(404).json({ error: 'Transaction not found on Paystack' });
+    console.error('[admin] replay-charge error:', err.message);
+    res.status(err.response?.status || 500).json({ error: err.message });
+  }
+});
+
+// ── POST /admin/paystack/sync-org ─────────────────────────────────────────────
+router.post('/paystack/sync-org', superadminOnly, async (req, res) => {
+  const orgId = Number(req.body?.org_id);
+  if (!Number.isInteger(orgId) || orgId <= 0) return res.status(400).json({ error: 'org_id is required' });
+
+  const secretKey = process.env.PAYSTACK_SECRET_KEY;
+  if (!secretKey) return res.status(500).json({ error: 'PAYSTACK_SECRET_KEY not configured' });
+
+  const subs = db.prepare('SELECT * FROM rider_subscriptions WHERE organization_id = ? AND paystack_customer_code IS NOT NULL').all(orgId);
+  if (!subs.length) return res.json({ checked: 0, synced: 0, skipped: 0, errors: [] });
+
+  const results = { checked: 0, synced: 0, skipped: 0, errors: [] };
+
+  for (const sub of subs) {
+    let page = 1;
+    let hasMore = true;
+
+    while (hasMore) {
+      let txns;
+      try {
+        const { data: psResp } = await axios.get(`${PAYSTACK_BASE_URL}/transaction`, {
+          params: { customer: sub.paystack_customer_code, perPage: 100, page, status: 'success' },
+          headers: paystackHeaders()
+        });
+        txns = psResp.data || [];
+        hasMore = txns.length === 100;
+        page++;
+      } catch (err) {
+        results.errors.push({ customer_code: sub.paystack_customer_code, reason: err.message });
+        break;
+      }
+
+      results.checked += txns.length;
+
+      for (const txn of txns) {
+        try {
+          const outcome = replayPaystackTxn(txn, orgId, req.user.id, req.ip);
+          if (outcome.result === 'already_recorded') results.skipped++;
+          else results.synced++;
+        } catch (err) {
+          results.errors.push({ reference: txn.reference, reason: err.message });
+          results.skipped++;
+        }
+      }
+    }
+  }
+
+  logAudit(req.user.id, 'admin.paystack.sync_org', 'organizations', orgId, results, req.ip);
   res.json(results);
 });
 

@@ -5,7 +5,7 @@ import api from '../../api';
 import { useAuth } from '../../auth';
 import { Badge, ConfirmModal, CopyableContactValue, EmptyState, Loading, Modal, Pagination, SearchInput, Stat, fmt, fmtDate, matchesSearch, paginateItems } from '../../components/ui';
 import { getFleetRoleLabel } from '../fleet/access';
-import { Building2, ShieldCheck, Users, Wallet, Settings, ChevronDown, ChevronRight, Mail, MapPin, Bike, CreditCard, KeyRound, Trash2, Send, Eye, Phone, TrendingUp, AlertTriangle, CheckCircle2, Circle, Zap, Clock } from 'lucide-react';
+import { Building2, ShieldCheck, Users, Wallet, Settings, ChevronDown, ChevronRight, Mail, MapPin, Bike, CreditCard, KeyRound, Trash2, Send, Eye, Phone, TrendingUp, AlertTriangle, CheckCircle2, Circle, Zap, Clock, RefreshCw } from 'lucide-react';
 
 const EMAIL_TEMPLATES = [
   { key: 'demo_invite',     label: 'Demo / call invite' },
@@ -451,6 +451,26 @@ export default function AdminFleetOwners() {
     });
   };
 
+  const syncPaystack = async (org) => {
+    setBusyKey(`sync-${org.id}`);
+    try {
+      const { data } = await api.post('/admin/paystack/sync-org', { org_id: org.id });
+      const { synced, checked, skipped, errors } = data;
+      if (synced > 0) {
+        toast.success(`Synced ${synced} payment${synced !== 1 ? 's' : ''} for ${org.name} · ${checked} checked, ${skipped} already recorded`);
+        await load();
+      } else if (errors?.length) {
+        toast.error(`Sync complete — 0 new payments, ${errors.length} error${errors.length !== 1 ? 's' : ''} (${errors[0]?.reason || 'unknown'})`);
+      } else {
+        toast.success(`All Paystack payments already recorded for ${org.name} (${checked} checked)`);
+      }
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Paystack sync failed');
+    } finally {
+      setBusyKey('');
+    }
+  };
+
   if (loading) return <Loading />;
 
   if (user?.role !== 'superadmin') {
@@ -604,6 +624,16 @@ export default function AdminFleetOwners() {
                         style={{ display: 'flex', alignItems: 'center', gap: 4 }}
                       >
                         <Settings size={13} /> Plan
+                      </button>
+                      <button
+                        className="btn btn-sm btn-secondary"
+                        disabled={busyKey === `sync-${org.id}`}
+                        onClick={() => syncPaystack(org)}
+                        title="Pull missing Paystack payments into OnFleet"
+                        style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+                      >
+                        <RefreshCw size={13} style={busyKey === `sync-${org.id}` ? { animation: 'spin 1s linear infinite' } : {}} />
+                        {busyKey === `sync-${org.id}` ? 'Syncing…' : 'Sync PS'}
                       </button>
                       <button
                         className={`btn btn-sm ${isExpanded ? '' : 'btn-secondary'}`}

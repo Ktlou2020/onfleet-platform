@@ -9,6 +9,7 @@ import {
   Shield, Bell, Route, BellOff, Pencil, Settings, Mail, Users, Moon,
   Battery, BatteryLow, BatteryMedium, BatteryFull, BatteryCharging,
   Signal, SignalZero, SignalLow, SignalMedium, SignalHigh, Satellite,
+  Play, Pause, SkipBack, ChevronsRight,
 } from 'lucide-react';
 import api from '../../api';
 import toast from 'react-hot-toast';
@@ -39,6 +40,24 @@ function makeIcon(color, pulse = false) {
     iconSize: [14, 14],
     iconAnchor: [7, 7],
   });
+}
+
+function makeReplayMarkerIcon(color) {
+  return L.divIcon({
+    className: '',
+    html: `<div style="width:22px;height:22px;border-radius:50%;background:${color};border:3px solid #fff;box-shadow:0 2px 10px rgba(0,0,0,.65);"></div>`,
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+  });
+}
+
+function fmtReplayTime(ms) {
+  if (!ms || ms < 0) return '0:00';
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  const h = Math.floor(m / 60);
+  if (h > 0) return `${h}:${String(m % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+  return `${m}:${String(s % 60).padStart(2, '0')}`;
 }
 
 function speedColor(kmh) {
@@ -83,6 +102,19 @@ function FitBounds({ trigger, positions }) {
 
 function MapClickHandler({ onMapClick }) {
   useMapEvents({ click: (e) => onMapClick(e.latlng) });
+  return null;
+}
+
+function ReplayCamera({ position, follow, active }) {
+  const map = useMap();
+  const prevPos = useRef(null);
+  useEffect(() => {
+    if (!active || !follow || !position) return;
+    if (!prevPos.current) map.setView(position, Math.max(map.getZoom(), 15), { animate: false });
+    else map.panTo(position, { animate: true, duration: 0.4, easeLinearity: 1 });
+    prevPos.current = position;
+  }, [position, follow, active, map]);
+  useEffect(() => { if (!active) prevPos.current = null; }, [active]);
   return null;
 }
 
@@ -485,6 +517,15 @@ export default function Tracking() {
   const [pingDate,     setPingDate]     = useState(() => todayInSAST());
   const [pingDateLoading, setPingDateLoading] = useState(false);
 
+  // ── trip replay ──────────────────────────────────────────────
+  const [replayTrip,    setReplayTrip]    = useState(null);
+  const [replayPings,   setReplayPings]   = useState([]);
+  const [replayIdx,     setReplayIdx]     = useState(0);
+  const [replayPlaying, setReplayPlaying] = useState(false);
+  const [replaySpeed,   setReplaySpeed]   = useState(5);
+  const [replayLoading, setReplayLoading] = useState(false);
+  const [replayFollow,  setReplayFollow]  = useState(true);
+
   const selectedRef         = useRef(null);
   const mountedRef          = useRef(true);
   const geocodeVersionRef   = useRef(0);
@@ -797,6 +838,42 @@ export default function Tracking() {
       setPingDateLoading(false);
     }
   }, []);
+
+  const startReplay = useCallback(async (trip) => {
+    if (!selectedDevice?.id) return;
+    setReplayLoading(true);
+    try {
+      const from = encodeURIComponent(new Date(trip.started_at).toISOString());
+      const to   = trip.ended_at ? `&to=${encodeURIComponent(new Date(trip.ended_at).toISOString())}` : '';
+      const { data } = await api.get(`/tracking/devices/${selectedDevice.id}/positions?limit=1000&from=${from}${to}`);
+      if (data.length < 2) { toast.error('Not enough GPS data to replay this trip'); return; }
+      setReplayPings(data); // oldest-first from backend
+      setReplayIdx(0);
+      setReplayPlaying(true);
+      setReplayTrip(trip);
+      setReplayFollow(true);
+    } catch { toast.error('Could not load trip data'); }
+    finally { setReplayLoading(false); }
+  }, [selectedDevice]);
+
+  const stopReplay = useCallback(() => {
+    setReplayTrip(null);
+    setReplayPings([]);
+    setReplayIdx(0);
+    setReplayPlaying(false);
+  }, []);
+
+  // Replay tick — advance one ping at a time using real time gaps / speed multiplier
+  useEffect(() => {
+    if (!replayPlaying || replayPings.length === 0) return;
+    if (replayIdx >= replayPings.length - 1) { setReplayPlaying(false); return; }
+    const curr = replayPings[replayIdx];
+    const next = replayPings[replayIdx + 1];
+    const gap  = Math.max(0, new Date(next.recorded_at) - new Date(curr.recorded_at));
+    const delay = Math.max(40, Math.min(gap / replaySpeed, 3000));
+    const t = setTimeout(() => setReplayIdx(i => i + 1), delay);
+    return () => clearTimeout(t);
+  }, [replayPlaying, replayIdx, replayPings, replaySpeed]);
 
   const selectDevice = useCallback(async (device) => {
     const version = ++selectVersionRef.current;
@@ -1329,6 +1406,27 @@ export default function Tracking() {
               <Popup>Latest position</Popup>
             </Marker>
           )}
+
+          {/* ── Trip replay overlays ─────────────────────────── */}
+          {replayPings.length > 0 && (() => {
+            const cur = replayPings[replayIdx];
+            const fullRoute = replayPings.map(p => [p.lat, p.lng]);
+            const played    = replayPings.slice(0, replayIdx + 1);
+            return (<>
+              {/* Full route faint */}
+              <Polyline positions={fullRoute} color="#94a3b8" weight={3} opacity={0.35} />
+              {/* Played portion speed-coloured */}
+              <SpeedTrail positions={played} />
+              {/* Moving marker */}
+              {cur && <Marker position={[cur.lat, cur.lng]} icon={makeReplayMarkerIcon(speedColor(cur.speed_kmh))} />}
+              {/* Camera follow */}
+              <ReplayCamera
+                position={cur ? [cur.lat, cur.lng] : null}
+                follow={replayFollow}
+                active={!!replayTrip}
+              />
+            </>);
+          })()}
         </MapContainer>
 
         {/* Map controls */}
@@ -1366,6 +1464,73 @@ export default function Tracking() {
             </div>
           ))}
         </div>
+
+        {/* ── Replay control bar ──────────────────────────────────── */}
+        {replayTrip && (() => {
+          const cur     = replayPings[replayIdx];
+          const first   = replayPings[0];
+          const last    = replayPings[replayPings.length - 1];
+          const elapsed = cur && first ? new Date(cur.recorded_at) - new Date(first.recorded_at) : 0;
+          const total   = first && last ? new Date(last.recorded_at) - new Date(first.recorded_at) : 0;
+          const kmh     = Math.round(cur?.speed_kmh || 0);
+          return (
+            <div style={{
+              position: 'absolute', bottom: 36, left: 12, right: 12, zIndex: 1100,
+              background: 'rgba(15,15,20,.88)', backdropFilter: 'blur(10px)',
+              borderRadius: 12, padding: '10px 14px', color: '#fff',
+              boxShadow: '0 4px 24px rgba(0,0,0,.5)',
+              display: 'flex', flexDirection: 'column', gap: 8,
+            }}>
+              {/* Top row: title + speed badge + close */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                <span style={{ fontWeight: 700, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  Trip replay · {fmtSAST(replayTrip.started_at)}
+                </span>
+                <span style={{ fontSize: 11, background: speedColor(cur?.speed_kmh), color: '#fff', borderRadius: 6, padding: '1px 7px', fontWeight: 700, minWidth: 40, textAlign: 'center' }}>
+                  {kmh} km/h
+                </span>
+                <button onClick={stopReplay} style={{ background: 'rgba(255,255,255,.12)', border: 'none', borderRadius: 6, color: '#fff', cursor: 'pointer', padding: '3px 6px', display: 'flex', alignItems: 'center' }}>
+                  <X size={13} />
+                </button>
+              </div>
+              {/* Scrubber */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 11, fontVariantNumeric: 'tabular-nums', color: '#a0aec0', minWidth: 42 }}>{fmtReplayTime(elapsed)}</span>
+                <input
+                  type="range" min={0} max={replayPings.length - 1} value={replayIdx}
+                  onChange={e => { setReplayPlaying(false); setReplayIdx(Number(e.target.value)); }}
+                  style={{ flex: 1, accentColor: '#1E88D1', cursor: 'pointer' }}
+                />
+                <span style={{ fontSize: 11, fontVariantNumeric: 'tabular-nums', color: '#a0aec0', minWidth: 42, textAlign: 'right' }}>{fmtReplayTime(total)}</span>
+              </div>
+              {/* Bottom row: controls */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <button onClick={() => { setReplayIdx(0); setReplayPlaying(false); }}
+                  style={{ background: 'rgba(255,255,255,.1)', border: 'none', borderRadius: 6, color: '#fff', cursor: 'pointer', padding: '5px 8px', display: 'flex', alignItems: 'center' }}>
+                  <SkipBack size={13} />
+                </button>
+                <button onClick={() => setReplayPlaying(p => !p)}
+                  style={{ background: '#1E88D1', border: 'none', borderRadius: 6, color: '#fff', cursor: 'pointer', padding: '5px 12px', display: 'flex', alignItems: 'center', gap: 4, fontWeight: 700, fontSize: 12 }}>
+                  {replayPlaying ? <><Pause size={13} /> Pause</> : <><Play size={13} /> Play</>}
+                </button>
+                <div style={{ display: 'flex', gap: 3, marginLeft: 4 }}>
+                  {[1, 5, 20, 60].map(s => (
+                    <button key={s} onClick={() => setReplaySpeed(s)}
+                      style={{ background: replaySpeed === s ? '#1E88D1' : 'rgba(255,255,255,.1)', border: 'none', borderRadius: 5, color: '#fff', cursor: 'pointer', padding: '4px 7px', fontSize: 11, fontWeight: 700 }}>
+                      {s}×
+                    </button>
+                  ))}
+                </div>
+                <div style={{ flex: 1 }} />
+                <button onClick={() => setReplayFollow(f => !f)}
+                  style={{ background: replayFollow ? 'rgba(34,197,94,.25)' : 'rgba(255,255,255,.1)', border: replayFollow ? '1px solid rgba(34,197,94,.5)' : '1px solid transparent', borderRadius: 6, color: replayFollow ? '#22c55e' : '#a0aec0', cursor: 'pointer', padding: '4px 9px', fontSize: 11, fontWeight: 600 }}>
+                  <Navigation size={11} style={{ display: 'inline', marginRight: 3, verticalAlign: 'middle' }} />
+                  Follow
+                </button>
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* ── Device detail panel ──────────────────────────────────────── */}
@@ -1917,15 +2082,24 @@ export default function Tracking() {
               ) : trips.length === 0 ? (
                 <div style={{ fontSize: 12, color: 'var(--muted)' }}>No trips recorded yet. Trips start when the ignition turns on and the bike moves.</div>
               ) : trips.map(t => {
-                const dist = t.distance_km != null ? `${Number(t.distance_km).toFixed(1)} km` : '—';
-                const dur  = fmtDuration(t.duration_sec);
-                const maxS = t.max_speed_kmh != null ? `${Math.round(t.max_speed_kmh)} km/h` : '—';
+                const dist    = t.distance_km != null ? `${Number(t.distance_km).toFixed(1)} km` : '—';
+                const dur     = fmtDuration(t.duration_sec);
+                const maxS    = t.max_speed_kmh != null ? `${Math.round(t.max_speed_kmh)} km/h` : '—';
                 const ongoing = !t.ended_at;
+                const isReplaying = replayTrip?.id === t.id;
                 return (
-                  <div key={t.id} style={{ marginBottom: 8, padding: '9px 10px', background: 'var(--surface)', borderRadius: 8, border: '1px solid var(--border)', borderLeft: `3px solid ${ongoing ? '#22c55e' : 'var(--border)'}` }}>
+                  <div key={t.id} style={{ marginBottom: 8, padding: '9px 10px', background: isReplaying ? 'rgba(30,136,209,.08)' : 'var(--surface)', borderRadius: 8, border: `1px solid ${isReplaying ? 'var(--primary)' : 'var(--border)'}`, borderLeft: `3px solid ${isReplaying ? 'var(--primary)' : ongoing ? '#22c55e' : 'var(--border)'}` }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
                       <span style={{ fontSize: 11, color: 'var(--muted)', flex: 1 }}>{fmtSAST(t.started_at)}</span>
                       {ongoing && <span style={{ fontSize: 10, fontWeight: 700, color: '#22c55e', background: 'rgba(34,197,94,.12)', padding: '1px 6px', borderRadius: 8 }}>active</span>}
+                      {!ongoing && (
+                        <button
+                          onClick={() => isReplaying ? stopReplay() : startReplay(t)}
+                          disabled={replayLoading}
+                          style={{ display: 'flex', alignItems: 'center', gap: 3, padding: '2px 7px', fontSize: 10, fontWeight: 700, borderRadius: 6, border: 'none', cursor: 'pointer', background: isReplaying ? 'var(--primary)' : 'rgba(30,136,209,.12)', color: isReplaying ? '#fff' : 'var(--primary)' }}>
+                          {isReplaying ? <><X size={9} /> Stop</> : replayLoading ? '…' : <><Play size={9} /> Replay</>}
+                        </button>
+                      )}
                     </div>
                     <div style={{ display: 'flex', gap: 10 }}>
                       {[

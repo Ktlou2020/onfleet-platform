@@ -9,7 +9,8 @@ const { authRequired, adminOnly } = require('../middleware/auth');
 const { logAudit } = require('../utils/helpers');
 const { generateStrategicReport } = require('../services/strategicReport');
 const { requireValidMime } = require('../utils/validateUpload');
-const { sendNotification, detectEmailProvider } = require('../services/notifier');
+const { sendNotification, sendHtmlEmail, detectEmailProvider } = require('../services/notifier');
+const { getTemplate, listTemplates, previewTemplate } = require('../services/emailTemplates');
 
 const router = express.Router();
 const { branding: brandingUploadDir } = require('../uploadPaths');
@@ -833,6 +834,71 @@ router.post('/fleet-payouts/:id/process', superadminOnly, (req, res) => {
   }
 
   res.json({ ok: true, status: newStatus });
+});
+
+// ── Fleet owner email campaigns ───────────────────────────────────────────────
+router.get('/email-templates', superadminOnly, (req, res) => {
+  const key = req.query.preview;
+  if (key) {
+    const preview = previewTemplate(key);
+    if (!preview) return res.status(404).json({ error: 'Template not found' });
+    return res.json(preview);
+  }
+  res.json({ templates: listTemplates() });
+});
+
+router.post('/fleet-owners/email', superadminOnly, async (req, res) => {
+  const { template_key, org_ids, custom_subject, custom_message, preview } = req.body || {};
+
+  if (!template_key && !custom_message) {
+    return res.status(400).json({ error: 'Provide template_key or custom_message' });
+  }
+
+  let targetOrgs;
+  if (Array.isArray(org_ids) && org_ids.length) {
+    const placeholders = org_ids.map(() => '?').join(',');
+    targetOrgs = db.prepare(`SELECT id, name, contact_email, trial_ends_at FROM organizations WHERE id IN (${placeholders})`).all(...org_ids);
+  } else {
+    targetOrgs = db.prepare(`SELECT id, name, contact_email, trial_ends_at FROM organizations`).all();
+  }
+
+  targetOrgs = targetOrgs.filter((o) => o.contact_email);
+
+  if (preview) {
+    const first = targetOrgs[0];
+    if (!first) return res.json({ subject: '', html: '', recipients: [] });
+    const tpl = template_key ? getTemplate(template_key, first) : null;
+    return res.json({
+      subject: tpl?.subject || custom_subject || '(no subject)',
+      html: tpl?.html || (custom_message ? `<p>${custom_message}</p>` : ''),
+      recipients: targetOrgs.map((o) => ({ id: o.id, name: o.name, email: o.contact_email }))
+    });
+  }
+
+  const results = { sent: 0, failed: [] };
+  for (const org of targetOrgs) {
+    try {
+      let subject, html;
+      if (template_key) {
+        const tpl = getTemplate(template_key, org);
+        if (!tpl) { results.failed.push({ org: org.name, reason: 'Unknown template' }); continue; }
+        subject = tpl.subject;
+        html = tpl.html;
+      } else {
+        subject = custom_subject || 'Message from OnFleet';
+        html = `<p style="font-family:Arial,sans-serif;font-size:15px;line-height:1.7;color:#1a2b42">${String(custom_message).replace(/\n/g, '</p><p style="font-family:Arial,sans-serif;font-size:15px;line-height:1.7;color:#1a2b42;margin:0 0 12px">').replace(/</g, (m, i) => i === 0 ? m : m)}</p>`;
+      }
+      await sendHtmlEmail(org.contact_email, subject, html);
+      results.sent++;
+    } catch (err) {
+      results.failed.push({ org: org.name, email: org.contact_email, reason: err.message });
+    }
+  }
+
+  logAudit(req.user.id, 'admin.fleet_owner.email', 'organizations', null,
+    { template_key, org_ids, sent: results.sent, failed: results.failed.length }, req.ip);
+
+  res.json(results);
 });
 
 module.exports = router;

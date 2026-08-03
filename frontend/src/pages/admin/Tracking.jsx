@@ -185,6 +185,7 @@ const ALERT_LABELS = {
   movement:         'Unauthorized movement',
   tamper:           'GPS tamper',
   device_offline:   'Device offline',
+  engine_cut_auto:  'Engine cut (auto)',
 };
 const ALERT_COLORS = {
   geofence_enter:   '#22c55e',
@@ -200,18 +201,19 @@ const ALERT_COLORS = {
   movement:         '#dc2626',
   tamper:           '#dc2626',
   device_offline:   '#94a3b8',
+  engine_cut_auto:  '#7c3aed',
 };
 const ALERT_SEVERITY = {
   panic: 'critical', tamper: 'critical', power_disconnect: 'critical', movement: 'critical',
   speeding: 'high', harsh_brake: 'high', geofence_exit: 'high',
   harsh_accel: 'medium', harsh_cornering: 'medium', geofence_enter: 'medium', low_battery: 'medium',
-  idle: 'low', device_offline: 'low',
+  idle: 'low', device_offline: 'low', engine_cut_auto: 'high',
 };
 const ALERT_FILTER_GROUPS = [
   { id: '',         label: 'All' },
   { id: 'critical', label: 'Critical', types: ['panic','tamper','power_disconnect','movement'] },
   { id: 'driving',  label: 'Driving',  types: ['speeding','harsh_brake','harsh_accel','harsh_cornering','idle'] },
-  { id: 'location', label: 'Location', types: ['geofence_enter','geofence_exit'] },
+  { id: 'location', label: 'Location', types: ['geofence_enter','geofence_exit','engine_cut_auto'] },
   { id: 'vehicle',  label: 'Vehicle',  types: ['low_battery','device_offline'] },
 ];
 const CRITICAL_ALERT_TYPES = new Set(['panic','tamper','power_disconnect','movement']);
@@ -1341,8 +1343,9 @@ export default function Tracking() {
                         <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>
                           {a.bike_registration || `Bike #${a.bike_id}`} · {fmtSASTtime(a.created_at)}
                         </div>
-                        {payload.speed_kmh && <div style={{ fontSize: 10, color: ALERT_COLORS[a.alert_type], marginTop: 1 }}>{Math.round(payload.speed_kmh)} km/h{payload.limit_kmh ? ` (limit ${payload.limit_kmh})` : ''}</div>}
-                        {payload.geofence_name && <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>Zone: {payload.geofence_name}</div>}
+                        {payload.speed_kmh && <div style={{ fontSize: 10, color: alertColor, marginTop: 1 }}>{Math.round(payload.speed_kmh)} km/h{payload.limit_kmh ? ` (limit ${payload.limit_kmh})` : ''}</div>}
+                        {payload.geofence_name && a.alert_type !== 'engine_cut_auto' && <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>Zone: {payload.geofence_name}</div>}
+                        {a.alert_type === 'engine_cut_auto' && <div style={{ fontSize: 10, color: '#7c3aed', marginTop: 1 }}>{payload.queued ? 'Queued — will send on reconnect' : 'Command sent'}{payload.geofence_name ? ` · triggered by: ${payload.geofence_name}` : ''}</div>}
                         {payload.idle_sec && <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>Idle: {Math.round(payload.idle_sec / 60)} min</div>}
                         {payload.battery_mv && <div style={{ fontSize: 10, color: '#f97316', marginTop: 1 }}>{Math.round((payload.battery_mv - 3200) / 10)}% battery ({payload.battery_mv} mV)</div>}
                         {hasLocation && <div style={{ fontSize: 9, color: 'var(--primary)', marginTop: 1 }}>Tap to view on map</div>}

@@ -4,6 +4,52 @@ const db = require('../db');
 const pgDb = require('../pgDb');
 const trackingEvents = require('../trackingEvents');
 
+const ENGINE_CUT_CMD = { fmb920: 'setdigout 1 1', fmc920: 'setdigout 1 1', fmb965: 'setdigout 2 1' };
+
+async function autoEngineCut(deviceId, bikeId, geofence, reg) {
+  try {
+    const { rows } = await pgDb.query(
+      'SELECT id, imei, model FROM tracking_devices WHERE id = $1',
+      [deviceId]
+    );
+    if (!rows.length) return;
+    const device = rows[0];
+    const model = (device.model || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const cutCmd = ENGINE_CUT_CMD[model] || 'setdigout 1 1';
+
+    const { rows: cmdRows } = await pgDb.query(
+      `INSERT INTO tracking_commands (device_id, command, status, created_at)
+       VALUES ($1, $2, 'pending', NOW()) RETURNING id`,
+      [deviceId, cutCmd]
+    );
+    const cmdId = cmdRows[0].id;
+
+    // Lazy require avoids circular dep (teltonikaServer → geofenceService → teltonikaServer)
+    const { sendCommand } = require('../tcp/teltonikaServer');
+    const sent = sendCommand(device.imei, cmdId, cutCmd);
+    console.log(`[GeofenceService] Auto engine cut ${sent ? 'sent' : 'queued'} for ${device.imei} — entered: ${geofence.name}`);
+
+    const cutPayload = JSON.stringify({ geofence_name: geofence.name, cmd: cutCmd, queued: !sent });
+    const { rows: alertRows } = await pgDb.query(
+      `INSERT INTO tracking_alerts (bike_id, device_id, alert_type, payload, created_at)
+       VALUES ($1,$2,'engine_cut_auto',$3,NOW()) RETURNING id`,
+      [bikeId, deviceId, cutPayload]
+    );
+    trackingEvents.emit('alert', {
+      id: alertRows[0].id,
+      bike_id: bikeId,
+      device_id: deviceId,
+      alert_type: 'engine_cut_auto',
+      payload: cutPayload,
+      bike_registration: reg,
+      created_at: new Date().toISOString(),
+      acknowledged_at: null,
+    });
+  } catch (e) {
+    console.error('[GeofenceService] Auto engine cut failed:', e.message);
+  }
+}
+
 function haversineKm(lat1, lng1, lat2, lng2) {
   const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -44,7 +90,8 @@ async function checkGeofences(bikeId, deviceId, lat, lng, recordedAt) {
     if (inside === wasInside) continue;
 
     const alertType = inside ? 'geofence_enter' : 'geofence_exit';
-    const payload = JSON.stringify({ geofence_id: gf.id, geofence_name: gf.name, zone_type: gf.zone_type || 'standard', lat, lng });
+    const zoneType = gf.zone_type || 'standard';
+    const payload = JSON.stringify({ geofence_id: gf.id, geofence_name: gf.name, zone_type: zoneType, lat, lng });
 
     const { rows: alertRows } = await pgDb.query(
       'INSERT INTO tracking_alerts (bike_id, device_id, alert_type, payload, created_at) VALUES ($1,$2,$3,$4,$5) RETURNING id',
@@ -66,6 +113,11 @@ async function checkGeofences(bikeId, deviceId, lat, lng, recordedAt) {
       created_at: recordedAt,
       acknowledged_at: null,
     });
+
+    // Automatically cut the engine when a bike enters a no-go zone
+    if (alertType === 'geofence_enter' && zoneType === 'danger' && deviceId != null) {
+      autoEngineCut(deviceId, bikeId, gf, reg);
+    }
   }
 }
 

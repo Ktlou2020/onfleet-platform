@@ -58,6 +58,9 @@ const COOLDOWNS_MS = {
   power_disconnect: 10 * 60_000,
 };
 
+// Alert types that are OFF by default (no panic button wired on standard installs)
+const ALERT_DISABLED_BY_DEFAULT = new Set(['panic']);
+
 const CRITICAL_TYPES = new Set(['panic', 'tamper', 'power_disconnect', 'movement']);
 
 const ALERT_LABELS = {
@@ -136,7 +139,8 @@ async function emitAlert(id, bikeId, deviceId, alertType, payload, recordedAt) {
 async function fireAlert(bikeId, deviceId, alertType, payload, recordedAt, nowMs) {
   const deviceSetting = deviceId != null ? deviceAlertSettings[deviceId]?.[alertType] : undefined;
   const setting = deviceSetting !== undefined ? deviceSetting : alertSettingsCache[alertType];
-  if (setting && setting.enabled === false) return; // alert type disabled
+  const enabledDefault = !ALERT_DISABLED_BY_DEFAULT.has(alertType);
+  if (setting ? setting.enabled === false : !enabledDefault) return;
   if (!canFire(bikeId, alertType, nowMs)) return;
   const { rows } = await pgDb.query(
     'INSERT INTO tracking_alerts (bike_id, device_id, alert_type, payload, created_at) VALUES ($1,$2,$3,$4,$5) RETURNING id',

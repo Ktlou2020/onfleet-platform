@@ -440,14 +440,18 @@ router.get('/alert-settings', authRequired, adminOnly, async (req, res) => {
     } catch { /* table may not exist yet */ }
   }
 
+  // Alert types that are off by default when no explicit setting exists in the DB
+  const DISABLED_BY_DEFAULT = new Set(['panic']);
+
   const result = ALL_ALERT_TYPES.map(t => {
     const g = globalMap[t];
     const d = deviceMap[t];
     const active = d || g;
+    const enabledDefault = !DISABLED_BY_DEFAULT.has(t);
     return {
       alert_type: t,
-      enabled: active ? active.enabled : true,
-      notify_enabled: active ? active.notify_enabled : true,
+      enabled: active ? active.enabled : enabledDefault,
+      notify_enabled: active ? active.notify_enabled : enabledDefault,
       recipient_user_ids: (() => { try { return JSON.parse(active?.recipient_user_ids || '[]'); } catch { return []; } })(),
       device_override: !!d,
     };

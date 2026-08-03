@@ -125,6 +125,31 @@ async function runTrackingSchema() {
         PRIMARY KEY (device_id, alert_type)
       )
     `);
+    // Add zone_type and color columns to geofences (idempotent)
+    await pgDb.query(`ALTER TABLE geofences ADD COLUMN IF NOT EXISTS zone_type TEXT DEFAULT 'standard'`);
+    await pgDb.query(`ALTER TABLE geofences ADD COLUMN IF NOT EXISTS color TEXT`);
+
+    // Seed the known no-go (theft/stripping) zones — skip any that already exist by name+type
+    const noGoZones = [
+      { name: 'Cleveland - Theft Zone',    lat: -26.2042, lng: 28.1192, radius_m:  150 },
+      { name: 'Cosmo City 1',              lat: -26.0359, lng: 27.9320, radius_m:  620 },
+      { name: 'Cosmo City 2',              lat: -26.0307, lng: 27.9169, radius_m:  415 },
+      { name: 'Cosmo 3',                   lat: -26.0137, lng: 27.9314, radius_m:  410 },
+      { name: 'Mogale City Strip Zone',    lat: -26.1339, lng: 27.8101, radius_m:  880 },
+      { name: 'Mooiplaas - Stripping Area',lat: -25.8520, lng: 28.0913, radius_m:  405 },
+      { name: 'Oliven',                    lat: -25.9111, lng: 28.0770, radius_m:  860 },
+      { name: 'Witpoortjie',               lat: -26.1608, lng: 27.8357, radius_m:  210 },
+      { name: 'Zanspriut',                 lat: -26.0607, lng: 27.9147, radius_m:  465 },
+    ];
+    for (const z of noGoZones) {
+      await pgDb.query(
+        `INSERT INTO geofences (name, lat, lng, radius_m, zone_type, color, active)
+         SELECT $1,$2,$3,$4,'danger','#E53935',TRUE
+         WHERE NOT EXISTS (SELECT 1 FROM geofences WHERE name=$1 AND zone_type='danger')`,
+        [z.name, z.lat, z.lng, z.radius_m]
+      );
+    }
+
     console.log('[pgDb] Tracking schema ready');
   } catch (err) {
     console.error('[pgDb] Schema migration failed:', err.message);

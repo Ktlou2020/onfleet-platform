@@ -329,13 +329,13 @@ router.get('/geofences', authRequired, adminOnly, async (req, res) => {
 });
 
 router.post('/geofences', authRequired, adminOnly, async (req, res) => {
-  const { name, lat, lng, radius_m, bike_id } = req.body;
+  const { name, lat, lng, radius_m, bike_id, zone_type, color } = req.body;
   if (!name || lat == null || lng == null) return res.status(400).json({ error: 'name, lat and lng are required' });
   const radius = Number(radius_m) || 500;
   if (radius < 50 || radius > 50000) return res.status(400).json({ error: 'radius_m must be 50–50000' });
   const { rows } = await pgDb.query(
-    'INSERT INTO geofences (name, lat, lng, radius_m, bike_id, created_by) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',
-    [name, Number(lat), Number(lng), radius, bike_id || null, req.user.id]
+    'INSERT INTO geofences (name, lat, lng, radius_m, bike_id, zone_type, color, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id',
+    [name, Number(lat), Number(lng), radius, bike_id || null, zone_type || 'standard', color || null, req.user.id]
   );
   res.status(201).json({ id: rows[0].id });
 });

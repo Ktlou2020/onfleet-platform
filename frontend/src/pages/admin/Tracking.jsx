@@ -1311,7 +1311,13 @@ export default function Tracking() {
                 const isUnread = !a.acknowledged_at;
                 const severity = ALERT_SEVERITY[a.alert_type];
                 const isCritical = severity === 'critical';
+                const isDangerZone = payload.zone_type === 'danger';
                 const hasLocation = payload.lat && payload.lng;
+                const alertLabel = isDangerZone && a.alert_type === 'geofence_enter' ? 'Entered no-go zone'
+                  : isDangerZone && a.alert_type === 'geofence_exit' ? 'Left no-go zone'
+                  : ALERT_LABELS[a.alert_type] || a.alert_type;
+                const alertColor = isDangerZone && (a.alert_type === 'geofence_enter' || a.alert_type === 'geofence_exit')
+                  ? '#E53935' : ALERT_COLORS[a.alert_type] || '#94a3b8';
                 return (
                   <div
                     key={a.id}
@@ -1322,14 +1328,15 @@ export default function Tracking() {
                         if (dev) { selectDevice(dev); setSideTab('devices'); }
                       }
                     }}
-                    style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', opacity: isUnread ? 1 : 0.55, cursor: hasLocation || a.device_id ? 'pointer' : 'default', borderLeft: `3px solid ${isCritical ? ALERT_COLORS[a.alert_type] : 'transparent'}` }}
+                    style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', opacity: isUnread ? 1 : 0.55, cursor: hasLocation || a.device_id ? 'pointer' : 'default', borderLeft: `3px solid ${(isCritical || isDangerZone) ? alertColor : 'transparent'}` }}
                   >
                     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
-                      <div style={{ width: 8, height: 8, borderRadius: '50%', background: ALERT_COLORS[a.alert_type] || '#94a3b8', flexShrink: 0, marginTop: 3 }} />
+                      <div style={{ width: 8, height: 8, borderRadius: '50%', background: alertColor, flexShrink: 0, marginTop: 3 }} />
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                          <span style={{ fontSize: 12, fontWeight: isUnread ? 700 : 400 }}>{ALERT_LABELS[a.alert_type] || a.alert_type}</span>
-                          {isCritical && <span style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: ALERT_COLORS[a.alert_type], padding: '0 4px', borderRadius: 4 }}>CRITICAL</span>}
+                          <span style={{ fontSize: 12, fontWeight: isUnread ? 700 : 400 }}>{alertLabel}</span>
+                          {isCritical && <span style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: alertColor, padding: '0 4px', borderRadius: 4 }}>CRITICAL</span>}
+                          {isDangerZone && a.alert_type === 'geofence_enter' && <span style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: '#E53935', padding: '0 4px', borderRadius: 4 }}>NO-GO</span>}
                         </div>
                         <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>
                           {a.bike_registration || `Bike #${a.bike_id}`} · {fmtSASTtime(a.created_at)}
@@ -1366,19 +1373,28 @@ export default function Tracking() {
                 <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 16, lineHeight: 1.5 }}>Add zones to get entry/exit alerts when bikes cross the boundary</div>
                 <button className="btn btn-sm btn-primary" onClick={() => setShowGeoForm(true)}><Plus size={11} /> Add geofence</button>
               </div>
-            ) : geofences.map(gf => (
-              <div key={gf.id} style={{ padding: '9px 12px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 7 }}>
-                <div style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid #1E88D1', background: 'rgba(30,136,209,.12)', flexShrink: 0 }} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{gf.name}</div>
-                  <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>
-                    r={gf.radius_m}m{gf.bike_registration ? ` · ${gf.bike_registration}` : ' · all bikes'}
+            ) : geofences.map(gf => {
+              const isDanger = gf.zone_type === 'danger';
+              const dotColor = isDanger ? '#E53935' : '#1E88D1';
+              return (
+                <div key={gf.id} style={{ padding: '9px 12px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 7, borderLeft: isDanger ? '3px solid #E53935' : '3px solid transparent' }}>
+                  <div style={{ width: 12, height: 12, borderRadius: '50%', border: `2px solid ${dotColor}`, background: isDanger ? 'rgba(229,57,53,.12)' : 'rgba(30,136,209,.12)', flexShrink: 0 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{gf.name}</div>
+                      {isDanger && <span style={{ fontSize: 8, fontWeight: 700, color: '#fff', background: '#E53935', padding: '1px 4px', borderRadius: 3, flexShrink: 0 }}>NO-GO</span>}
+                    </div>
+                    <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>
+                      {gf.radius_m >= 1000 ? `${(gf.radius_m / 1000).toFixed(1)} km radius` : `${gf.radius_m} m radius`}{gf.bike_registration ? ` · ${gf.bike_registration}` : ' · all bikes'}
+                    </div>
                   </div>
+                  {!isDanger && (
+                    <button className="btn btn-sm" style={{ padding: '2px 4px', opacity: 0.5, background: 'transparent', minWidth: 0 }}
+                      onClick={() => deleteGeofence(gf.id)} title="Delete"><Trash2 size={10} /></button>
+                  )}
                 </div>
-                <button className="btn btn-sm" style={{ padding: '2px 4px', opacity: 0.5, background: 'transparent', minWidth: 0 }}
-                  onClick={() => deleteGeofence(gf.id)} title="Delete"><Trash2 size={10} /></button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </>}
       </div>
@@ -1399,16 +1415,32 @@ export default function Tracking() {
           {pickingCenter && <MapClickHandler onMapClick={handleMapClick} />}
 
           {/* Geofence circles */}
-          {geofences.map(gf => gf.lat && gf.lng ? (
-            <Circle
-              key={gf.id}
-              center={[gf.lat, gf.lng]}
-              radius={gf.radius_m}
-              pathOptions={{ color: '#1E88D1', fillColor: '#1E88D1', fillOpacity: 0.07, weight: 2, dashArray: '6 4' }}
-            >
-              <Popup><strong>{gf.name}</strong><br />Radius: {gf.radius_m}m{gf.bike_registration ? `\nBike: ${gf.bike_registration}` : ''}</Popup>
-            </Circle>
-          ) : null)}
+          {geofences.map(gf => {
+            if (!gf.lat || !gf.lng) return null;
+            const isDanger = gf.zone_type === 'danger';
+            const color = isDanger ? '#E53935' : (gf.color || '#1E88D1');
+            return (
+              <Circle
+                key={gf.id}
+                center={[gf.lat, gf.lng]}
+                radius={gf.radius_m}
+                pathOptions={{
+                  color,
+                  fillColor: color,
+                  fillOpacity: isDanger ? 0.13 : 0.07,
+                  weight: isDanger ? 2.5 : 2,
+                  dashArray: isDanger ? undefined : '6 4',
+                }}
+              >
+                <Popup>
+                  {isDanger && <div style={{ color: '#E53935', fontWeight: 700, fontSize: 11, marginBottom: 4 }}>⚠ NO-GO ZONE</div>}
+                  <strong>{gf.name}</strong><br />
+                  Radius: {gf.radius_m >= 1000 ? `${(gf.radius_m / 1000).toFixed(1)} km` : `${gf.radius_m} m`}
+                  {gf.bike_registration ? <><br />Bike: {gf.bike_registration}</> : ''}
+                </Popup>
+              </Circle>
+            );
+          })}
 
           {/* Device markers */}
           {mapDevices.map(d => d.lat && d.lng ? (

@@ -44,7 +44,7 @@ async function checkGeofences(bikeId, deviceId, lat, lng, recordedAt) {
     if (inside === wasInside) continue;
 
     const alertType = inside ? 'geofence_enter' : 'geofence_exit';
-    const payload = JSON.stringify({ geofence_id: gf.id, geofence_name: gf.name, lat, lng });
+    const payload = JSON.stringify({ geofence_id: gf.id, geofence_name: gf.name, zone_type: gf.zone_type || 'standard', lat, lng });
 
     const { rows: alertRows } = await pgDb.query(
       'INSERT INTO tracking_alerts (bike_id, device_id, alert_type, payload, created_at) VALUES ($1,$2,$3,$4,$5) RETURNING id',

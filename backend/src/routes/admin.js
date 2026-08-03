@@ -1511,4 +1511,119 @@ router.post('/paystack/sync-org', superadminOnly, async (req, res) => {
   res.json(results);
 });
 
+// ── GET /admin/org-agreements ─────────────────────────────────────────────────
+// Returns active/defaulted/paused agreements for an org (for dropdowns).
+router.get('/org-agreements', superadminOnly, (req, res) => {
+  const orgId = Number(req.query.org_id);
+  if (!orgId) return res.status(400).json({ error: 'org_id required' });
+  const agreements = db.prepare(`
+    SELECT a.id, a.agreement_number, a.status, a.created_at,
+           u.id as rider_id, u.full_name as rider_name, u.email as rider_email,
+           b.registration_number as bike_reg
+    FROM agreements a
+    JOIN users u ON u.id = a.user_id
+    JOIN bikes b ON b.id = a.bike_id
+    WHERE b.organization_id = ?
+      AND a.status IN ('active','paused','defaulted')
+    ORDER BY a.status = 'active' DESC, a.id DESC
+  `).all(orgId);
+  res.json(agreements);
+});
+
+// ── GET /admin/agreement-schedule ─────────────────────────────────────────────
+// Returns all payment schedule weeks for an agreement (for the payment modal).
+router.get('/agreement-schedule', superadminOnly, (req, res) => {
+  const agreementId = Number(req.query.agreement_id);
+  if (!agreementId) return res.status(400).json({ error: 'agreement_id required' });
+  const weeks = db.prepare(`
+    SELECT id, week_number, due_date, amount_due, amount_paid, status, paid_at
+    FROM payment_schedules
+    WHERE agreement_id = ?
+    ORDER BY week_number ASC
+  `).all(agreementId);
+  res.json(weeks);
+});
+
+// ── POST /admin/record-paystack-payment ───────────────────────────────────────
+// Manually record a Paystack payment, apply it to a contract schedule, and
+// credit the fleet wallet.  Body: { org_id, agreement_id, amount, reference?,
+// paid_at?, schedule_week_ids? }
+router.post('/record-paystack-payment', superadminOnly, (req, res) => {
+  const { org_id, agreement_id, amount, reference, paid_at, schedule_week_ids } = req.body;
+
+  if (!agreement_id || !amount || Number(amount) <= 0) {
+    return res.status(400).json({ error: 'agreement_id and a positive amount are required' });
+  }
+
+  const grossAmountZAR = Number(amount);
+  const agreement = db.prepare(`
+    SELECT a.id, a.status, a.user_id, b.organization_id
+    FROM agreements a JOIN bikes b ON b.id = a.bike_id WHERE a.id = ?
+  `).get(Number(agreement_id));
+  if (!agreement) return res.status(404).json({ error: 'Agreement not found' });
+
+  const orgId = Number(org_id) || agreement.organization_id;
+  const riderId = agreement.user_id;
+  const ref = (reference || '').trim() || `ADMIN-PS-${Date.now()}`;
+  const paymentDate = paid_at ? new Date(paid_at).toISOString() : new Date().toISOString();
+
+  const dupCheck = db.prepare('SELECT id FROM payments WHERE paystack_reference = ? OR reference = ?').get(ref, ref);
+  if (dupCheck) return res.status(409).json({ error: `Reference already exists: ${ref}` });
+
+  const fee = +(grossAmountZAR * 0.035 + 1).toFixed(2);
+  const net = +(grossAmountZAR - fee).toFixed(2);
+
+  let paymentId;
+  db.transaction(() => {
+    const info = db.prepare(`
+      INSERT INTO payments
+        (agreement_id, user_id, amount, currency, method, reference, paystack_reference,
+         status, fee_amount, net_amount, paid_at, notes)
+      VALUES (?,?,?,'ZAR','paystack',?,?,'success',?,?,?,'Admin-recorded Paystack payment')
+    `).run(Number(agreement_id), riderId, grossAmountZAR, ref, ref, fee, net, paymentDate);
+    paymentId = info.lastInsertRowid;
+
+    const weekIds = Array.isArray(schedule_week_ids)
+      ? schedule_week_ids.map(Number).filter(Boolean)
+      : [];
+    if (weekIds.length) {
+      const upd = db.prepare(
+        'UPDATE payment_schedules SET amount_paid=?, status=?, paid_at=? WHERE id=? AND agreement_id=?'
+      );
+      let remaining = grossAmountZAR;
+      for (const wid of weekIds) {
+        if (remaining <= 0) break;
+        const row = db.prepare('SELECT * FROM payment_schedules WHERE id=? AND agreement_id=?')
+          .get(wid, Number(agreement_id));
+        if (!row || row.status === 'paid' || row.status === 'waived') continue;
+        const owe = +(row.amount_due - row.amount_paid).toFixed(2);
+        const apply = Math.min(remaining, owe);
+        const newPaid = +(row.amount_paid + apply).toFixed(2);
+        const newStatus = newPaid >= row.amount_due ? 'paid' : 'partial';
+        upd.run(newPaid, newStatus, newStatus === 'paid' ? paymentDate : (row.paid_at || null),
+          wid, Number(agreement_id));
+        remaining = +(remaining - apply).toFixed(2);
+      }
+    }
+  })();
+
+  if (agreement.status !== 'discontinued') {
+    const weekIds = Array.isArray(schedule_week_ids) ? schedule_week_ids : [];
+    if (weekIds.length) {
+      recalcScheduleStatuses(Number(agreement_id));
+    } else {
+      try { applyPaymentToScheduleAdmin(Number(agreement_id), grossAmountZAR); } catch (e) {
+        console.error('[admin record payment] schedule apply error:', e.message);
+      }
+    }
+  }
+
+  creditFleetWalletAdmin(orgId, grossAmountZAR, riderId, ref);
+
+  logAudit(req.user.id, 'admin.record_paystack_payment', 'payments', paymentId,
+    { agreement_id, org_id: orgId, amount: grossAmountZAR, reference: ref, paid_at: paymentDate }, req.ip);
+
+  res.json({ success: true, payment_id: paymentId, amount: grossAmountZAR, reference: ref, net_to_wallet: net });
+});
+
 module.exports = router;

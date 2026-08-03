@@ -2557,11 +2557,22 @@ function creditFleetWallet(organizationId, grossAmountZAR, riderId, reference) {
   db.transaction(() => {
     db.prepare(`UPDATE fleet_wallets SET balance = balance + ?, total_collected = total_collected + ?, updated_at = CURRENT_TIMESTAMP WHERE organization_id = ?`)
       .run(net, net, organizationId);
-    db.prepare(`INSERT INTO fleet_wallet_transactions (organization_id, type, amount, fee_amount, net_amount, description, paystack_reference, rider_user_id)
-      VALUES (?,?,?,?,?,?,?,?)`)
+    db.prepare(`INSERT INTO fleet_wallet_transactions (organization_id, type, amount, fee_amount, net_amount, description, paystack_reference, rider_user_id, available_at)
+      VALUES (?,?,?,?,?,?,?,?, datetime('now', '+48 hours'))`)
       .run(organizationId, 'credit', grossAmountZAR, fee, net, 'Weekly rider rental payment', reference || null, riderId || null);
   })();
   return { gross: grossAmountZAR, fee, net };
+}
+
+function computeWalletAvailability(organizationId, wallet) {
+  const pending = db.prepare(
+    `SELECT COALESCE(SUM(net_amount), 0) AS pending_balance
+     FROM fleet_wallet_transactions
+     WHERE organization_id = ? AND type = 'credit' AND available_at IS NOT NULL AND available_at > datetime('now')`
+  ).get(organizationId);
+  const pendingBalance = +(Number(pending?.pending_balance || 0).toFixed(2));
+  const availableBalance = +(Math.max(0, (wallet?.balance || 0) - pendingBalance).toFixed(2));
+  return { pending_balance: pendingBalance, available_balance: availableBalance };
 }
 
 // GET /fleet/wallet — wallet balance and recent transactions
@@ -2570,6 +2581,7 @@ router.get('/wallet', companyRoleAllowed(FLEET_RESOURCE_ACCESS.wallet.view), (re
     const org = getOrganizationOrThrow(req.user.organization_id);
     ensureFleetWallet(org.id);
     const wallet = db.prepare('SELECT * FROM fleet_wallets WHERE organization_id = ?').get(org.id);
+    const { pending_balance, available_balance } = computeWalletAvailability(org.id, wallet);
     const transactions = db.prepare(`SELECT t.*, u.full_name AS rider_name
       FROM fleet_wallet_transactions t
       LEFT JOIN users u ON u.id = t.rider_user_id
@@ -2580,7 +2592,11 @@ router.get('/wallet', companyRoleAllowed(FLEET_RESOURCE_ACCESS.wallet.view), (re
       JOIN users u ON u.id = p.requested_by
       WHERE p.organization_id = ?
       ORDER BY p.created_at DESC LIMIT 20`).all(org.id);
-    res.json({ wallet, transactions, payout_requests: payoutRequests });
+    res.json({
+      wallet: { ...wallet, available_balance, pending_balance },
+      transactions,
+      payout_requests: payoutRequests
+    });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message });
   }
@@ -2595,7 +2611,14 @@ router.post('/wallet/payout', companyRoleAllowed(FLEET_RESOURCE_ACCESS.wallet.ma
 
     const amount = Number(req.body.amount);
     if (!amount || amount <= 0) return res.status(400).json({ error: 'Invalid withdrawal amount' });
-    if (!wallet || wallet.balance < amount) return res.status(400).json({ error: 'Insufficient wallet balance' });
+    const { available_balance } = computeWalletAvailability(org.id, wallet);
+    if (!wallet || available_balance < amount) {
+      return res.status(400).json({
+        error: 'Insufficient available balance',
+        available_balance,
+        pending_balance: (wallet?.balance || 0) - available_balance
+      });
+    }
 
     const bankAccountName = req.body.bank_account_name || org.bank_account_name;
     const bankName = req.body.bank_name || org.bank_name;

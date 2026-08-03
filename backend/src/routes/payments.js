@@ -485,8 +485,8 @@ function creditFleetWalletFromWebhook(organizationId, grossAmountZAR, riderId, r
     }
     db.prepare(`UPDATE fleet_wallets SET balance = balance + ?, total_collected = total_collected + ?, updated_at = CURRENT_TIMESTAMP WHERE organization_id = ?`)
       .run(net, net, organizationId);
-    db.prepare(`INSERT INTO fleet_wallet_transactions (organization_id, type, amount, fee_amount, net_amount, description, paystack_reference, rider_user_id)
-      VALUES (?,?,?,?,?,?,?,?)`)
+    db.prepare(`INSERT INTO fleet_wallet_transactions (organization_id, type, amount, fee_amount, net_amount, description, paystack_reference, rider_user_id, available_at)
+      VALUES (?,?,?,?,?,?,?,?, datetime('now', '+48 hours'))`)
       .run(organizationId, 'credit', grossAmountZAR, fee, net, 'Weekly rider rental payment', reference || null, riderId || null);
   })();
 }

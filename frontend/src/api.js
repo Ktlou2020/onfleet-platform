@@ -3,7 +3,7 @@ import axios from 'axios';
 const api = axios.create({ baseURL: '/api' });
 
 api.interceptors.request.use((cfg) => {
-  const token = localStorage.getItem('of_token');
+  const token = sessionStorage.getItem('of_imp_token') || localStorage.getItem('of_token');
   if (token) cfg.headers.Authorization = `Bearer ${token}`;
   return cfg;
 });
@@ -18,6 +18,12 @@ api.interceptors.response.use(
       return Promise.reject(err);
     }
     if (err.response?.status === 401) {
+      if (sessionStorage.getItem('of_imp_token')) {
+        sessionStorage.removeItem('of_imp_token');
+        sessionStorage.removeItem('of_imp_user');
+        location.href = '/fleet/login';
+        return Promise.reject(err);
+      }
       let redirectTo = '/login';
       try {
         const storedUser = JSON.parse(localStorage.getItem('of_user') || 'null');

@@ -5,7 +5,7 @@ import api from '../../api';
 import { useAuth } from '../../auth';
 import { Badge, ConfirmModal, CopyableContactValue, EmptyState, Loading, Modal, Pagination, SearchInput, Stat, fmt, fmtDate, matchesSearch, paginateItems } from '../../components/ui';
 import { getFleetRoleLabel } from '../fleet/access';
-import { Building2, ShieldCheck, Users, Wallet, Settings, ChevronDown, ChevronRight, Mail, MapPin, Bike, CreditCard, KeyRound, Trash2, Send } from 'lucide-react';
+import { Building2, ShieldCheck, Users, Wallet, Settings, ChevronDown, ChevronRight, Mail, MapPin, Bike, CreditCard, KeyRound, Trash2, Send, Eye } from 'lucide-react';
 
 const EMAIL_TEMPLATES = [
   { key: 'demo_invite',     label: 'Demo / call invite' },
@@ -548,6 +548,26 @@ export default function AdminFleetOwners() {
                           <Mail size={13} /> Email
                         </button>
                       )}
+                      <button
+                        className="btn btn-sm btn-secondary"
+                        disabled={busyKey === `imp-${org.id}`}
+                        title={`Impersonate ${org.name} as fleet owner`}
+                        style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+                        onClick={async () => {
+                          setBusyKey(`imp-${org.id}`);
+                          try {
+                            const { data } = await api.post(`/admin/impersonate/${org.id}`);
+                            const userParam = encodeURIComponent(JSON.stringify(data.user));
+                            window.open(`/fleet/impersonate?token=${encodeURIComponent(data.token)}&user=${userParam}`, '_blank');
+                          } catch (error) {
+                            toast.error(error.response?.data?.error || 'Could not start impersonation');
+                          } finally {
+                            setBusyKey('');
+                          }
+                        }}
+                      >
+                        <Eye size={13} /> View as
+                      </button>
                       <button
                         className="btn btn-sm btn-secondary"
                         onClick={() => setPlanModal({ orgId: org.id, orgName: org.name, currentPlan: org.plan_key, currentStatus: org.status })}

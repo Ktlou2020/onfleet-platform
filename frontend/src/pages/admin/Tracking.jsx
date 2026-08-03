@@ -1464,15 +1464,16 @@ export default function Tracking() {
                       {gf.polygon_coords ? `Polygon · ${gf.polygon_coords.length} pts` : (gf.radius_m >= 1000 ? `${(gf.radius_m / 1000).toFixed(1)} km radius` : `${gf.radius_m} m radius`)}{gf.bike_registration ? ` · ${gf.bike_registration}` : ' · all bikes'}
                     </div>
                   </div>
-                  {isDanger ? (
-                    <button className="btn btn-sm" style={{ padding: '2px 6px', fontSize: 10, color: '#7c3aed', borderColor: '#7c3aed', background: 'transparent', minWidth: 0, flexShrink: 0 }}
-                      onClick={() => drawPolygonForGeofence(gf)} title="Draw accurate polygon outline">
-                      <Pencil size={10} />
-                    </button>
-                  ) : (
+                  <div style={{ display: 'flex', gap: 3, flexShrink: 0 }}>
+                    {isDanger && (
+                      <button className="btn btn-sm" style={{ padding: '2px 5px', fontSize: 10, color: '#7c3aed', borderColor: '#7c3aed', background: 'transparent', minWidth: 0 }}
+                        onClick={() => drawPolygonForGeofence(gf)} title="Draw polygon outline">
+                        <Pencil size={10} />
+                      </button>
+                    )}
                     <button className="btn btn-sm" style={{ padding: '2px 4px', opacity: 0.5, background: 'transparent', minWidth: 0 }}
                       onClick={() => deleteGeofence(gf.id)} title="Delete"><Trash2 size={10} /></button>
-                  )}
+                  </div>
                 </div>
               );
             })}

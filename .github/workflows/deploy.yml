@@ -16,4 +16,4 @@ jobs:
           fetch-depth: 0
 
       - name: Push to main (triggers Railway)
-        run: git push origin HEAD:main
+        run: git push origin HEAD:main --force

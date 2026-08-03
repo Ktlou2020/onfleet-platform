@@ -4,7 +4,7 @@ const { sendNotification } = require('./notifier');
 const { recalcScheduleStatuses } = require('../utils/helpers');
 
 function creditedAmount(payment) {
-  return Number(payment?.net_amount ?? payment?.amount ?? 0);
+  return Number(payment?.amount ?? payment?.net_amount ?? 0);
 }
 
 function startOfUtcDay(dateStr) {
@@ -83,7 +83,7 @@ async function runMonthlyStatements(statementMonth = previousMonthKey()) {
     if (notificationExistsForPeriod(snapshot.agreement.user_id, 'monthly_statement', title)) continue;
 
     const firstName = String(snapshot.agreement.full_name || 'Rider').split(' ')[0];
-    const bikeName = `${snapshot.agreement.make} ${snapshot.agreement.model}`;
+    const bikeName = [snapshot.agreement.make, snapshot.agreement.model].filter(Boolean).join(' ') || 'Bike';
     const bikeRef = snapshot.agreement.registration || snapshot.agreement.vin;
     const nextDueLine = snapshot.nextDue
       ? `Next instalment: R${Number(snapshot.nextDue.amount_due - snapshot.nextDue.amount_paid).toFixed(2)} due on ${snapshot.nextDue.due_date}.`

@@ -67,7 +67,7 @@ const TEMPLATES = {
     label: 'Demo / call invite',
     subject: (org) => `Quick 15-min call about your OnFleet account, ${org.name}?`,
     html: (org) => layout({
-      preheader: 'We'd love to show you what OnFleet can do for your fleet in 15 minutes.',
+      preheader: "We'd love to show you what OnFleet can do for your fleet in 15 minutes.",
       body: `
         <p style="margin:0 0 16px">Hi ${org.contact_name || org.name},</p>
         <p style="margin:0 0 16px">I noticed you've been exploring OnFleet — thank you for giving it a shot!</p>

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, Polyline, Circle, useMap, useMapEvents } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, Circle, Polygon, CircleMarker, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
@@ -102,6 +102,14 @@ function FitBounds({ trigger, positions }) {
 
 function MapClickHandler({ onMapClick }) {
   useMapEvents({ click: (e) => onMapClick(e.latlng) });
+  return null;
+}
+
+function PolygonDrawer({ onAddPoint, onFinish }) {
+  useMapEvents({
+    click(e) { onAddPoint([e.latlng.lat, e.latlng.lng]); },
+    dblclick(e) { e.originalEvent.preventDefault(); onFinish(); },
+  });
   return null;
 }
 
@@ -236,7 +244,7 @@ function playAlertBeep() {
 }
 
 const EMPTY_FORM = { imei: '', model: 'FMB920', bike_id: '', label: '' };
-const EMPTY_GEO  = { name: '', lat: '', lng: '', radius_m: 500, bike_id: '' };
+const EMPTY_GEO  = { name: '', lat: '', lng: '', radius_m: 500, bike_id: '', polygon_coords: null };
 
 function BikeCombobox({ bikes, value, onChange }) {
   const [query, setQuery] = useState('');
@@ -505,11 +513,13 @@ export default function Tracking() {
   const [applySettingsToAll,   setApplySettingsToAll]   = useState(false);
 
   // ── geofences ────────────────────────────────────────────────────
-  const [geofences,     setGeofences]     = useState([]);
-  const [showGeoForm,   setShowGeoForm]   = useState(false);
-  const [geoForm,       setGeoForm]       = useState(EMPTY_GEO);
-  const [geoSubmitting, setGeoSubmitting] = useState(false);
-  const [pickingCenter, setPickingCenter] = useState(false);
+  const [geofences,       setGeofences]       = useState([]);
+  const [showGeoForm,     setShowGeoForm]     = useState(false);
+  const [geoForm,         setGeoForm]         = useState(EMPTY_GEO);
+  const [geoSubmitting,   setGeoSubmitting]   = useState(false);
+  const [pickingCenter,   setPickingCenter]   = useState(false);
+  const [drawingPolygon,  setDrawingPolygon]  = useState(false);
+  const [polygonPoints,   setPolygonPoints]   = useState([]);
 
   // ── detail panel tabs ─────────────────────────────────────────────
   const [detailTab, setDetailTab] = useState('activity');
@@ -560,15 +570,20 @@ export default function Tracking() {
     if (Notification.permission === 'default') Notification.requestPermission().catch(() => {});
   }, []);
 
-  // Escape cancels center picking
+  // Escape cancels center picking or polygon drawing
   useEffect(() => {
-    if (!pickingCenter) return;
+    if (!pickingCenter && !drawingPolygon) return;
     const handler = (e) => {
-      if (e.key === 'Escape') { setPickingCenter(false); setShowGeoForm(true); }
+      if (e.key === 'Escape') {
+        setPickingCenter(false);
+        setDrawingPolygon(false);
+        setPolygonPoints([]);
+        setShowGeoForm(true);
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [pickingCenter]);
+  }, [pickingCenter, drawingPolygon]);
 
   // ── data loaders ─────────────────────────────────────────────────
 
@@ -1046,16 +1061,19 @@ export default function Tracking() {
 
   const saveGeofence = useCallback(async () => {
     if (!geoForm.name.trim()) return toast.error('Name is required');
-    if (!geoForm.lat || !geoForm.lng) return toast.error('Pick a center on the map or enter coordinates');
+    const hasPolygon = Array.isArray(geoForm.polygon_coords) && geoForm.polygon_coords.length >= 3;
+    if (!hasPolygon && (!geoForm.lat || !geoForm.lng)) return toast.error('Pick a center, enter coordinates, or draw an outline');
     setGeoSubmitting(true);
     try {
-      await api.post('/tracking/geofences', {
-        name: geoForm.name.trim(),
-        lat: Number(geoForm.lat),
-        lng: Number(geoForm.lng),
-        radius_m: Number(geoForm.radius_m),
-        bike_id: geoForm.bike_id || null,
-      });
+      const body = { name: geoForm.name.trim(), bike_id: geoForm.bike_id || null };
+      if (hasPolygon) {
+        body.polygon_coords = geoForm.polygon_coords;
+      } else {
+        body.lat = Number(geoForm.lat);
+        body.lng = Number(geoForm.lng);
+        body.radius_m = Number(geoForm.radius_m);
+      }
+      await api.post('/tracking/geofences', body);
       toast.success('Geofence created');
       setShowGeoForm(false);
       setGeoForm(EMPTY_GEO);
@@ -1083,6 +1101,61 @@ export default function Tracking() {
     setPickingCenter(false);
     setShowGeoForm(true);
   }, [pickingCenter]);
+
+  const startPolygonDraw = useCallback(() => {
+    setShowGeoForm(false);
+    setDrawingPolygon(true);
+    setPolygonPoints([]);
+    setSideTab('geofences');
+  }, []);
+
+  const addPolygonPoint = useCallback((point) => {
+    setPolygonPoints(prev => [...prev, point]);
+  }, []);
+
+  const undoPolygonPoint = useCallback(() => {
+    setPolygonPoints(prev => prev.slice(0, -1));
+  }, []);
+
+  const finishPolygon = useCallback(() => {
+    if (editingGeofenceIdRef.current) {
+      finishPolygonForGeofence(polygonPoints);
+    } else {
+      if (polygonPoints.length >= 3) {
+        setGeoForm(f => ({ ...f, polygon_coords: polygonPoints, lat: '', lng: '' }));
+      }
+      setDrawingPolygon(false);
+      setShowGeoForm(true);
+    }
+  }, [polygonPoints, finishPolygonForGeofence]);
+
+  const clearPolygon = useCallback(() => {
+    setPolygonPoints([]);
+    setGeoForm(f => ({ ...f, polygon_coords: null }));
+  }, []);
+
+  // Draw a polygon for an existing geofence (updates it in place)
+  const editingGeofenceIdRef = useRef(null);
+  const drawPolygonForGeofence = useCallback((gf) => {
+    editingGeofenceIdRef.current = gf.id;
+    setDrawingPolygon(true);
+    setPolygonPoints([]);
+    setSideTab('geofences');
+  }, []);
+
+  const finishPolygonForGeofence = useCallback(async (points) => {
+    const id = editingGeofenceIdRef.current;
+    editingGeofenceIdRef.current = null;
+    setDrawingPolygon(false);
+    if (!id || points.length < 3) return;
+    try {
+      await api.put(`/tracking/geofences/${id}`, { polygon_coords: points });
+      toast.success('Polygon saved');
+      await loadGeofences();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to save polygon');
+    }
+  }, [loadGeofences]);
 
   // ── alerts ───────────────────────────────────────────────────────
 
@@ -1388,10 +1461,15 @@ export default function Tracking() {
                       {isDanger && <span style={{ fontSize: 8, fontWeight: 700, color: '#fff', background: '#E53935', padding: '1px 4px', borderRadius: 3, flexShrink: 0 }}>NO-GO</span>}
                     </div>
                     <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>
-                      {gf.radius_m >= 1000 ? `${(gf.radius_m / 1000).toFixed(1)} km radius` : `${gf.radius_m} m radius`}{gf.bike_registration ? ` · ${gf.bike_registration}` : ' · all bikes'}
+                      {gf.polygon_coords ? `Polygon · ${gf.polygon_coords.length} pts` : (gf.radius_m >= 1000 ? `${(gf.radius_m / 1000).toFixed(1)} km radius` : `${gf.radius_m} m radius`)}{gf.bike_registration ? ` · ${gf.bike_registration}` : ' · all bikes'}
                     </div>
                   </div>
-                  {!isDanger && (
+                  {isDanger ? (
+                    <button className="btn btn-sm" style={{ padding: '2px 6px', fontSize: 10, color: '#7c3aed', borderColor: '#7c3aed', background: 'transparent', minWidth: 0, flexShrink: 0 }}
+                      onClick={() => drawPolygonForGeofence(gf)} title="Draw accurate polygon outline">
+                      <Pencil size={10} />
+                    </button>
+                  ) : (
                     <button className="btn btn-sm" style={{ padding: '2px 4px', opacity: 0.5, background: 'transparent', minWidth: 0 }}
                       onClick={() => deleteGeofence(gf.id)} title="Delete"><Trash2 size={10} /></button>
                   )}
@@ -1411,38 +1489,54 @@ export default function Tracking() {
           </div>
         )}
 
-        <MapContainer center={[-26.2, 28.0]} zoom={10} style={{ height: '100%', width: '100%', cursor: pickingCenter ? 'crosshair' : undefined }}>
+        {drawingPolygon && (
+          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 1100, background: '#7c3aed', color: '#fff', padding: '7px 14px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
+            <span style={{ fontSize: 12, fontWeight: 600 }}>
+              {polygonPoints.length === 0 ? 'Click to start drawing the zone outline' : `${polygonPoints.length} point${polygonPoints.length !== 1 ? 's' : ''} — double-click or press Done to finish`}
+            </span>
+            {polygonPoints.length > 0 && (
+              <button onClick={undoPolygonPoint} style={{ background: 'rgba(255,255,255,.2)', border: 'none', color: '#fff', fontSize: 11, padding: '2px 8px', borderRadius: 4, cursor: 'pointer' }}>Undo</button>
+            )}
+            {polygonPoints.length >= 3 && (
+              <button onClick={finishPolygon} style={{ background: '#fff', border: 'none', color: '#7c3aed', fontSize: 11, fontWeight: 700, padding: '2px 10px', borderRadius: 4, cursor: 'pointer' }}>Done</button>
+            )}
+            <button onClick={() => { setDrawingPolygon(false); setPolygonPoints([]); setShowGeoForm(true); }} style={{ background: 'rgba(255,255,255,.15)', border: 'none', color: '#fff', fontSize: 11, padding: '2px 8px', borderRadius: 4, cursor: 'pointer' }}>Cancel</button>
+          </div>
+        )}
+
+        <MapContainer center={[-26.2, 28.0]} zoom={10} style={{ height: '100%', width: '100%', cursor: pickingCenter || drawingPolygon ? 'crosshair' : undefined }}>
           <TileLayer key={tileMode} url={TILES[tileMode].url} attribution={TILES[tileMode].attribution} />
           {flyTo && <FlyTo position={flyTo} />}
           <FitBounds trigger={fitTrigger} positions={allPositions} />
           {pickingCenter && <MapClickHandler onMapClick={handleMapClick} />}
+          {drawingPolygon && <PolygonDrawer onAddPoint={addPolygonPoint} onFinish={finishPolygon} />}
 
-          {/* Geofence circles */}
+          {/* Polygon being drawn — live preview */}
+          {drawingPolygon && polygonPoints.length >= 2 && (
+            <Polygon positions={polygonPoints} pathOptions={{ color: '#7c3aed', fillColor: '#7c3aed', fillOpacity: 0.08, weight: 2, dashArray: '6 4' }} />
+          )}
+          {drawingPolygon && polygonPoints.map((p, i) => (
+            <CircleMarker key={i} center={p} radius={5} pathOptions={{ color: '#7c3aed', fillColor: '#fff', fillOpacity: 1, weight: 2 }} />
+          ))}
+
+          {/* Geofence zones (polygon or circle) */}
           {geofences.map(gf => {
-            if (!gf.lat || !gf.lng) return null;
             const isDanger = gf.zone_type === 'danger';
             const color = isDanger ? '#E53935' : (gf.color || '#1E88D1');
-            return (
-              <Circle
-                key={gf.id}
-                center={[gf.lat, gf.lng]}
-                radius={gf.radius_m}
-                pathOptions={{
-                  color,
-                  fillColor: color,
-                  fillOpacity: isDanger ? 0.13 : 0.07,
-                  weight: isDanger ? 2.5 : 2,
-                  dashArray: isDanger ? undefined : '6 4',
-                }}
-              >
-                <Popup>
-                  {isDanger && <div style={{ color: '#E53935', fontWeight: 700, fontSize: 11, marginBottom: 4 }}>⚠ NO-GO ZONE</div>}
-                  <strong>{gf.name}</strong><br />
-                  Radius: {gf.radius_m >= 1000 ? `${(gf.radius_m / 1000).toFixed(1)} km` : `${gf.radius_m} m`}
-                  {gf.bike_registration ? <><br />Bike: {gf.bike_registration}</> : ''}
-                </Popup>
-              </Circle>
+            const popup = (
+              <Popup>
+                {isDanger && <div style={{ color: '#E53935', fontWeight: 700, fontSize: 11, marginBottom: 4 }}>⚠ NO-GO ZONE</div>}
+                <strong>{gf.name}</strong><br />
+                {gf.polygon_coords ? `Polygon · ${gf.polygon_coords.length} points` : (gf.radius_m >= 1000 ? `Radius: ${(gf.radius_m / 1000).toFixed(1)} km` : `Radius: ${gf.radius_m} m`)}
+                {gf.bike_registration ? <><br />Bike: {gf.bike_registration}</> : ''}
+              </Popup>
             );
+            const opts = { color, fillColor: color, fillOpacity: isDanger ? 0.13 : 0.07, weight: isDanger ? 2.5 : 2, dashArray: isDanger ? undefined : '6 4' };
+            if (gf.polygon_coords && Array.isArray(gf.polygon_coords) && gf.polygon_coords.length >= 3) {
+              return <Polygon key={gf.id} positions={gf.polygon_coords} pathOptions={opts}>{popup}</Polygon>;
+            }
+            if (!gf.lat || !gf.lng) return null;
+            return <Circle key={gf.id} center={[gf.lat, gf.lng]} radius={gf.radius_m} pathOptions={opts}>{popup}</Circle>;
           })}
 
           {/* Device markers */}
@@ -2367,27 +2461,43 @@ export default function Tracking() {
           </div>
 
           <div style={{ marginBottom: 14 }}>
-            <button
-              className="btn btn-sm btn-secondary"
-              style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11 }}
-              onClick={() => { setShowGeoForm(false); setPickingCenter(true); setSideTab('geofences'); }}
-            >
-              <MapPin size={11} />Pick center from map
-            </button>
-            {geoForm.lat && geoForm.lng && (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              <button
+                className="btn btn-sm btn-secondary"
+                style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11 }}
+                onClick={() => { setShowGeoForm(false); setPickingCenter(true); setSideTab('geofences'); }}
+              >
+                <MapPin size={11} />Pick center
+              </button>
+              <button
+                className="btn btn-sm btn-secondary"
+                style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#7c3aed', borderColor: '#7c3aed' }}
+                onClick={startPolygonDraw}
+              >
+                <Pencil size={11} />Draw outline
+              </button>
+            </div>
+            {geoForm.polygon_coords && geoForm.polygon_coords.length >= 3 ? (
+              <div style={{ marginTop: 6, padding: '6px 10px', background: 'rgba(124,58,237,.08)', borderRadius: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 11, color: '#7c3aed', flex: 1 }}>✓ Polygon drawn — {geoForm.polygon_coords.length} points</span>
+                <button onClick={clearPolygon} style={{ background: 'none', border: 'none', fontSize: 10, color: 'var(--muted)', cursor: 'pointer', padding: 0 }}>Clear</button>
+              </div>
+            ) : geoForm.lat && geoForm.lng ? (
               <div style={{ fontSize: 10, color: '#22c55e', marginTop: 4 }}>Center set: {Number(geoForm.lat).toFixed(5)}, {Number(geoForm.lng).toFixed(5)}</div>
-            )}
+            ) : null}
           </div>
 
-          <div className="field">
-            <label className="label">Radius: {geoForm.radius_m >= 1000 ? `${(geoForm.radius_m / 1000).toFixed(1)} km` : `${geoForm.radius_m} m`}</label>
-            <input type="range" min={50} max={10000} step={50} value={geoForm.radius_m}
-              onChange={e => setGeoForm(f => ({ ...f, radius_m: Number(e.target.value) }))}
-              style={{ width: '100%' }} />
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--muted)', marginTop: 2 }}>
-              <span>50 m</span><span>10 km</span>
+          {!geoForm.polygon_coords && (
+            <div className="field">
+              <label className="label">Radius: {geoForm.radius_m >= 1000 ? `${(geoForm.radius_m / 1000).toFixed(1)} km` : `${geoForm.radius_m} m`}</label>
+              <input type="range" min={50} max={10000} step={50} value={geoForm.radius_m}
+                onChange={e => setGeoForm(f => ({ ...f, radius_m: Number(e.target.value) }))}
+                style={{ width: '100%' }} />
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--muted)', marginTop: 2 }}>
+                <span>50 m</span><span>10 km</span>
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="field">
             <label className="label">Scope to bike <span style={{ color: 'var(--muted)', fontWeight: 400 }}>(optional)</span></label>

@@ -125,9 +125,10 @@ async function runTrackingSchema() {
         PRIMARY KEY (device_id, alert_type)
       )
     `);
-    // Add zone_type and color columns to geofences (idempotent)
+    // Add zone_type, color, and polygon_coords columns to geofences (idempotent)
     await pgDb.query(`ALTER TABLE geofences ADD COLUMN IF NOT EXISTS zone_type TEXT DEFAULT 'standard'`);
     await pgDb.query(`ALTER TABLE geofences ADD COLUMN IF NOT EXISTS color TEXT`);
+    await pgDb.query(`ALTER TABLE geofences ADD COLUMN IF NOT EXISTS polygon_coords JSONB`);
 
     // Seed the known no-go (theft/stripping) zones — skip any that already exist by name+type
     const noGoZones = [

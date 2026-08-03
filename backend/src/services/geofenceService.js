@@ -50,6 +50,19 @@ async function autoEngineCut(deviceId, bikeId, geofence, reg) {
   }
 }
 
+// Ray-casting point-in-polygon; coords: [[lat,lng], ...]
+function pointInPolygon(lat, lng, coords) {
+  let inside = false;
+  for (let i = 0, j = coords.length - 1; i < coords.length; j = i++) {
+    const [yi, xi] = coords[i];
+    const [yj, xj] = coords[j];
+    if ((yi > lat) !== (yj > lat) && lng < (xj - xi) * (lat - yi) / (yj - yi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
 function haversineKm(lat1, lng1, lat2, lng2) {
   const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -69,8 +82,14 @@ async function checkGeofences(bikeId, deviceId, lat, lng, recordedAt) {
   for (const gf of fences) {
     if (gf.bike_id !== null && Number(gf.bike_id) !== Number(bikeId)) continue;
 
-    const distKm = haversineKm(lat, lng, gf.lat, gf.lng);
-    const inside = distKm * 1000 <= gf.radius_m;
+    let inside;
+    const coords = gf.polygon_coords;
+    if (coords && Array.isArray(coords) && coords.length >= 3) {
+      inside = pointInPolygon(lat, lng, coords);
+    } else {
+      const distKm = haversineKm(lat, lng, gf.lat, gf.lng);
+      inside = distKm * 1000 <= gf.radius_m;
+    }
 
     const { rows: stateRows } = await pgDb.query(
       'SELECT inside FROM geofence_states WHERE bike_id = $1 AND geofence_id = $2',

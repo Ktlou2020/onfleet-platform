@@ -329,13 +329,17 @@ router.get('/geofences', authRequired, adminOnly, async (req, res) => {
 });
 
 router.post('/geofences', authRequired, adminOnly, async (req, res) => {
-  const { name, lat, lng, radius_m, bike_id, zone_type, color } = req.body;
-  if (!name || lat == null || lng == null) return res.status(400).json({ error: 'name, lat and lng are required' });
+  const { name, lat, lng, radius_m, bike_id, zone_type, color, polygon_coords } = req.body;
+  if (!name) return res.status(400).json({ error: 'name is required' });
+  const hasPolygon = Array.isArray(polygon_coords) && polygon_coords.length >= 3;
+  if (!hasPolygon && (lat == null || lng == null)) return res.status(400).json({ error: 'lat and lng are required without a polygon' });
   const radius = Number(radius_m) || 500;
-  if (radius < 50 || radius > 50000) return res.status(400).json({ error: 'radius_m must be 50–50000' });
+  if (!hasPolygon && (radius < 50 || radius > 50000)) return res.status(400).json({ error: 'radius_m must be 50–50000' });
+  const centerLat = hasPolygon ? polygon_coords.reduce((s, p) => s + p[0], 0) / polygon_coords.length : Number(lat);
+  const centerLng = hasPolygon ? polygon_coords.reduce((s, p) => s + p[1], 0) / polygon_coords.length : Number(lng);
   const { rows } = await pgDb.query(
-    'INSERT INTO geofences (name, lat, lng, radius_m, bike_id, zone_type, color, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id',
-    [name, Number(lat), Number(lng), radius, bike_id || null, zone_type || 'standard', color || null, req.user.id]
+    'INSERT INTO geofences (name, lat, lng, radius_m, bike_id, zone_type, color, polygon_coords, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id',
+    [name, centerLat, centerLng, radius, bike_id || null, zone_type || 'standard', color || null, hasPolygon ? JSON.stringify(polygon_coords) : null, req.user.id]
   );
   res.status(201).json({ id: rows[0].id });
 });
@@ -343,17 +347,19 @@ router.post('/geofences', authRequired, adminOnly, async (req, res) => {
 router.put('/geofences/:id', authRequired, adminOnly, async (req, res) => {
   const { rows } = await pgDb.query('SELECT id FROM geofences WHERE id=$1', [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Geofence not found' });
-  const { name, lat, lng, radius_m, bike_id, active } = req.body;
+  const { name, lat, lng, radius_m, bike_id, active, polygon_coords } = req.body;
   const hasBikeId = 'bike_id' in req.body;
+  const hasPolygon = 'polygon_coords' in req.body;
   await pgDb.query(`
     UPDATE geofences SET
-      name     = COALESCE($1, name),
-      lat      = COALESCE($2, lat),
-      lng      = COALESCE($3, lng),
-      radius_m = COALESCE($4, radius_m),
-      bike_id  = CASE WHEN $5 THEN $6 ELSE bike_id END,
-      active   = COALESCE($7, active)
-    WHERE id = $8
+      name           = COALESCE($1, name),
+      lat            = COALESCE($2, lat),
+      lng            = COALESCE($3, lng),
+      radius_m       = COALESCE($4, radius_m),
+      bike_id        = CASE WHEN $5 THEN $6 ELSE bike_id END,
+      active         = COALESCE($7, active),
+      polygon_coords = CASE WHEN $8 THEN $9::jsonb ELSE polygon_coords END
+    WHERE id = $10
   `, [
     name || null,
     lat != null ? Number(lat) : null,
@@ -361,6 +367,7 @@ router.put('/geofences/:id', authRequired, adminOnly, async (req, res) => {
     radius_m != null ? Number(radius_m) : null,
     hasBikeId, bike_id || null,
     active != null ? Boolean(active) : null,
+    hasPolygon, polygon_coords != null ? JSON.stringify(polygon_coords) : null,
     rows[0].id,
   ]);
   res.json({ ok: true });

@@ -57,7 +57,7 @@ function divider() {
 
 // ── Templates ─────────────────────────────────────────────────────────────────
 
-const BOOKING_URL = 'https://calendly.com/onfleet';
+const BOOKING_URL = 'https://calendar.app.google/gL1v9a5bj7rxgbHV8';
 const PORTAL_URL  = 'https://portal.onfleet.africa/fleet/login';
 const PRICING_URL = 'https://portal.onfleet.africa/#pricing';
 

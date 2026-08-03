@@ -56,6 +56,7 @@ const COOLDOWNS_MS = {
   tamper:           10 * 60_000,
   low_battery:      60 * 60_000,
   power_disconnect: 10 * 60_000,
+  device_offline:  240 * 60_000, // 4-hour cooldown — don't spam if stays offline
 };
 
 // Alert types that are OFF by default (no panic button wired on standard installs)
@@ -274,4 +275,28 @@ async function hydrateOpenTrips() {
   }
 }
 
-module.exports = { processPing, hydrateOpenTrips, reloadAlertSettings };
+async function checkOfflineDevices() {
+  try {
+    const { rows } = await pgDb.query(`
+      UPDATE tracking_devices
+      SET connected = FALSE
+      WHERE connected = TRUE
+        AND last_seen_at < NOW() - INTERVAL '15 minutes'
+      RETURNING id, bike_id, last_seen_at, imei
+    `);
+    for (const device of rows) {
+      console.log(`[Offline] ${device.imei} marked offline (last seen ${device.last_seen_at})`);
+      trackingEvents.emit('device_status', { device_id: device.id, connected: false });
+      if (!device.bike_id) continue;
+      const recordedAt = new Date().toISOString();
+      await fireAlert(device.bike_id, device.id, 'device_offline', {
+        imei: device.imei,
+        last_seen: device.last_seen_at,
+      }, recordedAt, Date.now());
+    }
+  } catch (e) {
+    console.error('[Offline] Check failed:', e.message);
+  }
+}
+
+module.exports = { processPing, hydrateOpenTrips, reloadAlertSettings, checkOfflineDevices };

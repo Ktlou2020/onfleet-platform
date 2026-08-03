@@ -300,12 +300,19 @@ router.get('/live', authRequired, adminOnly, (req, res) => {
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
 
-  const onPing  = (p) => { try { res.write(`event: ping\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
-  const onAlert = (p) => { try { res.write(`event: alert\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
+  const onPing         = (p) => { try { res.write(`event: ping\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
+  const onAlert        = (p) => { try { res.write(`event: alert\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
+  const onDeviceStatus = (p) => { try { res.write(`event: device_status\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
   trackingEvents.on('ping', onPing);
   trackingEvents.on('alert', onAlert);
+  trackingEvents.on('device_status', onDeviceStatus);
   const hb = setInterval(() => { try { res.write(': heartbeat\n\n'); } catch (_) {} }, 25_000);
-  req.on('close', () => { trackingEvents.off('ping', onPing); trackingEvents.off('alert', onAlert); clearInterval(hb); });
+  req.on('close', () => {
+    trackingEvents.off('ping', onPing);
+    trackingEvents.off('alert', onAlert);
+    trackingEvents.off('device_status', onDeviceStatus);
+    clearInterval(hb);
+  });
 });
 
 // ---------- Geofences ----------

@@ -322,6 +322,13 @@ function start() {
   cron.schedule('0 6 * * *', () => runDailyReminders().catch((error) => console.error('daily reminders failed', error)));
   cron.schedule('5 0 * * *', runScheduleRecalc);
   cron.schedule('30 6 1 * *', () => runMonthlyStatements().catch((error) => console.error('monthly statements failed', error)));
+
+  // Device offline detection — runs every 5 minutes
+  const { checkOfflineDevices } = require('./tripService');
+  const runOfflineCheck = () => checkOfflineDevices().catch(e => console.error('[offline-check]', e.message));
+  setInterval(runOfflineCheck, 5 * 60_000);
+  setTimeout(runOfflineCheck, 15_000); // initial check shortly after boot
+
   console.log('🕒 Scheduler started');
 }
 

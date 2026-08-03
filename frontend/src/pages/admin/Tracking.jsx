@@ -526,6 +526,10 @@ export default function Tracking() {
   const [replayLoading, setReplayLoading] = useState(false);
   const [replayFollow,  setReplayFollow]  = useState(true);
 
+  // ── trip map preview (static route on map) ───────────────
+  const [previewTripId, setPreviewTripId] = useState(null);
+  const [previewRoute,  setPreviewRoute]  = useState([]);
+
   const selectedRef         = useRef(null);
   const mountedRef          = useRef(true);
   const geocodeVersionRef   = useRef(0);
@@ -750,6 +754,13 @@ export default function Tracking() {
                     new Notification(`🚨 ${label}`, { body: reg, tag: `gps-${p.alert_type}`, silent: true });
                   }
                 }
+              } else if (evtType === 'device_status') {
+                setMapDevices(prev => prev.map(d =>
+                  d.id === p.device_id ? { ...d, connected: 0, device_status: 'offline' } : d
+                ));
+                setDevices(prev => prev.map(d =>
+                  d.id === p.device_id ? { ...d, connected: 0, device_status: 'offline' } : d
+                ));
               }
             } catch { /* ignore parse errors */ }
           }
@@ -863,6 +874,23 @@ export default function Tracking() {
     setReplayPlaying(false);
   }, []);
 
+  const toggleTripPreview = useCallback(async (trip) => {
+    if (previewTripId === trip.id) {
+      setPreviewTripId(null);
+      setPreviewRoute([]);
+      return;
+    }
+    setPreviewTripId(trip.id);
+    setPreviewRoute([]);
+    try {
+      const from = encodeURIComponent(new Date(trip.started_at).toISOString());
+      const to   = trip.ended_at ? `&to=${encodeURIComponent(new Date(trip.ended_at).toISOString())}` : '';
+      const { data } = await api.get(`/tracking/devices/${selected}/positions?limit=1000&from=${from}${to}`);
+      setPreviewRoute(data.map(p => [p.lat, p.lng]));
+      if (data.length > 0) setFlyTo([data[0].lat, data[0].lng]);
+    } catch { setPreviewTripId(null); }
+  }, [previewTripId, selected]);
+
   // Replay tick — advance one ping at a time using real time gaps / speed multiplier
   useEffect(() => {
     if (!replayPlaying || replayPings.length === 0) return;
@@ -886,6 +914,8 @@ export default function Tracking() {
     setPingDate(todayStr);
     pingDateRef.current = todayStr;
     setAddress(null);
+    setPreviewTripId(null);
+    setPreviewRoute([]);
     if (device.lat && device.lng) {
       setFlyTo([device.lat, device.lng]);
       const geocodeVersion = ++geocodeVersionRef.current;
@@ -1407,6 +1437,11 @@ export default function Tracking() {
             </Marker>
           )}
 
+          {/* ── Trip preview (static route) ──────────────────── */}
+          {previewRoute.length > 1 && (
+            <Polyline positions={previewRoute} color="#1E88D1" weight={3} opacity={0.7} dashArray="8 6" />
+          )}
+
           {/* ── Trip replay overlays ─────────────────────────── */}
           {replayPings.length > 0 && (() => {
             const cur = replayPings[replayIdx];
@@ -1750,6 +1785,39 @@ export default function Tracking() {
                   )}
                 </div>
 
+                {/* Weekly summary */}
+                {(() => {
+                  const now = new Date();
+                  // Week starts Monday in SAST
+                  const dayOfWeek = (now.getDay() + 6) % 7; // Mon=0 … Sun=6
+                  const weekStart = new Date(now.getTime() - dayOfWeek * 86400000);
+                  weekStart.setHours(0, 0, 0, 0);
+                  const weekTrips = trips.filter(t => t.ended_at && new Date(t.started_at) >= weekStart);
+                  if (weekTrips.length === 0) return null;
+                  const weekKm   = weekTrips.reduce((s, t) => s + (t.distance_km || 0), 0);
+                  const weekSec  = weekTrips.reduce((s, t) => s + (t.duration_sec || 0), 0);
+                  const weekTopS = weekTrips.reduce((m, t) => Math.max(m, t.max_speed_kmh || 0), 0);
+                  return (
+                    <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border)' }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8 }}>This week</div>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 700, color: 'var(--primary)' }}>
+                          <Route size={12} />{weekKm.toFixed(1)} km
+                        </span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 700, color: 'var(--muted)' }}>
+                          <Clock size={12} />{fmtDuration(weekSec)}
+                        </span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 700, color: 'var(--muted)' }}>
+                          <Gauge size={12} />top {Math.round(weekTopS)} km/h
+                        </span>
+                        <span style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 600 }}>
+                          {weekTrips.length} trip{weekTrips.length !== 1 ? 's' : ''}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* Location ping log */}
                 <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border)' }}>
                   {/* Header row: label + count + refresh */}
@@ -2086,20 +2154,27 @@ export default function Tracking() {
                 const dur     = fmtDuration(t.duration_sec);
                 const maxS    = t.max_speed_kmh != null ? `${Math.round(t.max_speed_kmh)} km/h` : '—';
                 const ongoing = !t.ended_at;
-                const isReplaying = replayTrip?.id === t.id;
+                const isReplaying  = replayTrip?.id === t.id;
+                const isPreviewing = previewTripId === t.id;
                 return (
-                  <div key={t.id} style={{ marginBottom: 8, padding: '9px 10px', background: isReplaying ? 'rgba(30,136,209,.08)' : 'var(--surface)', borderRadius: 8, border: `1px solid ${isReplaying ? 'var(--primary)' : 'var(--border)'}`, borderLeft: `3px solid ${isReplaying ? 'var(--primary)' : ongoing ? '#22c55e' : 'var(--border)'}` }}>
+                  <div key={t.id} style={{ marginBottom: 8, padding: '9px 10px', background: isReplaying || isPreviewing ? 'rgba(30,136,209,.08)' : 'var(--surface)', borderRadius: 8, border: `1px solid ${isReplaying || isPreviewing ? 'var(--primary)' : 'var(--border)'}`, borderLeft: `3px solid ${isReplaying ? 'var(--primary)' : ongoing ? '#22c55e' : isPreviewing ? '#1E88D1' : 'var(--border)'}` }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
                       <span style={{ fontSize: 11, color: 'var(--muted)', flex: 1 }}>{fmtSAST(t.started_at)}</span>
                       {ongoing && <span style={{ fontSize: 10, fontWeight: 700, color: '#22c55e', background: 'rgba(34,197,94,.12)', padding: '1px 6px', borderRadius: 8 }}>active</span>}
-                      {!ongoing && (
+                      {!ongoing && (<>
+                        <button
+                          onClick={() => toggleTripPreview(t)}
+                          title={isPreviewing ? 'Hide route' : 'Show route on map'}
+                          style={{ display: 'flex', alignItems: 'center', gap: 3, padding: '2px 7px', fontSize: 10, fontWeight: 700, borderRadius: 6, border: 'none', cursor: 'pointer', background: isPreviewing ? 'rgba(30,136,209,.2)' : 'rgba(30,136,209,.08)', color: 'var(--primary)' }}>
+                          <MapPin size={9} />{isPreviewing ? 'Hide' : 'Map'}
+                        </button>
                         <button
                           onClick={() => isReplaying ? stopReplay() : startReplay(t)}
                           disabled={replayLoading}
                           style={{ display: 'flex', alignItems: 'center', gap: 3, padding: '2px 7px', fontSize: 10, fontWeight: 700, borderRadius: 6, border: 'none', cursor: 'pointer', background: isReplaying ? 'var(--primary)' : 'rgba(30,136,209,.12)', color: isReplaying ? '#fff' : 'var(--primary)' }}>
                           {isReplaying ? <><X size={9} /> Stop</> : replayLoading ? '…' : <><Play size={9} /> Replay</>}
                         </button>
-                      )}
+                      </>)}
                     </div>
                     <div style={{ display: 'flex', gap: 10 }}>
                       {[

@@ -1284,14 +1284,33 @@ function processSubscriptionInvoices(psSub, orgId, riderId, agreementId, actorUs
 async function syncOneSubscription(subCode, orgId, actorUserId, ip, results, seenSubCodes) {
   if (seenSubCodes.has(subCode)) return;
   seenSubCodes.add(subCode);
+
+  if (!results.debug.subscriptions) results.debug.subscriptions = [];
+  const diag = { code: subCode, ps_found: false, invoice_count: 0, txn_count: 0, customer_code: null, customer_email: null, email_match: null };
+  results.debug.subscriptions.push(diag);
+
   const { data: subResp } = await axios.get(`${PAYSTACK_BASE_URL}/subscription/${encodeURIComponent(subCode)}`, {
     headers: paystackHeaders()
   });
   const psSub = subResp.data;
-  if (!psSub) return;
+  if (!psSub) { diag.error = 'Paystack returned null for this subscription code'; return; }
+
+  diag.ps_found = true;
+  diag.ps_status = psSub.status;
+  diag.amount = psSub.amount;
+  diag.customer_code = psSub.customer?.customer_code || null;
+  diag.customer_email = psSub.customer?.email || null;
+  diag.invoice_count = (psSub.invoices || []).length;
+  diag.plan_code = psSub.plan?.plan_code || null;
+
+  // Check if email matches a local user
+  if (diag.customer_email) {
+    const user = db.prepare('SELECT id, full_name FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1').get(diag.customer_email);
+    diag.email_match = user ? { id: user.id, name: user.full_name } : null;
+  }
 
   // Backfill customer code if we don't have it.
-  const localRow = db.prepare('SELECT id, paystack_customer_code FROM rider_subscriptions WHERE paystack_subscription_code = ?').get(subCode);
+  const localRow = db.prepare('SELECT id, paystack_customer_code, rider_user_id, agreement_id FROM rider_subscriptions WHERE paystack_subscription_code = ?').get(subCode);
   const customerCode = psSub.customer?.customer_code;
   if (localRow && !localRow.paystack_customer_code && customerCode) {
     db.prepare('UPDATE rider_subscriptions SET paystack_customer_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
@@ -1299,12 +1318,14 @@ async function syncOneSubscription(subCode, orgId, actorUserId, ip, results, see
   }
 
   // Resolve org match via email if we don't have a local row.
-  let riderId = localRow ? db.prepare('SELECT rider_user_id FROM rider_subscriptions WHERE id = ?').get(localRow.id)?.rider_user_id : null;
-  let agreementId = localRow ? db.prepare('SELECT agreement_id FROM rider_subscriptions WHERE id = ?').get(localRow.id)?.agreement_id : null;
+  let riderId = localRow?.rider_user_id || null;
+  let agreementId = localRow?.agreement_id || null;
   if (!riderId || !agreementId) {
     const match = resolveSubscriptionToAgreement(psSub, orgId);
     if (match) { riderId = riderId || match.riderId; agreementId = agreementId || match.agreementId; }
   }
+  diag.rider_id = riderId;
+  diag.agreement_id = agreementId;
 
   if (!localRow && riderId && agreementId) {
     db.prepare(`INSERT OR IGNORE INTO rider_subscriptions
@@ -1320,9 +1341,14 @@ async function syncOneSubscription(subCode, orgId, actorUserId, ip, results, see
   if (customerCode) {
     try {
       const txns = await fetchCustomerTxns(customerCode);
+      diag.txn_count = txns.length;
       results.checked += txns.length;
       for (const txn of txns) {
         if (!txn.subscription) txn.subscription = { subscription_code: subCode };
+        if (!txn.metadata) txn.metadata = {};
+        if (riderId && !txn.metadata.rider_user_id) txn.metadata.rider_user_id = riderId;
+        if (agreementId && !txn.metadata.agreement_id) txn.metadata.agreement_id = agreementId;
+        if (orgId && !txn.metadata.organization_id) txn.metadata.organization_id = orgId;
         try {
           const outcome = replayPaystackTxn(txn, orgId, actorUserId, ip);
           if (outcome.result === 'already_recorded') results.skipped++;
@@ -1332,7 +1358,11 @@ async function syncOneSubscription(subCode, orgId, actorUserId, ip, results, see
           results.skipped++;
         }
       }
-    } catch (_) { /* best-effort */ }
+    } catch (e) {
+      diag.txn_fetch_error = e.message;
+    }
+  } else {
+    diag.warning = 'No customer_code on Paystack subscription — cannot fetch transaction list';
   }
 }
 

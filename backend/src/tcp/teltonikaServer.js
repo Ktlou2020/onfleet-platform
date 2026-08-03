@@ -1,6 +1,7 @@
 'use strict';
 
-const net = require('net');
+const net  = require('net');
+const dgram = require('dgram');
 const db = require('../db');
 const pgDb = require('../pgDb');
 const trackingEvents = require('../trackingEvents');
@@ -9,6 +10,29 @@ const tripService = require('../services/tripService');
 
 // Active TCP connections keyed by IMEI
 const connections = new Map();
+// Last remote IP from each device's most recent TCP connection
+const deviceAddresses = new Map(); // IMEI → remote IP string
+
+// Send a UDP wake packet to the device's last known IP on the server's TCP port.
+// Triggers the device to reconnect and pick up any pending queued commands.
+let _tcpPort = 5000;
+function sendWakePacket(imei) {
+  const address = deviceAddresses.get(imei);
+  if (!address) return false;
+  try {
+    const client = dgram.createSocket('udp4');
+    const msg = Buffer.from([0x00]);
+    client.send(msg, _tcpPort, address, (err) => {
+      client.close();
+      if (err) console.warn(`[Teltonika] wake packet failed for ${imei}:`, err.message);
+      else console.log(`[Teltonika] wake → ${address}:${_tcpPort} (${imei})`);
+    });
+    return true;
+  } catch (err) {
+    console.warn(`[Teltonika] wake error for ${imei}:`, err.message);
+    return false;
+  }
+}
 
 // ── CRC-16/ARC ────────────────────────────────────────────────────────────────
 function crc16(buf, start, len) {
@@ -178,7 +202,7 @@ async function storeRecords(imei, device, records) {
 async function storeCommandResponse(imei, response) {
   console.log(`[Teltonika] ${imei} → ${response}`);
   const { rows } = await pgDb.query(
-    `SELECT tc.id FROM tracking_commands tc
+    `SELECT tc.id, tc.command FROM tracking_commands tc
      JOIN tracking_devices td ON td.id = tc.device_id
      WHERE td.imei=$1 AND tc.status='sent' ORDER BY tc.sent_at ASC LIMIT 1`,
     [imei]
@@ -189,6 +213,62 @@ async function storeCommandResponse(imei, response) {
       [response, rows[0].id]
     );
   }
+
+  // If this is a getgps response, parse the position and emit it as a real ping
+  // Response format: Lat:XX.XXXXXX Long:YY.YYYYYY Alt:ZZZ Speed:0 Dir:0 Sat:N Fix:1 UTC:...
+  const latM = response.match(/Lat:([\d.\-]+)/i);
+  const lngM = response.match(/Long:([\d.\-]+)/i);
+  if (!latM || !lngM) return;
+
+  const lat = parseFloat(latM[1]);
+  const lng = parseFloat(lngM[1]);
+  if (!lat && !lng) return; // skip 0,0
+
+  const alt = response.match(/Alt:([\d.\-]+)/i)?.[1];
+  const spd = response.match(/Speed:([\d.]+)/i)?.[1];
+  const sat = response.match(/Sat:(\d+)/i)?.[1];
+  const dir = response.match(/Dir:([\d.]+)/i)?.[1];
+  const fix = response.match(/Fix:(\d+)/i)?.[1];
+  if (fix === '0') return; // no GPS fix — don't store
+
+  const now = new Date().toISOString();
+  const { rows: devRows } = await pgDb.query(
+    'SELECT * FROM tracking_devices WHERE imei=$1', [imei]
+  );
+  const device = devRows[0];
+  if (!device?.bike_id) return;
+
+  await pgDb.query(
+    `INSERT INTO gps_pings (bike_id, lat, lng, speed_kmh, heading, recorded_at, satellites, altitude)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [device.bike_id, lat, lng,
+     spd != null ? parseFloat(spd) : 0,
+     dir != null ? parseFloat(dir) : null,
+     now,
+     sat != null ? parseInt(sat) : null,
+     alt != null ? parseInt(alt) : null]
+  );
+  db.prepare('UPDATE bikes SET last_known_lat=?, last_known_lng=?, last_location_at=? WHERE id=?')
+    .run(lat, lng, now, device.bike_id);
+  await pgDb.query('UPDATE tracking_devices SET last_seen_at=NOW() WHERE imei=$1', [imei]);
+
+  trackingEvents.emit('ping', {
+    imei,
+    device_id:     device.id,
+    bike_id:       device.bike_id,
+    lat,
+    lng,
+    speed:         spd != null ? parseFloat(spd) : 0,
+    heading:       dir != null ? parseFloat(dir) : null,
+    altitude:      alt != null ? parseInt(alt) : null,
+    satellites:    sat != null ? parseInt(sat) : null,
+    ignition:      null,
+    gsm_signal:    null,
+    battery_mv:    null,
+    ext_voltage_mv: null,
+    ts:            Date.now(),
+  });
+  console.log(`[Teltonika] getgps position stored for ${imei}: ${lat},${lng}`);
 }
 
 // ── Dispatch a command to a connected device ──────────────────────────────────
@@ -207,6 +287,7 @@ function dispatchCommand(socket, imei, cmdId, command) {
 
 // ── Handle one TCP connection ─────────────────────────────────────────────────
 function handleConnection(socket) {
+  const remoteAddress = socket.remoteAddress?.replace(/^::ffff:/, ''); // strip IPv6 wrapper
   let imei = null;
   let authed = false;
   let cachedDevice = null;
@@ -245,6 +326,7 @@ function handleConnection(socket) {
         authed = true;
         cachedDevice = device;
         connections.set(imei, socket);
+        if (remoteAddress) deviceAddresses.set(imei, remoteAddress);
         await pgDb.query('UPDATE tracking_devices SET connected=TRUE, last_seen_at=NOW() WHERE imei=$1', [imei]);
         console.log(`[Teltonika] + ${imei} (${device.model})`);
         // Flush queued commands
@@ -324,6 +406,7 @@ function getConnectedIMEIs() {
 }
 
 function start(port) {
+  _tcpPort = port;
   // Hydrate open trips from Postgres before accepting connections
   tripService.hydrateOpenTrips().catch(console.error);
 
@@ -380,4 +463,4 @@ async function checkOfflineDevices() {
 
 setInterval(checkOfflineDevices, 10 * 60_000);
 
-module.exports = { start, sendCommand, getConnectedIMEIs, trackingEvents };
+module.exports = { start, sendCommand, getConnectedIMEIs, sendWakePacket, trackingEvents };

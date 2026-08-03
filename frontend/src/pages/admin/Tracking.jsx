@@ -481,6 +481,7 @@ export default function Tracking() {
   const selectVersionRef    = useRef(0);
   const doDeviceRefreshRef  = useRef(null);
   const scheduleNextPollRef = useRef(null);
+  const awaitingPositionRef = useRef(new Set()); // device IDs waiting for getgps response
 
   useEffect(() => { selectedRef.current = selected; }, [selected]);
   useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
@@ -652,6 +653,12 @@ export default function Tracking() {
                   doDeviceRefreshRef.current?.();
                   scheduleNextPollRef.current?.(true);
                 }
+                // Clear position-request indicator if this is the response we were waiting for
+                if (awaitingPositionRef.current.has(p.device_id)) {
+                  awaitingPositionRef.current.delete(p.device_id);
+                  setRequestingPos(prev => { const s = new Set(prev); s.delete(p.device_id); return s; });
+                  toast.success(`Position updated: ${p.lat?.toFixed(5)}, ${p.lng?.toFixed(5)}`);
+                }
                 setMapDevices(prev => {
                   const idx = prev.findIndex(d => d.id === p.device_id);
                   if (idx === -1) return prev;
@@ -821,15 +828,20 @@ export default function Tracking() {
   const requestPosition = useCallback(async (deviceId) => {
     if (!deviceId) return;
     setRequestingPos(prev => new Set([...prev, deviceId]));
+    awaitingPositionRef.current.add(deviceId);
     try {
       const { data } = await api.post(`/tracking/devices/${deviceId}/commands`, { preset: 'get_gps' });
-      toast.success(data.note || 'Position request queued');
-      if (deviceId === selected) await refreshCommands();
+      toast.success(data.note || 'Position request sent');
+      if (deviceId === selected) {
+        await refreshCommands();
+        setDetailTab('info'); // switch to Controls tab to show command history
+      }
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to request position');
-    } finally {
       setRequestingPos(prev => { const s = new Set(prev); s.delete(deviceId); return s; });
+      awaitingPositionRef.current.delete(deviceId);
     }
+    // Note: requestingPos stays set until SSE ping arrives (cleared in SSE handler below)
   }, [selected, refreshCommands]);
 
   // ── add device ───────────────────────────────────────────────────
@@ -1741,7 +1753,7 @@ export default function Tracking() {
               <button className="btn btn-sm btn-primary" style={{ width: '100%', gap: 7, justifyContent: 'center' }}
                 disabled={requestingPos.has(selected)} onClick={() => requestPosition(selected)}>
                 <MapPin size={13} />
-                {requestingPos.has(selected) ? 'Requesting…' : 'Request current position'}
+                {requestingPos.has(selected) ? 'Waiting for device…' : 'Request current position'}
               </button>
             </div>
 

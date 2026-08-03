@@ -244,7 +244,16 @@ function playAlertBeep() {
 }
 
 const EMPTY_FORM = { imei: '', model: 'FMB920', bike_id: '', label: '' };
-const EMPTY_GEO  = { name: '', lat: '', lng: '', radius_m: 500, bike_id: '', polygon_coords: null };
+const EMPTY_GEO  = { name: '', lat: '', lng: '', radius_m: 500, bike_id: '', polygon_coords: null, zone_type: 'standard' };
+
+const ZONE_TYPES = [
+  { value: 'standard', label: 'Standard',  badge: 'ZONE',    color: '#1E88D1', bg: 'rgba(30,136,209,.12)' },
+  { value: 'safe',     label: 'Safe Zone', badge: 'SAFE',    color: '#16A34A', bg: 'rgba(22,163,74,.12)'  },
+  { value: 'warning',  label: 'Caution',   badge: 'CAUTION', color: '#D97706', bg: 'rgba(217,119,6,.12)'  },
+  { value: 'danger',   label: 'No-Go',     badge: 'NO-GO',   color: '#E53935', bg: 'rgba(229,57,53,.12)'  },
+];
+const ZONE_COLOR = Object.fromEntries(ZONE_TYPES.map(z => [z.value, z.color]));
+const ZONE_BG    = Object.fromEntries(ZONE_TYPES.map(z => [z.value, z.bg]));
 
 function BikeCombobox({ bikes, value, onChange }) {
   const [query, setQuery] = useState('');
@@ -1065,7 +1074,13 @@ export default function Tracking() {
     if (!hasPolygon && (!geoForm.lat || !geoForm.lng)) return toast.error('Pick a center, enter coordinates, or draw an outline');
     setGeoSubmitting(true);
     try {
-      const body = { name: geoForm.name.trim(), bike_id: geoForm.bike_id || null };
+      const zt = geoForm.zone_type || 'standard';
+      const body = {
+        name: geoForm.name.trim(),
+        bike_id: geoForm.bike_id || null,
+        zone_type: zt,
+        color: ZONE_COLOR[zt] || '#1E88D1',
+      };
       if (hasPolygon) {
         body.polygon_coords = geoForm.polygon_coords;
       } else {
@@ -1452,27 +1467,24 @@ export default function Tracking() {
                 <button className="btn btn-sm btn-primary" onClick={() => setShowGeoForm(true)}><Plus size={11} /> Add geofence</button>
               </div>
             ) : geofences.map(gf => {
-              const isDanger = gf.zone_type === 'danger';
-              const dotColor = isDanger ? '#E53935' : '#1E88D1';
+              const zt = ZONE_TYPES.find(z => z.value === gf.zone_type) || ZONE_TYPES[0];
               return (
-                <div key={gf.id} style={{ padding: '9px 12px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 7, borderLeft: isDanger ? '3px solid #E53935' : '3px solid transparent' }}>
-                  <div style={{ width: 12, height: 12, borderRadius: '50%', border: `2px solid ${dotColor}`, background: isDanger ? 'rgba(229,57,53,.12)' : 'rgba(30,136,209,.12)', flexShrink: 0 }} />
+                <div key={gf.id} style={{ padding: '9px 12px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 7, borderLeft: `3px solid ${zt.color}` }}>
+                  <div style={{ width: 12, height: 12, borderRadius: '50%', border: `2px solid ${zt.color}`, background: zt.bg, flexShrink: 0 }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                       <div style={{ fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{gf.name}</div>
-                      {isDanger && <span style={{ fontSize: 8, fontWeight: 700, color: '#fff', background: '#E53935', padding: '1px 4px', borderRadius: 3, flexShrink: 0 }}>NO-GO</span>}
+                      <span style={{ fontSize: 8, fontWeight: 700, color: '#fff', background: zt.color, padding: '1px 4px', borderRadius: 3, flexShrink: 0 }}>{zt.badge}</span>
                     </div>
                     <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>
                       {gf.polygon_coords ? `Polygon · ${gf.polygon_coords.length} pts` : (gf.radius_m >= 1000 ? `${(gf.radius_m / 1000).toFixed(1)} km radius` : `${gf.radius_m} m radius`)}{gf.bike_registration ? ` · ${gf.bike_registration}` : ' · all bikes'}
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: 3, flexShrink: 0 }}>
-                    {isDanger && (
-                      <button className="btn btn-sm" style={{ padding: '2px 5px', fontSize: 10, color: '#7c3aed', borderColor: '#7c3aed', background: 'transparent', minWidth: 0 }}
-                        onClick={() => drawPolygonForGeofence(gf)} title="Draw polygon outline">
-                        <Pencil size={10} />
-                      </button>
-                    )}
+                    <button className="btn btn-sm" style={{ padding: '2px 5px', fontSize: 10, color: '#7c3aed', borderColor: '#7c3aed', background: 'transparent', minWidth: 0 }}
+                      onClick={() => drawPolygonForGeofence(gf)} title="Draw polygon outline">
+                      <Pencil size={10} />
+                    </button>
                     <button className="btn btn-sm" style={{ padding: '2px 4px', opacity: 0.5, background: 'transparent', minWidth: 0 }}
                       onClick={() => deleteGeofence(gf.id)} title="Delete"><Trash2 size={10} /></button>
                   </div>
@@ -1524,17 +1536,18 @@ export default function Tracking() {
 
           {/* Geofence zones (polygon or circle) */}
           {geofences.map(gf => {
-            const isDanger = gf.zone_type === 'danger';
-            const color = isDanger ? '#E53935' : (gf.color || '#1E88D1');
+            const zt = ZONE_TYPES.find(z => z.value === gf.zone_type) || ZONE_TYPES[0];
+            const color = gf.color || zt.color;
+            const isSolid = gf.zone_type === 'danger' || gf.zone_type === 'warning';
             const popup = (
               <Popup>
-                {isDanger && <div style={{ color: '#E53935', fontWeight: 700, fontSize: 11, marginBottom: 4 }}>⚠ NO-GO ZONE</div>}
+                <div style={{ color: zt.color, fontWeight: 700, fontSize: 11, marginBottom: 4 }}>{zt.badge}: {zt.label}</div>
                 <strong>{gf.name}</strong><br />
                 {gf.polygon_coords ? `Polygon · ${gf.polygon_coords.length} points` : (gf.radius_m >= 1000 ? `Radius: ${(gf.radius_m / 1000).toFixed(1)} km` : `Radius: ${gf.radius_m} m`)}
                 {gf.bike_registration ? <><br />Bike: {gf.bike_registration}</> : ''}
               </Popup>
             );
-            const opts = { color, fillColor: color, fillOpacity: isDanger ? 0.13 : 0.07, weight: isDanger ? 2.5 : 2, dashArray: isDanger ? undefined : '6 4' };
+            const opts = { color, fillColor: color, fillOpacity: isSolid ? 0.13 : 0.07, weight: isSolid ? 2.5 : 2, dashArray: isSolid ? undefined : '6 4' };
             if (gf.polygon_coords && Array.isArray(gf.polygon_coords) && gf.polygon_coords.length >= 3) {
               return <Polygon key={gf.id} positions={gf.polygon_coords} pathOptions={opts}>{popup}</Polygon>;
             }
@@ -2448,6 +2461,33 @@ export default function Tracking() {
             <label className="label">Zone name <span style={{ color: 'var(--danger)' }}>*</span></label>
             <input className="input" placeholder="e.g. Depot, School zone, Client site" value={geoForm.name}
               onChange={e => setGeoForm(f => ({ ...f, name: e.target.value }))} autoFocus />
+          </div>
+
+          <div className="field">
+            <label className="label">Zone type</label>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {ZONE_TYPES.map(zt => {
+                const active = (geoForm.zone_type || 'standard') === zt.value;
+                return (
+                  <button key={zt.value} type="button"
+                    onClick={() => setGeoForm(f => ({ ...f, zone_type: zt.value }))}
+                    style={{
+                      padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                      border: `2px solid ${zt.color}`,
+                      background: active ? zt.color : 'transparent',
+                      color: active ? '#fff' : zt.color,
+                      transition: 'all .12s',
+                    }}>
+                    {zt.label}
+                  </button>
+                );
+              })}
+            </div>
+            {geoForm.zone_type === 'danger' && (
+              <div style={{ marginTop: 6, fontSize: 11, color: '#E53935', display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span>⚠</span> Engine will be cut automatically when a bike enters this zone
+              </div>
+            )}
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>

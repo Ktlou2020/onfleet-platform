@@ -840,12 +840,12 @@ export default function Tracking() {
   }, []);
 
   const startReplay = useCallback(async (trip) => {
-    if (!selectedDevice?.id) return;
+    if (!selected) return;
     setReplayLoading(true);
     try {
       const from = encodeURIComponent(new Date(trip.started_at).toISOString());
       const to   = trip.ended_at ? `&to=${encodeURIComponent(new Date(trip.ended_at).toISOString())}` : '';
-      const { data } = await api.get(`/tracking/devices/${selectedDevice.id}/positions?limit=1000&from=${from}${to}`);
+      const { data } = await api.get(`/tracking/devices/${selected}/positions?limit=1000&from=${from}${to}`);
       if (data.length < 2) { toast.error('Not enough GPS data to replay this trip'); return; }
       setReplayPings(data); // oldest-first from backend
       setReplayIdx(0);
@@ -854,7 +854,7 @@ export default function Tracking() {
       setReplayFollow(true);
     } catch { toast.error('Could not load trip data'); }
     finally { setReplayLoading(false); }
-  }, [selectedDevice]);
+  }, [selected]);
 
   const stopReplay = useCallback(() => {
     setReplayTrip(null);

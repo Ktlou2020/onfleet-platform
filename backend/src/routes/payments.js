@@ -266,8 +266,13 @@ router.post('/paystack/webhook', (req, res) => {
     const orgId = Number(meta.organization_id);
     const riderId = Number(meta.rider_user_id);
     if (orgId && riderId) {
-      db.prepare(`UPDATE rider_subscriptions SET status = 'active', paystack_subscription_code = ?, paystack_customer_code = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE organization_id = ? AND rider_user_id = ? AND status = 'pending'`)
+      // Use COALESCE so an already-stored code is never overwritten by a null
+      db.prepare(`UPDATE rider_subscriptions
+        SET status = 'active',
+            paystack_subscription_code = COALESCE(paystack_subscription_code, ?),
+            paystack_customer_code = COALESCE(paystack_customer_code, ?),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE organization_id = ? AND rider_user_id = ? AND status != 'cancelled'`)
         .run(subscriptionCode || null, customerCode || null, orgId, riderId);
     }
   // Rider charge.success — credit the fleet wallet and record the payment
@@ -307,7 +312,18 @@ router.post('/paystack/webhook', (req, res) => {
 
     if (orgId && grossAmountZAR > 0) {
       creditFleetWalletFromWebhook(orgId, grossAmountZAR, riderId || null, reference);
-      if (subscriptionCode) {
+      // Keep rider_subscriptions in sync: store subscription + customer codes on the row
+      // so future lookups work even if Paystack metadata is absent on recurring charges.
+      // COALESCE avoids overwriting already-correct values.
+      if (subscriptionCode && orgId && riderId) {
+        db.prepare(`UPDATE rider_subscriptions
+          SET status = 'active',
+              paystack_subscription_code = COALESCE(paystack_subscription_code, ?),
+              paystack_customer_code = COALESCE(paystack_customer_code, ?),
+              updated_at = CURRENT_TIMESTAMP
+          WHERE organization_id = ? AND rider_user_id = ? AND status != 'cancelled'`)
+          .run(subscriptionCode, customerCode || null, orgId, riderId);
+      } else if (subscriptionCode) {
         db.prepare(`UPDATE rider_subscriptions SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE paystack_subscription_code = ? AND status != 'cancelled'`)
           .run(subscriptionCode);
       }

@@ -1096,6 +1096,81 @@ function replayPaystackTxn(txn, hintOrgId, actorUserId, ip) {
   return { result: 'synced', payment_id: paymentId, amount: grossAmountZAR, agreement_id: agreementId, org_id: orgId };
 }
 
+// ── POST /admin/paystack/diagnose ─────────────────────────────────────────────
+// Returns raw Paystack data for a subscription or customer code so mismatches
+// can be identified without guessing. Safe read-only endpoint.
+router.post('/paystack/diagnose', superadminOnly, async (req, res) => {
+  const { subscription_code, customer_code } = req.body || {};
+  if (!subscription_code && !customer_code) {
+    return res.status(400).json({ error: 'Provide subscription_code or customer_code' });
+  }
+  const secretKey = process.env.PAYSTACK_SECRET_KEY;
+  if (!secretKey) return res.status(500).json({ error: 'PAYSTACK_SECRET_KEY not configured' });
+
+  const out = {};
+  try {
+    if (subscription_code) {
+      const { data } = await axios.get(`${PAYSTACK_BASE_URL}/subscription/${encodeURIComponent(subscription_code)}`, {
+        headers: paystackHeaders()
+      });
+      const sub = data.data;
+      out.subscription = {
+        code: sub?.subscription_code,
+        status: sub?.status,
+        amount: sub?.amount,
+        customer_code: sub?.customer?.customer_code,
+        customer_email: sub?.customer?.email,
+        plan_code: sub?.plan?.plan_code,
+        invoice_count: (sub?.invoices || []).length,
+        invoices: (sub?.invoices || []).map((inv) => ({
+          reference: inv.transaction?.reference,
+          status: inv.transaction?.status,
+          amount: inv.transaction?.amount,
+          paid_at: inv.transaction?.paid_at
+        }))
+      };
+      // Check if we can find this customer's email in our DB
+      if (sub?.customer?.email) {
+        const user = db.prepare('SELECT id, email, full_name, role FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1').get(sub.customer.email);
+        out.local_user_match = user || null;
+      }
+      // Also fetch transactions for this customer
+      if (sub?.customer?.customer_code) {
+        try {
+          const { data: txnData } = await axios.get(`${PAYSTACK_BASE_URL}/transaction`, {
+            params: { customer: sub.customer.customer_code, perPage: 10, status: 'success' },
+            headers: paystackHeaders()
+          });
+          out.recent_transactions = (txnData.data || []).map((t) => ({
+            reference: t.reference,
+            amount: t.amount,
+            status: t.status,
+            paid_at: t.paid_at,
+            channel: t.channel
+          }));
+        } catch (e) {
+          out.transaction_fetch_error = e.message;
+        }
+      }
+    }
+    if (customer_code) {
+      const { data: txnData } = await axios.get(`${PAYSTACK_BASE_URL}/transaction`, {
+        params: { customer: customer_code, perPage: 10, status: 'success' },
+        headers: paystackHeaders()
+      });
+      out.transactions_by_customer = (txnData.data || []).map((t) => ({
+        reference: t.reference,
+        amount: t.amount,
+        status: t.status,
+        paid_at: t.paid_at
+      }));
+    }
+    res.json(out);
+  } catch (err) {
+    res.status(err.response?.status || 500).json({ error: err.message, paystack_response: err.response?.data });
+  }
+});
+
 // ── POST /admin/paystack/replay-charge ────────────────────────────────────────
 router.post('/paystack/replay-charge', superadminOnly, async (req, res) => {
   const { reference } = req.body || {};

@@ -12,6 +12,25 @@ const alertCooldowns = new Map();
 // Previous external voltage: bikeId → last known ext_voltage_mv
 const prevExtVoltage = new Map();
 
+// Alert settings cache: alertType → { enabled, notify_enabled, recipientIds: number[] }
+let alertSettingsCache = {};
+async function loadAlertSettings() {
+  try {
+    const { rows } = await pgDb.query('SELECT * FROM alert_settings');
+    const next = {};
+    for (const r of rows) {
+      let recipientIds = [];
+      try { recipientIds = JSON.parse(r.recipient_user_ids || '[]'); } catch { /* ignore */ }
+      next[r.alert_type] = { enabled: r.enabled, notify_enabled: r.notify_enabled, recipientIds };
+    }
+    alertSettingsCache = next;
+  } catch { /* table may not exist yet on first boot; use defaults */ }
+}
+// Called by tracking.js after a PUT /alert-settings
+function reloadAlertSettings() { loadAlertSettings().catch(() => {}); }
+// Load on startup (non-blocking)
+setTimeout(() => loadAlertSettings().catch(() => {}), 2000);
+
 const COOLDOWNS_MS = {
   speeding:          5 * 60_000,
   harsh_brake:           60_000,
@@ -74,23 +93,33 @@ async function emitAlert(id, bikeId, deviceId, alertType, payload, recordedAt) {
     created_at: recordedAt,
     acknowledged_at: null,
   });
-  if (CRITICAL_TYPES.has(alertType)) {
-    const label = ALERT_LABELS[alertType] || alertType;
+  const setting = alertSettingsCache[alertType];
+  const notifyEnabled = setting ? setting.notify_enabled : true;
+  if (!notifyEnabled) return;
+
+  const label = ALERT_LABELS[alertType] || alertType;
+  const title = `🚨 Fleet Alert: ${label} — ${reg || `Bike #${bikeId}`}`;
+  const message = `A ${label} alert was triggered for ${reg || `Bike #${bikeId}`} at ${recordedAt}.\n\nDetails:\n${JSON.stringify(payload, null, 2)}`;
+
+  // Use custom recipients if configured, otherwise fall back to all superadmins for critical alerts
+  const customIds = setting?.recipientIds?.length ? setting.recipientIds : null;
+  if (customIds) {
+    const placeholders = customIds.map((_, i) => `?`).join(',');
+    const recipients = db.prepare(`SELECT id FROM users WHERE id IN (${placeholders}) AND deleted_at IS NULL`).all(...customIds);
+    for (const u of recipients) {
+      sendNotification({ userId: u.id, channel: 'email', type: `gps_${alertType}`, title, message, throwOnError: false }).catch(() => {});
+    }
+  } else if (CRITICAL_TYPES.has(alertType)) {
     const admins = db.prepare("SELECT id FROM users WHERE role='superadmin' AND email IS NOT NULL AND deleted_at IS NULL").all();
     for (const admin of admins) {
-      sendNotification({
-        userId: admin.id,
-        channel: 'email',
-        type: `gps_${alertType}`,
-        title: `🚨 Fleet Alert: ${label} — ${reg || `Bike #${bikeId}`}`,
-        message: `A ${label} alert was triggered for ${reg || `Bike #${bikeId}`} at ${recordedAt}.\n\nDetails:\n${JSON.stringify(payload, null, 2)}`,
-        throwOnError: false,
-      }).catch(() => {});
+      sendNotification({ userId: admin.id, channel: 'email', type: `gps_${alertType}`, title, message, throwOnError: false }).catch(() => {});
     }
   }
 }
 
 async function fireAlert(bikeId, deviceId, alertType, payload, recordedAt, nowMs) {
+  const setting = alertSettingsCache[alertType];
+  if (setting && setting.enabled === false) return; // alert type disabled
   if (!canFire(bikeId, alertType, nowMs)) return;
   const { rows } = await pgDb.query(
     'INSERT INTO tracking_alerts (bike_id, device_id, alert_type, payload, created_at) VALUES ($1,$2,$3,$4,$5) RETURNING id',
@@ -224,4 +253,4 @@ async function hydrateOpenTrips() {
   }
 }
 
-module.exports = { processPing, hydrateOpenTrips };
+module.exports = { processPing, hydrateOpenTrips, reloadAlertSettings };

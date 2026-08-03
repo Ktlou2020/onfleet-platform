@@ -20,6 +20,22 @@ const PRESET_COMMANDS = {
   get_param:      () => 'getparam 2004',
 };
 
+// A device is "online" if it has an active socket OR was seen within the last 10 minutes.
+// FMB920/FMB965 units connect briefly to push data then drop the TCP link, so we apply
+// a grace window so they don't flicker offline between transmissions.
+const ONLINE_GRACE_MS = 10 * 60 * 1000;
+function isOnline(imei, lastSeenAt, connectedImeis) {
+  if (connectedImeis.includes(imei)) return 1;
+  if (lastSeenAt && (Date.now() - new Date(lastSeenAt).getTime()) < ONLINE_GRACE_MS) return 1;
+  return 0;
+}
+
+// All known alert types with defaults
+const ALL_ALERT_TYPES = [
+  'geofence_enter','geofence_exit','harsh_brake','harsh_accel','harsh_cornering',
+  'idle','speeding','panic','power_disconnect','low_battery','movement','tamper','device_offline',
+];
+
 // Build a SQLite bike/org/rider map for a list of bike IDs
 function getBikeMap(bikeIds) {
   if (!bikeIds.length) return {};
@@ -51,7 +67,7 @@ router.get('/devices', authRequired, adminOnly, async (req, res) => {
   const bikeMap = getBikeMap(bikeIds);
   const result = devices.map(d => ({
     ...d,
-    connected: connected.includes(d.imei) ? 1 : 0,
+    connected: isOnline(d.imei, d.last_seen_at, connected),
     ...(d.bike_id && bikeMap[d.bike_id] ? {
       registration: bikeMap[d.bike_id].registration,
       make: bikeMap[d.bike_id].make,
@@ -81,7 +97,8 @@ router.get('/devices/:id', authRequired, adminOnly, async (req, res) => {
     SELECT b.registration, b.make, b.model, b.last_known_lat, b.last_known_lng, b.last_location_at
     FROM bikes b WHERE b.id = ?
   `).get(d.bike_id) : null;
-  const connected = teltonikaServer.getConnectedIMEIs().includes(d.imei) ? 1 : 0;
+  const connImeis = teltonikaServer.getConnectedIMEIs();
+  const connected = isOnline(d.imei, d.last_seen_at, connImeis);
   res.json({ ...d, connected, ...(bike || {}) });
 });
 
@@ -245,7 +262,7 @@ router.get('/map', authRequired, adminOnly, async (req, res) => {
         satellites: p.satellites, altitude: p.altitude, io_data: p.io_data,
         rider_name: b.rider_name, rider_phone: b.rider_phone,
         rider_address: b.rider_address, rider_city: b.rider_city,
-        connected: connected.includes(d.imei) ? 1 : 0,
+        connected: isOnline(d.imei, d.last_seen_at, connected),
       };
     });
   res.json(result);
@@ -379,6 +396,48 @@ router.post('/alerts/acknowledge-all', authRequired, adminOnly, async (req, res)
     await pgDb.query('UPDATE tracking_alerts SET acknowledged_at=NOW() WHERE acknowledged_at IS NULL');
   }
   res.json({ ok: true });
+});
+
+// ---------- Alert settings ----------
+
+router.get('/alert-settings', authRequired, adminOnly, async (req, res) => {
+  const { rows } = await pgDb.query('SELECT * FROM alert_settings');
+  const map = {};
+  for (const r of rows) map[r.alert_type] = r;
+  const result = ALL_ALERT_TYPES.map(t => ({
+    alert_type: t,
+    enabled: map[t] ? map[t].enabled : true,
+    notify_enabled: map[t] ? map[t].notify_enabled : true,
+    recipient_user_ids: (() => { try { return JSON.parse(map[t]?.recipient_user_ids || '[]'); } catch { return []; } })(),
+  }));
+  res.json(result);
+});
+
+router.put('/alert-settings', authRequired, adminOnly, async (req, res) => {
+  const settings = req.body; // array of { alert_type, enabled, notify_enabled, recipient_user_ids }
+  if (!Array.isArray(settings)) return res.status(400).json({ error: 'Expected array of settings' });
+  for (const s of settings) {
+    if (!ALL_ALERT_TYPES.includes(s.alert_type)) continue;
+    const recipIds = JSON.stringify(Array.isArray(s.recipient_user_ids) ? s.recipient_user_ids : []);
+    await pgDb.query(`
+      INSERT INTO alert_settings (alert_type, enabled, notify_enabled, recipient_user_ids, updated_at)
+      VALUES ($1, $2, $3, $4, NOW())
+      ON CONFLICT (alert_type) DO UPDATE SET
+        enabled = EXCLUDED.enabled,
+        notify_enabled = EXCLUDED.notify_enabled,
+        recipient_user_ids = EXCLUDED.recipient_user_ids,
+        updated_at = NOW()
+    `, [s.alert_type, s.enabled !== false, s.notify_enabled !== false, recipIds]);
+  }
+  require('../services/tripService').reloadAlertSettings();
+  res.json({ ok: true });
+});
+
+router.get('/notification-users', authRequired, adminOnly, (req, res) => {
+  const users = db.prepare(
+    `SELECT id, full_name, email, role FROM users WHERE role IN ('superadmin','admin') AND deleted_at IS NULL ORDER BY full_name`
+  ).all();
+  res.json(users);
 });
 
 module.exports = router;

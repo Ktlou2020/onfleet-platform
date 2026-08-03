@@ -6,7 +6,7 @@ import {
   Wifi, WifiOff, Zap, ZapOff, Radio, Info, RefreshCw, Plus, Trash2,
   CheckCircle, Clock, XCircle, AlertCircle, X, Search, Layers,
   Maximize2, Navigation, Gauge, Mountain, MapPin, Activity,
-  Shield, Bell, Route, BellOff, Pencil,
+  Shield, Bell, Route, BellOff, Pencil, Settings, Mail, Users,
   Battery, BatteryLow, BatteryMedium, BatteryFull, BatteryCharging,
   Signal, SignalZero, SignalLow, SignalMedium, SignalHigh, Satellite,
 } from 'lucide-react';
@@ -426,6 +426,12 @@ export default function Tracking() {
   const [alertsUnread,    setAlertsUnread]    = useState(0);
   const [alertTypeFilter, setAlertTypeFilter] = useState('');
 
+  // ── alert settings modal ──────────────────────────────────────────
+  const [showAlertSettings,  setShowAlertSettings]  = useState(false);
+  const [alertSettings,      setAlertSettings]      = useState([]);
+  const [notifUsers,         setNotifUsers]         = useState([]);
+  const [savingAlertSettings,setSavingAlertSettings]= useState(false);
+
   // ── geofences ────────────────────────────────────────────────────
   const [geofences,     setGeofences]     = useState([]);
   const [showGeoForm,   setShowGeoForm]   = useState(false);
@@ -503,6 +509,28 @@ export default function Tracking() {
       setAlerts(data);
     } catch { /* silent */ }
   }, []);
+
+  const openAlertSettings = useCallback(async () => {
+    try {
+      const [{ data: settings }, { data: users }] = await Promise.all([
+        api.get('/tracking/alert-settings'),
+        api.get('/tracking/notification-users'),
+      ]);
+      setAlertSettings(settings);
+      setNotifUsers(users);
+      setShowAlertSettings(true);
+    } catch { toast.error('Could not load alert settings'); }
+  }, []);
+
+  const saveAlertSettings = useCallback(async () => {
+    setSavingAlertSettings(true);
+    try {
+      await api.put('/tracking/alert-settings', alertSettings);
+      toast.success('Alert settings saved');
+      setShowAlertSettings(false);
+    } catch { toast.error('Failed to save settings'); }
+    finally { setSavingAlertSettings(false); }
+  }, [alertSettings]);
 
   const loadTrips = useCallback(async (bikeId) => {
     try {
@@ -956,6 +984,7 @@ export default function Tracking() {
         {sideTab === 'alerts' && <>
           <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)', display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={{ fontSize: 11, color: 'var(--muted)', flex: 1 }}>Recent events</span>
+            <button className="btn btn-sm btn-secondary" title="Alert settings" onClick={openAlertSettings}><Settings size={11} /></button>
             <button className="btn btn-sm btn-secondary" onClick={loadAlerts}><RefreshCw size={11} /></button>
             {alerts.some(a => !a.acknowledged_at) && (
               <button className="btn btn-sm btn-secondary" style={{ fontSize: 11 }} onClick={acknowledgeAll}>Ack all</button>
@@ -1813,6 +1842,76 @@ export default function Tracking() {
               {geoSubmitting ? 'Saving…' : 'Save geofence'}
             </button>
             <button className="btn btn-secondary" onClick={() => { setShowGeoForm(false); setGeoForm(EMPTY_GEO); }}>Cancel</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── Alert Settings Modal ─────────────────────────────────────── */}
+      {showAlertSettings && (
+        <Modal onClose={() => setShowAlertSettings(false)} title="Alert Settings">
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 16 }}>
+            Enable or disable each alert type and choose who receives email notifications.
+          </div>
+
+          {/* Notification recipients */}
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Users size={13} /> Email notification recipients
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 8 }}>
+              Select who receives email notifications. Leave empty to notify all superadmins for critical alerts only (default).
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 120, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 10px' }}>
+              {notifUsers.map(u => {
+                const isChecked = alertSettings.some(s => s.recipient_user_ids?.includes(u.id));
+                return (
+                  <label key={u.id} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 12 }}>
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={e => {
+                        setAlertSettings(prev => prev.map(s => ({
+                          ...s,
+                          recipient_user_ids: e.target.checked
+                            ? [...new Set([...(s.recipient_user_ids || []), u.id])]
+                            : (s.recipient_user_ids || []).filter(id => id !== u.id),
+                        })));
+                      }}
+                    />
+                    <span>{u.full_name}</span>
+                    <span style={{ color: 'var(--muted)', fontSize: 10 }}>{u.email}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Per-type settings */}
+          <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 8 }}>Alert types</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 340, overflowY: 'auto' }}>
+            {alertSettings.map((s, idx) => (
+              <div key={s.alert_type} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderBottom: '1px solid var(--border)' }}>
+                <div style={{ width: 8, height: 8, borderRadius: '50%', background: ALERT_COLORS[s.alert_type] || '#94a3b8', flexShrink: 0 }} />
+                <span style={{ flex: 1, fontSize: 12, color: s.enabled ? 'inherit' : 'var(--muted)' }}>
+                  {ALERT_LABELS[s.alert_type] || s.alert_type}
+                </span>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, cursor: 'pointer', color: 'var(--muted)' }} title="Trigger alert">
+                  <input type="checkbox" checked={s.enabled} onChange={e => setAlertSettings(prev => prev.map((x, i) => i === idx ? { ...x, enabled: e.target.checked } : x))} />
+                  Active
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, cursor: 'pointer', color: 'var(--muted)' }} title="Send email notification">
+                  <input type="checkbox" checked={s.notify_enabled} disabled={!s.enabled} onChange={e => setAlertSettings(prev => prev.map((x, i) => i === idx ? { ...x, notify_enabled: e.target.checked } : x))} />
+                  <Mail size={11} />
+                </label>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, marginTop: 18 }}>
+            <button className="btn btn-primary" onClick={saveAlertSettings} disabled={savingAlertSettings}>
+              {savingAlertSettings ? 'Saving…' : 'Save settings'}
+            </button>
+            <button className="btn btn-secondary" onClick={() => setShowAlertSettings(false)}>Cancel</button>
           </div>
         </Modal>
       )}

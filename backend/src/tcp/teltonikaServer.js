@@ -365,6 +365,13 @@ function handleConnection(socket) {
 
       if (parsed.ack) {
         socket.write(parsed.ack);
+        // Refresh device if bike_id is missing — it may have been linked after this connection was made
+        if (!cachedDevice?.bike_id && parsed.pingRecords?.length) {
+          try {
+            const { rows: fresh } = await pgDb.query('SELECT * FROM tracking_devices WHERE imei=$1', [imei]);
+            if (fresh[0]) cachedDevice = fresh[0];
+          } catch { /* ignore — use stale cache */ }
+        }
         if (!cachedDevice?.bike_id && parsed.pingRecords?.length) {
           console.warn(`[Teltonika] ${imei} has ${parsed.pingRecords.length} record(s) but no bike linked`);
         }

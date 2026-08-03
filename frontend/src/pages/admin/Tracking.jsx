@@ -1950,7 +1950,7 @@ export default function Tracking() {
       {showAdd && (
         <Modal onClose={() => { setShowAdd(false); setAddForm(EMPTY_FORM); }} title="Register a GPS tracker">
           <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 18, marginTop: -4, lineHeight: 1.5 }}>
-            Enter the IMEI printed on the device label. Once registered, the tracker will connect automatically and appear on the map.
+            Enter the IMEI printed on the device label. Assign it to a bike so location data is recorded and the tracker appears on the map.
           </p>
 
           <div className="field">
@@ -1977,8 +1977,13 @@ export default function Tracking() {
           </div>
 
           <div className="field">
-            <label className="label">Assign to bike <span style={{ color: 'var(--muted)', fontWeight: 400 }}>(optional)</span></label>
+            <label className="label">Assign to bike</label>
             <BikeCombobox bikes={bikes} value={addForm.bike_id} onChange={v => setAddForm(f => ({ ...f, bike_id: v }))} />
+            {!addForm.bike_id && (
+              <div style={{ fontSize: 11, color: '#f97316', marginTop: 4 }}>
+                No bike selected — location pings won't be stored until a bike is linked
+              </div>
+            )}
           </div>
 
           <div className="field">

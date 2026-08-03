@@ -1117,25 +1117,15 @@ export default function Tracking() {
     setPolygonPoints(prev => prev.slice(0, -1));
   }, []);
 
-  const finishPolygon = useCallback(() => {
-    if (editingGeofenceIdRef.current) {
-      finishPolygonForGeofence(polygonPoints);
-    } else {
-      if (polygonPoints.length >= 3) {
-        setGeoForm(f => ({ ...f, polygon_coords: polygonPoints, lat: '', lng: '' }));
-      }
-      setDrawingPolygon(false);
-      setShowGeoForm(true);
-    }
-  }, [polygonPoints, finishPolygonForGeofence]);
-
   const clearPolygon = useCallback(() => {
     setPolygonPoints([]);
     setGeoForm(f => ({ ...f, polygon_coords: null }));
   }, []);
 
-  // Draw a polygon for an existing geofence (updates it in place)
+  // editingGeofenceIdRef and finishPolygonForGeofence must be declared
+  // BEFORE finishPolygon to avoid a TDZ ReferenceError on render.
   const editingGeofenceIdRef = useRef(null);
+
   const drawPolygonForGeofence = useCallback((gf) => {
     editingGeofenceIdRef.current = gf.id;
     setDrawingPolygon(true);
@@ -1156,6 +1146,18 @@ export default function Tracking() {
       toast.error(err.response?.data?.error || 'Failed to save polygon');
     }
   }, [loadGeofences]);
+
+  const finishPolygon = useCallback(() => {
+    if (editingGeofenceIdRef.current) {
+      finishPolygonForGeofence(polygonPoints);
+    } else {
+      if (polygonPoints.length >= 3) {
+        setGeoForm(f => ({ ...f, polygon_coords: polygonPoints, lat: '', lng: '' }));
+      }
+      setDrawingPolygon(false);
+      setShowGeoForm(true);
+    }
+  }, [polygonPoints, finishPolygonForGeofence]);
 
   // ── alerts ───────────────────────────────────────────────────────
 

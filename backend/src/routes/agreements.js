@@ -13,7 +13,7 @@ const RIDER_PLAN_AMOUNTS = [500, 650, 700, 750, 800, 850, 1000, 1200];
 function getRiderPlanCode(weeklyAmount) {
   const amount = Math.round(Number(weeklyAmount));
   for (const amt of RIDER_PLAN_AMOUNTS) {
-    if (amount === amt) return process.env[`PAYSTACK_RIDER_PLAN_${amt}`] || null;
+    if (amount === amt) return process.env[`PAYSTACK_FLEET_PLAN_${amt}`] || null;
   }
   return null;
 }

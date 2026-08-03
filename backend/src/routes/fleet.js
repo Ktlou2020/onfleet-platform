@@ -2541,7 +2541,7 @@ function getFleetPaymentPlanCode(weeklyAmount) {
 function getRiderPlanCode(weeklyAmount) {
   const amount = Math.round(Number(weeklyAmount));
   for (const amt of RIDER_PLAN_AMOUNTS) {
-    if (amount === amt) return process.env[`PAYSTACK_RIDER_PLAN_${amt}`] || null;
+    if (amount === amt) return process.env[`PAYSTACK_FLEET_PLAN_${amt}`] || null;
   }
   return null;
 }

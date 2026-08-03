@@ -130,37 +130,47 @@ async function runTrackingSchema() {
     await pgDb.query(`ALTER TABLE geofences ADD COLUMN IF NOT EXISTS color TEXT`);
     await pgDb.query(`ALTER TABLE geofences ADD COLUMN IF NOT EXISTS polygon_coords JSONB`);
 
-    // Seed the known no-go (theft/stripping) zones — skip any that already exist by name+type
+    // Seed stripping/chop-shop zones (AfriGIS data) as danger (auto engine-cut on entry)
     const noGoZones = [
-      // ── Original stripping/chop-shop zones (AfriGIS data) ──────────────────────
-      { name: 'Cleveland - Theft Zone',          lat: -26.2042, lng: 28.1192, radius_m:  150 },
-      { name: 'Cosmo City 1',                    lat: -26.0359, lng: 27.9320, radius_m:  620 },
-      { name: 'Cosmo City 2',                    lat: -26.0307, lng: 27.9169, radius_m:  415 },
-      { name: 'Cosmo 3',                         lat: -26.0137, lng: 27.9314, radius_m:  410 },
-      { name: 'Mogale City Strip Zone',          lat: -26.1339, lng: 27.8101, radius_m:  880 },
-      { name: 'Mooiplaas - Stripping Area',      lat: -25.8520, lng: 28.0913, radius_m:  405 },
-      { name: 'Oliven',                          lat: -25.9111, lng: 28.0770, radius_m:  860 },
-      { name: 'Witpoortjie',                     lat: -26.1608, lng: 27.8357, radius_m:  210 },
-      { name: 'Zanspriut',                       lat: -26.0607, lng: 27.9147, radius_m:  465 },
-      // ── SAPS-reported hijacking hotspots (Gauteng, 2024–2026) ──────────────────
-      // Source: SAPS crime stats, Cartrack, Arrive Alive, News24
-      { name: 'Ivory Park - Hijacking Zone',     lat: -25.9989, lng: 28.1961, radius_m:  800 },
-      { name: 'Tembisa - High Risk Area',        lat: -25.9964, lng: 28.2268, radius_m: 1200 },
-      { name: 'Alexandra - Hijacking Hotspot',   lat: -26.1023, lng: 28.0910, radius_m:  700 },
-      { name: 'Vosloorus - Hijacking Zone',      lat: -26.3583, lng: 28.2075, radius_m: 1000 },
-      { name: 'Kempton Park / OR Tambo Risk',    lat: -26.1017, lng: 28.2282, radius_m:  900 },
-      { name: 'Roodepoort / Florida Risk Zone',  lat: -26.1644, lng: 27.8723, radius_m:  600 },
-      { name: 'Jabulani - Soweto Risk Zone',     lat: -26.2558, lng: 27.8603, radius_m:  600 },
-      { name: 'Moroka - Soweto Risk Zone',       lat: -26.2800, lng: 27.8723, radius_m:  600 },
-      { name: 'Benoni N12 - Snake Road Zone',    lat: -26.1883, lng: 28.3186, radius_m:  700 },
-      { name: 'Sandringham - Hijacking Zone',    lat: -26.1225, lng: 28.0822, radius_m:  600 },
-      { name: 'Olievenhoutbosch Risk Zone',      lat: -25.9058, lng: 28.0097, radius_m:  900 },
+      { name: 'Cleveland - Theft Zone',    lat: -26.2042, lng: 28.1192, radius_m:  150 },
+      { name: 'Cosmo City 1',              lat: -26.0359, lng: 27.9320, radius_m:  620 },
+      { name: 'Cosmo City 2',              lat: -26.0307, lng: 27.9169, radius_m:  415 },
+      { name: 'Cosmo 3',                   lat: -26.0137, lng: 27.9314, radius_m:  410 },
+      { name: 'Mogale City Strip Zone',    lat: -26.1339, lng: 27.8101, radius_m:  880 },
+      { name: 'Mooiplaas - Stripping Area',lat: -25.8520, lng: 28.0913, radius_m:  405 },
+      { name: 'Oliven',                    lat: -25.9111, lng: 28.0770, radius_m:  860 },
+      { name: 'Witpoortjie',               lat: -26.1608, lng: 27.8357, radius_m:  210 },
+      { name: 'Zanspriut',                 lat: -26.0607, lng: 27.9147, radius_m:  465 },
     ];
     for (const z of noGoZones) {
       await pgDb.query(
         `INSERT INTO geofences (name, lat, lng, radius_m, zone_type, color, active)
          SELECT $1,$2,$3,$4,'danger','#E53935',TRUE
          WHERE NOT EXISTS (SELECT 1 FROM geofences WHERE name=$1 AND zone_type='danger')`,
+        [z.name, z.lat, z.lng, z.radius_m]
+      );
+    }
+
+    // Seed SAPS-reported hijacking hotspots as caution (alert only, no auto engine-cut)
+    // Source: SAPS crime stats 2024-2026, Cartrack, Arrive Alive, News24
+    const cautionZones = [
+      { name: 'Ivory Park - Hijacking Zone',    lat: -25.9989, lng: 28.1961, radius_m:  800 },
+      { name: 'Tembisa - High Risk Area',       lat: -25.9964, lng: 28.2268, radius_m: 1200 },
+      { name: 'Alexandra - Hijacking Hotspot',  lat: -26.1023, lng: 28.0910, radius_m:  700 },
+      { name: 'Vosloorus - Hijacking Zone',     lat: -26.3583, lng: 28.2075, radius_m: 1000 },
+      { name: 'Kempton Park / OR Tambo Risk',   lat: -26.1017, lng: 28.2282, radius_m:  900 },
+      { name: 'Roodepoort / Florida Risk Zone', lat: -26.1644, lng: 27.8723, radius_m:  600 },
+      { name: 'Jabulani - Soweto Risk Zone',    lat: -26.2558, lng: 27.8603, radius_m:  600 },
+      { name: 'Moroka - Soweto Risk Zone',      lat: -26.2800, lng: 27.8723, radius_m:  600 },
+      { name: 'Benoni N12 - Snake Road Zone',   lat: -26.1883, lng: 28.3186, radius_m:  700 },
+      { name: 'Sandringham - Hijacking Zone',   lat: -26.1225, lng: 28.0822, radius_m:  600 },
+      { name: 'Olievenhoutbosch Risk Zone',     lat: -25.9058, lng: 28.0097, radius_m:  900 },
+    ];
+    for (const z of cautionZones) {
+      await pgDb.query(
+        `INSERT INTO geofences (name, lat, lng, radius_m, zone_type, color, active)
+         SELECT $1,$2,$3,$4,'warning','#D97706',TRUE
+         WHERE NOT EXISTS (SELECT 1 FROM geofences WHERE name=$1 AND zone_type='warning')`,
         [z.name, z.lat, z.lng, z.radius_m]
       );
     }

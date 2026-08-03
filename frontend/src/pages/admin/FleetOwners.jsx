@@ -451,13 +451,14 @@ export default function AdminFleetOwners() {
     });
   };
 
-  const [syncModal, setSyncModal] = useState(null); // { org, subCodesText }
+  const [syncModal, setSyncModal] = useState(null); // { org, subCodesText, agreementNum }
 
-  const syncPaystack = async (org, subscriptionCodes) => {
+  const syncPaystack = async (org, subscriptionCodes, hintAgreementNumber) => {
     setBusyKey(`sync-${org.id}`);
     try {
       const body = { org_id: org.id };
       if (subscriptionCodes?.length) body.subscription_codes = subscriptionCodes;
+      if (hintAgreementNumber) body.hint_agreement_number = hintAgreementNumber;
       const { data } = await api.post('/admin/paystack/sync-org', body);
       const { synced, checked, skipped, errors, debug } = data;
       console.log('[paystack sync debug]', JSON.stringify(debug, null, 2));
@@ -465,10 +466,12 @@ export default function AdminFleetOwners() {
       if (synced > 0) {
         toast.success(`Synced ${synced} payment${synced !== 1 ? 's' : ''} for ${org.name} · ${checked} checked, ${skipped} already recorded`);
         await load();
-      } else if (errors?.length && checked === 0) {
-        toast.error(`Sync error: ${errors[0]?.reason || 'unknown'} — check console for details`, { duration: 8000 });
       } else if (errors?.length) {
-        toast.error(`Sync — 0 new · ${errors.length} error${errors.length !== 1 ? 's' : ''}: ${errors[0]?.reason || 'unknown'}`);
+        // Show first error prominently — if agreement couldn't be resolved, hint about agreement number field.
+        const firstErr = errors[0]?.reason || 'unknown error';
+        const needsAgreement = firstErr.includes('agreement_id');
+        const hint = needsAgreement ? ' Enter the agreement number (e.g. OF-2026-895786) in "Sync by codes" to override.' : '';
+        toast.error(`Sync — 0 new · ${errors.length} error${errors.length !== 1 ? 's' : ''}: ${firstErr}.${hint}`, { duration: 12000 });
       } else if (checked === 0) {
         const usingCodes = subscriptionCodes?.length > 0;
         if (usingCodes && debug?.subscriptions?.length) {
@@ -476,7 +479,7 @@ export default function AdminFleetOwners() {
           const detail = sub.error
             ? `Paystack error: ${sub.error}`
             : sub.ps_found
-              ? `Found on Paystack (${sub.invoice_count} invoices, ${sub.txn_count} txns) · customer: ${sub.customer_email || 'no email'} · email match: ${sub.email_match ? sub.email_match.name : 'none'}`
+              ? `Found on Paystack (${sub.invoice_count} invoices, ${sub.txn_count} txns) · customer: ${sub.customer_email || 'no email'} · email match: ${sub.email_match ? sub.email_match.name : 'none'}${sub.hint_agreement_used ? ' · agreement hint used' : ''}`
               : `Not found on Paystack — check the subscription codes`;
           toast.error(`0 transactions for ${org.name}. ${detail}. Check browser console for full detail.`, { duration: 10000 });
         } else {
@@ -529,17 +532,29 @@ export default function AdminFleetOwners() {
         <Modal title={`Sync Paystack · ${syncModal.org.name}`} onClose={() => setSyncModal(null)}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <p className="text-sm muted" style={{ margin: 0 }}>
-              Paste Paystack subscription codes (one per line, e.g. <code>SUB_abc123</code>).
+              Paste Paystack subscription codes (one per line, e.g. <code>SUB_abc123</code>). If the Paystack customer email doesn't match OnFleet, enter the agreement number below to override.
               The tool will fetch each subscription's payment history and replay any missing charges.
             </p>
             <textarea
               className="form-control"
-              rows={5}
+              rows={4}
               placeholder={'SUB_umbfan2iixtspk2\nSUB_scek35i9hkuvoky\nSUB_og5pmeife5h2wv9'}
               value={syncModal.subCodesText}
               onChange={(e) => setSyncModal((m) => ({ ...m, subCodesText: e.target.value }))}
               style={{ fontFamily: 'monospace', fontSize: 13 }}
             />
+            <div>
+              <label className="text-sm" style={{ display: 'block', marginBottom: 4 }}>
+                Agreement number <span className="muted">(optional — override if email doesn't match)</span>
+              </label>
+              <input
+                className="form-control"
+                placeholder="e.g. OF-2026-895786"
+                value={syncModal.agreementNum || ''}
+                onChange={(e) => setSyncModal((m) => ({ ...m, agreementNum: e.target.value }))}
+                style={{ fontFamily: 'monospace', fontSize: 13 }}
+              />
+            </div>
             <div className="row" style={{ gap: 8 }}>
               <button
                 className="btn btn-sm"
@@ -547,8 +562,9 @@ export default function AdminFleetOwners() {
                 onClick={async () => {
                   const codes = syncModal.subCodesText.split(/[\n,\s]+/).map((s) => s.trim()).filter((s) => s.startsWith('SUB_'));
                   if (!codes.length) { toast.error('No valid SUB_ codes found'); return; }
+                  const agreementNum = syncModal.agreementNum?.trim() || null;
                   setSyncModal(null);
-                  await syncPaystack(syncModal.org, codes);
+                  await syncPaystack(syncModal.org, codes, agreementNum);
                 }}
               >
                 {busyKey === `sync-${syncModal.org.id}` ? 'Syncing…' : `Sync ${syncModal.subCodesText.split(/[\n,\s]+/).filter((s) => s.trim().startsWith('SUB_')).length || ''} codes`}
@@ -695,7 +711,7 @@ export default function AdminFleetOwners() {
                       <button
                         className="btn btn-sm btn-secondary"
                         disabled={busyKey === `sync-${org.id}`}
-                        onClick={() => setSyncModal({ org, subCodesText: '' })}
+                        onClick={() => setSyncModal({ org, subCodesText: '', agreementNum: '' })}
                         title="Sync specific Paystack subscription codes"
                         style={{ display: 'flex', alignItems: 'center', gap: 4 }}
                       >

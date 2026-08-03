@@ -322,6 +322,7 @@ function DeviceSignalIcon({ gsm, size = 12 }) {
 
 // ── Command label mapping ─────────────────────────────────────────────────────
 const CMD_LABEL_MAP = {
+  'getgps':         'Request Position',
   'fota connect':   'FOTA Update',
   'getinfo':        'Device Info',
   'getstatus':      'Connection Status',
@@ -390,6 +391,25 @@ function parseCommandResponse(command, raw) {
     return rows.length ? rows : null;
   }
 
+  // getgps — "Lat:XX.XXXXXX Long:YY.YYYYYY Alt:ZZZ Speed:0 Dir:0 Sat:N Fix:1 UTC:YYYY/MM/DD HH:MM:SS"
+  if (/^Lat:/i.test(r)) {
+    const lat  = r.match(/Lat:([\d.\-]+)/i)?.[1];
+    const lng  = r.match(/Long:([\d.\-]+)/i)?.[1];
+    const alt  = r.match(/Alt:([\d.\-]+)/i)?.[1];
+    const spd  = r.match(/Speed:([\d.]+)/i)?.[1];
+    const sat  = r.match(/Sat:(\d+)/i)?.[1];
+    const fix  = r.match(/Fix:(\d+)/i)?.[1];
+    const utc  = r.match(/UTC:([\d/ :]+)/i)?.[1]?.trim();
+    const rows = [];
+    if (lat && lng) rows.push({ label: 'Position', value: `${Number(lat).toFixed(6)}, ${Number(lng).toFixed(6)}` });
+    if (alt)  rows.push({ label: 'Altitude',   value: `${alt} m` });
+    if (spd)  rows.push({ label: 'Speed',       value: `${spd} km/h` });
+    if (sat)  rows.push({ label: 'Satellites',  value: `${sat} visible`, warn: Number(sat) < 4 });
+    if (fix)  rows.push({ label: 'GPS fix',     value: fix === '1' ? 'Active' : 'No fix', warn: fix !== '1' });
+    if (utc)  rows.push({ label: 'Device time', value: utc + ' UTC' });
+    return rows.length ? rows : null;
+  }
+
   // setdigout (engine cut/restore) — no meaningful response body
   if (/setdigout/.test(String(command))) {
     return [{ label: 'Result', value: r || 'Command applied' }];
@@ -415,6 +435,7 @@ export default function Tracking() {
   const [address,      setAddress]      = useState(null);
   const [sseOnline,    setSseOnline]    = useState(false);
   const [sendingCmd,   setSendingCmd]   = useState(null);
+  const [requestingPos,setRequestingPos]= useState(new Set()); // device IDs with pending getgps
 
   // ── add-device modal ─────────────────────────────────────────────
   const [showAdd,  setShowAdd]  = useState(false);
@@ -797,6 +818,20 @@ export default function Tracking() {
     }
   }, [selected, devices, refreshCommands]);
 
+  const requestPosition = useCallback(async (deviceId) => {
+    if (!deviceId) return;
+    setRequestingPos(prev => new Set([...prev, deviceId]));
+    try {
+      const { data } = await api.post(`/tracking/devices/${deviceId}/commands`, { preset: 'get_gps' });
+      toast.success(data.note || 'Position request queued');
+      if (deviceId === selected) await refreshCommands();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to request position');
+    } finally {
+      setRequestingPos(prev => { const s = new Set(prev); s.delete(deviceId); return s; });
+    }
+  }, [selected, refreshCommands]);
+
   // ── add device ───────────────────────────────────────────────────
 
   const addDevice = useCallback(async () => {
@@ -1027,6 +1062,12 @@ export default function Tracking() {
                     {d.device_status === 'active' && kmh <= 5 && mapD?.ignition !== null && (
                       <span style={{ fontSize: 10, color: mapD?.ignition ? '#22c55e' : 'var(--muted)', flexShrink: 0 }}>{mapD?.ignition ? 'IGN' : 'idle'}</span>
                     )}
+                    <button className="btn btn-sm" style={{ padding: '2px 4px', opacity: requestingPos.has(d.id) ? 1 : 0.45, background: 'transparent', minWidth: 0, color: requestingPos.has(d.id) ? '#1E88D1' : undefined }}
+                      title="Request current position"
+                      onClick={e => { e.stopPropagation(); requestPosition(d.id); }}
+                      disabled={requestingPos.has(d.id)}>
+                      <MapPin size={10} />
+                    </button>
                     <button className="btn btn-sm" style={{ padding: '2px 4px', opacity: 0.45, background: 'transparent', minWidth: 0 }}
                       onClick={e => deleteDevice(e, d.id)} title="Remove"><Trash2 size={10} /></button>
                   </div>
@@ -1687,6 +1728,21 @@ export default function Tracking() {
               {trail.length > 0 && (
                 <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 5 }}>{trail.length} positions</div>
               )}
+            </div>
+
+            {/* Request position */}
+            <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8 }}>Position</div>
+              {!selectedDevice.connected && (
+                <div style={{ fontSize: 11, color: '#6366f1', marginBottom: 8, padding: '5px 8px', background: 'rgba(99,102,241,.08)', borderRadius: 6, border: '1px solid rgba(99,102,241,.18)' }}>
+                  Device sleeping — request will queue and deliver when it wakes
+                </div>
+              )}
+              <button className="btn btn-sm btn-primary" style={{ width: '100%', gap: 7, justifyContent: 'center' }}
+                disabled={requestingPos.has(selected)} onClick={() => requestPosition(selected)}>
+                <MapPin size={13} />
+                {requestingPos.has(selected) ? 'Requesting…' : 'Request current position'}
+              </button>
             </div>
 
             {/* Engine control */}

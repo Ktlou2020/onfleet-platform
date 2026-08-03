@@ -13,6 +13,7 @@ const ENGINE_REST_CMD = { FMB920: 'setdigout 1 0', FMC920: 'setdigout 1 0', FMB9
 const PRESET_COMMANDS = {
   cut_engine:     (model) => ENGINE_CUT_CMD[model]  || ENGINE_CUT_CMD.other,
   restore_engine: (model) => ENGINE_REST_CMD[model] || ENGINE_REST_CMD.other,
+  get_gps:        () => 'getgps',
   fota_connect:   () => 'fota connect',
   get_info:       () => 'getinfo',
   get_status:     () => 'getstatus',

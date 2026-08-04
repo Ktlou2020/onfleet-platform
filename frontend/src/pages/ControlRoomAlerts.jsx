@@ -1,10 +1,10 @@
 'use strict';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { RefreshCw, BellOff, CheckCircle2, Wifi, WifiOff } from 'lucide-react';
+import { RefreshCw, BellOff, CheckCircle2, Wifi, WifiOff, X } from 'lucide-react';
 import api from '../api';
 import toast from 'react-hot-toast';
 import { Modal } from '../components/ui';
-import { ALERT_LABELS, ALERT_COLORS, ALERT_SEVERITY, ALERT_FILTER_GROUPS, CRITICAL_ALERT_TYPES } from '../lib/alertMeta';
+import { ALERT_LABELS, ALERT_COLORS, ALERT_SEVERITY, ALERT_FILTER_GROUPS } from '../lib/alertMeta';
 
 const SAST = { timeZone: 'Africa/Johannesburg' };
 const fmtSASTtime = (d) => d
@@ -40,6 +40,10 @@ export default function ControlRoomAlerts() {
   const [comment, setComment] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [sseOnline, setSseOnline] = useState(false);
+  const [selected, setSelected] = useState(() => new Set());
+  const [bulkResolving, setBulkResolving] = useState(false);
+  const [bulkComment, setBulkComment] = useState('');
+  const [bulkSubmitting, setBulkSubmitting] = useState(false);
   const mountedRef = useRef(true);
   const statusTabRef = useRef(statusTab);
   statusTabRef.current = statusTab;
@@ -55,7 +59,8 @@ export default function ControlRoomAlerts() {
   }, []);
 
   useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
-  useEffect(() => { loadAlerts(statusTab); }, [statusTab, loadAlerts]);
+  useEffect(() => { setSelected(new Set()); loadAlerts(statusTab); }, [statusTab, loadAlerts]);
+  useEffect(() => { setSelected(new Set()); }, [typeFilter]);
 
   // ── Live updates over the shared tracking SSE channel ──────────────
   useEffect(() => {
@@ -99,6 +104,7 @@ export default function ControlRoomAlerts() {
                   setAlerts(prev => [p, ...prev].slice(0, 200));
                 }
               } else if (evtType === 'alert_resolved') {
+                setSelected(prev => { if (!prev.has(p.id)) return prev; const next = new Set(prev); next.delete(p.id); return next; });
                 setAlerts(prev => {
                   if (statusTabRef.current === 'open') return prev.filter(a => a.id !== p.id);
                   const idx = prev.findIndex(a => a.id === p.id);
@@ -133,6 +139,7 @@ export default function ControlRoomAlerts() {
     try {
       const { data } = await api.put(`/tracking/alerts/${resolving.id}/resolve`, { comment: comment.trim() });
       setAlerts(prev => statusTab === 'open' ? prev.filter(a => a.id !== data.id) : prev.map(a => a.id === data.id ? data : a));
+      setSelected(prev => { if (!prev.has(data.id)) return prev; const next = new Set(prev); next.delete(data.id); return next; });
       toast.success('Alert closed');
       setResolving(null);
       setComment('');
@@ -145,9 +152,47 @@ export default function ControlRoomAlerts() {
 
   const group = ALERT_FILTER_GROUPS.find(g => g.id === typeFilter);
   const visible = group?.types ? alerts.filter(a => group.types.includes(a.alert_type)) : alerts;
+  const openVisible = visible.filter(a => !a.resolved_at);
+  const allOpenVisibleSelected = openVisible.length > 0 && openVisible.every(a => selected.has(a.id));
+
+  const toggleSelect = (id) => setSelected(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  const toggleSelectAllVisible = () => setSelected(prev => {
+    if (allOpenVisibleSelected) return new Set();
+    return new Set(openVisible.map(a => a.id));
+  });
+
+  const openBulkResolve = () => { if (selected.size) { setBulkComment(''); setBulkResolving(true); } };
+  const closeBulkResolve = () => { if (!bulkSubmitting) { setBulkResolving(false); setBulkComment(''); } };
+
+  const submitBulkResolve = useCallback(async () => {
+    if (!selected.size || !bulkComment.trim()) return;
+    setBulkSubmitting(true);
+    try {
+      const ids = [...selected];
+      const { data } = await api.post('/tracking/alerts/resolve-bulk', { ids, comment: bulkComment.trim() });
+      const resolvedIds = new Set((data.resolved || []).map(a => a.id));
+      const resolvedMap = new Map((data.resolved || []).map(a => [a.id, a]));
+      setAlerts(prev => statusTab === 'open'
+        ? prev.filter(a => !resolvedIds.has(a.id))
+        : prev.map(a => resolvedMap.has(a.id) ? resolvedMap.get(a.id) : a));
+      setSelected(new Set());
+      toast.success(`Closed ${data.resolved_count} alert${data.resolved_count !== 1 ? 's' : ''}${data.skipped_count ? ` (${data.skipped_count} already closed)` : ''}`);
+      setBulkResolving(false);
+      setBulkComment('');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to close alerts');
+    } finally {
+      setBulkSubmitting(false);
+    }
+  }, [selected, bulkComment, statusTab]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', position: 'relative' }}>
       <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)', display: 'flex', alignItems: 'center', gap: 12 }}>
         <div style={{ display: 'flex', gap: 4 }}>
           {STATUS_TABS.map(t => (
@@ -187,7 +232,19 @@ export default function ControlRoomAlerts() {
         ))}
       </div>
 
-      <div style={{ flex: 1, overflowY: 'auto' }}>
+      {openVisible.length > 0 && (
+        <div style={{ padding: '6px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--muted)', cursor: 'pointer' }}>
+            <input type="checkbox" checked={allOpenVisibleSelected} onChange={toggleSelectAllVisible} />
+            Select all open ({openVisible.length})
+          </label>
+          {selected.size > 0 && (
+            <span style={{ fontSize: 11, color: 'var(--muted)' }}>· {selected.size} selected</span>
+          )}
+        </div>
+      )}
+
+      <div style={{ flex: 1, overflowY: 'auto', paddingBottom: selected.size > 0 ? 56 : 0 }}>
         {loading ? (
           <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>Loading…</div>
         ) : visible.length === 0 ? (
@@ -203,8 +260,16 @@ export default function ControlRoomAlerts() {
               const { payload, isDangerZone, isCritical, label, color } = alertMeta(a);
               const isResolved = !!a.resolved_at;
               return (
-                <div key={a.id} className="card" style={{ marginBottom: 8, padding: '12px 14px', borderLeft: `3px solid ${color}` }}>
+                <div key={a.id} className="card" style={{ marginBottom: 8, padding: '12px 14px', borderLeft: `3px solid ${color}`, background: selected.has(a.id) ? 'var(--surface-2)' : undefined }}>
                   <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                    {!isResolved && (
+                      <input
+                        type="checkbox"
+                        checked={selected.has(a.id)}
+                        onChange={() => toggleSelect(a.id)}
+                        style={{ marginTop: 3, flexShrink: 0 }}
+                      />
+                    )}
                     <div style={{ width: 9, height: 9, borderRadius: '50%', background: color, flexShrink: 0, marginTop: 4 }} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
@@ -251,6 +316,23 @@ export default function ControlRoomAlerts() {
         )}
       </div>
 
+      {selected.size > 0 && (
+        <div style={{
+          position: 'absolute', left: '50%', bottom: 18, transform: 'translateX(-50%)',
+          display: 'flex', alignItems: 'center', gap: 12, padding: '8px 10px 8px 16px',
+          background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 10,
+          boxShadow: '0 6px 20px rgba(0,0,0,.35)', zIndex: 20,
+        }}>
+          <span style={{ fontSize: 12, fontWeight: 700 }}>{selected.size} alert{selected.size !== 1 ? 's' : ''} selected</span>
+          <button className="btn btn-sm btn-primary" onClick={openBulkResolve}>Close {selected.size} alert{selected.size !== 1 ? 's' : ''}</button>
+          <button
+            onClick={() => setSelected(new Set())}
+            title="Clear selection"
+            style={{ background: 'transparent', border: 'none', color: 'var(--muted)', cursor: 'pointer', display: 'flex', padding: 4 }}
+          ><X size={14} /></button>
+        </div>
+      )}
+
       <Modal isOpen={!!resolving} onClose={closeResolve} title="Close alert">
         {resolving && (
           <div style={{ minWidth: 360 }}>
@@ -274,6 +356,29 @@ export default function ControlRoomAlerts() {
             </div>
           </div>
         )}
+      </Modal>
+
+      <Modal isOpen={bulkResolving} onClose={closeBulkResolve} title={`Close ${selected.size} alert${selected.size !== 1 ? 's' : ''}`}>
+        <div style={{ minWidth: 360 }}>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
+            This comment will be recorded on all {selected.size} selected alert{selected.size !== 1 ? 's' : ''} for audit purposes.
+          </div>
+          <label className="label" style={{ fontSize: 12 }}>Resolution comment (required, kept for audit)</label>
+          <textarea
+            autoFocus
+            rows={4}
+            value={bulkComment}
+            onChange={e => setBulkComment(e.target.value)}
+            placeholder="What happened and what action was taken?"
+            style={{ width: '100%', resize: 'vertical' }}
+          />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+            <button className="btn btn-sm btn-secondary" onClick={closeBulkResolve} disabled={bulkSubmitting}>Cancel</button>
+            <button className="btn btn-sm btn-primary" onClick={submitBulkResolve} disabled={bulkSubmitting || !bulkComment.trim()}>
+              {bulkSubmitting ? 'Closing…' : `Close ${selected.size} alert${selected.size !== 1 ? 's' : ''}`}
+            </button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

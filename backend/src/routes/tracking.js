@@ -525,6 +525,34 @@ router.put('/alerts/:id/resolve', authRequired, trackingReadOnly, async (req, re
   res.json(resolved);
 });
 
+router.post('/alerts/resolve-bulk', authRequired, trackingReadOnly, async (req, res) => {
+  const comment = String(req.body.comment || '').trim();
+  if (!comment) return res.status(400).json({ error: 'A comment is required to close alerts' });
+  const ids = Array.isArray(req.body.ids) ? [...new Set(req.body.ids.map(Number).filter(Number.isFinite))] : [];
+  if (!ids.length) return res.status(400).json({ error: 'No alerts selected' });
+  if (ids.length > 500) return res.status(400).json({ error: 'Too many alerts selected (max 500)' });
+
+  const { rows: resolved } = await pgDb.query(
+    `UPDATE tracking_alerts
+     SET resolved_by=$1, resolved_at=NOW(), resolution_comment=$2, acknowledged_at=COALESCE(acknowledged_at, NOW())
+     WHERE id = ANY($3) AND resolved_at IS NULL
+     RETURNING *`,
+    [req.user.id, comment, ids]
+  );
+
+  for (const alert of resolved) {
+    const b = db.prepare('SELECT registration FROM bikes WHERE id = ?').get(alert.bike_id);
+    alert.bike_registration = b?.registration || null;
+    alert.resolved_by_name = req.user.full_name;
+    logAudit(req.user.id, 'alert.resolve', 'tracking_alerts', alert.id,
+      { alert_type: alert.alert_type, bike_id: alert.bike_id, comment, bulk: true }, req.ip);
+    trackingEvents.emit('alert_resolved', alert);
+  }
+
+  const skipped = ids.length - resolved.length;
+  res.json({ resolved, resolved_count: resolved.length, skipped_count: skipped });
+});
+
 router.post('/alerts/acknowledge-all', authRequired, trackingReadOnly, async (req, res) => {
   const bikeId = req.body.bike_id ? Number(req.body.bike_id) : null;
   if (bikeId) {

@@ -493,6 +493,7 @@ export default function Tracking({ readOnly = false }) {
   // ── detail panel tabs ─────────────────────────────────────────────
   const [detailTab, setDetailTab] = useState('activity');
   const [trips,        setTrips]        = useState([]);
+  const [activityStats, setActivityStats] = useState(null); // { today: {trips,km,sec}, week: {trips,km,sec,top_speed_kmh} }
   const [pings,        setPings]        = useState([]);  // newest-first, trail pings from SSE
   const [dayPings,     setDayPings]     = useState([]);  // newest-first, pings for pingDate
   const [pingDate,     setPingDate]     = useState(() => todayInSAST());
@@ -641,8 +642,12 @@ export default function Tracking({ readOnly = false }) {
 
   const loadTrips = useCallback(async (bikeId) => {
     try {
-      const { data } = await api.get(`/tracking/trips?bike_id=${bikeId}&limit=30`);
+      const [{ data }, { data: stats }] = await Promise.all([
+        api.get(`/tracking/trips?bike_id=${bikeId}&limit=30`),
+        api.get(`/tracking/trips/stats?bike_id=${bikeId}`),
+      ]);
       setTrips(data);
+      setActivityStats(stats);
     } catch { /* silent */ }
   }, []);
 
@@ -1787,13 +1792,8 @@ export default function Tracking({ readOnly = false }) {
             const battMv = selectedMapDevice?.battery_mv    ?? io.battMv;
             const extMv  = selectedMapDevice?.ext_voltage_mv ?? io.extMv;
             const ts     = selectedMapDevice?.last_location_at;
-            const todayTrips = trips.filter(t => {
-              const d = new Date(t.started_at);
-              const now = new Date();
-              return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
-            });
-            const todayKm   = todayTrips.reduce((s, t) => s + (t.distance_km || 0), 0);
-            const todaySec  = todayTrips.reduce((s, t) => s + (t.duration_sec || 0), 0);
+            // Recent-items list only (capped at 30 total) — totals come from activityStats, not this filter
+            const todayTrips = trips.filter(t => todayInSAST() === new Date(t.started_at).toLocaleDateString('en-CA', SAST));
             const todayStr = todayInSAST();
             const telemetryRows = [
               {
@@ -1899,19 +1899,19 @@ export default function Tracking({ readOnly = false }) {
                     <div style={{ fontSize: 12, color: 'var(--muted)' }}>No bike assigned to this device.</div>
                   ) : trips.length === 0 ? (
                     <div style={{ fontSize: 12, color: 'var(--muted)' }}>No trips loaded — select this device to load trips.</div>
-                  ) : todayTrips.length === 0 ? (
+                  ) : !activityStats || activityStats.today.trips === 0 ? (
                     <div style={{ fontSize: 12, color: 'var(--muted)' }}>No trips recorded today.</div>
                   ) : (
                     <>
                       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
                         <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 700, color: '#22c55e' }}>
-                          <Route size={12} />{todayKm.toFixed(1)} km
+                          <Route size={12} />{activityStats.today.km.toFixed(1)} km
                         </span>
                         <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 700, color: 'var(--muted)' }}>
-                          <Clock size={12} />{fmtDuration(todaySec)}
+                          <Clock size={12} />{fmtDuration(activityStats.today.sec)}
                         </span>
                         <span style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 600 }}>
-                          {todayTrips.length} trip{todayTrips.length !== 1 ? 's' : ''}
+                          {activityStats.today.trips} trip{activityStats.today.trips !== 1 ? 's' : ''}
                         </span>
                       </div>
                       {todayTrips.slice(0, 5).map(t => {
@@ -1930,38 +1930,27 @@ export default function Tracking({ readOnly = false }) {
                   )}
                 </div>
 
-                {/* Weekly summary */}
-                {(() => {
-                  const now = new Date();
-                  // Week starts Monday in SAST
-                  const dayOfWeek = (now.getDay() + 6) % 7; // Mon=0 … Sun=6
-                  const weekStart = new Date(now.getTime() - dayOfWeek * 86400000);
-                  weekStart.setHours(0, 0, 0, 0);
-                  const weekTrips = trips.filter(t => t.ended_at && new Date(t.started_at) >= weekStart);
-                  if (weekTrips.length === 0) return null;
-                  const weekKm   = weekTrips.reduce((s, t) => s + (t.distance_km || 0), 0);
-                  const weekSec  = weekTrips.reduce((s, t) => s + (t.duration_sec || 0), 0);
-                  const weekTopS = weekTrips.reduce((m, t) => Math.max(m, t.max_speed_kmh || 0), 0);
-                  return (
-                    <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border)' }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8 }}>This week</div>
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 700, color: 'var(--primary)' }}>
-                          <Route size={12} />{weekKm.toFixed(1)} km
-                        </span>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 700, color: 'var(--muted)' }}>
-                          <Clock size={12} />{fmtDuration(weekSec)}
-                        </span>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 700, color: 'var(--muted)' }}>
-                          <Gauge size={12} />top {Math.round(weekTopS)} km/h
-                        </span>
-                        <span style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 600 }}>
-                          {weekTrips.length} trip{weekTrips.length !== 1 ? 's' : ''}
-                        </span>
-                      </div>
+                {/* Weekly summary — from a dedicated SQL aggregate (unaffected by the
+                    30-trip cap on the recent-trips list above), Monday-start in SAST */}
+                {activityStats && activityStats.week.trips > 0 && (
+                  <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border)' }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8 }}>This week</div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 700, color: 'var(--primary)' }}>
+                        <Route size={12} />{activityStats.week.km.toFixed(1)} km
+                      </span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 700, color: 'var(--muted)' }}>
+                        <Clock size={12} />{fmtDuration(activityStats.week.sec)}
+                      </span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 700, color: 'var(--muted)' }}>
+                        <Gauge size={12} />top {Math.round(activityStats.week.top_speed_kmh)} km/h
+                      </span>
+                      <span style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 600 }}>
+                        {activityStats.week.trips} trip{activityStats.week.trips !== 1 ? 's' : ''}
+                      </span>
                     </div>
-                  );
-                })()}
+                  </div>
+                )}
 
                 {/* Location ping log */}
                 <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border)' }}>

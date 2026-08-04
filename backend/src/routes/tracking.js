@@ -406,6 +406,44 @@ router.delete('/geofences/:id', authRequired, adminOnly, async (req, res) => {
 
 // ---------- Trips ----------
 
+// South Africa Standard Time is a fixed UTC+2 offset year-round (no DST).
+const SAST_OFFSET_MS = 2 * 60 * 60 * 1000;
+
+// Returns UTC instants for the start of "today" and the start of "this week"
+// (Monday) as observed in SAST, regardless of the server's own timezone.
+function sastDayAndWeekStart() {
+  const shifted = new Date(Date.now() + SAST_OFFSET_MS); // UTC fields == SAST wall-clock fields
+  const y = shifted.getUTCFullYear(), m = shifted.getUTCMonth(), d = shifted.getUTCDate();
+  const todayStart = new Date(Date.UTC(y, m, d, 0, 0, 0) - SAST_OFFSET_MS);
+  const dayOfWeek = (shifted.getUTCDay() + 6) % 7; // Mon=0 … Sun=6, in SAST wall-clock
+  const weekStart = new Date(todayStart.getTime() - dayOfWeek * 86400000);
+  return { todayStart, weekStart };
+}
+
+router.get('/trips/stats', authRequired, trackingReadOnly, async (req, res) => {
+  const bikeId = req.query.bike_id ? Number(req.query.bike_id) : null;
+  if (!bikeId) return res.status(400).json({ error: 'bike_id is required' });
+  const { todayStart, weekStart } = sastDayAndWeekStart();
+
+  const { rows } = await pgDb.query(
+    `SELECT
+       COUNT(*) FILTER (WHERE started_at >= $2)                        AS today_trips,
+       COALESCE(SUM(distance_km) FILTER (WHERE started_at >= $2), 0)   AS today_km,
+       COALESCE(SUM(duration_sec) FILTER (WHERE started_at >= $2), 0)  AS today_sec,
+       COUNT(*) FILTER (WHERE started_at >= $3)                        AS week_trips,
+       COALESCE(SUM(distance_km) FILTER (WHERE started_at >= $3), 0)   AS week_km,
+       COALESCE(SUM(duration_sec) FILTER (WHERE started_at >= $3), 0)  AS week_sec,
+       COALESCE(MAX(max_speed_kmh) FILTER (WHERE started_at >= $3), 0) AS week_top_speed_kmh
+     FROM trips WHERE bike_id=$1`,
+    [bikeId, todayStart.toISOString(), weekStart.toISOString()]
+  );
+  const r = rows[0];
+  res.json({
+    today: { trips: Number(r.today_trips), km: Number(r.today_km), sec: Number(r.today_sec) },
+    week:  { trips: Number(r.week_trips),  km: Number(r.week_km),  sec: Number(r.week_sec), top_speed_kmh: Number(r.week_top_speed_kmh) },
+  });
+});
+
 router.get('/trips', authRequired, trackingReadOnly, async (req, res) => {
   const limit  = Math.min(Number(req.query.limit) || 50, 200);
   const bikeId = req.query.bike_id ? Number(req.query.bike_id) : null;

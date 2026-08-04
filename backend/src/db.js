@@ -1122,4 +1122,47 @@ ensureJobCardQuotedStatus();
 // Add available_at to fleet_wallet_transactions so credits have a 48-hour hold
 ensureColumn('fleet_wallet_transactions', 'available_at', 'DATETIME DEFAULT NULL');
 
+// Extend fleet_wallet_transactions.type CHECK to include 'adjustment' (manual admin balance correction)
+function ensureFleetWalletAdjustmentType() {
+  const row = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='fleet_wallet_transactions'`).get();
+  if (String(row?.sql || '').includes("'adjustment'")) return;
+  try {
+    db.exec(`
+      PRAGMA foreign_keys = OFF;
+      BEGIN TRANSACTION;
+      CREATE TABLE fleet_wallet_transactions_v2 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        organization_id INTEGER NOT NULL,
+        type TEXT NOT NULL CHECK(type IN ('credit','withdrawal','withdrawal_fee','adjustment')),
+        amount REAL NOT NULL,
+        fee_amount REAL NOT NULL DEFAULT 0,
+        net_amount REAL NOT NULL,
+        description TEXT,
+        paystack_reference TEXT,
+        rider_user_id INTEGER,
+        payout_request_id INTEGER,
+        actor_user_id INTEGER,
+        available_at DATETIME DEFAULT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(organization_id) REFERENCES organizations(id),
+        FOREIGN KEY(rider_user_id) REFERENCES users(id)
+      );
+      INSERT INTO fleet_wallet_transactions_v2 (id, organization_id, type, amount, fee_amount, net_amount,
+        description, paystack_reference, rider_user_id, payout_request_id, available_at, created_at)
+      SELECT id, organization_id, type, amount, fee_amount, net_amount,
+        description, paystack_reference, rider_user_id, payout_request_id, available_at, created_at
+      FROM fleet_wallet_transactions;
+      DROP TABLE fleet_wallet_transactions;
+      ALTER TABLE fleet_wallet_transactions_v2 RENAME TO fleet_wallet_transactions;
+      COMMIT;
+      PRAGMA foreign_keys = ON;
+    `);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_fleet_wallet_txns_org ON fleet_wallet_transactions(organization_id, created_at DESC);`);
+  } catch (e) {
+    console.error('[ensureFleetWalletAdjustmentType] migration failed:', e.message);
+    try { db.exec('ROLLBACK; PRAGMA foreign_keys = ON;'); } catch (_) {}
+  }
+}
+ensureFleetWalletAdjustmentType();
+
 module.exports = db;

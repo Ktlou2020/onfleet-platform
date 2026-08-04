@@ -513,6 +513,41 @@ router.post('/fleet-owners/:id/status', superadminOnly, (req, res) => {
   res.json({ ok: true });
 });
 
+router.get('/organizations/:id/wallet', superadminOnly, (req, res) => {
+  const orgId = Number(req.params.id);
+  if (!Number.isInteger(orgId) || orgId <= 0) return res.status(400).json({ error: 'Invalid organization id' });
+
+  const org = db.prepare('SELECT id, name FROM organizations WHERE id = ?').get(orgId);
+  if (!org) return res.status(404).json({ error: 'Organization not found' });
+
+  const wallet = db.prepare('SELECT balance, total_collected, total_withdrawn, updated_at FROM fleet_wallets WHERE organization_id = ?').get(orgId)
+    || { balance: 0, total_collected: 0, total_withdrawn: 0, updated_at: null };
+  const transactions = db.prepare(`SELECT id, type, amount, fee_amount, net_amount, description, actor_user_id, created_at
+    FROM fleet_wallet_transactions WHERE organization_id = ? ORDER BY created_at DESC LIMIT 25`).all(orgId);
+
+  res.json({ wallet, transactions });
+});
+
+router.post('/organizations/:id/wallet-adjustment', superadminOnly, (req, res) => {
+  const orgId = Number(req.params.id);
+  if (!Number.isInteger(orgId) || orgId <= 0) return res.status(400).json({ error: 'Invalid organization id' });
+
+  const org = db.prepare('SELECT id, name FROM organizations WHERE id = ?').get(orgId);
+  if (!org) return res.status(404).json({ error: 'Organization not found' });
+
+  const amount = Number(req.body.amount);
+  if (!Number.isFinite(amount) || amount === 0) return res.status(400).json({ error: 'Enter a non-zero amount (negative to debit)' });
+  const reason = String(req.body.reason || '').trim();
+  if (!reason) return res.status(400).json({ error: 'A reason is required for a manual wallet adjustment' });
+
+  const balance = applyWalletAdjustmentAdmin(orgId, amount, reason, req.user.id);
+
+  logAudit(req.user.id, 'wallet.manual_adjustment', 'fleet_wallets', orgId,
+    { org_name: org.name, amount, reason, new_balance: balance }, req.ip);
+
+  res.json({ ok: true, balance });
+});
+
 router.delete('/organizations/:id', superadminOnly, (req, res) => {
   const orgId = Number(req.params.id);
   if (!Number.isInteger(orgId) || orgId <= 0) return res.status(400).json({ error: 'Invalid organization id' });
@@ -987,6 +1022,21 @@ function creditFleetWalletAdmin(organizationId, grossAmountZAR, riderId, referen
       VALUES (?,?,?,?,?,?,?,?, datetime('now', '+48 hours'))`)
       .run(organizationId, 'credit', grossAmountZAR, fee, net, 'Weekly rider rental payment (admin sync)', reference || null, riderId || null);
   })();
+}
+
+// Manual admin correction to a fleet wallet balance — no Paystack fee, available immediately.
+// Returns the resulting balance. `amount` may be negative to debit.
+function applyWalletAdjustmentAdmin(organizationId, amount, reason, actorUserId) {
+  ensureFleetWalletAdmin(organizationId);
+  const balance = db.transaction(() => {
+    db.prepare('UPDATE fleet_wallets SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP WHERE organization_id = ?')
+      .run(amount, organizationId);
+    db.prepare(`INSERT INTO fleet_wallet_transactions (organization_id, type, amount, fee_amount, net_amount, description, actor_user_id)
+      VALUES (?, 'adjustment', ?, 0, ?, ?, ?)`)
+      .run(organizationId, amount, amount, reason, actorUserId);
+    return db.prepare('SELECT balance FROM fleet_wallets WHERE organization_id = ?').get(organizationId).balance;
+  })();
+  return balance;
 }
 
 function applyPaymentToScheduleAdmin(agreementId, amountZAR) {

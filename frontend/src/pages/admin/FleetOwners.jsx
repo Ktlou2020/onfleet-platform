@@ -189,6 +189,115 @@ function RecordPaymentModal({ org, onClose }) {
   );
 }
 
+function AdjustWalletModal({ org, onClose }) {
+  const [loading, setLoading] = useState(true);
+  const [wallet, setWallet] = useState(null);
+  const [transactions, setTransactions] = useState([]);
+  const [amount, setAmount] = useState('');
+  const [reason, setReason] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const load = () => {
+    setLoading(true);
+    api.get(`/admin/organizations/${org.id}/wallet`)
+      .then(({ data }) => { setWallet(data.wallet); setTransactions(data.transactions); })
+      .catch(() => toast.error('Could not load wallet'))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(load, [org.id]);
+
+  const amountNum = Number(amount);
+  const valid = Number.isFinite(amountNum) && amountNum !== 0 && reason.trim().length > 0;
+
+  const submit = async () => {
+    if (!valid) return;
+    setSubmitting(true);
+    try {
+      const { data } = await api.post(`/admin/organizations/${org.id}/wallet-adjustment`, {
+        amount: amountNum,
+        reason: reason.trim(),
+      });
+      toast.success(`Wallet ${amountNum > 0 ? 'credited' : 'debited'} R${Math.abs(amountNum).toFixed(2)} · new balance R${Number(data.balance).toFixed(2)}`);
+      onClose(true);
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Failed to adjust wallet');
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal title={`Adjust Wallet · ${org.name}`} onClose={submitting ? undefined : () => onClose()}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {loading ? (
+          <p className="text-sm muted">Loading wallet…</p>
+        ) : (
+          <div style={{ background: 'var(--surface-2)', borderRadius: 6, padding: '10px 14px', fontSize: 13, display: 'flex', justifyContent: 'space-between' }}>
+            <span>Current balance</span><span style={{ fontWeight: 700 }}>R{Number(wallet?.balance || 0).toFixed(2)}</span>
+          </div>
+        )}
+
+        <div>
+          <label className="text-sm" style={{ display: 'block', marginBottom: 4 }}>
+            Amount (ZAR) <span className="muted">— positive to credit, negative to debit *</span>
+          </label>
+          <input
+            className="form-control"
+            type="number" step="0.01"
+            placeholder="e.g. 250.00 or -100.00"
+            value={amount}
+            onChange={e => setAmount(e.target.value)}
+          />
+        </div>
+
+        <div>
+          <label className="text-sm" style={{ display: 'block', marginBottom: 4 }}>Reason *</label>
+          <textarea
+            className="form-control"
+            rows={3}
+            placeholder="Why is this balance being corrected?"
+            value={reason}
+            onChange={e => setReason(e.target.value)}
+            style={{ resize: 'vertical' }}
+          />
+        </div>
+
+        {Number.isFinite(amountNum) && amountNum !== 0 && !loading && (
+          <div style={{ background: 'var(--surface-2)', borderRadius: 6, padding: '10px 14px', fontSize: 13, display: 'flex', justifyContent: 'space-between' }}>
+            <span>New balance</span>
+            <span style={{ fontWeight: 600 }}>R{(Number(wallet?.balance || 0) + amountNum).toFixed(2)}</span>
+          </div>
+        )}
+
+        {transactions.length > 0 && (
+          <div>
+            <label className="text-sm" style={{ display: 'block', marginBottom: 4 }}>Recent transactions</label>
+            <div style={{ maxHeight: 160, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 10px' }}>
+              {transactions.map(t => (
+                <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '4px 0', fontSize: 12 }}>
+                  <span className="muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {t.type} · {t.description || '—'} · {new Date(t.created_at).toLocaleDateString('en-ZA')}
+                  </span>
+                  <span style={{ fontWeight: 600, flexShrink: 0, color: Number(t.net_amount) < 0 ? '#ef4444' : undefined }}>
+                    {Number(t.net_amount) > 0 ? '+' : ''}R{Number(t.net_amount).toFixed(2)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="row" style={{ gap: 8, marginTop: 2 }}>
+          <button className="btn btn-sm" disabled={!valid || submitting || loading} onClick={submit}>
+            {submitting ? 'Adjusting…' : 'Adjust wallet'}
+          </button>
+          <button className="btn btn-secondary btn-sm" disabled={submitting} onClick={() => onClose()}>Cancel</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function EmailModal({ orgs, onClose }) {
   const [templateKey, setTemplateKey] = useState('demo_invite');
   const [customSubject, setCustomSubject] = useState('');
@@ -626,6 +735,7 @@ export default function AdminFleetOwners() {
 
   const [syncModal, setSyncModal] = useState(null); // { org, subCodesText, agreementNum }
   const [recordPaymentOrg, setRecordPaymentOrg] = useState(null);
+  const [adjustWalletOrg, setAdjustWalletOrg] = useState(null);
 
   const syncPaystack = async (org, subscriptionCodes, hintAgreementNumber) => {
     setBusyKey(`sync-${org.id}`);
@@ -706,6 +816,12 @@ export default function AdminFleetOwners() {
         <RecordPaymentModal
           org={recordPaymentOrg}
           onClose={async (refresh) => { setRecordPaymentOrg(null); if (refresh) await load(); }}
+        />
+      )}
+      {adjustWalletOrg && (
+        <AdjustWalletModal
+          org={adjustWalletOrg}
+          onClose={async (refresh) => { setAdjustWalletOrg(null); if (refresh) await load(); }}
         />
       )}
       {syncModal && (
@@ -914,6 +1030,14 @@ export default function AdminFleetOwners() {
                         style={{ display: 'flex', alignItems: 'center', gap: 4 }}
                       >
                         <CreditCard size={13} /> Record PS payment
+                      </button>
+                      <button
+                        className="btn btn-sm btn-secondary"
+                        onClick={() => setAdjustWalletOrg(org)}
+                        title="Manually credit or debit this fleet owner's wallet balance"
+                        style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+                      >
+                        <Wallet size={13} /> Adjust wallet
                       </button>
                       <button
                         className={`btn btn-sm ${isExpanded ? '' : 'btn-secondary'}`}

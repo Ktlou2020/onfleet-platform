@@ -696,8 +696,8 @@ export default function Tracking({ readOnly = false }) {
 
   useEffect(() => {
     setLoading(true);
-    Promise.all([loadDevices(), loadBikes(), loadGeofences()]).finally(() => setLoading(false));
-  }, [loadDevices, loadBikes, loadGeofences]);
+    Promise.all([loadDevices(), ...(readOnly ? [] : [loadBikes()]), loadGeofences()]).finally(() => setLoading(false));
+  }, [loadDevices, loadBikes, loadGeofences, readOnly]);
 
   // ── SSE real-time feed ───────────────────────────────────────────
   useEffect(() => {

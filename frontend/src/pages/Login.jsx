@@ -18,11 +18,7 @@ export default function Login() {
     try {
       const user = await login(email, password);
       toast.success(`Welcome back, ${user.full_name.split(' ')[0]}!`);
-      nav(['admin', 'superadmin'].includes(user.role)
-        ? '/admin'
-        : String(user.role || '').startsWith('fleet_owner_')
-          ? '/fleet/app'
-          : '/dashboard');
+      nav('/');
     } catch (error) {
       toast.error(error.response?.data?.error || 'Login failed');
     } finally {

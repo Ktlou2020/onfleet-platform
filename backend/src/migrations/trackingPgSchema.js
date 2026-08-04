@@ -125,6 +125,19 @@ async function runTrackingSchema() {
         PRIMARY KEY (device_id, alert_type)
       )
     `);
+    await pgDb.query(`
+      CREATE TABLE IF NOT EXISTS bike_risk_profiles (
+        bike_id        INTEGER PRIMARY KEY,
+        hour_histogram JSONB,
+        centroid_lat   DOUBLE PRECISION,
+        centroid_lng   DOUBLE PRECISION,
+        radius_p95_m   REAL,
+        speed_p95_kmh  REAL,
+        sample_count   INTEGER DEFAULT 0,
+        computed_at    TIMESTAMPTZ
+      )
+    `);
+
     // Add zone_type, color, and polygon_coords columns to geofences (idempotent)
     await pgDb.query(`ALTER TABLE geofences ADD COLUMN IF NOT EXISTS zone_type TEXT DEFAULT 'standard'`);
     await pgDb.query(`ALTER TABLE geofences ADD COLUMN IF NOT EXISTS color TEXT`);

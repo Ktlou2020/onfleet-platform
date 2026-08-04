@@ -58,7 +58,7 @@ const ALERT_TYPE_LABELS = {
   speeding: 'Speeding', harsh_acceleration: 'Harsh accel', harsh_braking: 'Harsh brake',
   harsh_cornering: 'Cornering', panic: 'Panic', geofence_exit: 'Geofence exit',
   geofence_entry: 'Geofence entry', power_disconnect: 'Power cut', movement: 'Movement',
-  idle_too_long: 'Idle too long', tamper: 'Tamper',
+  idle_too_long: 'Idle too long', tamper: 'Tamper', theft_risk: 'AI theft/anomaly risk',
 };
 
 function getBatteryIcon(mV) {

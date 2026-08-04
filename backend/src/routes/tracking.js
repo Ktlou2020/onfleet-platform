@@ -7,6 +7,7 @@ const pgDb = require('../pgDb');
 const { authRequired, adminOnly, trackingReadOnly } = require('../middleware/auth');
 const teltonikaServer = require('../tcp/teltonikaServer');
 const trackingEvents = require('../trackingEvents');
+const riskService = require('../services/riskService');
 
 const ENGINE_CUT_CMD  = { FMB920: 'setdigout 1 1', FMC920: 'setdigout 1 1', FMB965: 'setdigout 2 1', other: 'setdigout 1 1' };
 const ENGINE_REST_CMD = { FMB920: 'setdigout 1 0', FMC920: 'setdigout 1 0', FMB965: 'setdigout 2 0', other: 'setdigout 1 0' };
@@ -47,6 +48,7 @@ function isOnline(imei, lastSeenAt, connectedImeis) {
 const ALL_ALERT_TYPES = [
   'geofence_enter','geofence_exit','harsh_brake','harsh_accel','harsh_cornering',
   'idle','speeding','panic','power_disconnect','low_battery','movement','tamper','device_offline',
+  'theft_risk',
 ];
 
 // Build a SQLite bike/org/rider map for a list of bike IDs
@@ -265,12 +267,14 @@ router.get('/map', authRequired, trackingReadOnly, async (req, res) => {
 
   // Bike + org + rider info from SQLite
   const bikeMap = getBikeMap(bikeIds);
+  const riskMap = riskService.getCurrentScores();
 
   const result = devices
     .filter(d => bikeMap[d.bike_id]?.last_known_lat != null)
     .map(d => {
       const b = bikeMap[d.bike_id] || {};
       const p = pingMap[d.bike_id] || {};
+      const risk = riskMap[d.bike_id];
       return {
         id: d.id, imei: d.imei, model: d.model, label: d.label,
         last_seen_at: d.last_seen_at,
@@ -286,8 +290,21 @@ router.get('/map', authRequired, trackingReadOnly, async (req, res) => {
         rider_address: b.rider_address, rider_city: b.rider_city,
         device_status: deviceStatus(d.imei, d.last_seen_at, connected),
         connected: isOnline(d.imei, d.last_seen_at, connected),
+        risk_score: risk?.score ?? null, risk_level: risk?.level ?? null, risk_reasons: risk?.reasons ?? null,
       };
     });
+  res.json(result);
+});
+
+// ---------- AI theft/anomaly risk ----------
+
+router.get('/risk', authRequired, trackingReadOnly, async (req, res) => {
+  const riskMap = riskService.getCurrentScores();
+  const bikeIds = Object.keys(riskMap).map(Number);
+  const bikeMap = getBikeMap(bikeIds);
+  const result = bikeIds
+    .map(bikeId => ({ bike_id: bikeId, registration: bikeMap[bikeId]?.registration || null, ...riskMap[bikeId] }))
+    .sort((a, b) => b.score - a.score);
   res.json(result);
 });
 
@@ -303,14 +320,17 @@ router.get('/live', authRequired, trackingReadOnly, (req, res) => {
   const onPing         = (p) => { try { res.write(`event: ping\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
   const onAlert        = (p) => { try { res.write(`event: alert\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
   const onDeviceStatus = (p) => { try { res.write(`event: device_status\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
+  const onRiskUpdate   = (p) => { try { res.write(`event: risk_update\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
   trackingEvents.on('ping', onPing);
   trackingEvents.on('alert', onAlert);
   trackingEvents.on('device_status', onDeviceStatus);
+  trackingEvents.on('risk_update', onRiskUpdate);
   const hb = setInterval(() => { try { res.write(': heartbeat\n\n'); } catch (_) {} }, 25_000);
   req.on('close', () => {
     trackingEvents.off('ping', onPing);
     trackingEvents.off('alert', onAlert);
     trackingEvents.off('device_status', onDeviceStatus);
+    trackingEvents.off('risk_update', onRiskUpdate);
     clearInterval(hb);
   });
 });
@@ -525,6 +545,7 @@ router.put('/alert-settings', authRequired, adminOnly, async (req, res) => {
   }
 
   require('../services/tripService').reloadAlertSettings();
+  riskService.reloadAlertSettings();
   res.json({ ok: true });
 });
 

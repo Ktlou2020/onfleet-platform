@@ -639,7 +639,7 @@ router.get('/users/:id', (req, res) => {
 
 router.post('/users', superadminOnly, async (req, res) => {
   const { email, password, full_name, phone, role } = req.body;
-  if (!email || !password || !full_name || !['rider', 'admin', 'superadmin', 'technician'].includes(role)) {
+  if (!email || !password || !full_name || !['rider', 'admin', 'superadmin', 'technician', 'control_room'].includes(role)) {
     return res.status(400).json({ error: 'email, password, full_name and valid role are required' });
   }
   const normalizedEmail = String(email).trim().toLowerCase();

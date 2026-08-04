@@ -329,6 +329,12 @@ function start() {
   setInterval(runOfflineCheck, 5 * 60_000);
   setTimeout(runOfflineCheck, 15_000); // initial check shortly after boot
 
+  // AI risk-profile baseline rebuild — nightly at 02:30, plus a warmup shortly after boot
+  const { rebuildAllBaselines } = require('./riskService');
+  const runBaselineRebuild = () => rebuildAllBaselines().catch(e => console.error('[risk-baseline]', e.message));
+  cron.schedule('30 2 * * *', runBaselineRebuild);
+  setTimeout(runBaselineRebuild, 30_000);
+
   console.log('🕒 Scheduler started');
 }
 

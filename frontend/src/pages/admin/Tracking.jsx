@@ -31,12 +31,17 @@ function ensurePulseCSS() {
   document.head.appendChild(s);
 }
 
-function makeIcon(color, pulse = false) {
+function makeIcon(color, pulse = false, riskLevel = null) {
   ensurePulseCSS();
   const ring = pulse ? `<div class="gps-pulse-ring" style="background:${color};"></div>` : '';
+  const riskRing = riskLevel === 'critical'
+    ? '<div style="position:absolute;inset:-5px;border-radius:50%;border:2px solid #dc2626;box-shadow:0 0 0 2px rgba(220,38,38,.25);"></div>'
+    : riskLevel === 'elevated'
+      ? '<div style="position:absolute;inset:-5px;border-radius:50%;border:2px solid #f59e0b;"></div>'
+      : '';
   return L.divIcon({
     className: '',
-    html: `<div style="position:relative;width:14px;height:14px;">${ring}<div style="position:absolute;inset:0;border-radius:50%;background:${color};border:2px solid rgba(255,255,255,.9);box-shadow:0 1px 6px rgba(0,0,0,.55);"></div></div>`,
+    html: `<div style="position:relative;width:14px;height:14px;">${riskRing}${ring}<div style="position:absolute;inset:0;border-radius:50%;background:${color};border:2px solid rgba(255,255,255,.9);box-shadow:0 1px 6px rgba(0,0,0,.55);"></div></div>`,
     iconSize: [14, 14],
     iconAnchor: [7, 7],
   });
@@ -70,10 +75,11 @@ function speedColor(kmh) {
 
 function deviceIcon(d) {
   const status = d.device_status || (d.connected ? 'active' : 'offline');
-  if (status === 'offline') return makeIcon('#94a3b8');
-  if (status === 'sleeping') return makeIcon('#6366f1'); // indigo — sleeping
+  const riskLevel = (d.risk_level === 'critical' || d.risk_level === 'elevated') ? d.risk_level : null;
+  if (status === 'offline') return makeIcon('#94a3b8', false, riskLevel);
+  if (status === 'sleeping') return makeIcon('#6366f1', false, riskLevel); // indigo — sleeping
   const moving = (Number(d.speed_kmh) || 0) > 5;
-  return d.ignition ? makeIcon('#22c55e', moving) : makeIcon('#f97316');
+  return d.ignition ? makeIcon('#22c55e', moving, riskLevel) : makeIcon('#f97316', false, riskLevel);
 }
 
 function DeviceStatusIcon({ status, size = 12 }) {
@@ -194,6 +200,7 @@ const ALERT_LABELS = {
   tamper:           'GPS tamper',
   device_offline:   'Device offline',
   engine_cut_auto:  'Engine cut (auto)',
+  theft_risk:       'AI theft/anomaly risk',
 };
 const ALERT_COLORS = {
   geofence_enter:   '#22c55e',
@@ -210,21 +217,22 @@ const ALERT_COLORS = {
   tamper:           '#dc2626',
   device_offline:   '#94a3b8',
   engine_cut_auto:  '#7c3aed',
+  theft_risk:       '#7c3aed',
 };
 const ALERT_SEVERITY = {
-  panic: 'critical', tamper: 'critical', power_disconnect: 'critical', movement: 'critical',
+  panic: 'critical', tamper: 'critical', power_disconnect: 'critical', movement: 'critical', theft_risk: 'critical',
   speeding: 'high', harsh_brake: 'high', geofence_exit: 'high',
   harsh_accel: 'medium', harsh_cornering: 'medium', geofence_enter: 'medium', low_battery: 'medium',
   idle: 'low', device_offline: 'low', engine_cut_auto: 'high',
 };
 const ALERT_FILTER_GROUPS = [
   { id: '',         label: 'All' },
-  { id: 'critical', label: 'Critical', types: ['panic','tamper','power_disconnect','movement'] },
+  { id: 'critical', label: 'Critical', types: ['panic','tamper','power_disconnect','movement','theft_risk'] },
   { id: 'driving',  label: 'Driving',  types: ['speeding','harsh_brake','harsh_accel','harsh_cornering','idle'] },
   { id: 'location', label: 'Location', types: ['geofence_enter','geofence_exit','engine_cut_auto'] },
   { id: 'vehicle',  label: 'Vehicle',  types: ['low_battery','device_offline'] },
 ];
-const CRITICAL_ALERT_TYPES = new Set(['panic','tamper','power_disconnect','movement']);
+const CRITICAL_ALERT_TYPES = new Set(['panic','tamper','power_disconnect','movement','theft_risk']);
 
 function playAlertBeep() {
   try {
@@ -772,7 +780,8 @@ export default function Tracking({ readOnly = false }) {
               } else if (evtType === 'alert') {
                 setAlertsUnread(n => n + 1);
                 setAlerts(prev => [p, ...prev].slice(0, 200));
-                if (CRITICAL_ALERT_TYPES.has(p.alert_type)) {
+                const riskLevel = p.alert_type === 'theft_risk' ? (() => { try { return JSON.parse(p.payload)?.level; } catch { return null; } })() : null;
+                if (CRITICAL_ALERT_TYPES.has(p.alert_type) && (p.alert_type !== 'theft_risk' || riskLevel === 'critical')) {
                   playAlertBeep();
                   const label = ALERT_LABELS[p.alert_type] || p.alert_type;
                   const reg   = p.bike_registration || `Bike #${p.bike_id}`;
@@ -780,6 +789,10 @@ export default function Tracking({ readOnly = false }) {
                     new Notification(`🚨 ${label}`, { body: reg, tag: `gps-${p.alert_type}`, silent: true });
                   }
                 }
+              } else if (evtType === 'risk_update') {
+                setMapDevices(prev => prev.map(d =>
+                  d.bike_id === p.bike_id ? { ...d, risk_score: p.score, risk_level: p.level, risk_reasons: p.reasons } : d
+                ));
               } else if (evtType === 'device_status') {
                 setMapDevices(prev => prev.map(d =>
                   d.id === p.device_id ? { ...d, connected: 0, device_status: 'offline' } : d
@@ -1306,6 +1319,15 @@ export default function Tracking({ readOnly = false }) {
                     <span style={{ fontWeight: 600, fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {d.label || d.registration || d.imei}
                     </span>
+                    {(mapD?.risk_level === 'critical' || mapD?.risk_level === 'elevated') && (
+                      <span
+                        title={`AI risk score ${mapD.risk_score}/100${mapD.risk_reasons?.length ? `\n${mapD.risk_reasons.join('\n')}` : ''}`}
+                        style={{
+                          fontSize: 9, fontWeight: 700, flexShrink: 0, padding: '1px 5px', borderRadius: 8,
+                          background: mapD.risk_level === 'critical' ? '#dc2626' : '#f59e0b', color: '#fff',
+                        }}
+                      >⚠ {mapD.risk_score}</span>
+                    )}
                     {d.device_status === 'sleeping' && (
                       <span style={{ fontSize: 10, color: '#6366f1', fontWeight: 600, flexShrink: 0 }}>Sleep</span>
                     )}
@@ -1402,7 +1424,7 @@ export default function Tracking({ readOnly = false }) {
                 try { payload = JSON.parse(a.payload || '{}'); } catch { /* skip */ }
                 const isUnread = !a.acknowledged_at;
                 const severity = ALERT_SEVERITY[a.alert_type];
-                const isCritical = severity === 'critical';
+                const isCritical = a.alert_type === 'theft_risk' ? payload.level === 'critical' : severity === 'critical';
                 const isDangerZone = payload.zone_type === 'danger';
                 const hasLocation = payload.lat && payload.lng;
                 const alertLabel = isDangerZone && a.alert_type === 'geofence_enter' ? 'Entered no-go zone'
@@ -1438,6 +1460,16 @@ export default function Tracking({ readOnly = false }) {
                         {a.alert_type === 'engine_cut_auto' && <div style={{ fontSize: 10, color: '#7c3aed', marginTop: 1 }}>{payload.queued ? 'Queued — will send on reconnect' : 'Command sent'}{payload.geofence_name ? ` · triggered by: ${payload.geofence_name}` : ''}</div>}
                         {payload.idle_sec && <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>Idle: {Math.round(payload.idle_sec / 60)} min</div>}
                         {payload.battery_mv && <div style={{ fontSize: 10, color: '#f97316', marginTop: 1 }}>{Math.round((payload.battery_mv - 3200) / 10)}% battery ({payload.battery_mv} mV)</div>}
+                        {a.alert_type === 'theft_risk' && (
+                          <>
+                            <div style={{ fontSize: 10, color: alertColor, marginTop: 1, fontWeight: 700 }}>Risk score: {payload.score}/100</div>
+                            {Array.isArray(payload.reasons) && payload.reasons.length > 0 && (
+                              <ul style={{ margin: '2px 0 0', paddingLeft: 14, fontSize: 10, color: 'var(--muted)' }}>
+                                {payload.reasons.map((r, i) => <li key={i}>{r}</li>)}
+                              </ul>
+                            )}
+                          </>
+                        )}
                         {hasLocation && <div style={{ fontSize: 9, color: 'var(--primary)', marginTop: 1 }}>Tap to view on map</div>}
                       </div>
                       {isUnread && (
@@ -1568,6 +1600,18 @@ export default function Tracking({ readOnly = false }) {
                   <>🟢 Online<br />{Math.round(d.speed_kmh || 0)} km/h · {d.heading || 0}° · {d.satellites || '?'} sats</>
                 ) : d.device_status === 'sleeping' ? '🟣 Sleeping' : '⚫ Offline'}<br />
                 {d.last_location_at ? fmtSAST(d.last_location_at) : '—'}
+                {(d.risk_level === 'critical' || d.risk_level === 'elevated') && (
+                  <>
+                    <br /><span style={{ color: d.risk_level === 'critical' ? '#dc2626' : '#f59e0b', fontWeight: 700 }}>
+                      ⚠ AI risk {d.risk_score}/100
+                    </span>
+                    {d.risk_reasons?.length > 0 && (
+                      <ul style={{ margin: '2px 0 0', paddingLeft: 16, fontSize: 11 }}>
+                        {d.risk_reasons.map((r, i) => <li key={i}>{r}</li>)}
+                      </ul>
+                    )}
+                  </>
+                )}
               </Popup>
             </Marker>
           ) : null)}

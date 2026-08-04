@@ -7,6 +7,9 @@ const { sendNotification } = require('./notifier');
 
 // In-memory trip state per bike
 const openTrips = new Map();
+// Devices that don't report an ignition signal (io[239] absent) can't gate
+// trip start/end on it — fall back to ending a trip after this long stationary.
+const NO_IGNITION_TRIP_END_IDLE_MS = 5 * 60 * 1000;
 // Cooldown map: `${bikeId}:${alertType}` → last-fired epoch ms
 const alertCooldowns = new Map();
 // Previous external voltage: bikeId → last known ext_voltage_mv
@@ -153,6 +156,11 @@ async function fireAlert(bikeId, deviceId, alertType, payload, recordedAt, nowMs
 async function processPing(bikeId, deviceId, lat, lng, speed, ignition, recordedAt, io, speedLimitKmh = 120) {
   const ts = new Date(recordedAt).getTime();
   const moving = speed > 2;
+  // ignition is the raw io[239] value: a number when the device reports it, null when it doesn't.
+  // Devices without a wired/configured ignition line can't gate trip start/end on it at all —
+  // fall back to movement for those instead of silently never recording a trip.
+  const hasIgnitionSignal = ignition !== null && ignition !== undefined;
+  const ignitionOn = hasIgnitionSignal ? !!ignition : null;
 
   if (io) {
     if (io[248]) await fireAlert(bikeId, deviceId, 'harsh_brake',     { lat, lng, value: io[248] }, recordedAt, ts);
@@ -185,7 +193,8 @@ async function processPing(bikeId, deviceId, lat, lng, speed, ignition, recorded
   const state = openTrips.get(bikeId);
 
   if (!state) {
-    if (ignition && moving) {
+    // With an ignition signal, require it on. Without one, movement alone starts the trip.
+    if ((hasIgnitionSignal ? ignitionOn : true) && moving) {
       const { rows } = await pgDb.query(
         'INSERT INTO trips (bike_id, device_id, started_at, start_lat, start_lng) VALUES ($1,$2,$3,$4,$5) RETURNING id',
         [bikeId, deviceId, recordedAt, lat, lng]
@@ -197,6 +206,7 @@ async function processPing(bikeId, deviceId, lat, lng, speed, ignition, recorded
         lastLat: lat, lastLng: lng,
         lastTs: ts,
         idleStart: null,
+        noSignalStoppedSince: null,
         distanceKm: 0,
         maxSpeed: speed,
         totalSpeed: speed,
@@ -226,7 +236,20 @@ async function processPing(bikeId, deviceId, lat, lng, speed, ignition, recorded
     state.idleStart = null;
   }
 
-  if (!ignition) {
+  // With an ignition signal, end the trip the instant it goes off — unchanged behavior.
+  // Without one, there's no "off" event to key off, so end after a stationary spell instead.
+  let endTrip;
+  if (hasIgnitionSignal) {
+    endTrip = !ignitionOn;
+  } else if (moving) {
+    state.noSignalStoppedSince = null;
+    endTrip = false;
+  } else {
+    if (!state.noSignalStoppedSince) state.noSignalStoppedSince = ts;
+    endTrip = (ts - state.noSignalStoppedSince) >= NO_IGNITION_TRIP_END_IDLE_MS;
+  }
+
+  if (endTrip) {
     const durationSec = Math.max(0, Math.round((ts - state.startTs) / 1000));
     const avgSpeed = state.pingCount > 0 ? Math.round(state.totalSpeed / state.pingCount) : 0;
     const distRounded = Math.round(state.distanceKm * 100) / 100;
@@ -263,6 +286,7 @@ async function hydrateOpenTrips() {
         lastLng:    row.last_lng  ?? row.start_lng,
         lastTs:     row.last_ping_at ? new Date(row.last_ping_at).getTime() : new Date(row.started_at).getTime(),
         idleStart:  null,
+        noSignalStoppedSince: null,
         distanceKm: row.distance_km  || 0,
         maxSpeed:   row.max_speed_kmh || 0,
         totalSpeed: 0,

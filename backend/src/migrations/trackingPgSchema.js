@@ -105,6 +105,13 @@ async function runTrackingSchema() {
     await pgDb.query(`
       CREATE INDEX IF NOT EXISTS idx_tracking_alerts_bike_time ON tracking_alerts(bike_id, created_at DESC)
     `);
+    // Resolution/audit fields for the control-room alerts feed (idempotent)
+    await pgDb.query(`ALTER TABLE tracking_alerts ADD COLUMN IF NOT EXISTS resolved_by INTEGER`);
+    await pgDb.query(`ALTER TABLE tracking_alerts ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ`);
+    await pgDb.query(`ALTER TABLE tracking_alerts ADD COLUMN IF NOT EXISTS resolution_comment TEXT`);
+    await pgDb.query(`
+      CREATE INDEX IF NOT EXISTS idx_tracking_alerts_resolved ON tracking_alerts(resolved_at)
+    `);
     await pgDb.query(`
       CREATE TABLE IF NOT EXISTS alert_settings (
         alert_type          TEXT PRIMARY KEY,

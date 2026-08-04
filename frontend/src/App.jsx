@@ -69,6 +69,7 @@ import Privacy from './pages/Privacy';
 import Terms from './pages/Terms';
 import { canViewFleetSection, getDefaultFleetRoute, isAdminPortalRole } from './pages/fleet/access';
 import ControlRoom from './pages/ControlRoom';
+import ControlRoomAlerts from './pages/ControlRoomAlerts';
 
 const WORKSHOP_ROLES = ['technician', 'admin', 'superadmin'];
 
@@ -176,7 +177,10 @@ export default function App() {
           <Route path="audit" element={<AdminAuditLogs />} />
         </Route>
 
-        <Route path="/control-room" element={<PrivateRoute role="control_room"><ControlRoom /></PrivateRoute>} />
+        <Route path="/control-room" element={<PrivateRoute role="control_room"><ControlRoom /></PrivateRoute>}>
+          <Route index element={<AdminTracking readOnly />} />
+          <Route path="alerts" element={<ControlRoomAlerts />} />
+        </Route>
 
         <Route path="/workshop/login" element={<WorkshopLogin />} />
         <Route path="/workshop/app" element={<PrivateRoute role="workshop"><WorkshopShell /></PrivateRoute>}>

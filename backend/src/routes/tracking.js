@@ -8,6 +8,7 @@ const { authRequired, adminOnly, trackingReadOnly } = require('../middleware/aut
 const teltonikaServer = require('../tcp/teltonikaServer');
 const trackingEvents = require('../trackingEvents');
 const riskService = require('../services/riskService');
+const { logAudit } = require('../utils/helpers');
 
 const ENGINE_CUT_CMD  = { FMB920: 'setdigout 1 1', FMC920: 'setdigout 1 1', FMB965: 'setdigout 2 1', other: 'setdigout 1 1' };
 const ENGINE_REST_CMD = { FMB920: 'setdigout 1 0', FMC920: 'setdigout 1 0', FMB965: 'setdigout 2 0', other: 'setdigout 1 0' };
@@ -318,17 +319,20 @@ router.get('/live', authRequired, trackingReadOnly, (req, res) => {
   res.flushHeaders();
 
   const onPing         = (p) => { try { res.write(`event: ping\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
-  const onAlert        = (p) => { try { res.write(`event: alert\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
+  const onAlert         = (p) => { try { res.write(`event: alert\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
+  const onAlertResolved = (p) => { try { res.write(`event: alert_resolved\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
   const onDeviceStatus = (p) => { try { res.write(`event: device_status\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
   const onRiskUpdate   = (p) => { try { res.write(`event: risk_update\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
   trackingEvents.on('ping', onPing);
   trackingEvents.on('alert', onAlert);
+  trackingEvents.on('alert_resolved', onAlertResolved);
   trackingEvents.on('device_status', onDeviceStatus);
   trackingEvents.on('risk_update', onRiskUpdate);
   const hb = setInterval(() => { try { res.write(': heartbeat\n\n'); } catch (_) {} }, 25_000);
   req.on('close', () => {
     trackingEvents.off('ping', onPing);
     trackingEvents.off('alert', onAlert);
+    trackingEvents.off('alert_resolved', onAlertResolved);
     trackingEvents.off('device_status', onDeviceStatus);
     trackingEvents.off('risk_update', onRiskUpdate);
     clearInterval(hb);
@@ -424,16 +428,28 @@ router.get('/alerts', authRequired, trackingReadOnly, async (req, res) => {
   const limit      = Math.min(Number(req.query.limit) || 100, 500);
   const bikeId     = req.query.bike_id ? Number(req.query.bike_id) : null;
   const unackedOnly = req.query.unacked === '1';
+  const status = String(req.query.status || '').trim(); // 'open' | 'resolved'
   const params = [];
   let sql = 'SELECT * FROM tracking_alerts WHERE 1=1';
   if (bikeId)     { params.push(bikeId); sql += ` AND bike_id=$${params.length}`; }
   if (unackedOnly) sql += ' AND acknowledged_at IS NULL';
+  if (status === 'open')     sql += ' AND resolved_at IS NULL';
+  if (status === 'resolved') sql += ' AND resolved_at IS NOT NULL';
   params.push(limit);
   sql += ` ORDER BY created_at DESC LIMIT $${params.length}`;
   const { rows } = await pgDb.query(sql, params);
+  const resolverIds = [...new Set(rows.map(a => a.resolved_by).filter(Boolean))];
+  const resolverMap = {};
+  if (resolverIds.length) {
+    const placeholders = resolverIds.map(() => '?').join(',');
+    for (const u of db.prepare(`SELECT id, full_name FROM users WHERE id IN (${placeholders})`).all(...resolverIds)) {
+      resolverMap[u.id] = u.full_name;
+    }
+  }
   for (const a of rows) {
     const b = db.prepare('SELECT registration FROM bikes WHERE id = ?').get(a.bike_id);
     a.bike_registration = b?.registration || null;
+    a.resolved_by_name = a.resolved_by ? (resolverMap[a.resolved_by] || null) : null;
   }
   res.json(rows);
 });
@@ -443,6 +459,32 @@ router.put('/alerts/:id/acknowledge', authRequired, trackingReadOnly, async (req
   if (!rows[0]) return res.status(404).json({ error: 'Alert not found' });
   await pgDb.query('UPDATE tracking_alerts SET acknowledged_at=NOW() WHERE id=$1', [rows[0].id]);
   res.json({ ok: true });
+});
+
+router.put('/alerts/:id/resolve', authRequired, trackingReadOnly, async (req, res) => {
+  const comment = String(req.body.comment || '').trim();
+  if (!comment) return res.status(400).json({ error: 'A comment is required to close an alert' });
+  const { rows } = await pgDb.query('SELECT * FROM tracking_alerts WHERE id=$1', [req.params.id]);
+  const alert = rows[0];
+  if (!alert) return res.status(404).json({ error: 'Alert not found' });
+  if (alert.resolved_at) return res.status(409).json({ error: 'Alert already closed' });
+
+  const { rows: updated } = await pgDb.query(
+    `UPDATE tracking_alerts
+     SET resolved_by=$1, resolved_at=NOW(), resolution_comment=$2, acknowledged_at=COALESCE(acknowledged_at, NOW())
+     WHERE id=$3 RETURNING *`,
+    [req.user.id, comment, alert.id]
+  );
+  const resolved = updated[0];
+  const b = db.prepare('SELECT registration FROM bikes WHERE id = ?').get(resolved.bike_id);
+  resolved.bike_registration = b?.registration || null;
+  resolved.resolved_by_name = req.user.full_name;
+
+  logAudit(req.user.id, 'alert.resolve', 'tracking_alerts', resolved.id,
+    { alert_type: resolved.alert_type, bike_id: resolved.bike_id, comment }, req.ip);
+  trackingEvents.emit('alert_resolved', resolved);
+
+  res.json(resolved);
 });
 
 router.post('/alerts/acknowledge-all', authRequired, trackingReadOnly, async (req, res) => {

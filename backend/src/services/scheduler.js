@@ -1,7 +1,10 @@
 const cron = require('node-cron');
-const db = require('../db');
-const { sendNotification } = require('./notifier');
-const { recalcScheduleStatuses } = require('../utils/helpers');
+const pgDb = require('../pgDb');
+// Postgres versions — see each *Pg module's header comment for why it's a
+// separate file from the SQLite original (other, not-yet-migrated routes
+// still depend on those).
+const { sendNotification } = require('./notifierPg');
+const { recalcScheduleStatuses } = require('../utils/helpersPg');
 
 function creditedAmount(payment) {
   return Number(payment?.amount ?? payment?.net_amount ?? 0);
@@ -26,61 +29,64 @@ function previousMonthKey() {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
-function notificationExistsForPeriod(userId, type, periodLabel) {
-  return db.prepare(`SELECT id FROM notifications
-    WHERE user_id = ? AND type = ? AND title = ?
-    LIMIT 1`).get(userId, type, periodLabel);
+async function notificationExistsForPeriod(userId, type, periodLabel) {
+  const { rows } = await pgDb.query(`SELECT id FROM notifications
+    WHERE user_id = $1 AND type = $2 AND title = $3
+    LIMIT 1`, [userId, type, periodLabel]);
+  return rows[0];
 }
 
-function notificationExistsToday(userId, type, title) {
-  return db.prepare(`SELECT id FROM notifications
-    WHERE user_id = ? AND type = ? AND title = ?
-      AND date(COALESCE(sent_at, created_at)) = date('now')
-    LIMIT 1`).get(userId, type, title);
+async function notificationExistsToday(userId, type, title) {
+  const { rows } = await pgDb.query(`SELECT id FROM notifications
+    WHERE user_id = $1 AND type = $2 AND title = $3
+      AND (COALESCE(sent_at, created_at))::date = CURRENT_DATE
+    LIMIT 1`, [userId, type, title]);
+  return rows[0];
 }
 
-function buildAgreementStatementSnapshot(agreementId, monthKey) {
-  const agreement = db.prepare(`SELECT a.*, u.full_name, u.email,
+async function buildAgreementStatementSnapshot(agreementId, monthKey) {
+  const { rows: agreementRows } = await pgDb.query(`SELECT a.*, u.full_name, u.email,
       b.make, b.model, b.registration, b.vin, b.license_disc_expiry
     FROM agreements a
     JOIN users u ON u.id = a.user_id
     JOIN bikes b ON b.id = a.bike_id
-    WHERE a.id = ?`).get(agreementId);
+    WHERE a.id = $1`, [agreementId]);
+  const agreement = agreementRows[0];
   if (!agreement) return null;
 
   const { end } = monthRange(monthKey);
-  const payments = db.prepare(`SELECT * FROM payments WHERE agreement_id = ? AND status = 'success'
-    ORDER BY COALESCE(paid_at, created_at) ASC`).all(agreementId);
+  const { rows: payments } = await pgDb.query(`SELECT * FROM payments WHERE agreement_id = $1 AND status = 'success'
+    ORDER BY COALESCE(paid_at, created_at) ASC`, [agreementId]);
   const monthPayments = payments.filter((payment) => String(payment.paid_at || payment.created_at || '').slice(0, 7) === monthKey);
   const totalPaid = payments
     .filter((payment) => new Date(payment.paid_at || payment.created_at) <= end)
     .reduce((sum, payment) => sum + creditedAmount(payment), 0);
   const paidThisMonth = monthPayments.reduce((sum, payment) => sum + creditedAmount(payment), 0);
   const remaining = Math.max(0, Number(agreement.total_amount || 0) - totalPaid);
-  const nextDue = db.prepare(`SELECT due_date, amount_due, amount_paid, status
+  const { rows: nextDueRows } = await pgDb.query(`SELECT due_date, amount_due, amount_paid, status
     FROM payment_schedules
-    WHERE agreement_id = ? AND status NOT IN ('paid','waived')
+    WHERE agreement_id = $1 AND status NOT IN ('paid','waived')
     ORDER BY due_date ASC
-    LIMIT 1`).get(agreementId);
+    LIMIT 1`, [agreementId]);
 
   return {
     agreement,
     totalPaid: +totalPaid.toFixed(2),
     paidThisMonth: +paidThisMonth.toFixed(2),
     remaining: +remaining.toFixed(2),
-    nextDue,
+    nextDue: nextDueRows[0],
     paymentCount: monthPayments.length,
     monthKey
   };
 }
 
 async function runMonthlyStatements(statementMonth = previousMonthKey()) {
-  const agreements = db.prepare(`SELECT id, user_id FROM agreements WHERE status = 'active'`).all();
+  const { rows: agreements } = await pgDb.query(`SELECT id, user_id FROM agreements WHERE status = 'active'`);
   for (const agreementRow of agreements) {
-    const snapshot = buildAgreementStatementSnapshot(agreementRow.id, statementMonth);
+    const snapshot = await buildAgreementStatementSnapshot(agreementRow.id, statementMonth);
     if (!snapshot) continue;
     const title = `Monthly statement · ${statementMonth}`;
-    if (notificationExistsForPeriod(snapshot.agreement.user_id, 'monthly_statement', title)) continue;
+    if (await notificationExistsForPeriod(snapshot.agreement.user_id, 'monthly_statement', title)) continue;
 
     const firstName = String(snapshot.agreement.full_name || 'Rider').split(' ')[0];
     const bikeName = [snapshot.agreement.make, snapshot.agreement.model].filter(Boolean).join(' ') || 'Bike';
@@ -113,13 +119,13 @@ async function runMonthlyStatements(statementMonth = previousMonthKey()) {
 }
 
 async function runLicenseDiscAlerts() {
-  const platformAdmins = db.prepare(`SELECT id FROM users
-    WHERE role IN ('admin','superadmin') AND status = 'active' AND deleted_at IS NULL`).all();
+  const { rows: platformAdmins } = await pgDb.query(`SELECT id FROM users
+    WHERE role IN ('admin','superadmin') AND status = 'active' AND deleted_at IS NULL`);
 
-  const bikes = db.prepare(`SELECT id, make, model, registration, vin, license_disc_no, license_disc_expiry, organization_id
+  const { rows: bikes } = await pgDb.query(`SELECT id, make, model, registration, vin, license_disc_no, license_disc_expiry, organization_id
     FROM bikes
-    WHERE license_disc_expiry IS NOT NULL AND license_disc_expiry <= date('now','+30 days')
-    ORDER BY license_disc_expiry ASC`).all();
+    WHERE license_disc_expiry IS NOT NULL AND license_disc_expiry <= CURRENT_DATE + 30
+    ORDER BY license_disc_expiry ASC`);
 
   const today = startOfUtcDay(new Date().toISOString().slice(0, 10));
   for (const bike of bikes) {
@@ -137,7 +143,7 @@ async function runLicenseDiscAlerts() {
 
     // Notify platform admins (in-app)
     for (const admin of platformAdmins) {
-      if (notificationExistsToday(admin.id, 'license_disc_expiry', `${title} · ${ref}`)) continue;
+      if (await notificationExistsToday(admin.id, 'license_disc_expiry', `${title} · ${ref}`)) continue;
       try {
         await sendNotification({ userId: admin.id, channel: 'in_app', type: 'license_disc_expiry', title: `${title} · ${ref}`, message });
       } catch (err) {
@@ -147,11 +153,12 @@ async function runLicenseDiscAlerts() {
 
     // Notify fleet owner admins/ops for their org's bike (email)
     if (bike.organization_id) {
-      const fleetAdmins = db.prepare(
-        `SELECT id, full_name FROM users WHERE organization_id = ? AND role IN ('fleet_owner_admin','fleet_owner_ops') AND status = 'active' AND deleted_at IS NULL`
-      ).all(bike.organization_id);
+      const { rows: fleetAdmins } = await pgDb.query(
+        `SELECT id, full_name FROM users WHERE organization_id = $1 AND role IN ('fleet_owner_admin','fleet_owner_ops') AND status = 'active' AND deleted_at IS NULL`,
+        [bike.organization_id]
+      );
       for (const admin of fleetAdmins) {
-        if (notificationExistsToday(admin.id, 'license_disc_expiry', `${title} · ${ref}`)) continue;
+        if (await notificationExistsToday(admin.id, 'license_disc_expiry', `${title} · ${ref}`)) continue;
         try {
           await sendNotification({
             userId: admin.id,
@@ -170,16 +177,16 @@ async function runLicenseDiscAlerts() {
 
 async function runDailyReminders() {
   const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const due = db.prepare(`
+  const { rows: due } = await pgDb.query(`
     SELECT s.*, a.user_id, a.agreement_no, u.full_name FROM payment_schedules s
     JOIN agreements a ON a.id = s.agreement_id AND a.status = 'active'
     JOIN users u ON u.id = a.user_id AND u.status = 'active'
-    WHERE s.due_date = ? AND s.status IN ('pending','partial')`).all(tomorrow);
+    WHERE s.due_date = $1 AND s.status IN ('pending','partial')`, [tomorrow]);
 
   for (const d of due) {
     if (!d.amount_due || !Number.isFinite(Number(d.amount_due))) continue;
     const title = `Payment due tomorrow · ${d.agreement_no}`;
-    if (notificationExistsToday(d.user_id, 'payment_reminder', title)) continue;
+    if (await notificationExistsToday(d.user_id, 'payment_reminder', title)) continue;
     const msg = `Hi ${d.full_name.split(' ')[0]}, your weekly OnFleet payment of R${Number(d.amount_due).toFixed(2)} for agreement ${d.agreement_no} is due tomorrow (${d.due_date}). Pay via the app to keep your rent-to-own on track.`;
     try {
       await sendNotification({ userId: d.user_id, channel: 'whatsapp', type: 'payment_reminder', title, message: msg });
@@ -191,12 +198,12 @@ async function runDailyReminders() {
   }
 
   const today = new Date().toISOString().slice(0, 10);
-  const overdueRows = db.prepare(`
+  const { rows: overdueRows } = await pgDb.query(`
     SELECT s.id, s.agreement_id, s.due_date, s.amount_due, s.amount_paid,
            a.user_id, a.agreement_no, u.full_name FROM payment_schedules s
     JOIN agreements a ON a.id = s.agreement_id AND a.status = 'active'
     JOIN users u ON u.id = a.user_id AND u.status = 'active'
-    WHERE s.due_date < ? AND s.status = 'overdue'`).all(today);
+    WHERE s.due_date < $1 AND s.status = 'overdue'`, [today]);
 
   // Group by agreement — send at most one WhatsApp per agreement per day
   const byAgreement = {};
@@ -205,12 +212,12 @@ async function runDailyReminders() {
       byAgreement[row.agreement_id] = { ...row, overdueWeeks: 0, totalOwed: 0 };
     }
     byAgreement[row.agreement_id].overdueWeeks++;
-    byAgreement[row.agreement_id].totalOwed += (row.amount_due - row.amount_paid);
+    byAgreement[row.agreement_id].totalOwed += (Number(row.amount_due) - Number(row.amount_paid));
   }
 
   for (const entry of Object.values(byAgreement)) {
     const title = `Overdue payment · ${entry.agreement_no}`;
-    if (notificationExistsToday(entry.user_id, 'payment_overdue', title)) continue;
+    if (await notificationExistsToday(entry.user_id, 'payment_overdue', title)) continue;
     const owed = Number(entry.totalOwed).toFixed(2);
     const weeksText = entry.overdueWeeks > 1 ? ` (${entry.overdueWeeks} weeks overdue)` : '';
     const msg = `URGENT: OnFleet payment of R${owed}${weeksText} for ${entry.agreement_no} is overdue. Please pay immediately to avoid agreement default.`;
@@ -221,11 +228,11 @@ async function runDailyReminders() {
     }
   }
 
-  const serviceDue = db.prepare(`
+  const { rows: serviceDue } = await pgDb.query(`
     SELECT b.*, a.user_id, a.agreement_no, u.full_name FROM bikes b
     JOIN agreements a ON a.bike_id = b.id AND a.status = 'active'
     JOIN users u ON u.id = a.user_id
-    WHERE b.next_service_date IS NOT NULL AND b.next_service_date <= date('now','+7 days')`).all();
+    WHERE b.next_service_date IS NOT NULL AND b.next_service_date <= CURRENT_DATE + 7`);
   for (const s of serviceDue) {
     try {
       await sendNotification({
@@ -246,16 +253,16 @@ async function runDailyReminders() {
 async function runFleetServiceReminders() {
   const today = new Date().toISOString().slice(0, 10);
   // Bikes owned by fleet organisations due for service within 30 days (or already overdue)
-  const bikes = db.prepare(`
+  const { rows: bikes } = await pgDb.query(`
     SELECT b.id, b.registration, b.vin, b.make, b.model, b.next_service_date, b.status,
            b.organization_id, o.name AS org_name
     FROM bikes b
     JOIN organizations o ON o.id = b.organization_id
     WHERE b.organization_id IS NOT NULL
       AND b.next_service_date IS NOT NULL
-      AND b.next_service_date <= date('now', '+30 days')
+      AND b.next_service_date <= CURRENT_DATE + 30
       AND b.status NOT IN ('sold','written_off','stolen')
-  `).all();
+  `);
 
   if (!bikes.length) return;
 
@@ -268,11 +275,11 @@ async function runFleetServiceReminders() {
 
   for (const [orgId, orgBikes] of Object.entries(byOrg)) {
     const orgName = orgBikes[0].org_name;
-    const admins = db.prepare(`
+    const { rows: admins } = await pgDb.query(`
       SELECT id, full_name, email FROM users
-      WHERE organization_id = ? AND role IN ('fleet_owner_admin','fleet_owner_ops')
+      WHERE organization_id = $1 AND role IN ('fleet_owner_admin','fleet_owner_ops')
         AND status = 'active' AND deleted_at IS NULL
-    `).all(Number(orgId));
+    `, [Number(orgId)]);
 
     if (!admins.length) continue;
 
@@ -289,7 +296,7 @@ async function runFleetServiceReminders() {
     const body = `Hi [name],\n\n${orgName} has ${orgBikes.length} bike${orgBikes.length !== 1 ? 's' : ''} due for service${overdue.length ? ` (${overdue.length} overdue)` : ''}:\n\n${bikeLines}\n\nBasic service is R275 per bike. Please contact us to book your service appointments.\n\nOnFleet Africa Workshop`;
 
     for (const admin of admins) {
-      if (notificationExistsToday(admin.id, 'fleet_service_reminder', title)) continue;
+      if (await notificationExistsToday(admin.id, 'fleet_service_reminder', title)) continue;
       const personalised = body.replace('[name]', admin.full_name.split(' ')[0]);
       try {
         await sendNotification({
@@ -313,14 +320,14 @@ async function runFleetServiceReminders() {
   }
 }
 
-function runScheduleRecalc() {
-  const ags = db.prepare(`SELECT id FROM agreements WHERE status = 'active'`).all();
-  for (const a of ags) recalcScheduleStatuses(a.id);
+async function runScheduleRecalc() {
+  const { rows: ags } = await pgDb.query(`SELECT id FROM agreements WHERE status = 'active'`);
+  for (const a of ags) await recalcScheduleStatuses(a.id);
 }
 
 function start() {
   cron.schedule('0 6 * * *', () => runDailyReminders().catch((error) => console.error('daily reminders failed', error)));
-  cron.schedule('5 0 * * *', runScheduleRecalc);
+  cron.schedule('5 0 * * *', () => runScheduleRecalc().catch((error) => console.error('schedule recalc failed', error)));
   cron.schedule('30 6 1 * *', () => runMonthlyStatements().catch((error) => console.error('monthly statements failed', error)));
 
   // Device offline detection — runs every 5 minutes

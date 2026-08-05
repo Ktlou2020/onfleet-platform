@@ -554,6 +554,9 @@ module.exports = {
   getFleetOwnerContractContext,
   // Pure (no DB access) — reused by services/contractsPg.js
   buildContractFilename,
+  buildContractAbsolutePath,
+  parseContractFilename,
+  safeAgreementNo,
   rentToOwnContractTemplate,
   publicPath,
 };

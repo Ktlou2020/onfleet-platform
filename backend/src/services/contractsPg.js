@@ -1,8 +1,6 @@
 'use strict';
 
-// Postgres equivalent of services/contracts.js's DB-touching functions, for
-// routes migrated off SQLite (currently only fleet.js). Not edited in place
-// — app.js, applications.js, bikes.js, agreements.js are not migrated yet.
+// Postgres equivalent of services/contracts.js's DB-touching functions.
 // Pure template/filename functions are reused directly from contracts.js
 // (exported there specifically for this file to import).
 
@@ -10,7 +8,15 @@ const fs = require('fs');
 const path = require('path');
 const pgDb = require('../pgDb');
 const { contracts: contractDir } = require('../uploadPaths');
-const { buildContractFilename, rentToOwnContractTemplate, publicPath } = require('./contracts');
+const {
+  buildContractFilename,
+  buildContractAbsolutePath,
+  parseContractFilename,
+  safeAgreementNo,
+  rentToOwnContractTemplate,
+  publicPath,
+  writeContractSnapshot
+} = require('./contracts');
 
 async function getAgreementContractContext(agreementId) {
   const { rows } = await pgDb.query(`SELECT a.*, b.make, b.model, b.registration, b.image_url, b.vin,
@@ -51,8 +57,55 @@ async function writeFleetOwnerContractSnapshot(agreementId, organizationId) {
   return publicPath(filename);
 }
 
+// Regenerates a missing contract HTML snapshot from the database — used by
+// app.js's /uploads/* static-file fallback when the file isn't on disk
+// (e.g. lost volume, manual cleanup).
+async function ensureContractSnapshotForAgreement({ agreementId, kind }) {
+  const context = await getAgreementContractContext(agreementId);
+  if (!context) return null;
+
+  const absolutePath = buildContractAbsolutePath(context.agreement.agreement_no, kind);
+  if (!fs.existsSync(absolutePath)) {
+    writeContractSnapshot({
+      ...context,
+      signatureData: kind === 'signed' ? context.agreement.signature_data : null,
+      kind
+    });
+  }
+
+  const generatedPublicPath = publicPath(buildContractFilename(context.agreement.agreement_no, kind));
+  if (kind === 'signed' && context.agreement.signed_contract_path !== generatedPublicPath) {
+    await pgDb.query(`UPDATE agreements SET signed_contract_path = $1 WHERE id = $2`, [generatedPublicPath, agreementId]);
+  }
+  if (kind === 'unsigned' && (context.agreement.contract_file_path !== generatedPublicPath || context.agreement.contract_pdf_path !== generatedPublicPath)) {
+    await pgDb.query(`UPDATE agreements SET contract_file_path = $1, contract_pdf_path = $2 WHERE id = $3`, [generatedPublicPath, generatedPublicPath, agreementId]);
+  }
+
+  return {
+    absolutePath,
+    publicPath: generatedPublicPath,
+    context
+  };
+}
+
+async function ensureContractSnapshotForRelativePath(relativePath = '') {
+  const normalized = String(relativePath || '').replace(/^[/\\]+/, '');
+  if (!normalized.startsWith('contracts/')) return null;
+
+  const parsed = parseContractFilename(normalized.slice('contracts/'.length));
+  if (!parsed) return null;
+
+  const { rows } = await pgDb.query(`SELECT id, agreement_no FROM agreements`);
+  const agreement = rows.find((row) => safeAgreementNo(row.agreement_no) === parsed.safeNo);
+  if (!agreement) return null;
+
+  return ensureContractSnapshotForAgreement({ agreementId: agreement.id, kind: parsed.kind });
+}
+
 module.exports = {
   getAgreementContractContext,
   getFleetOwnerContractContext,
   writeFleetOwnerContractSnapshot,
+  ensureContractSnapshotForAgreement,
+  ensureContractSnapshotForRelativePath,
 };

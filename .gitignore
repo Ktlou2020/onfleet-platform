@@ -6,6 +6,7 @@ dist/
 *.log
 .DS_Store
 backend/data/
+backend/backups/
 backend/uploads/*
 !backend/uploads/.gitkeep
 .vscode/

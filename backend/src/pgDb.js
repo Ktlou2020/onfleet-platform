@@ -6,8 +6,10 @@ if (!process.env.DATABASE_URL) {
   console.warn('[pgDb] DATABASE_URL not set — Postgres tracking features will be disabled');
 }
 
-// Railway internal URLs don't require TLS; public Postgres URLs may
-const ssl = process.env.DATABASE_URL && !process.env.DATABASE_URL.includes('.railway.internal')
+// Railway internal URLs and local dev Postgres don't support/require TLS;
+// public Postgres URLs may.
+const NO_SSL_HOSTS = ['.railway.internal', 'localhost', '127.0.0.1'];
+const ssl = process.env.DATABASE_URL && !NO_SSL_HOSTS.some(h => process.env.DATABASE_URL.includes(h))
   ? { rejectUnauthorized: false }
   : false;
 

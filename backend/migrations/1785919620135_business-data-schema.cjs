@@ -240,7 +240,8 @@ exports.up = (pgm) => {
       signed_contract_path TEXT,
       notes TEXT,
       created_by INTEGER REFERENCES users(id),
-      created_at TIMESTAMPTZ DEFAULT NOW()
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
     );
 
     CREATE TABLE payment_schedules (

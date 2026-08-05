@@ -1,6 +1,16 @@
 'use strict';
 
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
+
+// Postgres returns DATE columns (oid 1082) as JS Date objects by default.
+// This codebase was ported from SQLite, where dates were TEXT ('YYYY-MM-DD'),
+// and every consumer — helpersPg.js, fleet.js, agreementLifecyclePg.js, etc.
+// — compares due_date/start_date/end_date as plain strings (e.g.
+// `s.due_date <= today`). A JS Date compared to a string coerces via
+// Date.toString() (locale-formatted), not toISOString(), silently producing
+// wrong results. Keep DATE as the raw wire string instead, matching every
+// existing comparison's assumption.
+types.setTypeParser(1082, (val) => val);
 
 if (!process.env.DATABASE_URL) {
   console.warn('[pgDb] DATABASE_URL not set — Postgres tracking features will be disabled');

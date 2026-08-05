@@ -1,12 +1,16 @@
 const express = require('express');
 const axios = require('axios');
-const db = require('../db');
+const pgDb = require('../pgDb');
 const { authRequired, adminOnly } = require('../middleware/auth');
-const { logAudit, addDays, recalcScheduleStatuses, rebuildScheduleAllocations, updateAgreementBalance } = require('../utils/helpers');
+// Postgres versions — see each *Pg module's header comment for why it's a
+// separate file from the SQLite original (other, not-yet-migrated routes
+// still depend on those).
+const { logAudit, addDays, recalcScheduleStatuses, rebuildScheduleAllocations, updateAgreementBalance } = require('../utils/helpersPg');
 const { writeContractSnapshot } = require('../services/contracts');
-const { discontinueAgreement, reinstateDiscontinuedAgreement } = require('../services/agreementLifecycle');
+const { discontinueAgreement, reinstateDiscontinuedAgreement } = require('../services/agreementLifecyclePg');
+const asyncRouter = require('../utils/asyncRouter');
 
-const router = express.Router();
+const router = asyncRouter(express.Router());
 const PAYSTACK_BASE = 'https://api.paystack.co';
 const RIDER_PLAN_AMOUNTS = [500, 650, 700, 750, 800, 850, 1000, 1200];
 
@@ -23,29 +27,34 @@ function adminVisibleAgreementClause(aAlias = 'a', bAlias = 'b', uAlias = 'u') {
   return `${bAlias}.organization_id IS NULL AND ${uAlias}.organization_id IS NULL`;
 }
 
-function getAgreementBundle(agreementId, options = {}) {
+async function getAgreementBundle(agreementId, options = {}) {
   const scopeClause = options.adminVisible ? ` AND ${adminVisibleAgreementClause('a', 'b', 'u')}` : '';
-  const ag = db.prepare(`SELECT a.*, b.make, b.model, b.registration, b.image_url, b.vin,
+  const { rows: agRows } = await pgDb.query(`SELECT a.*, b.make, b.model, b.registration, b.image_url, b.vin,
       b.last_known_lat, b.last_known_lng, b.last_location_at, b.next_service_date,
       b.next_service_km, b.odometer_km, b.status AS bike_status,
       u.full_name, u.email, u.phone, u.id_number
     FROM agreements a
     JOIN bikes b ON b.id = a.bike_id
     JOIN users u ON u.id = a.user_id
-    WHERE a.id = ?${scopeClause}`).get(agreementId);
+    WHERE a.id = $1${scopeClause}`, [agreementId]);
+  const ag = agRows[0];
   if (!ag) return null;
-  const application = ag.application_id ? db.prepare('SELECT * FROM applications WHERE id = ?').get(ag.application_id) : null;
+  let application = null;
+  if (ag.application_id) {
+    const { rows: appRows } = await pgDb.query('SELECT * FROM applications WHERE id = $1', [ag.application_id]);
+    application = appRows[0] || null;
+  }
   return { agreement: ag, application };
 }
 
-router.get('/mine', authRequired, (req, res) => {
-  const ags = db.prepare(`SELECT a.*, b.make, b.model, b.registration, b.image_url, b.vin, b.status AS bike_status
+router.get('/mine', authRequired, async (req, res) => {
+  const { rows: ags } = await pgDb.query(`SELECT a.*, b.make, b.model, b.registration, b.image_url, b.vin, b.status AS bike_status
     FROM agreements a JOIN bikes b ON b.id = a.bike_id
-    WHERE a.user_id = ? ORDER BY a.created_at DESC`).all(req.user.id);
+    WHERE a.user_id = $1 ORDER BY a.created_at DESC`, [req.user.id]);
   res.json({ agreements: ags });
 });
 
-router.get('/', authRequired, adminOnly, (req, res) => {
+router.get('/', authRequired, adminOnly, async (req, res) => {
   const { status = '', bike_status = '', exclude_bike_statuses = '' } = req.query;
   const where = [adminVisibleAgreementClause('a', 'b', 'u')];
   const values = [];
@@ -55,16 +64,19 @@ router.get('/', authRequired, adminOnly, (req, res) => {
     .filter(Boolean);
 
   if (status) {
-    where.push('a.status = ?');
     values.push(status);
+    where.push(`a.status = $${values.length}`);
   }
   if (bike_status) {
-    where.push('b.status = ?');
     values.push(bike_status);
+    where.push(`b.status = $${values.length}`);
   }
   if (excludedBikeStatuses.length) {
-    where.push(`b.status NOT IN (${excludedBikeStatuses.map(() => '?').join(',')})`);
-    values.push(...excludedBikeStatuses);
+    const placeholders = excludedBikeStatuses.map((value) => {
+      values.push(value);
+      return `$${values.length}`;
+    });
+    where.push(`b.status NOT IN (${placeholders.join(',')})`);
   }
 
   const sql = `SELECT a.*, u.full_name, u.email, b.make, b.model, b.registration, b.status AS bike_status
@@ -74,11 +86,11 @@ router.get('/', authRequired, adminOnly, (req, res) => {
     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
     ORDER BY a.created_at DESC`;
 
-  const ags = db.prepare(sql).all(...values);
+  const { rows: ags } = await pgDb.query(sql, values);
   res.json({ agreements: ags });
 });
 
-router.post('/bulk-discontinue', authRequired, adminOnly, (req, res) => {
+router.post('/bulk-discontinue', authRequired, adminOnly, async (req, res) => {
   const agreementIds = Array.from(new Set((Array.isArray(req.body.agreement_ids) ? req.body.agreement_ids : [])
     .map((value) => Number(value))
     .filter((value) => Number.isInteger(value) && value > 0)));
@@ -95,11 +107,12 @@ router.post('/bulk-discontinue', authRequired, adminOnly, (req, res) => {
   };
 
   for (const agreementId of agreementIds) {
-    const agreement = db.prepare(`SELECT a.id, a.agreement_no, a.status
+    const { rows: agreementRows } = await pgDb.query(`SELECT a.id, a.agreement_no, a.status
       FROM agreements a
       JOIN bikes b ON b.id = a.bike_id
       JOIN users u ON u.id = a.user_id
-      WHERE a.id = ? AND ${adminVisibleAgreementClause('a', 'b', 'u')}`).get(agreementId);
+      WHERE a.id = $1 AND ${adminVisibleAgreementClause('a', 'b', 'u')}`, [agreementId]);
+    const agreement = agreementRows[0];
     if (!agreement) {
       summary.not_found.push(agreementId);
       continue;
@@ -109,7 +122,7 @@ router.post('/bulk-discontinue', authRequired, adminOnly, (req, res) => {
       continue;
     }
 
-    const result = discontinueAgreement({
+    const result = await discontinueAgreement({
       agreementId: agreement.id,
       reason: 'bulk_admin_discontinue',
       actorId: req.user.id,
@@ -136,25 +149,30 @@ router.post('/bulk-discontinue', authRequired, adminOnly, (req, res) => {
   });
 });
 
-router.get('/:id', authRequired, (req, res) => {
+router.get('/:id', authRequired, async (req, res) => {
   const isAdminPortalUser = ['admin', 'superadmin'].includes(req.user.role);
-  const bundle = getAgreementBundle(req.params.id, { adminVisible: isAdminPortalUser });
+  const bundle = await getAgreementBundle(req.params.id, { adminVisible: isAdminPortalUser });
   if (!bundle) return res.status(404).json({ error: 'Not found' });
   const ag = bundle.agreement;
   if (ag.user_id !== req.user.id && !isAdminPortalUser) {
     return res.status(403).json({ error: 'Forbidden' });
   }
 
-  recalcScheduleStatuses(ag.id);
-  const schedule = db.prepare(`SELECT * FROM payment_schedules WHERE agreement_id = ? ORDER BY week_number`).all(ag.id);
-  const payments = db.prepare(`SELECT * FROM payments WHERE agreement_id = ? ORDER BY COALESCE(paid_at, created_at) DESC`).all(ag.id);
-  const applicationDocuments = ag.application_id ? db.prepare(`SELECT id, doc_type, file_path, original_name, status, uploaded_at
-    FROM application_documents WHERE application_id = ? ORDER BY uploaded_at DESC`).all(ag.application_id) : [];
+  await recalcScheduleStatuses(ag.id);
+  const { rows: schedule } = await pgDb.query(`SELECT * FROM payment_schedules WHERE agreement_id = $1 ORDER BY week_number`, [ag.id]);
+  const { rows: payments } = await pgDb.query(`SELECT * FROM payments WHERE agreement_id = $1 ORDER BY COALESCE(paid_at, created_at) DESC`, [ag.id]);
+  let applicationDocuments = [];
+  if (ag.application_id) {
+    const { rows } = await pgDb.query(`SELECT id, doc_type, file_path, original_name, status, uploaded_at
+      FROM application_documents WHERE application_id = $1 ORDER BY uploaded_at DESC`, [ag.application_id]);
+    applicationDocuments = rows;
+  }
 
   const successfulPayments = payments.filter((payment) => payment.status === 'success');
-  const creditedAmount = (payment) => Number(payment.net_amount || payment.amount || 0);
+  const creditedAmount = (payment) => Number(payment.net_amount) || Number(payment.amount) || 0;
   const totalPaid = successfulPayments.reduce((sum, payment) => sum + creditedAmount(payment), 0);
-  const remainingRaw = +(ag.total_amount - totalPaid).toFixed(2);
+  const totalAmount = Number(ag.total_amount) || 0;
+  const remainingRaw = +(totalAmount - totalPaid).toFixed(2);
 
   // Derive weeks_paid, overdue, and next_due from payments (source of truth), not from
   // potentially-stale payment_schedules rows. This means no rebuild click is needed.
@@ -166,7 +184,7 @@ router.get('/:id', authRequired, (req, res) => {
   const amountDueByToday = +(weeksDueByToday * weeklyAmount).toFixed(2);
   const overdueRaw = Math.max(0, +(amountDueByToday - totalPaid).toFixed(2));
   const nextDueRaw = nonWaivedSchedule[weeksPaid] || null;
-  const progressPct = ag.total_amount ? +((totalPaid / ag.total_amount) * 100).toFixed(1) : 0;
+  const progressPct = totalAmount ? +((totalPaid / totalAmount) * 100).toFixed(1) : 0;
   const isDiscontinued = ag.status === 'discontinued';
 
   res.json({
@@ -187,8 +205,8 @@ router.get('/:id', authRequired, (req, res) => {
   });
 });
 
-router.post('/:id/sign', authRequired, (req, res) => {
-  const bundle = getAgreementBundle(req.params.id);
+router.post('/:id/sign', authRequired, async (req, res) => {
+  const bundle = await getAgreementBundle(req.params.id);
   if (!bundle || bundle.agreement.user_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
   const signature = req.body.signature || `${req.user.full_name} · ${new Date().toLocaleString('en-ZA')}`;
   const signedContractPath = writeContractSnapshot({
@@ -199,18 +217,19 @@ router.post('/:id/sign', authRequired, (req, res) => {
     signatureData: signature,
     kind: 'signed'
   });
-  db.prepare(`UPDATE agreements SET signed_at = CURRENT_TIMESTAMP, signature_data = ?, signed_contract_path = ? WHERE id = ?`)
-    .run(signature, signedContractPath, req.params.id);
+  await pgDb.query(`UPDATE agreements SET signed_at = CURRENT_TIMESTAMP, signature_data = $1, signed_contract_path = $2 WHERE id = $3`,
+    [signature, signedContractPath, req.params.id]);
 
   if (bundle.agreement.application_id) {
-    const existing = db.prepare(`SELECT id FROM application_documents WHERE application_id = ? AND doc_type = 'signed_contract'`).get(bundle.agreement.application_id);
+    const { rows: existingRows } = await pgDb.query(`SELECT id FROM application_documents WHERE application_id = $1 AND doc_type = 'signed_contract'`, [bundle.agreement.application_id]);
+    const existing = existingRows[0];
     if (existing) {
-      db.prepare(`UPDATE application_documents SET file_path = ?, original_name = ?, mime_type = 'text/html', status = 'signed', uploaded_at = CURRENT_TIMESTAMP WHERE id = ?`)
-        .run(signedContractPath, `${bundle.agreement.agreement_no}-signed.html`, existing.id);
+      await pgDb.query(`UPDATE application_documents SET file_path = $1, original_name = $2, mime_type = 'text/html', status = 'signed', uploaded_at = CURRENT_TIMESTAMP WHERE id = $3`,
+        [signedContractPath, `${bundle.agreement.agreement_no}-signed.html`, existing.id]);
     } else {
-      db.prepare(`INSERT INTO application_documents
+      await pgDb.query(`INSERT INTO application_documents
         (application_id, user_id, doc_type, file_path, original_name, mime_type, status, uploaded_by)
-        VALUES (?,?,?,?,?,?,?,?)`).run(
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [
           bundle.agreement.application_id,
           bundle.agreement.user_id,
           'signed_contract',
@@ -219,48 +238,49 @@ router.post('/:id/sign', authRequired, (req, res) => {
           'text/html',
           'signed',
           req.user.id
-        );
+        ]);
     }
   }
 
-  logAudit(req.user.id, 'agreement.sign', 'agreements', Number(req.params.id));
+  await logAudit(req.user.id, 'agreement.sign', 'agreements', Number(req.params.id));
   res.json({ ok: true, signed_contract_path: signedContractPath });
 });
 
-router.post('/:id/status', authRequired, adminOnly, (req, res) => {
+router.post('/:id/status', authRequired, adminOnly, async (req, res) => {
   const { status } = req.body;
   if (!AGREEMENT_STATUS_VALUES.includes(status)) {
     return res.status(400).json({ error: 'Invalid status' });
   }
-  const agreement = db.prepare(`SELECT a.*
+  const { rows: agreementRows } = await pgDb.query(`SELECT a.*
     FROM agreements a
     JOIN bikes b ON b.id = a.bike_id
     JOIN users u ON u.id = a.user_id
-    WHERE a.id = ? AND ${adminVisibleAgreementClause('a', 'b', 'u')}`).get(req.params.id);
+    WHERE a.id = $1 AND ${adminVisibleAgreementClause('a', 'b', 'u')}`, [req.params.id]);
+  const agreement = agreementRows[0];
   if (!agreement) return res.status(404).json({ error: 'Agreement not found' });
-  db.prepare('UPDATE agreements SET status = ? WHERE id = ?').run(status, req.params.id);
-  if (status === 'completed') db.prepare(`UPDATE bikes SET status = 'paid_off' WHERE id = ?`).run(agreement.bike_id);
-  if (status === 'cancelled' || status === 'defaulted') db.prepare(`UPDATE bikes SET status = 'ready_to_go' WHERE id = ?`).run(agreement.bike_id);
+  await pgDb.query('UPDATE agreements SET status = $1 WHERE id = $2', [status, req.params.id]);
+  if (status === 'completed') await pgDb.query(`UPDATE bikes SET status = 'paid_off' WHERE id = $1`, [agreement.bike_id]);
+  if (status === 'cancelled' || status === 'defaulted') await pgDb.query(`UPDATE bikes SET status = 'ready_to_go' WHERE id = $1`, [agreement.bike_id]);
   if (status === 'discontinued') {
-    db.prepare(`UPDATE agreements SET discontinued_at = CURRENT_TIMESTAMP, discontinued_reason = 'admin_status_change' WHERE id = ?`).run(req.params.id);
-    db.prepare(`UPDATE payment_schedules SET status = 'waived' WHERE agreement_id = ? AND status IN ('pending','upcoming','overdue')`).run(req.params.id);
+    await pgDb.query(`UPDATE agreements SET discontinued_at = CURRENT_TIMESTAMP, discontinued_reason = 'admin_status_change' WHERE id = $1`, [req.params.id]);
+    await pgDb.query(`UPDATE payment_schedules SET status = 'waived' WHERE agreement_id = $1 AND status IN ('pending','upcoming','overdue')`, [req.params.id]);
   }
   if (agreement.status === 'discontinued' && status !== 'discontinued') {
-    db.prepare(`UPDATE agreements SET discontinued_at = NULL, discontinued_reason = NULL WHERE id = ?`).run(req.params.id);
+    await pgDb.query(`UPDATE agreements SET discontinued_at = NULL, discontinued_reason = NULL WHERE id = $1`, [req.params.id]);
   }
-  logAudit(req.user.id, 'agreement.status', 'agreements', Number(req.params.id), { previous_status: agreement.status, status });
+  await logAudit(req.user.id, 'agreement.status', 'agreements', Number(req.params.id), { previous_status: agreement.status, status });
   res.json({ ok: true });
 });
 
-router.post('/:id/reinstate', authRequired, adminOnly, (req, res) => {
+router.post('/:id/reinstate', authRequired, adminOnly, async (req, res) => {
   try {
-    const agreement = db.prepare(`SELECT a.id
+    const { rows: agreementRows } = await pgDb.query(`SELECT a.id
       FROM agreements a
       JOIN bikes b ON b.id = a.bike_id
       JOIN users u ON u.id = a.user_id
-      WHERE a.id = ? AND ${adminVisibleAgreementClause('a', 'b', 'u')}`).get(req.params.id);
-    if (!agreement) return res.status(404).json({ error: 'Agreement not found' });
-    const result = reinstateDiscontinuedAgreement({ agreementId: Number(req.params.id), actorId: req.user.id, ip: req.ip });
+      WHERE a.id = $1 AND ${adminVisibleAgreementClause('a', 'b', 'u')}`, [req.params.id]);
+    if (!agreementRows[0]) return res.status(404).json({ error: 'Agreement not found' });
+    const result = await reinstateDiscontinuedAgreement({ agreementId: Number(req.params.id), actorId: req.user.id, ip: req.ip });
     res.json({ ok: true, ...result });
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -268,29 +288,31 @@ router.post('/:id/reinstate', authRequired, adminOnly, (req, res) => {
 });
 
 // POST /:id/rebuild-schedule — resets payment schedule rows and replays all payments from the payments table
-router.post('/:id/rebuild-schedule', authRequired, adminOnly, (req, res) => {
-  const agreement = db.prepare(`SELECT a.id
+router.post('/:id/rebuild-schedule', authRequired, adminOnly, async (req, res) => {
+  const { rows: agreementRows } = await pgDb.query(`SELECT a.id
     FROM agreements a
     JOIN bikes b ON b.id = a.bike_id
     JOIN users u ON u.id = a.user_id
-    WHERE a.id = ? AND ${adminVisibleAgreementClause('a', 'b', 'u')}`).get(req.params.id);
+    WHERE a.id = $1 AND ${adminVisibleAgreementClause('a', 'b', 'u')}`, [req.params.id]);
+  const agreement = agreementRows[0];
   if (!agreement) return res.status(404).json({ error: 'Agreement not found' });
-  rebuildScheduleAllocations(agreement.id);
-  logAudit(req.user.id, 'admin.agreement_schedule_rebuild', 'agreements', agreement.id, {}, req.ip);
+  await rebuildScheduleAllocations(agreement.id);
+  await logAudit(req.user.id, 'admin.agreement_schedule_rebuild', 'agreements', agreement.id, {}, req.ip);
   res.json({ ok: true });
 });
 
 // PUT /:id/balance — admin manually sets the outstanding remaining balance
-router.put('/:id/balance', authRequired, adminOnly, (req, res) => {
+router.put('/:id/balance', authRequired, adminOnly, async (req, res) => {
   try {
-    const agreement = db.prepare(`SELECT a.id
+    const { rows: agreementRows } = await pgDb.query(`SELECT a.id
       FROM agreements a
       JOIN bikes b ON b.id = a.bike_id
       JOIN users u ON u.id = a.user_id
-      WHERE a.id = ? AND ${adminVisibleAgreementClause('a', 'b', 'u')}`).get(req.params.id);
+      WHERE a.id = $1 AND ${adminVisibleAgreementClause('a', 'b', 'u')}`, [req.params.id]);
+    const agreement = agreementRows[0];
     if (!agreement) return res.status(404).json({ error: 'Agreement not found' });
-    const result = updateAgreementBalance(Number(req.params.id), req.body.remaining_balance);
-    logAudit(req.user.id, 'admin.agreement_balance_edit', 'agreements', agreement.id, {
+    const result = await updateAgreementBalance(Number(req.params.id), req.body.remaining_balance);
+    await logAudit(req.user.id, 'admin.agreement_balance_edit', 'agreements', agreement.id, {
       remaining_balance: result.remaining_balance,
       total_amount: result.total_amount
     }, req.ip);
@@ -301,13 +323,14 @@ router.put('/:id/balance', authRequired, adminOnly, (req, res) => {
 });
 
 // PUT /:id/schedule — admin changes the number of installments (total_weeks)
-router.put('/:id/schedule', authRequired, adminOnly, (req, res) => {
+router.put('/:id/schedule', authRequired, adminOnly, async (req, res) => {
   try {
-    const ag = db.prepare(`SELECT a.*
+    const { rows: agRows } = await pgDb.query(`SELECT a.*
       FROM agreements a
       JOIN bikes b ON b.id = a.bike_id
       JOIN users u ON u.id = a.user_id
-      WHERE a.id = ? AND ${adminVisibleAgreementClause('a', 'b', 'u')}`).get(req.params.id);
+      WHERE a.id = $1 AND ${adminVisibleAgreementClause('a', 'b', 'u')}`, [req.params.id]);
+    const ag = agRows[0];
     if (!ag) return res.status(404).json({ error: 'Agreement not found' });
 
     const newTotalWeeks = Number(req.body.total_weeks);
@@ -316,11 +339,11 @@ router.put('/:id/schedule', authRequired, adminOnly, (req, res) => {
     }
 
     // Find the highest committed week (paid/partial/waived) — cannot go below this
-    const committed = db.prepare(
+    const { rows: committedRows } = await pgDb.query(
       `SELECT COALESCE(MAX(week_number), 0) AS max_week FROM payment_schedules
-       WHERE agreement_id = ? AND status IN ('paid', 'partial', 'waived')`
-    ).get(ag.id);
-    const minWeeks = committed.max_week || 0;
+       WHERE agreement_id = $1 AND status IN ('paid', 'partial', 'waived')`, [ag.id]
+    );
+    const minWeeks = Number(committedRows[0]?.max_week) || 0;
 
     if (newTotalWeeks < minWeeks) {
       return res.status(400).json({
@@ -331,31 +354,33 @@ router.put('/:id/schedule', authRequired, adminOnly, (req, res) => {
     const weeklyAmount = Number(ag.weekly_amount);
     const newTotalAmount = +(weeklyAmount * newTotalWeeks).toFixed(2);
 
-    db.transaction(() => {
+    await pgDb.withTransaction(async (client) => {
       // Remove all pending/overdue rows beyond the new total
-      db.prepare(
-        `DELETE FROM payment_schedules WHERE agreement_id = ? AND week_number > ? AND status NOT IN ('paid', 'partial', 'waived')`
-      ).run(ag.id, newTotalWeeks);
+      await client.query(
+        `DELETE FROM payment_schedules WHERE agreement_id = $1 AND week_number > $2 AND status NOT IN ('paid', 'partial', 'waived')`,
+        [ag.id, newTotalWeeks]
+      );
 
       // Find the current highest week_number in the schedule
-      const currentMax = db.prepare(
-        `SELECT COALESCE(MAX(week_number), 0) AS max FROM payment_schedules WHERE agreement_id = ?`
-      ).get(ag.id).max;
+      const { rows: currentMaxRows } = await client.query(
+        `SELECT COALESCE(MAX(week_number), 0) AS max FROM payment_schedules WHERE agreement_id = $1`, [ag.id]
+      );
+      const currentMax = Number(currentMaxRows[0]?.max) || 0;
 
       // Insert any new rows needed
-      const insert = db.prepare(
-        `INSERT INTO payment_schedules (agreement_id, week_number, due_date, amount_due) VALUES (?,?,?,?)`
-      );
       for (let w = currentMax + 1; w <= newTotalWeeks; w++) {
-        insert.run(ag.id, w, addDays(ag.start_date, (w - 1) * 7), weeklyAmount);
+        await client.query(
+          `INSERT INTO payment_schedules (agreement_id, week_number, due_date, amount_due) VALUES ($1,$2,$3,$4)`,
+          [ag.id, w, addDays(ag.start_date, (w - 1) * 7), weeklyAmount]
+        );
       }
 
-      db.prepare(`UPDATE agreements SET total_weeks = ?, total_amount = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
-        .run(newTotalWeeks, newTotalAmount, ag.id);
-    })();
+      await client.query(`UPDATE agreements SET total_weeks = $1, total_amount = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`,
+        [newTotalWeeks, newTotalAmount, ag.id]);
+    });
 
-    recalcScheduleStatuses(ag.id);
-    logAudit(req.user.id, 'admin.agreement_schedule_edit', 'agreements', ag.id, {
+    await recalcScheduleStatuses(ag.id);
+    await logAudit(req.user.id, 'admin.agreement_schedule_edit', 'agreements', ag.id, {
       old_total_weeks: ag.total_weeks,
       new_total_weeks: newTotalWeeks,
       weekly_amount: weeklyAmount,
@@ -371,11 +396,12 @@ router.put('/:id/schedule', authRequired, adminOnly, (req, res) => {
 // POST /:id/subscription/init — admin generates a Paystack recurring-payment link for a rider
 router.post('/:id/subscription/init', authRequired, adminOnly, async (req, res) => {
   try {
-    const ag = db.prepare(`SELECT a.*, u.email, u.full_name
+    const { rows: agRows } = await pgDb.query(`SELECT a.*, u.email, u.full_name
       FROM agreements a
       JOIN users u ON u.id = a.user_id
       JOIN bikes b ON b.id = a.bike_id
-      WHERE a.id = ? AND ${adminVisibleAgreementClause('a', 'b', 'u')}`).get(req.params.id);
+      WHERE a.id = $1 AND ${adminVisibleAgreementClause('a', 'b', 'u')}`, [req.params.id]);
+    const ag = agRows[0];
     if (!ag) return res.status(404).json({ error: 'Agreement not found' });
 
     const overrideAmount = req.body.plan_amount ? Math.round(Number(req.body.plan_amount)) : null;
@@ -405,7 +431,7 @@ router.post('/:id/subscription/init', authRequired, adminOnly, async (req, res) 
       }
     }, { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } });
 
-    logAudit(req.user.id, 'agreement.subscription_link_generated', 'agreements', Number(req.params.id), { plan_code: planCode, weekly_amount: weeklyAmount }, req.ip);
+    await logAudit(req.user.id, 'agreement.subscription_link_generated', 'agreements', Number(req.params.id), { plan_code: planCode, weekly_amount: weeklyAmount }, req.ip);
 
     res.json({
       authorization_url: resp.data.data.authorization_url,

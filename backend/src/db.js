@@ -1165,4 +1165,54 @@ function ensureFleetWalletAdjustmentType() {
 }
 ensureFleetWalletAdjustmentType();
 
+// Extend payments.status CHECK to include 'reversed' — POST /api/payments/:id/reverse
+// has always set this value, but it was never in the original CHECK constraint,
+// so every reversal attempt has been throwing a constraint violation and failing.
+function ensurePaymentsReversedStatus() {
+  const row = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='payments'`).get();
+  if (String(row?.sql || '').includes("'reversed'")) return;
+  try {
+    db.exec(`
+      PRAGMA foreign_keys = OFF;
+      BEGIN TRANSACTION;
+      CREATE TABLE payments_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        agreement_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        schedule_id INTEGER,
+        amount REAL NOT NULL,
+        currency TEXT NOT NULL DEFAULT 'ZAR',
+        method TEXT NOT NULL CHECK(method IN ('paystack','eft','cash','card','other')),
+        reference TEXT UNIQUE,
+        paystack_reference TEXT,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','success','failed','refunded','reversed')),
+        paid_at DATETIME,
+        recorded_by INTEGER,
+        notes TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        fee_amount REAL DEFAULT 0,
+        net_amount REAL DEFAULT 0,
+        FOREIGN KEY(agreement_id) REFERENCES agreements(id),
+        FOREIGN KEY(user_id) REFERENCES users(id),
+        FOREIGN KEY(schedule_id) REFERENCES payment_schedules(id),
+        FOREIGN KEY(recorded_by) REFERENCES users(id)
+      );
+      INSERT INTO payments_new (id, agreement_id, user_id, schedule_id, amount, currency, method,
+        reference, paystack_reference, status, paid_at, recorded_by, notes, created_at, fee_amount, net_amount)
+      SELECT id, agreement_id, user_id, schedule_id, amount, currency, method,
+        reference, paystack_reference, status, paid_at, recorded_by, notes, created_at, fee_amount, net_amount
+      FROM payments;
+      DROP TABLE payments;
+      ALTER TABLE payments_new RENAME TO payments;
+      COMMIT;
+      PRAGMA foreign_keys = ON;
+    `);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_payments_agreement ON payments(agreement_id);`);
+  } catch (e) {
+    console.error('[ensurePaymentsReversedStatus] migration failed:', e.message);
+    try { db.exec('ROLLBACK; PRAGMA foreign_keys = ON;'); } catch (_) {}
+  }
+}
+ensurePaymentsReversedStatus();
+
 module.exports = db;

@@ -2,16 +2,20 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const db = require('../db');
+const pgDb = require('../pgDb');
 const { authRequired, adminOnly } = require('../middleware/auth');
-const { logAudit, generateAgreementNo, buildPaymentSchedule, addDays } = require('../utils/helpers');
-const { setBikeStatus } = require('../utils/bikeStatus');
-const { discontinueAgreementForStolenBike, discontinueAgreement } = require('../services/agreementLifecycle');
+// Postgres versions — see each *Pg module's header comment for why it's a
+// separate file from the SQLite original (other, not-yet-migrated routes
+// still depend on those).
+const { logAudit, generateAgreementNo, buildPaymentSchedule, addDays } = require('../utils/helpersPg');
+const { setBikeStatus } = require('../utils/bikeStatusPg');
+const { discontinueAgreementForStolenBike, discontinueAgreement } = require('../services/agreementLifecyclePg');
 const { extractLicenseDiscInsights } = require('../services/documentInsights');
 const { requireValidMime } = require('../utils/validateUpload');
 const { writeContractSnapshot } = require('../services/contracts');
+const asyncRouter = require('../utils/asyncRouter');
 
-const router = express.Router();
+const router = asyncRouter(express.Router());
 const { bikes: bikeUploadDir, serviceInvoices: invoiceUploadDir, bikeDocuments: bikeDocumentUploadDir } = require('../uploadPaths');
 
 const bikeImageUpload = multer({
@@ -41,7 +45,6 @@ const bikeDocumentUpload = multer({
   limits: { fileSize: 15 * 1024 * 1024 }
 });
 
-const OPEN_AGREEMENT_STATUSES = ['active', 'paused', 'defaulted'];
 const OPEN_AGREEMENT_STATUSES_SQL = "('active','paused','defaulted')";
 const ALLOCATION_ELIGIBLE_BIKE_STATUSES = ['ready_to_go', 'active'];
 
@@ -49,22 +52,20 @@ function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function superadminOnly(req, res, next) {
-  if (!['admin', 'superadmin'].includes(req.user.role)) return res.status(403).json({ error: 'Admin access required' });
-  next();
+async function getSetting(key) {
+  const { rows } = await pgDb.query('SELECT setting_value FROM app_settings WHERE setting_key = $1', [key]);
+  return rows[0]?.setting_value || null;
 }
 
-function getSetting(key) {
-  return db.prepare('SELECT setting_value FROM app_settings WHERE setting_key = ?').get(key)?.setting_value || null;
-}
-
-function computeBikeRoi(bikeId) {
-  const revenue = db.prepare(`SELECT COALESCE(SUM(COALESCE(NULLIF(p.net_amount,0), p.amount)),0) total FROM payments p
+async function computeBikeRoi(bikeId) {
+  const { rows: revenueRows } = await pgDb.query(`SELECT COALESCE(SUM(COALESCE(NULLIF(p.net_amount,0), p.amount)),0) total FROM payments p
     JOIN agreements a ON a.id = p.agreement_id
-    WHERE a.bike_id = ? AND p.status = 'success'`).get(bikeId).total || 0;
-  const serviceCost = db.prepare(`SELECT COALESCE(SUM(cost),0) total FROM service_records WHERE bike_id = ?`).get(bikeId).total || 0;
-  const bike = db.prepare(`SELECT purchase_price FROM bikes WHERE id = ?`).get(bikeId);
-  const purchasePrice = Number(bike?.purchase_price || 0);
+    WHERE a.bike_id = $1 AND p.status = 'success'`, [bikeId]);
+  const revenue = Number(revenueRows[0]?.total) || 0;
+  const { rows: serviceRows } = await pgDb.query(`SELECT COALESCE(SUM(cost),0) total FROM service_records WHERE bike_id = $1`, [bikeId]);
+  const serviceCost = Number(serviceRows[0]?.total) || 0;
+  const { rows: bikeRows } = await pgDb.query(`SELECT purchase_price FROM bikes WHERE id = $1`, [bikeId]);
+  const purchasePrice = Number(bikeRows[0]?.purchase_price || 0);
   const net = +(revenue - purchasePrice - serviceCost).toFixed(2);
   const roiPct = purchasePrice ? +((net / purchasePrice) * 100).toFixed(1) : null;
   return {
@@ -173,7 +174,7 @@ const bikeSelectSql = `SELECT b.*,
   ) AS allocated_agreement_no
 FROM bikes b`;
 
-function listCatalogValues(column, whereClauses = [], params = []) {
+async function listCatalogValues(column, whereClauses = [], params = []) {
   const sql = `SELECT DISTINCT b.${column} AS value
     FROM bikes b
     WHERE b.status = 'ready_to_go'
@@ -181,7 +182,8 @@ function listCatalogValues(column, whereClauses = [], params = []) {
       ${whereClauses.length ? `AND ${whereClauses.join(' AND ')}` : ''}
       AND COALESCE(TRIM(b.${column}), '') <> ''
     ORDER BY b.${column}`;
-  return db.prepare(sql).all(...params).map((row) => row.value);
+  const { rows } = await pgDb.query(sql, params);
+  return rows.map((row) => row.value);
 }
 
 function adminVisibleBikeClause(alias = 'b') {
@@ -196,36 +198,40 @@ function adminVisibleBikeClause(alias = 'b') {
   )`;
 }
 
-function getAdminVisibleBike(bikeId) {
-  return db.prepare(`${bikeSelectSql} WHERE b.id = ? AND ${adminVisibleBikeClause('b')}`).get(bikeId);
+async function getAdminVisibleBike(bikeId) {
+  const { rows } = await pgDb.query(`${bikeSelectSql} WHERE b.id = $1 AND ${adminVisibleBikeClause('b')}`, [bikeId]);
+  return rows[0];
 }
 
-function getAdminVisibleRider(riderId) {
-  return db.prepare(`SELECT *
+async function getAdminVisibleRider(riderId) {
+  const { rows } = await pgDb.query(`SELECT *
     FROM users
-    WHERE id = ?
+    WHERE id = $1
       AND role = 'rider'
       AND deleted_at IS NULL
-      AND organization_id IS NULL`).get(riderId);
+      AND organization_id IS NULL`, [riderId]);
+  return rows[0];
 }
 
-function getOpenAgreementForBike(bikeId) {
-  return db.prepare(`SELECT *
+async function getOpenAgreementForBike(bikeId) {
+  const { rows } = await pgDb.query(`SELECT *
     FROM agreements
-    WHERE bike_id = ? AND status IN ${OPEN_AGREEMENT_STATUSES_SQL}
+    WHERE bike_id = $1 AND status IN ${OPEN_AGREEMENT_STATUSES_SQL}
     ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at DESC
-    LIMIT 1`).get(bikeId);
+    LIMIT 1`, [bikeId]);
+  return rows[0];
 }
 
-function getOpenAgreementForRider(riderId) {
-  return db.prepare(`SELECT *
+async function getOpenAgreementForRider(riderId) {
+  const { rows } = await pgDb.query(`SELECT *
     FROM agreements
-    WHERE user_id = ? AND status IN ${OPEN_AGREEMENT_STATUSES_SQL}
+    WHERE user_id = $1 AND status IN ${OPEN_AGREEMENT_STATUSES_SQL}
     ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at DESC
-    LIMIT 1`).get(riderId);
+    LIMIT 1`, [riderId]);
+  return rows[0];
 }
 
-router.get('/catalog', (req, res) => {
+router.get('/catalog', async (req, res) => {
   const make = String(req.query.make || '').trim();
   const model = String(req.query.model || '').trim();
   const condition = String(req.query.condition || '').trim();
@@ -233,69 +239,72 @@ router.get('/catalog', (req, res) => {
   const params = [];
 
   if (make) {
-    whereClauses.push('b.make = ?');
     params.push(make);
+    whereClauses.push(`b.make = $${params.length}`);
   }
   if (model) {
-    whereClauses.push('b.model = ?');
     params.push(model);
+    whereClauses.push(`b.model = $${params.length}`);
   }
   if (condition) {
-    whereClauses.push('b.condition = ?');
     params.push(condition);
+    whereClauses.push(`b.condition = $${params.length}`);
   }
 
-  const bikes = db.prepare(`SELECT b.id, b.make, b.model, b.year, b.engine_cc, b.condition, b.rental_weekly, b.total_weeks, b.image_url, b.status, b.registration
+  const { rows: bikes } = await pgDb.query(`SELECT b.id, b.make, b.model, b.year, b.engine_cc, b.condition, b.rental_weekly, b.total_weeks, b.image_url, b.status, b.registration
     FROM bikes b
     WHERE ${whereClauses.join(' AND ')}
-    ORDER BY b.make, b.model, b.year DESC, b.id DESC`).all(...params);
+    ORDER BY b.make, b.model, b.year DESC, b.id DESC`, params);
 
   const modelWhereClauses = [];
   const modelParams = [];
   if (make) {
-    modelWhereClauses.push('make = ?');
     modelParams.push(make);
+    modelWhereClauses.push(`make = $${modelParams.length}`);
   }
 
   const conditionWhereClauses = [];
   const conditionParams = [];
   if (make) {
-    conditionWhereClauses.push('make = ?');
     conditionParams.push(make);
+    conditionWhereClauses.push(`make = $${conditionParams.length}`);
   }
   if (model) {
-    conditionWhereClauses.push('model = ?');
     conditionParams.push(model);
+    conditionWhereClauses.push(`model = $${conditionParams.length}`);
   }
+
+  const [makes, models, conditions, heroImageUrl] = await Promise.all([
+    listCatalogValues('make'),
+    listCatalogValues('model', modelWhereClauses, modelParams),
+    listCatalogValues('condition', conditionWhereClauses, conditionParams),
+    getSetting('landing_hero_image_url')
+  ]);
 
   res.json({
     bikes,
-    filters: {
-      makes: listCatalogValues('make'),
-      models: listCatalogValues('model', modelWhereClauses, modelParams),
-      conditions: listCatalogValues('condition', conditionWhereClauses, conditionParams)
-    },
-    hero_image_url: getSetting('landing_hero_image_url')
+    filters: { makes, models, conditions },
+    hero_image_url: heroImageUrl
   });
 });
 
-router.get('/', authRequired, adminOnly, (req, res) => {
+router.get('/', authRequired, adminOnly, async (req, res) => {
   const status = String(req.query.status || '').trim();
   const fleet = String(req.query.fleet || '').trim();
   const clauses = [adminVisibleBikeClause('b')];
   const params = [];
 
   if (status) {
-    clauses.push('b.status = ?');
     params.push(status);
+    clauses.push(`b.status = $${params.length}`);
   }
   if (fleet) {
-    clauses.push('COALESCE(TRIM(b.fleet), \'\') = ?');
     params.push(fleet);
+    clauses.push(`COALESCE(TRIM(b.fleet), '') = $${params.length}`);
   }
 
   const sql = `${bikeSelectSql} ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''} ORDER BY b.id DESC`;
-  const bikes = db.prepare(sql).all(...params);
+  const { rows: bikes } = await pgDb.query(sql, params);
   res.json({ bikes });
 });
 
@@ -317,30 +326,32 @@ router.post('/document-insights/license-disc', authRequired, adminOnly, bikeDocu
   }
 });
 
-router.get('/:id', authRequired, (req, res) => {
+router.get('/:id', authRequired, async (req, res) => {
   const isAdminPortalUser = ['admin', 'superadmin'].includes(req.user.role);
-  const bike = db.prepare(`${bikeSelectSql} WHERE b.id = ?${isAdminPortalUser ? ` AND ${adminVisibleBikeClause('b')}` : ''}`).get(req.params.id);
+  const { rows: bikeRows } = await pgDb.query(`${bikeSelectSql} WHERE b.id = $1${isAdminPortalUser ? ` AND ${adminVisibleBikeClause('b')}` : ''}`, [req.params.id]);
+  const bike = bikeRows[0];
   if (!bike) return res.status(404).json({ error: 'Not found' });
 
   if (!isAdminPortalUser) {
-    const owns = db.prepare(`SELECT 1 FROM agreements WHERE bike_id = ? AND user_id = ? AND status = 'active'`).get(req.params.id, req.user.id);
-    if (!owns) return res.status(403).json({ error: 'Forbidden' });
+    const { rows: ownRows } = await pgDb.query(`SELECT 1 FROM agreements WHERE bike_id = $1 AND user_id = $2 AND status = 'active'`, [req.params.id, req.user.id]);
+    if (!ownRows[0]) return res.status(403).json({ error: 'Forbidden' });
   }
 
-  const services = db.prepare(`SELECT * FROM service_records WHERE bike_id = ? ORDER BY service_date DESC LIMIT 50`).all(req.params.id);
-  const lastPings = db.prepare(`SELECT lat, lng, speed_kmh, recorded_at FROM gps_pings WHERE bike_id = ? ORDER BY recorded_at DESC LIMIT 50`).all(req.params.id);
+  const { rows: services } = await pgDb.query(`SELECT * FROM service_records WHERE bike_id = $1 ORDER BY service_date DESC LIMIT 50`, [req.params.id]);
+  const { rows: lastPings } = await pgDb.query(`SELECT lat, lng, speed_kmh, recorded_at FROM gps_pings WHERE bike_id = $1 ORDER BY recorded_at DESC LIMIT 50`, [req.params.id]);
   const payload = { bike, services, gps_history: lastPings };
-  if (isAdminPortalUser) payload.roi = computeBikeRoi(req.params.id);
+  if (isAdminPortalUser) payload.roi = await computeBikeRoi(req.params.id);
   res.json(payload);
 });
 
-router.post('/', authRequired, adminOnly, (req, res) => {
+router.post('/', authRequired, adminOnly, async (req, res) => {
   const b = req.body;
-  const info = db.prepare(`INSERT INTO bikes
+  const { rows } = await pgDb.query(`INSERT INTO bikes
     (vin, registration, make, model, fleet, organization_id, year, engine_cc, color, condition, purchase_price,
      rental_weekly, total_weeks, status, gps_device_id, odometer_km, insurance_provider,
      insurance_policy_no, insurance_expiry, license_disc_no, license_disc_expiry, image_url, notes)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+    RETURNING id`, [
       b.vin,
       b.registration || null,
       b.make,
@@ -364,12 +375,13 @@ router.post('/', authRequired, adminOnly, (req, res) => {
       b.license_disc_expiry || null,
       b.image_url || null,
       b.notes || null
-    );
-  logAudit(req.user.id, 'bike.create', 'bikes', info.lastInsertRowid);
-  res.json({ id: info.lastInsertRowid });
+    ]);
+  const id = rows[0].id;
+  await logAudit(req.user.id, 'bike.create', 'bikes', id);
+  res.json({ id });
 });
 
-router.put('/:id', authRequired, adminOnly, (req, res) => {
+router.put('/:id', authRequired, adminOnly, async (req, res) => {
   const allowed = ['registration', 'make', 'model', 'fleet', 'organization_id', 'year', 'engine_cc', 'color', 'condition', 'purchase_price', 'rental_weekly', 'total_weeks', 'gps_device_id', 'odometer_km', 'next_service_km', 'next_service_date', 'insurance_provider', 'insurance_policy_no', 'insurance_expiry', 'license_disc_no', 'license_disc_expiry', 'image_url', 'notes'];
   const sets = [];
   const vals = [];
@@ -377,9 +389,9 @@ router.put('/:id', authRequired, adminOnly, (req, res) => {
 
   if (req.body.status !== undefined) {
     try {
-      statusMeta = setBikeStatus(req.params.id, req.body.status);
+      statusMeta = await setBikeStatus(req.params.id, req.body.status);
       if (statusMeta?.next_status === 'stolen') {
-        const discontinued = discontinueAgreementForStolenBike({ bikeId: Number(req.params.id), actorId: req.user.id, ip: req.ip });
+        const discontinued = await discontinueAgreementForStolenBike({ bikeId: Number(req.params.id), actorId: req.user.id, ip: req.ip });
         statusMeta.discontinued_agreement_id = discontinued.agreement?.id || null;
         statusMeta.discontinued_agreement_no = discontinued.agreement?.agreement_no || null;
         statusMeta.waived_schedule_rows = discontinued.waived_rows || 0;
@@ -391,23 +403,23 @@ router.put('/:id', authRequired, adminOnly, (req, res) => {
 
   for (const key of allowed) {
     if (req.body[key] !== undefined) {
-      sets.push(`${key} = ?`);
       vals.push(['fleet', 'organization_id'].includes(key) ? (req.body[key] || null) : req.body[key]);
+      sets.push(`${key} = $${vals.length}`);
     }
   }
 
   if (sets.length) {
     vals.push(req.params.id);
-    db.prepare(`UPDATE bikes SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+    await pgDb.query(`UPDATE bikes SET ${sets.join(', ')} WHERE id = $${vals.length}`, vals);
   }
 
   if (!sets.length && !statusMeta) return res.json({ ok: true });
-  logAudit(req.user.id, 'bike.update', 'bikes', Number(req.params.id), { ...req.body, ...(statusMeta || {}) });
+  await logAudit(req.user.id, 'bike.update', 'bikes', Number(req.params.id), { ...req.body, ...(statusMeta || {}) });
   res.json({ ok: true, ...(statusMeta || {}) });
 });
 
 
-router.post('/:id/allocate', authRequired, adminOnly, (req, res) => {
+router.post('/:id/allocate', authRequired, adminOnly, async (req, res) => {
   try {
     const bikeId = Number(req.params.id);
     const riderId = Number(req.body.rider_id);
@@ -418,18 +430,19 @@ router.post('/:id/allocate', authRequired, adminOnly, (req, res) => {
       return res.status(400).json({ error: 'Bike and rider are required' });
     }
 
-    const bike = getAdminVisibleBike(bikeId);
+    const bike = await getAdminVisibleBike(bikeId);
     if (!bike) return res.status(404).json({ error: 'Bike not found' });
     if (!ALLOCATION_ELIGIBLE_BIKE_STATUSES.includes(String(bike.status || ''))) {
       return res.status(400).json({ error: 'Bike must be active or ready to go before allocation' });
     }
-    if (db.prepare(`SELECT id FROM agreements WHERE bike_id = ? AND status IN ('active','paused') LIMIT 1`).get(bikeId)) {
+    const { rows: existingOpenRows } = await pgDb.query(`SELECT id FROM agreements WHERE bike_id = $1 AND status IN ('active','paused') LIMIT 1`, [bikeId]);
+    if (existingOpenRows[0]) {
       return res.status(400).json({ error: 'This bike already has an allocated rider' });
     }
 
-    const rider = getAdminVisibleRider(riderId);
+    const rider = await getAdminVisibleRider(riderId);
     if (!rider) return res.status(404).json({ error: 'Rider not found' });
-    if (getOpenAgreementForRider(riderId)) {
+    if (await getOpenAgreementForRider(riderId)) {
       return res.status(400).json({ error: 'This rider already has an open agreement' });
     }
 
@@ -442,28 +455,30 @@ router.post('/:id/allocate', authRequired, adminOnly, (req, res) => {
       return res.status(400).json({ error: 'Total weeks must be greater than zero' });
     }
 
-    const matchingApplication = db.prepare(`SELECT ap.*
+    const { rows: matchingApplicationRows } = await pgDb.query(`SELECT ap.*
       FROM applications ap
       LEFT JOIN bikes pref ON pref.id = ap.preferred_bike_id
-      WHERE ap.user_id = ?
+      WHERE ap.user_id = $1
         AND ap.status IN ('approved', 'submitted', 'under_review')
-        AND (ap.preferred_bike_id = ? OR ap.preferred_bike_id IS NULL OR pref.organization_id IS NULL)
-      ORDER BY CASE WHEN ap.preferred_bike_id = ? THEN 0 ELSE 1 END, ap.submitted_at DESC, ap.id DESC
-      LIMIT 1`).get(riderId, bikeId, bikeId);
+        AND (ap.preferred_bike_id = $2 OR ap.preferred_bike_id IS NULL OR pref.organization_id IS NULL)
+      ORDER BY CASE WHEN ap.preferred_bike_id = $2 THEN 0 ELSE 1 END, ap.submitted_at DESC, ap.id DESC
+      LIMIT 1`, [riderId, bikeId]);
+    const matchingApplication = matchingApplicationRows[0];
 
     const totalAmount = +(weeklyAmount * totalWeeks).toFixed(2);
     const endDate = addDays(startDate, totalWeeks * 7);
     const agreementNo = generateAgreementNo();
 
-    const agreementId = db.transaction(() => {
+    const agreementId = await pgDb.withTransaction(async (client) => {
       if (matchingApplication?.id) {
-        db.prepare(`UPDATE applications
-          SET status = 'approved', reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP, rejection_reason = NULL
-          WHERE id = ?`).run(req.user.id, matchingApplication.id);
+        await client.query(`UPDATE applications
+          SET status = 'approved', reviewed_by = $1, reviewed_at = CURRENT_TIMESTAMP, rejection_reason = NULL
+          WHERE id = $2`, [req.user.id, matchingApplication.id]);
       }
-      const info = db.prepare(`INSERT INTO agreements
+      const { rows: insertRows } = await client.query(`INSERT INTO agreements
         (agreement_no, user_id, bike_id, application_id, weekly_amount, total_weeks, total_amount, start_date, end_date, status, notes, created_by)
-        VALUES (?,?,?,?,?,?,?,?,?, 'active', ?, ?)`).run(
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, 'active', $10, $11)
+        RETURNING id`, [
           agreementNo,
           riderId,
           bikeId,
@@ -475,20 +490,22 @@ router.post('/:id/allocate', authRequired, adminOnly, (req, res) => {
           endDate,
           note,
           req.user.id
-        );
-      buildPaymentSchedule(info.lastInsertRowid, weeklyAmount, totalWeeks, startDate);
-      db.prepare(`UPDATE bikes SET status = 'active' WHERE id = ?`).run(bikeId);
-      return info.lastInsertRowid;
-    })();
+        ]);
+      const newAgreementId = insertRows[0].id;
+      await buildPaymentSchedule(newAgreementId, weeklyAmount, totalWeeks, startDate, client);
+      await client.query(`UPDATE bikes SET status = 'active' WHERE id = $1`, [bikeId]);
+      return newAgreementId;
+    });
 
-    const agreement = db.prepare('SELECT * FROM agreements WHERE id = ?').get(agreementId);
+    const { rows: agreementRows } = await pgDb.query('SELECT * FROM agreements WHERE id = $1', [agreementId]);
+    const agreement = agreementRows[0];
     const contractPath = writeContractSnapshot({ agreement, rider, bike, application: matchingApplication || null, kind: 'unsigned' });
-    db.prepare(`UPDATE agreements SET contract_file_path = ?, contract_pdf_path = ? WHERE id = ?`).run(contractPath, contractPath, agreementId);
+    await pgDb.query(`UPDATE agreements SET contract_file_path = $1, contract_pdf_path = $2 WHERE id = $3`, [contractPath, contractPath, agreementId]);
 
     if (matchingApplication?.id) {
-      db.prepare(`INSERT INTO application_documents
+      await pgDb.query(`INSERT INTO application_documents
         (application_id, user_id, doc_type, file_path, original_name, mime_type, status, uploaded_by)
-        VALUES (?,?,?,?,?,?,?,?)`).run(
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [
           matchingApplication.id,
           riderId,
           'unsigned_contract',
@@ -497,10 +514,10 @@ router.post('/:id/allocate', authRequired, adminOnly, (req, res) => {
           'text/html',
           'verified',
           req.user.id
-        );
+        ]);
     }
 
-    logAudit(req.user.id, 'bike.allocate_rider', 'agreements', agreementId, {
+    await logAudit(req.user.id, 'bike.allocate_rider', 'agreements', agreementId, {
       bike_id: bikeId,
       rider_id: riderId,
       weekly_amount: weeklyAmount,
@@ -514,19 +531,19 @@ router.post('/:id/allocate', authRequired, adminOnly, (req, res) => {
   }
 });
 
-router.patch('/:id/allocated-rider', authRequired, adminOnly, (req, res) => {
+router.patch('/:id/allocated-rider', authRequired, adminOnly, async (req, res) => {
   const bikeId = Number(req.params.id);
   if (!Number.isInteger(bikeId) || bikeId <= 0) {
     return res.status(400).json({ error: 'Invalid bike id' });
   }
 
-  const bike = getAdminVisibleBike(bikeId);
+  const bike = await getAdminVisibleBike(bikeId);
   if (!bike) return res.status(404).json({ error: 'Bike not found' });
 
-  const agreement = getOpenAgreementForBike(bikeId);
+  const agreement = await getOpenAgreementForBike(bikeId);
   if (!agreement) return res.status(400).json({ error: 'No allocated rider found for this bike' });
 
-  const rider = getAdminVisibleRider(agreement.user_id);
+  const rider = await getAdminVisibleRider(agreement.user_id);
   if (!rider) return res.status(404).json({ error: 'Allocated rider not found' });
 
   const updates = [];
@@ -535,47 +552,48 @@ router.patch('/:id/allocated-rider', authRequired, adminOnly, (req, res) => {
   if (req.body.full_name !== undefined) {
     const fullName = String(req.body.full_name || '').trim();
     if (!fullName) return res.status(400).json({ error: 'Full name is required' });
-    updates.push('full_name = ?');
     values.push(fullName);
+    updates.push(`full_name = $${values.length}`);
   }
 
   if (req.body.email !== undefined) {
     const email = String(req.body.email || '').trim().toLowerCase();
     if (!email || !email.includes('@')) return res.status(400).json({ error: 'A valid email is required' });
-    const conflict = db.prepare('SELECT id FROM users WHERE email = ? AND id != ? AND deleted_at IS NULL').get(email, rider.id);
-    if (conflict) return res.status(409).json({ error: 'Email already exists for another user' });
-    updates.push('email = ?');
+    const { rows: conflictRows } = await pgDb.query('SELECT id FROM users WHERE email = $1 AND id != $2 AND deleted_at IS NULL', [email, rider.id]);
+    if (conflictRows[0]) return res.status(409).json({ error: 'Email already exists for another user' });
     values.push(email);
+    updates.push(`email = $${values.length}`);
   }
 
   for (const field of ['phone', 'id_number', 'address', 'city', 'province']) {
     if (req.body[field] !== undefined) {
-      updates.push(`${field} = ?`);
       values.push(String(req.body[field] || '').trim() || null);
+      updates.push(`${field} = $${values.length}`);
     }
   }
 
   if (!updates.length) return res.json({ ok: true });
 
-  db.prepare(`UPDATE users SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...values, rider.id);
-  logAudit(req.user.id, 'bike.allocated_rider_update', 'users', rider.id, { bike_id: bikeId, agreement_id: agreement.id }, req.ip);
+  values.push(rider.id);
+  await pgDb.query(`UPDATE users SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $${values.length}`, values);
+  await logAudit(req.user.id, 'bike.allocated_rider_update', 'users', rider.id, { bike_id: bikeId, agreement_id: agreement.id }, req.ip);
   res.json({ ok: true });
 });
 
-router.post('/:id/terminate-contract', authRequired, adminOnly, (req, res) => {
+router.post('/:id/terminate-contract', authRequired, adminOnly, async (req, res) => {
   try {
     const bikeId = Number(req.params.id);
     if (!Number.isInteger(bikeId) || bikeId <= 0) {
       return res.status(400).json({ error: 'Invalid bike id' });
     }
 
-    const bike = getAdminVisibleBike(bikeId);
+    const bike = await getAdminVisibleBike(bikeId);
     if (!bike) return res.status(404).json({ error: 'Bike not found' });
 
-    const agreement = getOpenAgreementForBike(bikeId);
+    const agreement = await getOpenAgreementForBike(bikeId);
     if (!agreement) return res.status(400).json({ error: 'This bike has no open contract to terminate' });
 
-    const result = discontinueAgreement({
+    const result = await discontinueAgreement({
       agreementId: agreement.id,
       reason: String(req.body.reason || 'manual_bike_contract_termination').trim() || 'manual_bike_contract_termination',
       actorId: req.user.id,
@@ -583,8 +601,8 @@ router.post('/:id/terminate-contract', authRequired, adminOnly, (req, res) => {
       auditAction: 'agreement.terminated_from_bike'
     });
 
-    db.prepare(`UPDATE bikes SET status = 'active' WHERE id = ?`).run(bikeId);
-    logAudit(req.user.id, 'bike.terminate_contract', 'bikes', bikeId, {
+    await pgDb.query(`UPDATE bikes SET status = 'active' WHERE id = $1`, [bikeId]);
+    await logAudit(req.user.id, 'bike.terminate_contract', 'bikes', bikeId, {
       agreement_id: agreement.id,
       agreement_no: agreement.agreement_no,
       waived_schedule_rows: result.waived_rows || 0
@@ -596,71 +614,72 @@ router.post('/:id/terminate-contract', authRequired, adminOnly, (req, res) => {
   }
 });
 
-router.delete('/:id', authRequired, adminOnly, (req, res) => {
+router.delete('/:id', authRequired, adminOnly, async (req, res) => {
   const bikeId = Number(req.params.id);
   if (!Number.isInteger(bikeId) || bikeId <= 0) {
     return res.status(400).json({ error: 'Invalid bike id' });
   }
 
-  const bike = getAdminVisibleBike(bikeId);
+  const bike = await getAdminVisibleBike(bikeId);
   if (!bike) return res.status(404).json({ error: 'Bike not found' });
-  if (getOpenAgreementForBike(bikeId)) {
+  if (await getOpenAgreementForBike(bikeId)) {
     return res.status(400).json({ error: 'Terminate the current contract before deleting this bike' });
   }
 
-  const agreementCount = db.prepare('SELECT COUNT(*) c FROM agreements WHERE bike_id = ?').get(bikeId).c || 0;
+  const { rows: countRows } = await pgDb.query('SELECT COUNT(*) c FROM agreements WHERE bike_id = $1', [bikeId]);
+  const agreementCount = Number(countRows[0]?.c) || 0;
   if (agreementCount > 0) {
     return res.status(400).json({ error: 'Bikes with agreement history cannot be deleted' });
   }
 
-  db.transaction(() => {
-    db.prepare('UPDATE applications SET preferred_bike_id = NULL WHERE preferred_bike_id = ?').run(bikeId);
-    db.prepare('DELETE FROM service_records WHERE bike_id = ?').run(bikeId);
-    db.prepare('DELETE FROM gps_pings WHERE bike_id = ?').run(bikeId);
-    db.prepare('DELETE FROM bikes WHERE id = ?').run(bikeId);
-  })();
+  await pgDb.withTransaction(async (client) => {
+    await client.query('UPDATE applications SET preferred_bike_id = NULL WHERE preferred_bike_id = $1', [bikeId]);
+    await client.query('DELETE FROM service_records WHERE bike_id = $1', [bikeId]);
+    await client.query('DELETE FROM gps_pings WHERE bike_id = $1', [bikeId]);
+    await client.query('DELETE FROM bikes WHERE id = $1', [bikeId]);
+  });
 
-  logAudit(req.user.id, 'bike.delete', 'bikes', bikeId, { registration: bike.registration || null, vin: bike.vin }, req.ip);
+  await logAudit(req.user.id, 'bike.delete', 'bikes', bikeId, { registration: bike.registration || null, vin: bike.vin }, req.ip);
   res.json({ ok: true });
 });
 
-router.post('/:id/image', authRequired, adminOnly, bikeImageUpload.single('image'), requireValidMime(['image/jpeg', 'image/png', 'image/webp']), (req, res) => {
+router.post('/:id/image', authRequired, adminOnly, bikeImageUpload.single('image'), requireValidMime(['image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Image file is required' });
   const publicPath = `/uploads/bikes/${req.file.filename}`;
-  db.prepare('UPDATE bikes SET image_url = ? WHERE id = ?').run(publicPath, req.params.id);
-  logAudit(req.user.id, 'bike.image_upload', 'bikes', Number(req.params.id), { image_url: publicPath });
+  await pgDb.query('UPDATE bikes SET image_url = $1 WHERE id = $2', [publicPath, req.params.id]);
+  await logAudit(req.user.id, 'bike.image_upload', 'bikes', Number(req.params.id), { image_url: publicPath });
   res.json({ image_url: publicPath });
 });
 
 router.post('/:id/documents/:documentType', authRequired, adminOnly, bikeDocumentUpload.single('file'), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'A document file is required' });
-  const bike = db.prepare('SELECT id FROM bikes WHERE id = ?').get(req.params.id);
-  if (!bike) return res.status(404).json({ error: 'Bike not found' });
+  const { rows: bikeRows } = await pgDb.query('SELECT id FROM bikes WHERE id = $1', [req.params.id]);
+  if (!bikeRows[0]) return res.status(404).json({ error: 'Bike not found' });
 
   const documentType = String(req.params.documentType || '').trim().toLowerCase();
   const publicPath = `/uploads/bike-documents/${req.file.filename}`;
 
   if (documentType === 'rc1') {
-    db.prepare('UPDATE bikes SET rc1_file_path = ?, rc1_original_name = ? WHERE id = ?').run(publicPath, req.file.originalname, req.params.id);
-    logAudit(req.user.id, 'bike.rc1_upload', 'bikes', Number(req.params.id), { rc1_file_path: publicPath });
+    await pgDb.query('UPDATE bikes SET rc1_file_path = $1, rc1_original_name = $2 WHERE id = $3', [publicPath, req.file.originalname, req.params.id]);
+    await logAudit(req.user.id, 'bike.rc1_upload', 'bikes', Number(req.params.id), { rc1_file_path: publicPath });
     return res.json({ ok: true, rc1_file_path: publicPath, rc1_original_name: req.file.originalname });
   }
 
   if (documentType === 'license_disc') {
     const extracted = await extractLicenseDiscInsights(req.file.path, req.file.mimetype);
-    db.prepare(`UPDATE bikes
-      SET license_disc_file_path = ?,
-          license_disc_original_name = ?,
-          license_disc_no = COALESCE(?, license_disc_no),
-          license_disc_expiry = COALESCE(?, license_disc_expiry)
-      WHERE id = ?`).run(
+    await pgDb.query(`UPDATE bikes
+      SET license_disc_file_path = $1,
+          license_disc_original_name = $2,
+          license_disc_no = COALESCE($3, license_disc_no),
+          license_disc_expiry = COALESCE($4, license_disc_expiry)
+      WHERE id = $5`, [
       publicPath,
       req.file.originalname,
       extracted.license_disc_no || null,
       extracted.license_disc_expiry || null,
       req.params.id
-    );
-    logAudit(req.user.id, 'bike.license_disc_upload', 'bikes', Number(req.params.id), {
+    ]);
+    await logAudit(req.user.id, 'bike.license_disc_upload', 'bikes', Number(req.params.id), {
       license_disc_file_path: publicPath,
       extracted_license_disc_no: extracted.license_disc_no || null,
       extracted_license_disc_expiry: extracted.license_disc_expiry || null
@@ -679,21 +698,23 @@ router.post('/:id/documents/:documentType', authRequired, adminOnly, bikeDocumen
   return res.status(400).json({ error: 'Unsupported document type' });
 });
 
-router.post('/:id/ping', authRequired, adminOnly, (req, res) => {
+router.post('/:id/ping', authRequired, adminOnly, async (req, res) => {
   const { lat, lng, speed_kmh, heading } = req.body;
-  const bike = db.prepare('SELECT id FROM bikes WHERE id = ?').get(req.params.id);
+  const { rows: bikeRows } = await pgDb.query('SELECT id FROM bikes WHERE id = $1', [req.params.id]);
+  const bike = bikeRows[0];
   if (!bike) return res.status(404).end();
-  db.prepare(`INSERT INTO gps_pings (bike_id, lat, lng, speed_kmh, heading) VALUES (?,?,?,?,?)`).run(bike.id, lat, lng, speed_kmh || null, heading || null);
-  db.prepare(`UPDATE bikes SET last_known_lat = ?, last_known_lng = ?, last_location_at = CURRENT_TIMESTAMP WHERE id = ?`).run(lat, lng, bike.id);
+  await pgDb.query(`INSERT INTO gps_pings (bike_id, lat, lng, speed_kmh, heading) VALUES ($1,$2,$3,$4,$5)`, [bike.id, lat, lng, speed_kmh || null, heading || null]);
+  await pgDb.query(`UPDATE bikes SET last_known_lat = $1, last_known_lng = $2, last_location_at = CURRENT_TIMESTAMP WHERE id = $3`, [lat, lng, bike.id]);
   res.json({ ok: true });
 });
 
-router.post('/:id/service', authRequired, adminOnly, invoiceUpload.single('invoice'), (req, res) => {
+router.post('/:id/service', authRequired, adminOnly, invoiceUpload.single('invoice'), async (req, res) => {
   const b = req.body;
   const publicInvoice = req.file ? `/uploads/service-invoices/${req.file.filename}` : null;
-  const info = db.prepare(`INSERT INTO service_records
+  const { rows } = await pgDb.query(`INSERT INTO service_records
     (bike_id, agreement_id, service_date, odometer_km, service_type, description, cost, next_service_km, next_service_date, performed_by, invoice_file_path, invoice_original_name)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+    RETURNING id`, [
       req.params.id,
       b.agreement_id || null,
       b.service_date,
@@ -706,22 +727,24 @@ router.post('/:id/service', authRequired, adminOnly, invoiceUpload.single('invoi
       b.performed_by || null,
       publicInvoice,
       req.file?.originalname || null
-    );
+    ]);
+  const id = rows[0].id;
 
-  db.prepare(`UPDATE bikes SET next_service_km = COALESCE(?, next_service_km), next_service_date = COALESCE(?, next_service_date), odometer_km = COALESCE(?, odometer_km) WHERE id = ?`)
-    .run(b.next_service_km || null, b.next_service_date || null, b.odometer_km || null, req.params.id);
+  await pgDb.query(`UPDATE bikes SET next_service_km = COALESCE($1, next_service_km), next_service_date = COALESCE($2, next_service_date), odometer_km = COALESCE($3, odometer_km) WHERE id = $4`,
+    [b.next_service_km || null, b.next_service_date || null, b.odometer_km || null, req.params.id]);
 
-  logAudit(req.user.id, 'bike.service', 'service_records', info.lastInsertRowid, { bike_id: Number(req.params.id), invoice: publicInvoice });
-  res.json({ id: info.lastInsertRowid, invoice_file_path: publicInvoice });
+  await logAudit(req.user.id, 'bike.service', 'service_records', id, { bike_id: Number(req.params.id), invoice: publicInvoice });
+  res.json({ id, invoice_file_path: publicInvoice });
 });
 
-router.delete('/:id/service/:serviceId', authRequired, adminOnly, (req, res) => {
-  const service = db.prepare('SELECT id, bike_id FROM service_records WHERE id = ?').get(req.params.serviceId);
+router.delete('/:id/service/:serviceId', authRequired, adminOnly, async (req, res) => {
+  const { rows: serviceRows } = await pgDb.query('SELECT id, bike_id FROM service_records WHERE id = $1', [req.params.serviceId]);
+  const service = serviceRows[0];
   if (!service || Number(service.bike_id) !== Number(req.params.id)) {
     return res.status(404).json({ error: 'Service record not found' });
   }
-  db.prepare('DELETE FROM service_records WHERE id = ?').run(req.params.serviceId);
-  logAudit(req.user.id, 'bike.service_delete', 'service_records', Number(req.params.serviceId), { bike_id: Number(req.params.id) });
+  await pgDb.query('DELETE FROM service_records WHERE id = $1', [req.params.serviceId]);
+  await logAudit(req.user.id, 'bike.service_delete', 'service_records', Number(req.params.serviceId), { bike_id: Number(req.params.id) });
   res.json({ ok: true });
 });
 

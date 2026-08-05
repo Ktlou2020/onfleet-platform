@@ -2,7 +2,6 @@
 
 const net  = require('net');
 const dgram = require('dgram');
-const db = require('../db');
 const pgDb = require('../pgDb');
 const trackingEvents = require('../trackingEvents');
 const geofenceService = require('../services/geofenceService');
@@ -183,8 +182,8 @@ async function storeRecords(imei, device, records) {
   }
 
   if (latestRec) {
-    db.prepare('UPDATE bikes SET last_known_lat=?, last_known_lng=?, last_location_at=? WHERE id=?')
-      .run(latestRec.lat, latestRec.lng, new Date(latestRec.ts).toISOString(), device.bike_id);
+    await pgDb.query('UPDATE bikes SET last_known_lat=$1, last_known_lng=$2, last_location_at=$3 WHERE id=$4',
+      [latestRec.lat, latestRec.lng, new Date(latestRec.ts).toISOString(), device.bike_id]);
     trackingEvents.emit('ping', {
       imei,
       device_id: device.id,
@@ -254,8 +253,8 @@ async function storeCommandResponse(imei, response) {
      sat != null ? parseInt(sat) : null,
      alt != null ? parseInt(alt) : null]
   );
-  db.prepare('UPDATE bikes SET last_known_lat=?, last_known_lng=?, last_location_at=? WHERE id=?')
-    .run(lat, lng, now, device.bike_id);
+  await pgDb.query('UPDATE bikes SET last_known_lat=$1, last_known_lng=$2, last_location_at=$3 WHERE id=$4',
+    [lat, lng, now, device.bike_id]);
   await pgDb.query('UPDATE tracking_devices SET last_seen_at=NOW() WHERE imei=$1', [imei]);
 
   trackingEvents.emit('ping', {
@@ -478,7 +477,8 @@ async function checkOfflineDevices() {
         `INSERT INTO tracking_alerts (bike_id, device_id, alert_type, payload, created_at) VALUES ($1,$2,'device_offline',$3,$4) RETURNING id`,
         [dev.bike_id, dev.id, payload, at]
       );
-      const bike = db.prepare('SELECT registration FROM bikes WHERE id = ?').get(dev.bike_id);
+      const { rows: bikeRows } = await pgDb.query('SELECT registration FROM bikes WHERE id = $1', [dev.bike_id]);
+      const bike = bikeRows[0];
       trackingEvents.emit('alert', {
         id: rows[0].id,
         bike_id: dev.bike_id,

@@ -1,6 +1,5 @@
 'use strict';
 
-const db = require('../db');
 const pgDb = require('../pgDb');
 const trackingEvents = require('../trackingEvents');
 const { cutCommandForModel } = require('./engineCommands');
@@ -82,8 +81,8 @@ async function checkGeofences(bikeId, deviceId, lat, lng, recordedAt) {
   const { rows: fences } = await pgDb.query('SELECT * FROM geofences WHERE active = TRUE');
   if (!fences.length) return;
 
-  const bike = db.prepare('SELECT registration FROM bikes WHERE id = ?').get(bikeId);
-  const reg = bike?.registration || null;
+  const { rows: bikeRows } = await pgDb.query('SELECT registration FROM bikes WHERE id = $1', [bikeId]);
+  const reg = bikeRows[0]?.registration || null;
 
   for (const gf of fences) {
     if (gf.bike_id !== null && Number(gf.bike_id) !== Number(bikeId)) continue;

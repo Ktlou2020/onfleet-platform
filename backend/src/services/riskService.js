@@ -12,7 +12,6 @@
 // a bike moving somewhere/somewhen it never does, moving unusually fast
 // (loaded onto another vehicle), or teleporting between distant points.
 
-const db = require('../db');
 const pgDb = require('../pgDb');
 const trackingEvents = require('../trackingEvents');
 const { sendNotification } = require('./notifier');
@@ -165,8 +164,8 @@ function canFireRiskAlert(bikeId, nowMs) {
 async function fireRiskAlert(bikeId, deviceId, score, level, reasons, recordedAt) {
   if (riskAlertSettings.enabled === false) return;
 
-  const bike = db.prepare('SELECT registration FROM bikes WHERE id = ?').get(bikeId);
-  const reg = bike?.registration || `Bike #${bikeId}`;
+  const { rows: bikeRows } = await pgDb.query('SELECT registration FROM bikes WHERE id = $1', [bikeId]);
+  const reg = bikeRows[0]?.registration || `Bike #${bikeId}`;
   const payload = JSON.stringify({ score, level, reasons });
 
   const { rows } = await pgDb.query(
@@ -189,9 +188,9 @@ async function fireRiskAlert(bikeId, deviceId, score, level, reasons, recordedAt
   if (level === 'critical' && riskAlertSettings.notify_enabled !== false) {
     const title = `🚨 AI Theft Risk: ${reg} (${score}/100)`;
     const message = `Bike ${reg} has an elevated theft/anomaly risk score of ${score}/100 at ${recordedAt}.\n\nReasons:\n${reasons.map(r => `- ${r}`).join('\n')}`;
-    const recipients = riskAlertSettings.recipientIds.length
-      ? db.prepare(`SELECT id FROM users WHERE id IN (${riskAlertSettings.recipientIds.map(() => '?').join(',')}) AND deleted_at IS NULL`).all(...riskAlertSettings.recipientIds)
-      : db.prepare("SELECT id FROM users WHERE role='superadmin' AND email IS NOT NULL AND deleted_at IS NULL").all();
+    const { rows: recipients } = riskAlertSettings.recipientIds.length
+      ? await pgDb.query('SELECT id FROM users WHERE id = ANY($1) AND deleted_at IS NULL', [riskAlertSettings.recipientIds])
+      : await pgDb.query("SELECT id FROM users WHERE role='superadmin' AND email IS NOT NULL AND deleted_at IS NULL");
     for (const admin of recipients) {
       sendNotification({ userId: admin.id, channel: 'email', type: 'gps_theft_risk', title, message, throwOnError: false }).catch(() => {});
     }

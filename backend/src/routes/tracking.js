@@ -2,7 +2,6 @@
 
 const express = require('express');
 const router = express.Router();
-const db = require('../db');
 const pgDb = require('../pgDb');
 const { authRequired, adminOnly, trackingReadOnly } = require('../middleware/auth');
 const teltonikaServer = require('../tcp/teltonikaServer');
@@ -51,11 +50,12 @@ const ALL_ALERT_TYPES = [
   'theft_risk',
 ];
 
-// Build a SQLite bike/org/rider map for a list of bike IDs
-function getBikeMap(bikeIds) {
+// Bike/org/rider map for a list of bike IDs — bikes/organizations/users all
+// live in the same Postgres database now, so this is a single real query
+// instead of a per-row SQLite lookup loop.
+async function getBikeMap(bikeIds) {
   if (!bikeIds.length) return {};
-  const placeholders = bikeIds.map(() => '?').join(',');
-  const bikes = db.prepare(`
+  const { rows: bikes } = await pgDb.query(`
     SELECT b.id, b.registration, b.make, b.model, b.color, b.vin, b.year, b.status,
            b.last_known_lat, b.last_known_lng, b.last_location_at, b.odometer_km,
            b.organization_id, o.name AS organization_name,
@@ -64,11 +64,21 @@ function getBikeMap(bikeIds) {
            (SELECT u.address  FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_address,
            (SELECT u.city     FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_city
     FROM bikes b LEFT JOIN organizations o ON o.id = b.organization_id
-    WHERE b.id IN (${placeholders})
-  `).all(...bikeIds);
+    WHERE b.id = ANY($1)
+  `, [bikeIds]);
   const map = {};
   for (const b of bikes) map[b.id] = b;
   return map;
+}
+
+// Batch-fetch bike registrations for a set of tracking rows that each carry
+// a bike_id — one query instead of one SELECT per row.
+async function attachBikeRegistrations(rowsWithBikeId, bikeIdKey = 'bike_id') {
+  const ids = [...new Set(rowsWithBikeId.map(r => r[bikeIdKey]).filter(Boolean))];
+  if (!ids.length) { for (const r of rowsWithBikeId) r.bike_registration = null; return; }
+  const { rows: bikes } = await pgDb.query('SELECT id, registration FROM bikes WHERE id = ANY($1)', [ids]);
+  const regByBikeId = new Map(bikes.map(b => [b.id, b.registration]));
+  for (const r of rowsWithBikeId) r.bike_registration = regByBikeId.get(r[bikeIdKey]) || null;
 }
 
 // ---------- Devices ----------
@@ -79,7 +89,7 @@ router.get('/devices', authRequired, trackingReadOnly, async (req, res) => {
   );
   const connected = teltonikaServer.getConnectedIMEIs();
   const bikeIds = [...new Set(devices.map(d => d.bike_id).filter(Boolean))];
-  const bikeMap = getBikeMap(bikeIds);
+  const bikeMap = await getBikeMap(bikeIds);
   const result = devices.map(d => ({
     ...d,
     device_status: deviceStatus(d.imei, d.last_seen_at, connected),
@@ -109,10 +119,14 @@ router.get('/devices/:id', authRequired, trackingReadOnly, async (req, res) => {
   const { rows } = await pgDb.query('SELECT * FROM tracking_devices WHERE id=$1', [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Device not found' });
   const d = rows[0];
-  const bike = d.bike_id ? db.prepare(`
-    SELECT b.registration, b.make, b.model, b.last_known_lat, b.last_known_lng, b.last_location_at
-    FROM bikes b WHERE b.id = ?
-  `).get(d.bike_id) : null;
+  let bike = null;
+  if (d.bike_id) {
+    const { rows: bikeRows } = await pgDb.query(`
+      SELECT b.registration, b.make, b.model, b.last_known_lat, b.last_known_lng, b.last_location_at
+      FROM bikes b WHERE b.id = $1
+    `, [d.bike_id]);
+    bike = bikeRows[0] || null;
+  }
   const connImeis = teltonikaServer.getConnectedIMEIs();
   const status = deviceStatus(d.imei, d.last_seen_at, connImeis);
   res.json({ ...d, device_status: status, connected: status !== 'offline' ? 1 : 0, ...(bike || {}) });
@@ -251,12 +265,12 @@ router.get('/devices/:id/commands', authRequired, trackingReadOnly, async (req, 
     `SELECT tc.* FROM tracking_commands tc WHERE tc.device_id=$1 ORDER BY tc.created_at DESC LIMIT 100`,
     [devRows[0].id]
   );
-  // Enrich created_by with user name from SQLite
-  for (const cmd of rows) {
-    if (cmd.created_by) {
-      const u = db.prepare('SELECT full_name FROM users WHERE id = ?').get(cmd.created_by);
-      cmd.created_by_name = u?.full_name || null;
-    }
+  // Enrich created_by with the user's name
+  const creatorIds = [...new Set(rows.map(cmd => cmd.created_by).filter(Boolean))];
+  if (creatorIds.length) {
+    const { rows: users } = await pgDb.query('SELECT id, full_name FROM users WHERE id = ANY($1)', [creatorIds]);
+    const nameById = new Map(users.map(u => [u.id, u.full_name]));
+    for (const cmd of rows) cmd.created_by_name = cmd.created_by ? (nameById.get(cmd.created_by) || null) : null;
   }
   res.json(rows);
 });
@@ -284,7 +298,7 @@ router.get('/map', authRequired, trackingReadOnly, async (req, res) => {
   for (const p of latestPings) pingMap[p.bike_id] = p;
 
   // Bike + org + rider info from SQLite
-  const bikeMap = getBikeMap(bikeIds);
+  const bikeMap = await getBikeMap(bikeIds);
   const riskMap = riskService.getCurrentScores();
 
   const result = devices
@@ -319,7 +333,7 @@ router.get('/map', authRequired, trackingReadOnly, async (req, res) => {
 router.get('/risk', authRequired, trackingReadOnly, async (req, res) => {
   const riskMap = riskService.getCurrentScores();
   const bikeIds = Object.keys(riskMap).map(Number);
-  const bikeMap = getBikeMap(bikeIds);
+  const bikeMap = await getBikeMap(bikeIds);
   const result = bikeIds
     .map(bikeId => ({ bike_id: bikeId, registration: bikeMap[bikeId]?.registration || null, ...riskMap[bikeId] }))
     .sort((a, b) => b.score - a.score);
@@ -360,12 +374,7 @@ router.get('/live', authRequired, trackingReadOnly, (req, res) => {
 
 router.get('/geofences', authRequired, trackingReadOnly, async (req, res) => {
   const { rows } = await pgDb.query(`SELECT * FROM geofences ORDER BY created_at DESC`);
-  for (const gf of rows) {
-    if (gf.bike_id) {
-      const b = db.prepare('SELECT registration FROM bikes WHERE id = ?').get(gf.bike_id);
-      gf.bike_registration = b?.registration || null;
-    }
-  }
+  await attachBikeRegistrations(rows);
   res.json(rows);
 });
 
@@ -470,10 +479,7 @@ router.get('/trips', authRequired, trackingReadOnly, async (req, res) => {
   params.push(limit);
   sql += ` ORDER BY started_at DESC LIMIT $${params.length}`;
   const { rows } = await pgDb.query(sql, params);
-  for (const t of rows) {
-    const b = db.prepare('SELECT registration FROM bikes WHERE id = ?').get(t.bike_id);
-    t.bike_registration = b?.registration || null;
-  }
+  await attachBikeRegistrations(rows);
   res.json(rows);
 });
 
@@ -496,14 +502,11 @@ router.get('/alerts', authRequired, trackingReadOnly, async (req, res) => {
   const resolverIds = [...new Set(rows.map(a => a.resolved_by).filter(Boolean))];
   const resolverMap = {};
   if (resolverIds.length) {
-    const placeholders = resolverIds.map(() => '?').join(',');
-    for (const u of db.prepare(`SELECT id, full_name FROM users WHERE id IN (${placeholders})`).all(...resolverIds)) {
-      resolverMap[u.id] = u.full_name;
-    }
+    const { rows: resolvers } = await pgDb.query('SELECT id, full_name FROM users WHERE id = ANY($1)', [resolverIds]);
+    for (const u of resolvers) resolverMap[u.id] = u.full_name;
   }
+  await attachBikeRegistrations(rows);
   for (const a of rows) {
-    const b = db.prepare('SELECT registration FROM bikes WHERE id = ?').get(a.bike_id);
-    a.bike_registration = b?.registration || null;
     a.resolved_by_name = a.resolved_by ? (resolverMap[a.resolved_by] || null) : null;
   }
   res.json(rows);
@@ -531,8 +534,7 @@ router.put('/alerts/:id/resolve', authRequired, trackingReadOnly, async (req, re
     [req.user.id, comment, alert.id]
   );
   const resolved = updated[0];
-  const b = db.prepare('SELECT registration FROM bikes WHERE id = ?').get(resolved.bike_id);
-  resolved.bike_registration = b?.registration || null;
+  await attachBikeRegistrations([resolved]);
   resolved.resolved_by_name = req.user.full_name;
 
   logAudit(req.user.id, 'alert.resolve', 'tracking_alerts', resolved.id,
@@ -557,9 +559,8 @@ router.post('/alerts/resolve-bulk', authRequired, trackingReadOnly, async (req, 
     [req.user.id, comment, ids]
   );
 
+  await attachBikeRegistrations(resolved);
   for (const alert of resolved) {
-    const b = db.prepare('SELECT registration FROM bikes WHERE id = ?').get(alert.bike_id);
-    alert.bike_registration = b?.registration || null;
     alert.resolved_by_name = req.user.full_name;
     logAudit(req.user.id, 'alert.resolve', 'tracking_alerts', alert.id,
       { alert_type: alert.alert_type, bike_id: alert.bike_id, comment, bulk: true }, req.ip);
@@ -682,10 +683,10 @@ router.delete('/alert-settings/device/:device_id', authRequired, adminOnly, asyn
   res.json({ ok: true });
 });
 
-router.get('/notification-users', authRequired, trackingReadOnly, (req, res) => {
-  const users = db.prepare(
+router.get('/notification-users', authRequired, trackingReadOnly, async (req, res) => {
+  const { rows: users } = await pgDb.query(
     `SELECT id, full_name, email, role FROM users WHERE role IN ('superadmin','admin') AND deleted_at IS NULL ORDER BY full_name`
-  ).all();
+  );
   res.json(users);
 });
 

@@ -136,7 +136,11 @@ exports.up = (pgm) => {
       last_known_lat REAL,
       last_known_lng REAL,
       last_location_at TIMESTAMPTZ,
-      odometer_km INTEGER DEFAULT 0,
+      -- NUMERIC not INTEGER: incremented by fractional trip distances
+      -- (tripService.js rounds to 2 decimal places). SQLite's dynamic typing
+      -- silently tolerated this on an INTEGER-declared column; Postgres
+      -- correctly rejects a fractional value bound to a true integer column.
+      odometer_km NUMERIC(10,2) DEFAULT 0,
       next_service_km INTEGER,
       next_service_date DATE,
       insurance_provider TEXT,

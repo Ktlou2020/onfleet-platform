@@ -1,6 +1,5 @@
 'use strict';
 
-const db = require('../db');
 const pgDb = require('../pgDb');
 const trackingEvents = require('../trackingEvents');
 const { sendNotification } = require('./notifier');
@@ -103,8 +102,8 @@ function canFire(bikeId, alertType, nowMs) {
 }
 
 async function emitAlert(id, bikeId, deviceId, alertType, payload, recordedAt) {
-  const bike = db.prepare('SELECT registration FROM bikes WHERE id = ?').get(bikeId);
-  const reg = bike?.registration || null;
+  const { rows: bikeRows } = await pgDb.query('SELECT registration FROM bikes WHERE id = $1', [bikeId]);
+  const reg = bikeRows[0]?.registration || null;
   trackingEvents.emit('alert', {
     id,
     bike_id: bikeId,
@@ -127,13 +126,16 @@ async function emitAlert(id, bikeId, deviceId, alertType, payload, recordedAt) {
   // Use custom recipients if configured, otherwise fall back to all superadmins for critical alerts
   const customIds = setting?.recipientIds?.length ? setting.recipientIds : null;
   if (customIds) {
-    const placeholders = customIds.map((_, i) => `?`).join(',');
-    const recipients = db.prepare(`SELECT id FROM users WHERE id IN (${placeholders}) AND deleted_at IS NULL`).all(...customIds);
+    const { rows: recipients } = await pgDb.query(
+      'SELECT id FROM users WHERE id = ANY($1) AND deleted_at IS NULL', [customIds]
+    );
     for (const u of recipients) {
       sendNotification({ userId: u.id, channel: 'email', type: `gps_${alertType}`, title, message, throwOnError: false }).catch(() => {});
     }
   } else if (CRITICAL_TYPES.has(alertType)) {
-    const admins = db.prepare("SELECT id FROM users WHERE role='superadmin' AND email IS NOT NULL AND deleted_at IS NULL").all();
+    const { rows: admins } = await pgDb.query(
+      "SELECT id FROM users WHERE role='superadmin' AND email IS NOT NULL AND deleted_at IS NULL"
+    );
     for (const admin of admins) {
       sendNotification({ userId: admin.id, channel: 'email', type: `gps_${alertType}`, title, message, throwOnError: false }).catch(() => {});
     }
@@ -258,7 +260,7 @@ async function processPing(bikeId, deviceId, lat, lng, speed, ignition, recorded
       [recordedAt, lat, lng, distRounded, Math.round(state.maxSpeed), avgSpeed, durationSec, state.tripId]
     );
     if (distRounded > 0) {
-      db.prepare('UPDATE bikes SET odometer_km = COALESCE(odometer_km, 0) + ? WHERE id = ?').run(distRounded, bikeId);
+      await pgDb.query('UPDATE bikes SET odometer_km = COALESCE(odometer_km, 0) + $1 WHERE id = $2', [distRounded, bikeId]);
     }
     openTrips.delete(bikeId);
   }

@@ -3,8 +3,7 @@
 const db = require('../db');
 const pgDb = require('../pgDb');
 const trackingEvents = require('../trackingEvents');
-
-const ENGINE_CUT_CMD = { fmb920: 'setdigout 1 1', fmc920: 'setdigout 1 1', fmb965: 'setdigout 2 1' };
+const { cutCommandForModel } = require('./engineCommands');
 
 async function autoEngineCut(deviceId, bikeId, geofence, reg) {
   try {
@@ -14,8 +13,7 @@ async function autoEngineCut(deviceId, bikeId, geofence, reg) {
     );
     if (!rows.length) return;
     const device = rows[0];
-    const model = (device.model || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    const cutCmd = ENGINE_CUT_CMD[model] || 'setdigout 1 1';
+    const cutCmd = cutCommandForModel(device.model);
 
     const { rows: cmdRows } = await pgDb.query(
       `INSERT INTO tracking_commands (device_id, command, status, created_at)
@@ -23,6 +21,14 @@ async function autoEngineCut(deviceId, bikeId, geofence, reg) {
       [deviceId, cutCmd]
     );
     const cmdId = cmdRows[0].id;
+
+    // Persist "should stay cut" — setdigout doesn't survive a device power
+    // cycle, so this gets re-checked and re-sent on every reconnect
+    // (teltonikaServer.js) until explicitly restored.
+    await pgDb.query(
+      `UPDATE tracking_devices SET engine_cut_active=TRUE, engine_cut_reason=$1, engine_cut_at=NOW(), engine_cut_by=NULL WHERE id=$2`,
+      [`Entered no-go zone: ${geofence.name}`, deviceId]
+    );
 
     // Lazy require avoids circular dep (teltonikaServer → geofenceService → teltonikaServer)
     const { sendCommand } = require('../tcp/teltonikaServer');

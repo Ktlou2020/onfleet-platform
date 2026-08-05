@@ -2993,11 +2993,10 @@ const teltonikaServer = require('../tcp/teltonikaServer');
 const trackingEvents  = require('../trackingEvents');
 const pgDb            = require('../pgDb');
 
-const FLEET_ENGINE_CUT  = { FMB920: 'setdigout 1 1', FMC920: 'setdigout 1 1', FMB965: 'setdigout 2 1', other: 'setdigout 1 1' };
-const FLEET_ENGINE_REST = { FMB920: 'setdigout 1 0', FMC920: 'setdigout 1 0', FMB965: 'setdigout 2 0', other: 'setdigout 1 0' };
+const { cutCommandForModel, restoreCommandForModel } = require('../services/engineCommands');
 const FLEET_TRACKING_PRESETS = {
-  cut_engine:     (model) => FLEET_ENGINE_CUT[model]  || FLEET_ENGINE_CUT.other,
-  restore_engine: (model) => FLEET_ENGINE_REST[model] || FLEET_ENGINE_REST.other,
+  cut_engine:     (model) => cutCommandForModel(model),
+  restore_engine: (model) => restoreCommandForModel(model),
   get_info:   () => 'getinfo',
   get_status: () => 'getstatus',
 };
@@ -3136,6 +3135,22 @@ router.post('/tracking/devices/:id/commands', companyRoleAllowed(FLEET_RESOURCE_
   const cmdId = cmdRows[0].id;
   const sentNow = teltonikaServer.sendCommand(device.imei, cmdId, command);
   logAudit(req.user.id, `fleet_tracking.${preset}`, 'tracking_devices', device.id, { preset, bike_id: device.bike_id }, req.ip);
+
+  // Track cut state persistently — setdigout doesn't survive a device power
+  // cycle, so a cut must be re-asserted on every reconnect (teltonikaServer.js)
+  // until explicitly restored, or a rider can defeat it by cycling power.
+  if (preset === 'cut_engine') {
+    await pgDb.query(
+      `UPDATE tracking_devices SET engine_cut_active=TRUE, engine_cut_reason='Manual cut', engine_cut_at=NOW(), engine_cut_by=$1 WHERE id=$2`,
+      [req.user.id, device.id]
+    );
+  } else if (preset === 'restore_engine') {
+    await pgDb.query(
+      `UPDATE tracking_devices SET engine_cut_active=FALSE, engine_cut_reason=NULL, engine_cut_at=NULL, engine_cut_by=NULL WHERE id=$1`,
+      [device.id]
+    );
+  }
+
   res.json({
     id: cmdId,
     command,

@@ -8,6 +8,7 @@ const trackingEvents = require('../trackingEvents');
 const geofenceService = require('../services/geofenceService');
 const tripService = require('../services/tripService');
 const riskService = require('../services/riskService');
+const { cutCommandForModel } = require('../services/engineCommands');
 
 // Active TCP connections keyed by IMEI
 const connections = new Map();
@@ -340,6 +341,21 @@ function handleConnection(socket) {
           [device.id]
         );
         for (const cmd of pending) dispatchCommand(socket, imei, cmd.id, cmd.command);
+
+        // setdigout does not survive a device power cycle — a rider can defeat
+        // an engine cut just by disconnecting/reconnecting the bike battery.
+        // Every reconnect is exactly when that would show up, so re-assert the
+        // cut here unconditionally (harmless if it was never actually lost)
+        // whenever this device is flagged as should-stay-cut.
+        if (device.engine_cut_active) {
+          const cutCmd = cutCommandForModel(device.model);
+          const { rows: cutCmdRows } = await pgDb.query(
+            `INSERT INTO tracking_commands (device_id, command, status, created_at) VALUES ($1,$2,'pending',NOW()) RETURNING id`,
+            [device.id, cutCmd]
+          );
+          dispatchCommand(socket, imei, cutCmdRows[0].id, cutCmd);
+          console.log(`[Teltonika] Re-asserting engine cut on reconnect for ${imei} (reason: ${device.engine_cut_reason || 'unknown'})`);
+        }
       } else {
         socket.write(Buffer.from([0x00]));
         console.log(`[Teltonika] rejected unknown IMEI ${imei}`);

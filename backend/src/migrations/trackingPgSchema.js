@@ -20,6 +20,15 @@ async function runTrackingSchema() {
         updated_at    TIMESTAMPTZ DEFAULT NOW()
       )
     `);
+    // Persistent engine-cut state. setdigout does NOT survive a device power
+    // cycle (a rider can defeat a cut by disconnecting/reconnecting the bike
+    // battery) — this flag is re-checked and the cut re-sent on every device
+    // reconnect (see teltonikaServer.js) so it stays enforced until explicitly
+    // cleared via the restore_engine command.
+    await pgDb.query(`ALTER TABLE tracking_devices ADD COLUMN IF NOT EXISTS engine_cut_active BOOLEAN NOT NULL DEFAULT FALSE`);
+    await pgDb.query(`ALTER TABLE tracking_devices ADD COLUMN IF NOT EXISTS engine_cut_reason TEXT`);
+    await pgDb.query(`ALTER TABLE tracking_devices ADD COLUMN IF NOT EXISTS engine_cut_at TIMESTAMPTZ`);
+    await pgDb.query(`ALTER TABLE tracking_devices ADD COLUMN IF NOT EXISTS engine_cut_by INTEGER`); // admin user id; NULL = automatic (no-go zone)
     await pgDb.query(`
       CREATE TABLE IF NOT EXISTS gps_pings (
         id          BIGSERIAL PRIMARY KEY,

@@ -9,12 +9,11 @@ const teltonikaServer = require('../tcp/teltonikaServer');
 const trackingEvents = require('../trackingEvents');
 const riskService = require('../services/riskService');
 const { logAudit } = require('../utils/helpers');
+const { cutCommandForModel, restoreCommandForModel } = require('../services/engineCommands');
 
-const ENGINE_CUT_CMD  = { FMB920: 'setdigout 1 1', FMC920: 'setdigout 1 1', FMB965: 'setdigout 2 1', other: 'setdigout 1 1' };
-const ENGINE_REST_CMD = { FMB920: 'setdigout 1 0', FMC920: 'setdigout 1 0', FMB965: 'setdigout 2 0', other: 'setdigout 1 0' };
 const PRESET_COMMANDS = {
-  cut_engine:     (model) => ENGINE_CUT_CMD[model]  || ENGINE_CUT_CMD.other,
-  restore_engine: (model) => ENGINE_REST_CMD[model] || ENGINE_REST_CMD.other,
+  cut_engine:     (model) => cutCommandForModel(model),
+  restore_engine: (model) => restoreCommandForModel(model),
   get_gps:        () => 'getgps',
   fota_connect:   () => 'fota connect',
   get_info:       () => 'getinfo',
@@ -215,6 +214,24 @@ router.post('/devices/:id/commands', authRequired, adminOnly, async (req, res) =
   if (!sentNow && command === 'getgps') {
     woke = teltonikaServer.sendWakePacket(device.imei);
   }
+
+  // Track cut state persistently — setdigout doesn't survive a device power
+  // cycle, so a cut must be re-asserted on every reconnect (teltonikaServer.js)
+  // until explicitly restored, or a rider can defeat it by cycling power.
+  if (req.body.preset === 'cut_engine') {
+    await pgDb.query(
+      `UPDATE tracking_devices SET engine_cut_active=TRUE, engine_cut_reason='Manual cut', engine_cut_at=NOW(), engine_cut_by=$1 WHERE id=$2`,
+      [req.user.id, device.id]
+    );
+    logAudit(req.user.id, 'tracking.engine_cut', 'tracking_devices', device.id, { bike_id: device.bike_id, imei: device.imei }, req.ip);
+  } else if (req.body.preset === 'restore_engine') {
+    await pgDb.query(
+      `UPDATE tracking_devices SET engine_cut_active=FALSE, engine_cut_reason=NULL, engine_cut_at=NULL, engine_cut_by=NULL WHERE id=$1`,
+      [device.id]
+    );
+    logAudit(req.user.id, 'tracking.engine_restore', 'tracking_devices', device.id, { bike_id: device.bike_id, imei: device.imei }, req.ip);
+  }
+
   res.json({
     id: cmdId,
     command,

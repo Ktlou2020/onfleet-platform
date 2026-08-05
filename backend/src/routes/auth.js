@@ -7,12 +7,13 @@ const path = require('path');
 const fs = require('fs');
 const { body, validationResult } = require('express-validator');
 const rateLimit = require('express-rate-limit');
-const db = require('../db');
+const pgDb = require('../pgDb');
 const { authRequired } = require('../middleware/auth');
-const { logAudit, addDays } = require('../utils/helpers');
+const { logAudit, addDays } = require('../utils/helpersPg');
 const { extractPayslipInsights } = require('../services/documentInsights');
-const { sendNotification } = require('../services/notifier');
+const { sendNotification } = require('../services/notifierPg');
 const { requireValidMime } = require('../utils/validateUpload');
+const asyncRouter = require('../utils/asyncRouter');
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -38,7 +39,7 @@ const signupLimiter = rateLimit({
   message: { error: 'Too many registration attempts. Try again later.' }
 });
 
-const router = express.Router();
+const router = asyncRouter(express.Router());
 const { applications: uploadDir, profiles: profileUploadDir } = require('../uploadPaths');
 const FLEET_ROLE_VALUES = ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'];
 const FLEET_PLAN_ENTITLEMENTS = {
@@ -126,7 +127,7 @@ function readEnv(name, fallback = '') {
 
 function passwordResetExpiryIso() {
   const ttlMinutes = Number(readEnv('PASSWORD_RESET_TOKEN_TTL_MINUTES', '60') || 60);
-  return new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  return new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString();
 }
 
 function hashResetToken(token) {
@@ -138,11 +139,13 @@ function buildResetUrl(token) {
   return `${base}/reset-password?token=${encodeURIComponent(token)}`;
 }
 
-function slugifyCompanyName(value) {
+async function slugifyCompanyName(value) {
   const base = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || `fleet-${Date.now()}`;
   let slug = base;
   let counter = 2;
-  while (db.prepare('SELECT id FROM organizations WHERE slug = ?').get(slug)) {
+  while (true) {
+    const { rows } = await pgDb.query('SELECT id FROM organizations WHERE slug = $1', [slug]);
+    if (!rows[0]) break;
     slug = `${base}-${counter++}`;
   }
   return slug;
@@ -152,12 +155,13 @@ function getFleetEntitlements(planKey = 'trial') {
   return FLEET_PLAN_ENTITLEMENTS[planKey] || FLEET_PLAN_ENTITLEMENTS.trial;
 }
 
-function getSafeUser(userId) {
-  return db.prepare(`SELECT u.id, u.email, u.full_name, u.role, u.organization_id,
+async function getSafeUser(userId) {
+  const { rows } = await pgDb.query(`SELECT u.id, u.email, u.full_name, u.role, u.organization_id,
     o.name organization_name, o.slug organization_slug, o.status organization_status, o.plan_key organization_plan_key
     FROM users u
     LEFT JOIN organizations o ON o.id = u.organization_id
-    WHERE u.id = ? AND u.deleted_at IS NULL`).get(userId);
+    WHERE u.id = $1 AND u.deleted_at IS NULL`, [userId]);
+  return rows[0];
 }
 
 function getRequiredFile(req, field) {
@@ -201,19 +205,20 @@ async function resolvePayslipInsights(file, manualAmountRaw) {
   throw new Error('Payslips must be uploaded as PDF, JPG, or JPEG files');
 }
 
-function createApplication(userId, payload) {
-  const info = db.prepare(`INSERT INTO applications
+async function createApplication(userId, payload, db = pgDb) {
+  const { rows } = await db.query(`INSERT INTO applications
     (user_id, preferred_bike_id, monthly_income, delivery_platforms, has_riding_experience,
      years_riding, has_drivers_license, payout_preference, bank_name, account_holder,
      account_number, branch_code, ewallet_number, status)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
+    [
       userId,
       payload.preferred_bike_id || null,
       null,
       (payload.delivery_platforms || []).join(','),
-      payload.has_riding_experience ? 1 : 0,
+      payload.has_riding_experience,
       payload.years_riding || null,
-      payload.has_drivers_license ? 1 : 0,
+      payload.has_drivers_license,
       payload.payout_preference || null,
       payload.bank_name || null,
       payload.account_holder || null,
@@ -221,15 +226,16 @@ function createApplication(userId, payload) {
       payload.branch_code || null,
       payload.ewallet_number || null,
       'submitted'
-    );
-  return info.lastInsertRowid;
+    ]);
+  return rows[0].id;
 }
 
-function insertApplicationDocument({ applicationId, userId, docType, file, extracted_amount = null, extracted_text = null }) {
+async function insertApplicationDocument({ applicationId, userId, docType, file, extracted_amount = null, extracted_text = null }) {
   const publicFile = `/uploads/applications/${file.filename}`;
-  return db.prepare(`INSERT INTO application_documents
+  await pgDb.query(`INSERT INTO application_documents
     (application_id, user_id, doc_type, file_path, original_name, mime_type, extracted_amount, extracted_text, uploaded_by)
-    VALUES (?,?,?,?,?,?,?,?,?)`).run(
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+    [
       applicationId,
       userId,
       docType,
@@ -239,43 +245,45 @@ function insertApplicationDocument({ applicationId, userId, docType, file, extra
       extracted_amount,
       extracted_text,
       userId
-    );
+    ]);
 }
 
-function insertKycDocument({ userId, docType, file }) {
-  return db.prepare(`INSERT INTO kyc_documents (user_id, doc_type, file_path, original_name)
-    VALUES (?,?,?,?)`).run(userId, docType, `/uploads/applications/${file.filename}`, file.originalname);
+async function insertKycDocument({ userId, docType, file }) {
+  await pgDb.query(`INSERT INTO kyc_documents (user_id, doc_type, file_path, original_name)
+    VALUES ($1,$2,$3,$4)`, [userId, docType, `/uploads/applications/${file.filename}`, file.originalname]);
 }
 
-function getPayslipSummary(applicationId) {
-  const payslips = db.prepare(`SELECT * FROM application_documents
-    WHERE application_id = ? AND doc_type = 'payslip' AND extracted_amount IS NOT NULL
-    ORDER BY uploaded_at DESC LIMIT 3`).all(applicationId);
+async function getPayslipSummary(applicationId) {
+  const { rows: payslips } = await pgDb.query(`SELECT * FROM application_documents
+    WHERE application_id = $1 AND doc_type = 'payslip' AND extracted_amount IS NOT NULL
+    ORDER BY uploaded_at DESC LIMIT 3`, [applicationId]);
   const total = payslips.reduce((sum, row) => sum + Number(row.extracted_amount || 0), 0);
   const average = payslips.length ? +(total / payslips.length).toFixed(2) : 0;
   return { payslips, total: +total.toFixed(2), average };
 }
 
 async function recalcApplicationDecision(applicationId) {
-  const application = db.prepare(`SELECT a.*, u.full_name, u.email
-    FROM applications a JOIN users u ON u.id = a.user_id WHERE a.id = ?`).get(applicationId);
+  const { rows: applicationRows } = await pgDb.query(`SELECT a.*, u.full_name, u.email
+    FROM applications a JOIN users u ON u.id = a.user_id WHERE a.id = $1`, [applicationId]);
+  const application = applicationRows[0];
   if (!application) return null;
 
-  const { payslips, total, average } = getPayslipSummary(applicationId);
-  db.prepare(`UPDATE applications SET total_paid_last_3 = ?, average_weekly_earnings = ? WHERE id = ?`)
-    .run(total, average, applicationId);
+  const { payslips, total, average } = await getPayslipSummary(applicationId);
+  await pgDb.query(`UPDATE applications SET total_paid_last_3 = $1, average_weekly_earnings = $2 WHERE id = $3`,
+    [total, average, applicationId]);
 
   if (payslips.length < 3) return { total, average, decision: 'insufficient_documents' };
 
   if (average < 1000) {
     const retryAfter = addDays(new Date().toISOString().slice(0, 10), 14);
-    db.prepare(`UPDATE applications
-      SET status = 'rejected', auto_decision = 'auto_declined', rejection_reason = ?, retry_after_date = ?, reviewed_at = CURRENT_TIMESTAMP
-      WHERE id = ?`).run(
+    await pgDb.query(`UPDATE applications
+      SET status = 'rejected', auto_decision = 'auto_declined', rejection_reason = $1, retry_after_date = $2, reviewed_at = NOW()
+      WHERE id = $3`,
+      [
         `Average weekly earnings of R${average.toFixed(2)} are below the R1000 minimum. Please reapply after ${retryAfter}.`,
         retryAfter,
         applicationId
-      );
+      ]);
     sendNotification({
       userId: application.user_id,
       channel: 'email',
@@ -286,9 +294,9 @@ async function recalcApplicationDecision(applicationId) {
     return { total, average, decision: 'auto_declined', retry_after_date: retryAfter };
   }
 
-  db.prepare(`UPDATE applications
+  await pgDb.query(`UPDATE applications
     SET status = 'under_review', auto_decision = 'pre_approved', rejection_reason = NULL, retry_after_date = NULL
-    WHERE id = ?`).run(applicationId);
+    WHERE id = $1`, [applicationId]);
   sendNotification({
     userId: application.user_id,
     channel: 'email',
@@ -311,21 +319,23 @@ router.post('/signup',
     const { email, password, full_name, phone, id_number, address, city, province, postal_code,
             date_of_birth, emergency_contact_name, emergency_contact_phone, country_of_origin } = req.body;
 
-    const existing = db.prepare('SELECT id FROM users WHERE email = ? AND deleted_at IS NULL').get(normalizeEmail(email));
-    if (existing) return res.status(409).json({ error: 'Email already registered' });
+    const { rows: existingRows } = await pgDb.query('SELECT id FROM users WHERE email = $1 AND deleted_at IS NULL', [normalizeEmail(email)]);
+    if (existingRows[0]) return res.status(409).json({ error: 'Email already registered' });
 
     const hash = await bcrypt.hash(password, 10);
-    const info = db.prepare(`INSERT INTO users
+    const { rows: insertedRows } = await pgDb.query(`INSERT INTO users
       (email, password_hash, full_name, phone, id_number, address, city, province, postal_code,
        date_of_birth, emergency_contact_name, emergency_contact_phone, country_of_origin, role)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'rider')`).run(
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, 'rider') RETURNING id`,
+      [
         normalizeEmail(email), hash, full_name, phone || null, id_number || null,
         address || null, city || null, province || null, postal_code || null,
         date_of_birth || null, emergency_contact_name || null, emergency_contact_phone || null, country_of_origin || null
-      );
+      ]);
 
-    const user = db.prepare('SELECT id, email, full_name, role FROM users WHERE id = ?').get(info.lastInsertRowid);
-    logAudit(user.id, 'user.signup', 'users', user.id, { email }, req.ip);
+    const { rows: userRows } = await pgDb.query('SELECT id, email, full_name, role FROM users WHERE id = $1', [insertedRows[0].id]);
+    const user = userRows[0];
+    await logAudit(user.id, 'user.signup', 'users', user.id, { email }, req.ip);
     res.json({ token: signToken(user), user });
   });
 
@@ -392,8 +402,8 @@ router.post('/signup-complete', handleSignupUpload, async (req, res) => {
       return res.status(400).json({ error: 'Please enter your e-wallet cellphone number.' });
     }
 
-    const existing = db.prepare('SELECT id FROM users WHERE email = ? AND deleted_at IS NULL').get(normalizeEmail(email));
-    if (existing) return res.status(409).json({ error: 'This email address is already registered. Please sign in or use a different email address.' });
+    const { rows: existingRows } = await pgDb.query('SELECT id FROM users WHERE email = $1 AND deleted_at IS NULL', [normalizeEmail(email)]);
+    if (existingRows[0]) return res.status(409).json({ error: 'This email address is already registered. Please sign in or use a different email address.' });
 
     const payload = {
       preferred_bike_id: Number(preferred_bike_id),
@@ -410,39 +420,40 @@ router.post('/signup-complete', handleSignupUpload, async (req, res) => {
     };
 
     const hash = await bcrypt.hash(password, 10);
-    const created = db.transaction(() => {
-      const userInfo = db.prepare(`INSERT INTO users
+    const created = await pgDb.withTransaction(async (client) => {
+      const { rows: userRows } = await client.query(`INSERT INTO users
         (email, password_hash, full_name, phone, id_number, address, city, province, postal_code,
          date_of_birth, emergency_contact_name, emergency_contact_phone, country_of_origin, role)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'rider')`).run(
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, 'rider') RETURNING id`,
+        [
           normalizeEmail(email), hash, full_name, phone || null, id_number || null,
           address || null, city || null, province || null, postal_code || null,
           date_of_birth || null, emergency_contact_name || null, emergency_contact_phone || null, country_of_origin || null
-        );
-      const userId = userInfo.lastInsertRowid;
-      const applicationId = createApplication(userId, payload);
+        ]);
+      const userId = userRows[0].id;
+      const applicationId = await createApplication(userId, payload, client);
       return { userId, applicationId };
-    })();
+    });
 
     const idDocument = getRequiredFile(req, 'id_document');
     const driversLicense = getRequiredFile(req, 'drivers_license');
     const selfie = getRequiredFile(req, 'selfie');
     const payslipFiles = ['payslip_1', 'payslip_2', 'payslip_3'].map((field) => getRequiredFile(req, field)).filter(Boolean);
 
-    insertApplicationDocument({ applicationId: created.applicationId, userId: created.userId, docType: 'id_document', file: idDocument });
-    insertApplicationDocument({ applicationId: created.applicationId, userId: created.userId, docType: 'drivers_license', file: driversLicense });
-    insertApplicationDocument({ applicationId: created.applicationId, userId: created.userId, docType: 'other', file: selfie });
+    await insertApplicationDocument({ applicationId: created.applicationId, userId: created.userId, docType: 'id_document', file: idDocument });
+    await insertApplicationDocument({ applicationId: created.applicationId, userId: created.userId, docType: 'drivers_license', file: driversLicense });
+    await insertApplicationDocument({ applicationId: created.applicationId, userId: created.userId, docType: 'other', file: selfie });
 
-    insertKycDocument({ userId: created.userId, docType: 'id_document', file: idDocument });
-    insertKycDocument({ userId: created.userId, docType: 'drivers_license', file: driversLicense });
-    insertKycDocument({ userId: created.userId, docType: 'selfie', file: selfie });
+    await insertKycDocument({ userId: created.userId, docType: 'id_document', file: idDocument });
+    await insertKycDocument({ userId: created.userId, docType: 'drivers_license', file: driversLicense });
+    await insertKycDocument({ userId: created.userId, docType: 'selfie', file: selfie });
 
     const payslipInsights = await Promise.all(
       payslipFiles.map((payslip, index) => resolvePayslipInsights(payslip, req.body[`payslip_amount_${index + 1}`]))
     );
 
     for (let i = 0; i < payslipFiles.length; i++) {
-      insertApplicationDocument({
+      await insertApplicationDocument({
         applicationId: created.applicationId,
         userId: created.userId,
         docType: 'payslip',
@@ -453,19 +464,19 @@ router.post('/signup-complete', handleSignupUpload, async (req, res) => {
     }
 
     const decision = await recalcApplicationDecision(created.applicationId);
-    const user = db.prepare('SELECT id, email, full_name, role FROM users WHERE id = ?').get(created.userId);
-    logAudit(user.id, 'user.signup_complete', 'users', user.id, { application_id: created.applicationId }, req.ip);
+    const { rows: userRows } = await pgDb.query('SELECT id, email, full_name, role FROM users WHERE id = $1', [created.userId]);
+    const user = userRows[0];
+    await logAudit(user.id, 'user.signup_complete', 'users', user.id, { application_id: created.applicationId }, req.ip);
 
     res.json({ token: signToken(user), user, application_id: created.applicationId, decision });
   } catch (error) {
-    const msg = String(error.message || '');
-    if (msg.includes('UNIQUE constraint') && msg.toLowerCase().includes('email')) {
-      return res.status(409).json({ error: 'This email address is already registered. Please sign in or use a different email address.' });
+    if (error.code === '23505') {
+      const isEmail = String(error.constraint || '').includes('email') || String(error.detail || '').toLowerCase().includes('email');
+      return res.status(409).json({ error: isEmail
+        ? 'This email address is already registered. Please sign in or use a different email address.'
+        : 'An account with some of these details already exists. Please check your information and try again.' });
     }
-    if (msg.includes('UNIQUE constraint')) {
-      return res.status(409).json({ error: 'An account with some of these details already exists. Please check your information and try again.' });
-    }
-    res.status(400).json({ error: msg || 'Sign up could not be completed. Please check all your details and try again.' });
+    res.status(400).json({ error: error.message || 'Sign up could not be completed. Please check all your details and try again.' });
   }
 });
 
@@ -491,7 +502,8 @@ router.post('/fleet/signup',
     const planKey = Object.keys(FLEET_PLAN_ENTITLEMENTS).includes(requestedPlan) ? requestedPlan : 'trial';
 
     if (!company_name || !full_name) return res.status(400).json({ error: 'Company name and full name are required' });
-    if (db.prepare('SELECT id FROM users WHERE email = ? AND deleted_at IS NULL').get(email)) {
+    const { rows: existingRows } = await pgDb.query('SELECT id FROM users WHERE email = $1 AND deleted_at IS NULL', [email]);
+    if (existingRows[0]) {
       return res.status(409).json({ error: 'Email already registered' });
     }
     if (!FLEET_ROLE_VALUES.includes(requestedRole)) {
@@ -502,13 +514,15 @@ router.post('/fleet/signup',
     const hash = await bcrypt.hash(password, 10);
     const now = new Date();
     const trialEnds = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+    const slug = await slugifyCompanyName(company_name);
 
-    const created = db.transaction(() => {
-      const orgInfo = db.prepare(`INSERT INTO organizations
+    const created = await pgDb.withTransaction(async (client) => {
+      const { rows: orgRows } = await client.query(`INSERT INTO organizations
         (name, slug, contact_email, contact_phone, city, fleet_size, plan_key, status, trial_started_at, trial_ends_at, max_bikes, max_admin_users)
-        VALUES (?,?,?,?,?,?,?,'trialing',?,?,?,?)`).run(
+        VALUES ($1,$2,$3,$4,$5,$6,$7,'trialing',$8,$9,$10,$11) RETURNING id`,
+        [
           company_name,
-          slugifyCompanyName(company_name),
+          slug,
           email,
           phone || null,
           city || null,
@@ -518,25 +532,27 @@ router.post('/fleet/signup',
           trialEnds.toISOString(),
           entitlements.max_bikes,
           entitlements.max_admin_users
-        );
+        ]);
+      const organizationId = orgRows[0].id;
 
-        const userInfo = db.prepare(`INSERT INTO users
+      const { rows: userRows } = await client.query(`INSERT INTO users
           (email, password_hash, full_name, phone, city, role, organization_id, status)
-          VALUES (?,?,?,?,?,?,?, 'active')`).run(
-            email,
-            hash,
-            full_name,
-            phone || null,
-            city || null,
-            requestedRole,
-            orgInfo.lastInsertRowid
-          );
+          VALUES ($1,$2,$3,$4,$5,$6,$7, 'active') RETURNING id`,
+        [
+          email,
+          hash,
+          full_name,
+          phone || null,
+          city || null,
+          requestedRole,
+          organizationId
+        ]);
 
-        return { organizationId: orgInfo.lastInsertRowid, userId: userInfo.lastInsertRowid };
-    })();
+      return { organizationId, userId: userRows[0].id };
+    });
 
-    const user = getSafeUser(created.userId);
-    logAudit(user.id, 'fleet_owner.signup', 'organizations', created.organizationId, { company_name, role: requestedRole, plan: planKey }, req.ip);
+    const user = await getSafeUser(created.userId);
+    await logAudit(user.id, 'fleet_owner.signup', 'organizations', created.organizationId, { company_name, role: requestedRole, plan: planKey }, req.ip);
     res.json({ token: signToken(user), user });
   });
 
@@ -547,13 +563,14 @@ router.post('/login',
   async (req, res) => {
     const email = normalizeEmail(req.body.email);
     const { password } = req.body;
-    const user = db.prepare('SELECT * FROM users WHERE email = ? AND deleted_at IS NULL').get(email);
+    const { rows: userRows } = await pgDb.query('SELECT * FROM users WHERE email = $1 AND deleted_at IS NULL', [email]);
+    const user = userRows[0];
     if (!user) return res.status(401).json({ error: 'Invalid credentials' });
     if (user.status !== 'active') return res.status(403).json({ error: 'Account suspended' });
     if (!user.password_hash || !await bcrypt.compare(password, user.password_hash)) return res.status(401).json({ error: 'Invalid credentials' });
 
-    logAudit(user.id, 'user.login', 'users', user.id, {}, req.ip);
-    const safe = getSafeUser(user.id) || { id: user.id, email: user.email, full_name: user.full_name, role: user.role, organization_id: user.organization_id || null };
+    await logAudit(user.id, 'user.login', 'users', user.id, {}, req.ip);
+    const safe = await getSafeUser(user.id) || { id: user.id, email: user.email, full_name: user.full_name, role: user.role, organization_id: user.organization_id || null };
     res.json({ token: signToken(safe), user: safe });
   });
 
@@ -564,21 +581,23 @@ router.post('/forgot-password',
     try {
       const email = normalizeEmail(req.body.email);
       const generic = { ok: true, message: 'If an account exists for that email, a reset link has been sent.' };
-      const user = db.prepare(`SELECT id, email, full_name, status FROM users WHERE email = ? AND deleted_at IS NULL`).get(email);
+      const { rows: userRows } = await pgDb.query(`SELECT id, email, full_name, status FROM users WHERE email = $1 AND deleted_at IS NULL`, [email]);
+      const user = userRows[0];
 
       if (!user || user.status !== 'active') return res.json(generic);
 
       // Cooldown: max one reset request per 5 minutes per user
-      const recentToken = db.prepare(
-        `SELECT created_at FROM password_reset_tokens WHERE user_id = ? AND used_at IS NULL AND created_at > datetime('now', '-5 minutes') ORDER BY created_at DESC LIMIT 1`
-      ).get(user.id);
-      if (recentToken) return res.json(generic); // silently honour cooldown
+      const { rows: recentTokenRows } = await pgDb.query(
+        `SELECT created_at FROM password_reset_tokens WHERE user_id = $1 AND used_at IS NULL AND created_at > NOW() - INTERVAL '5 minutes' ORDER BY created_at DESC LIMIT 1`,
+        [user.id]
+      );
+      if (recentTokenRows[0]) return res.json(generic); // silently honour cooldown
 
       const rawToken = crypto.randomBytes(32).toString('hex');
       const tokenHash = hashResetToken(rawToken);
-      db.prepare(`UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE user_id = ? AND used_at IS NULL`).run(user.id);
-      db.prepare(`INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, requested_ip, user_agent)
-        VALUES (?,?,?,?,?)`).run(user.id, tokenHash, passwordResetExpiryIso(), req.ip || null, req.get('user-agent') || null);
+      await pgDb.query(`UPDATE password_reset_tokens SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL`, [user.id]);
+      await pgDb.query(`INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, requested_ip, user_agent)
+        VALUES ($1,$2,$3,$4,$5)`, [user.id, tokenHash, passwordResetExpiryIso(), req.ip || null, req.get('user-agent') || null]);
 
       const firstName = user.full_name?.split(' ')?.[0] || 'there';
       const resetUrl = buildResetUrl(rawToken);
@@ -590,7 +609,7 @@ router.post('/forgot-password',
         message: `Hi ${firstName},\n\nWe received a request to reset your OnFleet password.\n\nReset link: ${resetUrl}\n\nThis link expires in ${readEnv('PASSWORD_RESET_TOKEN_TTL_MINUTES', '60') || 60} minutes. If you did not request this, you can ignore this email.\n\nKind Regards\nOnFleet Team`
       }).catch((emailErr) => console.error('[forgot-password] email delivery failed:', emailErr.message));
 
-      logAudit(user.id, 'user.password_reset_requested', 'users', user.id, {}, req.ip);
+      await logAudit(user.id, 'user.password_reset_requested', 'users', user.id, {}, req.ip);
       return res.json(generic);
     } catch (err) {
       console.error('[forgot-password]', err.message);
@@ -603,28 +622,29 @@ router.post('/reset-password',
   body('new_password').isLength({ min: 6 }),
   async (req, res) => {
     const tokenHash = hashResetToken(req.body.token);
-    const tokenRow = db.prepare(`SELECT prt.id, prt.user_id, u.email
+    const { rows: tokenRows } = await pgDb.query(`SELECT prt.id, prt.user_id, u.email
       FROM password_reset_tokens prt
       JOIN users u ON u.id = prt.user_id
-      WHERE prt.token_hash = ?
+      WHERE prt.token_hash = $1
         AND prt.used_at IS NULL
-        AND prt.expires_at > CURRENT_TIMESTAMP
-        AND u.deleted_at IS NULL`).get(tokenHash);
+        AND prt.expires_at > NOW()
+        AND u.deleted_at IS NULL`, [tokenHash]);
+    const tokenRow = tokenRows[0];
 
     if (!tokenRow) return res.status(400).json({ error: 'Reset link is invalid or has expired' });
 
     const passwordHash = await bcrypt.hash(req.body.new_password, 10);
-    db.transaction(() => {
-      db.prepare(`UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(passwordHash, tokenRow.user_id);
-      db.prepare(`UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE user_id = ? AND used_at IS NULL`).run(tokenRow.user_id);
-    })();
+    await pgDb.withTransaction(async (client) => {
+      await client.query(`UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2`, [passwordHash, tokenRow.user_id]);
+      await client.query(`UPDATE password_reset_tokens SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL`, [tokenRow.user_id]);
+    });
 
-    logAudit(tokenRow.user_id, 'user.password_reset_completed', 'users', tokenRow.user_id, {}, req.ip);
+    await logAudit(tokenRow.user_id, 'user.password_reset_completed', 'users', tokenRow.user_id, {}, req.ip);
     res.json({ ok: true, message: 'Password reset successful. You can now sign in.' });
   });
 
-router.get('/me', authRequired, (req, res) => {
-  const u = db.prepare(`SELECT u.id, u.email, u.full_name, u.phone, u.role, u.status, u.organization_id,
+router.get('/me', authRequired, async (req, res) => {
+  const { rows } = await pgDb.query(`SELECT u.id, u.email, u.full_name, u.phone, u.role, u.status, u.organization_id,
                         u.id_number, u.date_of_birth, u.address, u.city, u.province, u.postal_code,
                         u.emergency_contact_name, u.emergency_contact_phone, u.avatar_url,
                         u.country_of_origin, u.created_at,
@@ -633,35 +653,36 @@ router.get('/me', authRequired, (req, res) => {
                         o.trial_ends_at organization_trial_ends_at
                         FROM users u
                         LEFT JOIN organizations o ON o.id = u.organization_id
-                        WHERE u.id = ? AND u.deleted_at IS NULL`).get(req.user.id);
-  res.json({ user: u });
+                        WHERE u.id = $1 AND u.deleted_at IS NULL`, [req.user.id]);
+  res.json({ user: rows[0] });
 });
 
-router.put('/me', authRequired, (req, res) => {
+router.put('/me', authRequired, async (req, res) => {
   const fields = ['full_name','phone','id_number','date_of_birth','address','city','province',
                   'postal_code','emergency_contact_name','emergency_contact_phone','avatar_url','country_of_origin'];
   const updates = [];
   const values = [];
   for (const f of fields) {
-    if (req.body[f] !== undefined) { updates.push(`${f} = ?`); values.push(req.body[f]); }
+    if (req.body[f] !== undefined) { updates.push(f); values.push(req.body[f]); }
   }
   if (!updates.length) return res.json({ ok: true });
+  const setClause = updates.map((col, i) => `${col} = $${i + 1}`).join(', ');
   values.push(req.user.id);
-  db.prepare(`UPDATE users SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...values);
+  await pgDb.query(`UPDATE users SET ${setClause}, updated_at = NOW() WHERE id = $${values.length}`, values);
   res.json({ ok: true });
 });
 
-router.post('/me/selfie', authRequired, profileUpload.single('selfie'), requireValidMime(['image/jpeg', 'image/png', 'image/webp']), (req, res) => {
+router.post('/me/selfie', authRequired, profileUpload.single('selfie'), requireValidMime(['image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Selfie image is required' });
   const avatarUrl = `/uploads/profiles/${req.file.filename}`;
-  db.prepare(`UPDATE users SET avatar_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(avatarUrl, req.user.id);
-  const existing = db.prepare(`SELECT id FROM kyc_documents WHERE user_id = ? AND doc_type = 'selfie'`).get(req.user.id);
-  if (existing) {
-    db.prepare(`UPDATE kyc_documents SET file_path = ?, original_name = ?, uploaded_at = CURRENT_TIMESTAMP WHERE id = ?`)
-      .run(avatarUrl, req.file.originalname, existing.id);
+  await pgDb.query(`UPDATE users SET avatar_url = $1, updated_at = NOW() WHERE id = $2`, [avatarUrl, req.user.id]);
+  const { rows: existingRows } = await pgDb.query(`SELECT id FROM kyc_documents WHERE user_id = $1 AND doc_type = 'selfie'`, [req.user.id]);
+  if (existingRows[0]) {
+    await pgDb.query(`UPDATE kyc_documents SET file_path = $1, original_name = $2, uploaded_at = NOW() WHERE id = $3`,
+      [avatarUrl, req.file.originalname, existingRows[0].id]);
   } else {
-    db.prepare(`INSERT INTO kyc_documents (user_id, doc_type, file_path, original_name, status)
-      VALUES (?, 'selfie', ?, ?, 'approved')`).run(req.user.id, avatarUrl, req.file.originalname);
+    await pgDb.query(`INSERT INTO kyc_documents (user_id, doc_type, file_path, original_name, status)
+      VALUES ($1, 'selfie', $2, $3, 'approved')`, [req.user.id, avatarUrl, req.file.originalname]);
   }
   res.json({ ok: true, avatar_url: avatarUrl });
 });
@@ -672,13 +693,14 @@ router.post('/change-password', authRequired,
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-    const u = db.prepare('SELECT password_hash FROM users WHERE id = ? AND deleted_at IS NULL').get(req.user.id);
+    const { rows: userRows } = await pgDb.query('SELECT password_hash FROM users WHERE id = $1 AND deleted_at IS NULL', [req.user.id]);
+    const u = userRows[0];
     if (!u) return res.status(403).json({ error: 'User not found' });
     if (!await bcrypt.compare(req.body.current_password, u.password_hash)) {
       return res.status(400).json({ error: 'Current password incorrect' });
     }
     const hash = await bcrypt.hash(req.body.new_password, 10);
-    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, req.user.id);
+    await pgDb.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, req.user.id]);
     res.json({ ok: true });
   });
 

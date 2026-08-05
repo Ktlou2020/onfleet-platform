@@ -1,20 +1,21 @@
 const jwt = require('jsonwebtoken');
-const db = require('../db');
+const pgDb = require('../pgDb');
 
 const FLEET_OWNER_ROLES = ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'];
 
-function authRequired(req, res, next) {
+async function authRequired(req, res, next) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
   if (!token) return res.status(401).json({ error: 'Missing token' });
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
-    const user = db.prepare(`SELECT u.id, u.email, u.full_name, u.role, u.status, u.organization_id,
+    const { rows } = await pgDb.query(`SELECT u.id, u.email, u.full_name, u.role, u.status, u.organization_id,
       o.name organization_name, o.status organization_status, o.plan_key organization_plan_key,
       o.trial_ends_at organization_trial_ends_at
       FROM users u
       LEFT JOIN organizations o ON o.id = u.organization_id
-      WHERE u.id = ? AND u.deleted_at IS NULL`).get(payload.uid);
+      WHERE u.id = $1 AND u.deleted_at IS NULL`, [payload.uid]);
+    const user = rows[0];
     if (!user || user.status !== 'active') return res.status(401).json({ error: 'Invalid user' });
     req.user = user;
     if (payload.impersonated_by) {

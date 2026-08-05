@@ -1,8 +1,9 @@
 const express = require('express');
 const crypto = require('crypto');
-const db = require('../db');
+const pgDb = require('../pgDb');
+const asyncRouter = require('../utils/asyncRouter');
 
-const router = express.Router();
+const router = asyncRouter(express.Router());
 
 function verifyRiderPortalToken(token) {
   const parts = String(token || '').split('.');
@@ -19,12 +20,12 @@ function verifyRiderPortalToken(token) {
   return id;
 }
 
-router.get('/rider-portal/:token', (req, res) => {
+router.get('/rider-portal/:token', async (req, res) => {
   try {
     const agreementId = verifyRiderPortalToken(req.params.token);
     if (!agreementId) return res.status(401).json({ error: 'Invalid or expired link' });
 
-    const agreement = db.prepare(`
+    const { rows: agreementRows } = await pgDb.query(`
       SELECT a.*,
         u.full_name AS rider_name, u.email AS rider_email, u.phone AS rider_phone,
         b.make, b.model, b.registration, b.color, b.year,
@@ -33,23 +34,24 @@ router.get('/rider-portal/:token', (req, res) => {
       JOIN users u ON u.id = a.user_id
       JOIN bikes b ON b.id = a.bike_id
       LEFT JOIN organizations o ON o.id = b.organization_id
-      WHERE a.id = ?
-    `).get(agreementId);
+      WHERE a.id = $1
+    `, [agreementId]);
+    const agreement = agreementRows[0];
 
     if (!agreement) return res.status(404).json({ error: 'Agreement not found' });
 
-    const schedule = db.prepare(
+    const { rows: schedule } = await pgDb.query(
       `SELECT week_number, due_date, amount_due, amount_paid, status, paid_at
-       FROM payment_schedules WHERE agreement_id = ? ORDER BY week_number`
-    ).all(agreementId);
+       FROM payment_schedules WHERE agreement_id = $1 ORDER BY week_number`, [agreementId]
+    );
 
-    const payments = db.prepare(
+    const { rows: payments } = await pgDb.query(
       `SELECT paid_at, amount, COALESCE(net_amount, amount) AS net_amount, fee_amount, method, reference, status
-       FROM payments WHERE agreement_id = ? AND status = 'success'
-       ORDER BY COALESCE(paid_at, created_at) DESC, id DESC LIMIT 25`
-    ).all(agreementId);
+       FROM payments WHERE agreement_id = $1 AND status = 'success'
+       ORDER BY COALESCE(paid_at, created_at) DESC, id DESC LIMIT 25`, [agreementId]
+    );
 
-    const totalPaid = payments.reduce((sum, p) => sum + Number(p.net_amount || 0), 0);
+    const totalPaid = payments.reduce((sum, p) => sum + (Number(p.net_amount) || Number(p.amount) || 0), 0);
     const totalDue = Number(agreement.total_amount || 0);
     const remaining = Math.max(0, +(totalDue - totalPaid).toFixed(2));
     const overdueAmount = schedule

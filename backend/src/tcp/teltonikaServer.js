@@ -431,9 +431,16 @@ function start(port) {
 // ── Offline alert checker (every 10 min) ──────────────────────────────────────
 const offlineAlertCooldowns = new Map();
 
+// Fleet devices are configured to check in only once every 3600s (60 min) while
+// stationary (Home Network Min/Send Period). A shorter threshold here fires a
+// false "offline" alert on every normal parked/idle period, before the device
+// was ever due to check in again. 75 min = the device's own 60-min cycle plus a
+// margin for network/reconnect jitter.
+const OFFLINE_ALERT_THRESHOLD_MS = 75 * 60_000;
+
 async function checkOfflineDevices() {
   try {
-    const threshold = new Date(Date.now() - 30 * 60_000).toISOString();
+    const threshold = new Date(Date.now() - OFFLINE_ALERT_THRESHOLD_MS).toISOString();
     const { rows: stale } = await pgDb.query(
       `SELECT id, imei, bike_id FROM tracking_devices
        WHERE bike_id IS NOT NULL AND last_seen_at IS NOT NULL AND last_seen_at < $1`,

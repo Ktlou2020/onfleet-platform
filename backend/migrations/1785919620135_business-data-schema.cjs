@@ -362,7 +362,7 @@ exports.up = (pgm) => {
       agreement_id INTEGER REFERENCES agreements(id),
       job_card_id INTEGER REFERENCES job_cards(id),
       service_date DATE NOT NULL,
-      odometer_km INTEGER,
+      odometer_km NUMERIC(10,2),
       service_type TEXT NOT NULL,
       description TEXT,
       cost NUMERIC(12,2) DEFAULT 0,

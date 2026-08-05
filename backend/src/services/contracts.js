@@ -551,5 +551,9 @@ module.exports = {
   ensureContractSnapshotForRelativePath,
   getAgreementContractContext,
   writeFleetOwnerContractSnapshot,
-  getFleetOwnerContractContext
+  getFleetOwnerContractContext,
+  // Pure (no DB access) — reused by services/contractsPg.js
+  buildContractFilename,
+  rentToOwnContractTemplate,
+  publicPath,
 };

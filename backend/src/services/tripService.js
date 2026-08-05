@@ -2,7 +2,7 @@
 
 const pgDb = require('../pgDb');
 const trackingEvents = require('../trackingEvents');
-const { sendNotification } = require('./notifier');
+const { sendNotification } = require('./notifierPg');
 
 // In-memory trip state per bike
 const openTrips = new Map();

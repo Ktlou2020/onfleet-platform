@@ -14,7 +14,7 @@
 
 const pgDb = require('../pgDb');
 const trackingEvents = require('../trackingEvents');
-const { sendNotification } = require('./notifier');
+const { sendNotification } = require('./notifierPg');
 
 const BASELINE_WINDOW_DAYS = 30;
 const MIN_SAMPLES_FOR_BASELINE = 50;

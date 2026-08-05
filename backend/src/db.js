@@ -747,6 +747,7 @@ ensureColumn('agreements', 'signed_contract_path', 'TEXT');
 ensureColumn('agreements', 'discontinued_reason', 'TEXT');
 ensureColumn('agreements', 'discontinued_at', 'DATETIME');
 ensureColumn('agreements', 'reinstated_at', 'DATETIME');
+ensureColumn('agreements', 'updated_at', 'DATETIME');
 ensureColumn('service_records', 'invoice_file_path', 'TEXT');
 ensureColumn('service_records', 'invoice_original_name', 'TEXT');
 ensureColumn('payments', 'fee_amount', 'REAL DEFAULT 0');

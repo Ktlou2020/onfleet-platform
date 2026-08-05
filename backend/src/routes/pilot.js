@@ -1,12 +1,16 @@
 const express = require('express');
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
-const db = require('../db');
+const pgDb = require('../pgDb');
 const { authRequired, adminOnly } = require('../middleware/auth');
-const { logAudit } = require('../utils/helpers');
-const { sendEmail } = require('../services/notifier');
+// Postgres versions — see each *Pg module's header comment for why it's a
+// separate file from the SQLite original (other, not-yet-migrated routes
+// still depend on those).
+const { logAudit } = require('../utils/helpersPg');
+const { sendEmail } = require('../services/notifierPg');
+const asyncRouter = require('../utils/asyncRouter');
 
-const router = express.Router();
+const router = asyncRouter(express.Router());
 
 const LEAD_STATUSES = ['new', 'contacted', 'demo_scheduled', 'trial_started', 'converted', 'archived'];
 const PLAN_OPTIONS = ['trial', 'small', 'medium', 'large', 'enterprise'];
@@ -33,8 +37,9 @@ function sanitizeNotes(notes) {
   return String(notes || '').trim().slice(0, 4000);
 }
 
-function leadRowSelect(whereClause = '', params = []) {
-  return db.prepare(`SELECT * FROM fleet_owner_pilot_leads ${whereClause} ORDER BY created_at DESC`).all(...params);
+async function leadRowSelect(whereClause = '', params = []) {
+  const { rows } = await pgDb.query(`SELECT * FROM fleet_owner_pilot_leads ${whereClause} ORDER BY created_at DESC`, params);
+  return rows;
 }
 
 function hashResetToken(token) {
@@ -43,7 +48,7 @@ function hashResetToken(token) {
 
 function passwordResetExpiryIso() {
   const ttlMinutes = Number(readEnv('PASSWORD_RESET_TOKEN_TTL_MINUTES', '60') || 60);
-  return new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  return new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString();
 }
 
 function buildResetUrl(token) {
@@ -51,20 +56,22 @@ function buildResetUrl(token) {
   return `${base}/reset-password?token=${encodeURIComponent(token)}`;
 }
 
-function issueFleetResetToken(userId, ip, ua) {
+async function issueFleetResetToken(userId, ip, ua) {
   const rawToken = crypto.randomBytes(32).toString('hex');
   const tokenHash = hashResetToken(rawToken);
-  db.prepare(`UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE user_id = ? AND used_at IS NULL`).run(userId);
-  db.prepare(`INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, requested_ip, user_agent) VALUES (?,?,?,?,?)`)
-    .run(userId, tokenHash, passwordResetExpiryIso(), ip || null, ua || null);
+  await pgDb.query(`UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND used_at IS NULL`, [userId]);
+  await pgDb.query(`INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, requested_ip, user_agent) VALUES ($1,$2,$3,$4,$5)`,
+    [userId, tokenHash, passwordResetExpiryIso(), ip || null, ua || null]);
   return buildResetUrl(rawToken);
 }
 
-function slugifyCompanyName(value) {
+async function slugifyCompanyName(value) {
   const base = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || `fleet-${Date.now()}`;
   let slug = base;
   let counter = 2;
-  while (db.prepare('SELECT id FROM organizations WHERE slug = ?').get(slug)) {
+  while (true) {
+    const { rows } = await pgDb.query('SELECT id FROM organizations WHERE slug = $1', [slug]);
+    if (!rows[0]) break;
     slug = `${base}-${counter++}`;
   }
   return slug;
@@ -78,11 +85,15 @@ const FLEET_PLAN_ENTITLEMENTS = {
   empire: { max_bikes: 9999, max_admin_users: 20 },
 };
 
-router.get('/stats', (req, res) => {
-  const bikes = db.prepare('SELECT COUNT(*) c FROM bikes').get().c;
-  const collected = db.prepare(`SELECT COALESCE(SUM(COALESCE(NULLIF(net_amount,0),amount)),0) c FROM payments WHERE status='success'`).get().c;
-  const cutCount = db.prepare(`SELECT COUNT(*) c FROM tracking_commands WHERE command LIKE 'setdigout%1'`).get().c;
-  const restoreCount = db.prepare(`SELECT COUNT(*) c FROM tracking_commands WHERE command LIKE 'setdigout%0'`).get().c;
+router.get('/stats', async (req, res) => {
+  const { rows: bikeRows } = await pgDb.query('SELECT COUNT(*) c FROM bikes');
+  const bikes = Number(bikeRows[0].c);
+  const { rows: collectedRows } = await pgDb.query(`SELECT COALESCE(SUM(COALESCE(NULLIF(net_amount,0),amount)),0) c FROM payments WHERE status='success'`);
+  const collected = Number(collectedRows[0].c);
+  const { rows: cutRows } = await pgDb.query(`SELECT COUNT(*) c FROM tracking_commands WHERE command LIKE 'setdigout%1'`);
+  const cutCount = Number(cutRows[0].c);
+  const { rows: restoreRows } = await pgDb.query(`SELECT COUNT(*) c FROM tracking_commands WHERE command LIKE 'setdigout%0'`);
+  const restoreCount = Number(restoreRows[0].c);
   const recoveredPct = cutCount > 0 ? Math.round((restoreCount / cutCount) * 100) : null;
   res.json({ bikes, collected, recovered_pct: recoveredPct });
 });
@@ -144,7 +155,7 @@ router.post('/leads', async (req, res) => {
     const city = String(req.body.city || '').trim();
     const fleet_size = Number(req.body.fleet_size || 0) || null;
     const plan_interest = String(req.body.plan_interest || 'trial').trim().toLowerCase();
-    const wants_demo = req.body.wants_demo === undefined ? 1 : (req.body.wants_demo ? 1 : 0);
+    const wants_demo = req.body.wants_demo === undefined ? true : !!req.body.wants_demo;
     const notes = sanitizeNotes(req.body.notes);
     const source = String(req.body.source || 'fleet_owner_pilot_page').trim().slice(0, 120) || 'fleet_owner_pilot_page';
 
@@ -159,19 +170,21 @@ router.post('/leads', async (req, res) => {
       return res.status(400).json({ error: 'Invalid plan selected' });
     }
 
-    const duplicate = db.prepare(`SELECT id, status, created_at FROM fleet_owner_pilot_leads
-      WHERE email = ? AND company_name = ? AND created_at >= datetime('now', '-30 days')
-      ORDER BY id DESC LIMIT 1`).get(email, company_name);
-    if (duplicate) {
+    const { rows: duplicateRows } = await pgDb.query(`SELECT id, status, created_at FROM fleet_owner_pilot_leads
+      WHERE email = $1 AND company_name = $2 AND created_at >= NOW() - INTERVAL '30 days'
+      ORDER BY id DESC LIMIT 1`, [email, company_name]);
+    if (duplicateRows[0]) {
       return res.status(409).json({ error: 'A pilot request for this company was already submitted recently' });
     }
 
-    const info = db.prepare(`INSERT INTO fleet_owner_pilot_leads
+    const { rows: insertRows } = await pgDb.query(`INSERT INTO fleet_owner_pilot_leads
       (company_name, contact_name, email, phone, city, fleet_size, plan_interest, wants_demo, notes, status, source)
-      VALUES (?,?,?,?,?,?,?,?,?, 'new', ?)`)
-      .run(company_name, contact_name, email, phone || null, city || null, fleet_size, plan_interest, wants_demo, notes || null, source);
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, 'new', $10)
+      RETURNING id`, [company_name, contact_name, email, phone || null, city || null, fleet_size, plan_interest, wants_demo, notes || null, source]);
+    const leadId = insertRows[0].id;
 
-    const lead = db.prepare('SELECT * FROM fleet_owner_pilot_leads WHERE id = ?').get(info.lastInsertRowid);
+    const { rows: leadRows } = await pgDb.query('SELECT * FROM fleet_owner_pilot_leads WHERE id = $1', [leadId]);
+    const lead = leadRows[0];
 
     const inbox = readEnv('PILOT_LEADS_EMAIL', readEnv('EMAIL_REPLY_TO', readEnv('EMAIL_FROM', '')));
     if (inbox) {
@@ -229,12 +242,12 @@ router.post('/leads', async (req, res) => {
   }
 });
 
-router.get('/leads', authRequired, adminOnly, (req, res) => {
+router.get('/leads', authRequired, adminOnly, async (req, res) => {
   const status = String(req.query.status || '').trim();
   const search = String(req.query.search || '').trim().toLowerCase();
   let rows = status && LEAD_STATUSES.includes(status)
-    ? leadRowSelect('WHERE status = ?', [status])
-    : leadRowSelect();
+    ? await leadRowSelect('WHERE status = $1', [status])
+    : await leadRowSelect();
 
   if (search) {
     rows = rows.filter((row) => [
@@ -251,33 +264,44 @@ router.get('/leads', authRequired, adminOnly, (req, res) => {
     ].some((value) => String(value || '').toLowerCase().includes(search)));
   }
 
+  const [totalRows, newRows, demoRows, trialRows, convertedRows] = await Promise.all([
+    pgDb.query('SELECT COUNT(*) c FROM fleet_owner_pilot_leads'),
+    pgDb.query(`SELECT COUNT(*) c FROM fleet_owner_pilot_leads WHERE status = 'new'`),
+    pgDb.query(`SELECT COUNT(*) c FROM fleet_owner_pilot_leads WHERE status = 'demo_scheduled'`),
+    pgDb.query(`SELECT COUNT(*) c FROM fleet_owner_pilot_leads WHERE status = 'trial_started'`),
+    pgDb.query(`SELECT COUNT(*) c FROM fleet_owner_pilot_leads WHERE status = 'converted'`)
+  ]);
   const stats = {
-    total: db.prepare('SELECT COUNT(*) c FROM fleet_owner_pilot_leads').get().c,
-    new: db.prepare(`SELECT COUNT(*) c FROM fleet_owner_pilot_leads WHERE status = 'new'`).get().c,
-    demos: db.prepare(`SELECT COUNT(*) c FROM fleet_owner_pilot_leads WHERE status = 'demo_scheduled'`).get().c,
-    trials: db.prepare(`SELECT COUNT(*) c FROM fleet_owner_pilot_leads WHERE status = 'trial_started'`).get().c,
-    converted: db.prepare(`SELECT COUNT(*) c FROM fleet_owner_pilot_leads WHERE status = 'converted'`).get().c
+    total: Number(totalRows.rows[0].c),
+    new: Number(newRows.rows[0].c),
+    demos: Number(demoRows.rows[0].c),
+    trials: Number(trialRows.rows[0].c),
+    converted: Number(convertedRows.rows[0].c)
   };
 
   res.json({ leads: rows, stats, statuses: LEAD_STATUSES });
 });
 
-router.get('/leads/:id', authRequired, adminOnly, (req, res) => {
+router.get('/leads/:id', authRequired, adminOnly, async (req, res) => {
   const leadId = Number(req.params.id);
   if (!Number.isInteger(leadId) || leadId <= 0) return res.status(400).json({ error: 'Invalid lead id' });
-  const lead = db.prepare('SELECT * FROM fleet_owner_pilot_leads WHERE id = ?').get(leadId);
+  const { rows: leadRows } = await pgDb.query('SELECT * FROM fleet_owner_pilot_leads WHERE id = $1', [leadId]);
+  const lead = leadRows[0];
   if (!lead) return res.status(404).json({ error: 'Lead not found' });
-  const org = lead.converted_org_id
-    ? db.prepare('SELECT id, name, slug, status, plan_key, created_at FROM organizations WHERE id = ?').get(lead.converted_org_id)
-    : null;
+  let org = null;
+  if (lead.converted_org_id) {
+    const { rows: orgRows } = await pgDb.query('SELECT id, name, slug, status, plan_key, created_at FROM organizations WHERE id = $1', [lead.converted_org_id]);
+    org = orgRows[0] || null;
+  }
   res.json({ lead, organization: org });
 });
 
-router.patch('/leads/:id', authRequired, adminOnly, (req, res) => {
+router.patch('/leads/:id', authRequired, adminOnly, async (req, res) => {
   const leadId = Number(req.params.id);
   if (!Number.isInteger(leadId) || leadId <= 0) return res.status(400).json({ error: 'Invalid lead id' });
 
-  const existing = db.prepare('SELECT * FROM fleet_owner_pilot_leads WHERE id = ?').get(leadId);
+  const { rows: existingRows } = await pgDb.query('SELECT * FROM fleet_owner_pilot_leads WHERE id = $1', [leadId]);
+  const existing = existingRows[0];
   if (!existing) return res.status(404).json({ error: 'Lead not found' });
 
   const nextStatus = String(req.body.status || existing.status).trim();
@@ -288,34 +312,35 @@ router.patch('/leads/:id', authRequired, adminOnly, (req, res) => {
   const notes = req.body.notes === undefined ? existing.notes : sanitizeNotes(req.body.notes);
   const internal_notes = req.body.internal_notes === undefined ? existing.internal_notes : sanitizeNotes(req.body.internal_notes);
 
-  db.prepare(`UPDATE fleet_owner_pilot_leads
-    SET status = ?, notes = ?, internal_notes = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?`).run(nextStatus, notes || null, internal_notes || null, leadId);
+  await pgDb.query(`UPDATE fleet_owner_pilot_leads
+    SET status = $1, notes = $2, internal_notes = $3, updated_at = CURRENT_TIMESTAMP
+    WHERE id = $4`, [nextStatus, notes || null, internal_notes || null, leadId]);
 
-  logAudit(req.user.id, 'pilot_lead.update', 'fleet_owner_pilot_leads', leadId, {
+  await logAudit(req.user.id, 'pilot_lead.update', 'fleet_owner_pilot_leads', leadId, {
     from_status: existing.status,
     to_status: nextStatus
   }, req.ip);
 
-  const lead = db.prepare('SELECT * FROM fleet_owner_pilot_leads WHERE id = ?').get(leadId);
-  res.json({ ok: true, lead });
+  const { rows: leadRows } = await pgDb.query('SELECT * FROM fleet_owner_pilot_leads WHERE id = $1', [leadId]);
+  res.json({ ok: true, lead: leadRows[0] });
 });
 
 router.post('/leads/:id/contact', authRequired, adminOnly, async (req, res) => {
   const leadId = Number(req.params.id);
   if (!Number.isInteger(leadId) || leadId <= 0) return res.status(400).json({ error: 'Invalid lead id' });
 
-  const lead = db.prepare('SELECT * FROM fleet_owner_pilot_leads WHERE id = ?').get(leadId);
+  const { rows: leadRows } = await pgDb.query('SELECT * FROM fleet_owner_pilot_leads WHERE id = $1', [leadId]);
+  const lead = leadRows[0];
   if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
   const message = String(req.body.message || '').trim().slice(0, 4000);
   const sendEmailToLead = req.body.send_email !== false;
 
-  db.prepare(`UPDATE fleet_owner_pilot_leads
+  await pgDb.query(`UPDATE fleet_owner_pilot_leads
     SET status = 'contacted', updated_at = CURRENT_TIMESTAMP
-    WHERE id = ? AND status = 'new'`).run(leadId);
+    WHERE id = $1 AND status = 'new'`, [leadId]);
 
-  logAudit(req.user.id, 'pilot_lead.contacted', 'fleet_owner_pilot_leads', leadId, { message: message.slice(0, 200) }, req.ip);
+  await logAudit(req.user.id, 'pilot_lead.contacted', 'fleet_owner_pilot_leads', leadId, { message: message.slice(0, 200) }, req.ip);
 
   if (sendEmailToLead && lead.email && message) {
     const body = [
@@ -330,15 +355,16 @@ router.post('/leads/:id/contact', authRequired, adminOnly, async (req, res) => {
     await sendEmail(lead.email, `OnFleet Fleet — following up on your request`, body).catch(() => {});
   }
 
-  const updated = db.prepare('SELECT * FROM fleet_owner_pilot_leads WHERE id = ?').get(leadId);
-  res.json({ ok: true, lead: updated });
+  const { rows: updatedRows } = await pgDb.query('SELECT * FROM fleet_owner_pilot_leads WHERE id = $1', [leadId]);
+  res.json({ ok: true, lead: updatedRows[0] });
 });
 
 router.post('/leads/:id/schedule-demo', authRequired, adminOnly, async (req, res) => {
   const leadId = Number(req.params.id);
   if (!Number.isInteger(leadId) || leadId <= 0) return res.status(400).json({ error: 'Invalid lead id' });
 
-  const lead = db.prepare('SELECT * FROM fleet_owner_pilot_leads WHERE id = ?').get(leadId);
+  const { rows: leadRows } = await pgDb.query('SELECT * FROM fleet_owner_pilot_leads WHERE id = $1', [leadId]);
+  const lead = leadRows[0];
   if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
   const demo_at = String(req.body.demo_at || '').trim();
@@ -347,11 +373,11 @@ router.post('/leads/:id/schedule-demo', authRequired, adminOnly, async (req, res
   const location = String(req.body.location || 'Kya Sand, Johannesburg').trim().slice(0, 300);
   const notes = String(req.body.notes || '').trim().slice(0, 2000);
 
-  db.prepare(`UPDATE fleet_owner_pilot_leads
-    SET status = 'demo_scheduled', demo_at = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?`).run(demo_at, leadId);
+  await pgDb.query(`UPDATE fleet_owner_pilot_leads
+    SET status = 'demo_scheduled', demo_at = $1, updated_at = CURRENT_TIMESTAMP
+    WHERE id = $2`, [demo_at, leadId]);
 
-  logAudit(req.user.id, 'pilot_lead.demo_scheduled', 'fleet_owner_pilot_leads', leadId, { demo_at, location }, req.ip);
+  await logAudit(req.user.id, 'pilot_lead.demo_scheduled', 'fleet_owner_pilot_leads', leadId, { demo_at, location }, req.ip);
 
   if (lead.email) {
     const humanDate = new Date(demo_at).toLocaleString('en-ZA', { dateStyle: 'full', timeStyle: 'short', timeZone: 'Africa/Johannesburg' }).replace(/,([^,]*)$/, ' at$1');
@@ -374,15 +400,16 @@ router.post('/leads/:id/schedule-demo', authRequired, adminOnly, async (req, res
     await sendEmail(lead.email, `OnFleet demo confirmed — ${humanDate}`, body).catch(() => {});
   }
 
-  const updated = db.prepare('SELECT * FROM fleet_owner_pilot_leads WHERE id = ?').get(leadId);
-  res.json({ ok: true, lead: updated });
+  const { rows: updatedRows } = await pgDb.query('SELECT * FROM fleet_owner_pilot_leads WHERE id = $1', [leadId]);
+  res.json({ ok: true, lead: updatedRows[0] });
 });
 
 router.post('/leads/:id/convert', authRequired, adminOnly, async (req, res) => {
   const leadId = Number(req.params.id);
   if (!Number.isInteger(leadId) || leadId <= 0) return res.status(400).json({ error: 'Invalid lead id' });
 
-  const lead = db.prepare('SELECT * FROM fleet_owner_pilot_leads WHERE id = ?').get(leadId);
+  const { rows: leadRows } = await pgDb.query('SELECT * FROM fleet_owner_pilot_leads WHERE id = $1', [leadId]);
+  const lead = leadRows[0];
   if (!lead) return res.status(404).json({ error: 'Lead not found' });
   if (lead.converted_org_id) return res.status(409).json({ error: 'Lead already converted' });
 
@@ -401,21 +428,23 @@ router.post('/leads/:id/convert', authRequired, adminOnly, async (req, res) => {
     return res.status(400).json({ error: 'email, full_name, and company_name are required' });
   }
 
-  const existingUser = db.prepare('SELECT id FROM users WHERE email = ? AND deleted_at IS NULL').get(email);
-  if (existingUser) return res.status(409).json({ error: 'A user with this email already exists' });
+  const { rows: existingUserRows } = await pgDb.query('SELECT id FROM users WHERE email = $1 AND deleted_at IS NULL', [email]);
+  if (existingUserRows[0]) return res.status(409).json({ error: 'A user with this email already exists' });
 
   const entitlements = FLEET_PLAN_ENTITLEMENTS[plan_key] || FLEET_PLAN_ENTITLEMENTS.trial;
   const now = new Date();
   const trialEnds = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
   const tempPassword = crypto.randomBytes(8).toString('hex');
   const passwordHash = await bcrypt.hash(tempPassword, 10);
+  const slug = await slugifyCompanyName(company_name);
 
-  const created = db.transaction(() => {
-    const orgInfo = db.prepare(`INSERT INTO organizations
+  const created = await pgDb.withTransaction(async (client) => {
+    const { rows: orgRows } = await client.query(`INSERT INTO organizations
       (name, slug, contact_email, contact_phone, city, fleet_size, plan_key, status, trial_started_at, trial_ends_at, max_bikes, max_admin_users)
-      VALUES (?,?,?,?,?,?,?,'trialing',?,?,?,?)`).run(
+      VALUES ($1,$2,$3,$4,$5,$6,$7,'trialing',$8,$9,$10,$11)
+      RETURNING id`, [
         company_name,
-        slugifyCompanyName(company_name),
+        slug,
         email,
         phone || null,
         city || null,
@@ -425,33 +454,36 @@ router.post('/leads/:id/convert', authRequired, adminOnly, async (req, res) => {
         trialEnds.toISOString(),
         entitlements.max_bikes,
         entitlements.max_admin_users
-      );
+      ]);
+    const organizationId = orgRows[0].id;
 
-    const userInfo = db.prepare(`INSERT INTO users
+    const { rows: userRows } = await client.query(`INSERT INTO users
       (email, password_hash, full_name, phone, city, role, organization_id, status)
-      VALUES (?,?,?,?,?,'fleet_owner_admin',?, 'active')`).run(
+      VALUES ($1,$2,$3,$4,$5,'fleet_owner_admin',$6, 'active')
+      RETURNING id`, [
         email,
         passwordHash,
         full_name,
         phone || null,
         city || null,
-        orgInfo.lastInsertRowid
-      );
+        organizationId
+      ]);
+    const userId = userRows[0].id;
 
-    db.prepare(`UPDATE fleet_owner_pilot_leads
-      SET status = 'converted', converted_org_id = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?`).run(orgInfo.lastInsertRowid, leadId);
+    await client.query(`UPDATE fleet_owner_pilot_leads
+      SET status = 'converted', converted_org_id = $1, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $2`, [organizationId, leadId]);
 
-    return { organizationId: orgInfo.lastInsertRowid, userId: userInfo.lastInsertRowid };
-  })();
+    return { organizationId, userId };
+  });
 
-  logAudit(req.user.id, 'pilot_lead.converted', 'fleet_owner_pilot_leads', leadId, {
+  await logAudit(req.user.id, 'pilot_lead.converted', 'fleet_owner_pilot_leads', leadId, {
     organization_id: created.organizationId,
     user_id: created.userId,
     plan_key,
   }, req.ip);
 
-  const resetUrl = issueFleetResetToken(created.userId, req.ip, req.get('user-agent'));
+  const resetUrl = await issueFleetResetToken(created.userId, req.ip, req.get('user-agent'));
 
   const intro = welcome_message ? `${welcome_message}\n\n` : '';
   const welcomeBody = [
@@ -477,10 +509,10 @@ router.post('/leads/:id/convert', authRequired, adminOnly, async (req, res) => {
 
   await sendEmail(email, 'Your OnFleet Fleet account is ready', welcomeBody).catch(() => {});
 
-  const updatedLead = db.prepare('SELECT * FROM fleet_owner_pilot_leads WHERE id = ?').get(leadId);
-  const org = db.prepare('SELECT id, name, slug, status, plan_key, created_at FROM organizations WHERE id = ?').get(created.organizationId);
+  const { rows: updatedLeadRows } = await pgDb.query('SELECT * FROM fleet_owner_pilot_leads WHERE id = $1', [leadId]);
+  const { rows: orgRows } = await pgDb.query('SELECT id, name, slug, status, plan_key, created_at FROM organizations WHERE id = $1', [created.organizationId]);
 
-  res.status(201).json({ ok: true, lead: updatedLead, organization: org, reset_url: resetUrl });
+  res.status(201).json({ ok: true, lead: updatedLeadRows[0], organization: orgRows[0], reset_url: resetUrl });
 });
 
 module.exports = router;

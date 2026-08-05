@@ -1,14 +1,16 @@
 'use strict';
 
 const express = require('express');
-const router = express.Router();
 const pgDb = require('../pgDb');
 const { authRequired, adminOnly, trackingReadOnly } = require('../middleware/auth');
 const teltonikaServer = require('../tcp/teltonikaServer');
 const trackingEvents = require('../trackingEvents');
 const riskService = require('../services/riskService');
-const { logAudit } = require('../utils/helpers');
+const { logAudit } = require('../utils/helpersPg');
 const { cutCommandForModel, restoreCommandForModel } = require('../services/engineCommands');
+const asyncRouter = require('../utils/asyncRouter');
+
+const router = asyncRouter(express.Router());
 
 const PRESET_COMMANDS = {
   cut_engine:     (model) => cutCommandForModel(model),
@@ -237,13 +239,13 @@ router.post('/devices/:id/commands', authRequired, adminOnly, async (req, res) =
       `UPDATE tracking_devices SET engine_cut_active=TRUE, engine_cut_reason='Manual cut', engine_cut_at=NOW(), engine_cut_by=$1 WHERE id=$2`,
       [req.user.id, device.id]
     );
-    logAudit(req.user.id, 'tracking.engine_cut', 'tracking_devices', device.id, { bike_id: device.bike_id, imei: device.imei }, req.ip);
+    await logAudit(req.user.id, 'tracking.engine_cut', 'tracking_devices', device.id, { bike_id: device.bike_id, imei: device.imei }, req.ip);
   } else if (req.body.preset === 'restore_engine') {
     await pgDb.query(
       `UPDATE tracking_devices SET engine_cut_active=FALSE, engine_cut_reason=NULL, engine_cut_at=NULL, engine_cut_by=NULL WHERE id=$1`,
       [device.id]
     );
-    logAudit(req.user.id, 'tracking.engine_restore', 'tracking_devices', device.id, { bike_id: device.bike_id, imei: device.imei }, req.ip);
+    await logAudit(req.user.id, 'tracking.engine_restore', 'tracking_devices', device.id, { bike_id: device.bike_id, imei: device.imei }, req.ip);
   }
 
   res.json({
@@ -537,7 +539,7 @@ router.put('/alerts/:id/resolve', authRequired, trackingReadOnly, async (req, re
   await attachBikeRegistrations([resolved]);
   resolved.resolved_by_name = req.user.full_name;
 
-  logAudit(req.user.id, 'alert.resolve', 'tracking_alerts', resolved.id,
+  await logAudit(req.user.id, 'alert.resolve', 'tracking_alerts', resolved.id,
     { alert_type: resolved.alert_type, bike_id: resolved.bike_id, comment }, req.ip);
   trackingEvents.emit('alert_resolved', resolved);
 
@@ -562,7 +564,7 @@ router.post('/alerts/resolve-bulk', authRequired, trackingReadOnly, async (req, 
   await attachBikeRegistrations(resolved);
   for (const alert of resolved) {
     alert.resolved_by_name = req.user.full_name;
-    logAudit(req.user.id, 'alert.resolve', 'tracking_alerts', alert.id,
+    await logAudit(req.user.id, 'alert.resolve', 'tracking_alerts', alert.id,
       { alert_type: alert.alert_type, bike_id: alert.bike_id, comment, bulk: true }, req.ip);
     trackingEvents.emit('alert_resolved', alert);
   }

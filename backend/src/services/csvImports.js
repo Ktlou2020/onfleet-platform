@@ -1,7 +1,10 @@
 const { v4: uuid } = require('uuid');
-const db = require('../db');
+const pgDb = require('../pgDb');
 const africanCountries = require('../constants/africanCountries');
-const { addDays, buildPaymentSchedule, generateAgreementNo } = require('../utils/helpers');
+// Postgres versions — imports.js (this file's only DB-touching consumer) is
+// fully migrated. payments.js and csvImportsFleet.js only import this file's
+// pure functions (parseMoney, parseDateFlexible), which are unaffected.
+const { addDays, buildPaymentSchedule, generateAgreementNo } = require('../utils/helpersPg');
 const { normalizeBikeStatus } = require('../utils/bikeStatus');
 
 function parseCsv(text) {
@@ -174,45 +177,48 @@ function mergeTagString(existingValue, tagToAdd) {
   return [...tags, normalizedTag].join(', ');
 }
 
-function addUserTagByEmail(email, tag) {
+async function addUserTagByEmail(email, tag) {
   const normalizedEmail = normalizeEmail(email);
   if (!normalizedEmail) return { status: 'missing_email' };
-  const user = db.prepare(`SELECT id, email, user_tags, status FROM users WHERE email = ? AND deleted_at IS NULL`).get(normalizedEmail);
+  const { rows } = await pgDb.query(`SELECT id, email, user_tags, status FROM users WHERE email = $1 AND deleted_at IS NULL`, [normalizedEmail]);
+  const user = rows[0];
   if (!user) return { status: 'not_found', email: normalizedEmail };
   const nextTags = mergeTagString(user.user_tags, tag);
   if (normalizeText(nextTags) === normalizeText(user.user_tags)) {
     return { status: 'already_tagged', id: user.id, email: user.email, user_tags: user.user_tags || '' };
   }
-  db.prepare(`UPDATE users SET user_tags = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(nextTags, user.id);
+  await pgDb.query(`UPDATE users SET user_tags = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`, [nextTags, user.id]);
   return { status: 'tagged', id: user.id, email: user.email, user_tags: nextTags, account_status: user.status };
 }
 
-function findUser({ email, fullName }) {
+async function findUser({ email, fullName }) {
   const normalizedEmail = normalizeText(email).toLowerCase();
   const normalizedName = normalizeKey(fullName);
   if (normalizedEmail) {
-    const byEmail = db.prepare(`SELECT * FROM users WHERE email = ? AND deleted_at IS NULL`).get(normalizedEmail);
-    if (byEmail) return byEmail;
+    const { rows: byEmailRows } = await pgDb.query(`SELECT * FROM users WHERE email = $1 AND deleted_at IS NULL`, [normalizedEmail]);
+    if (byEmailRows[0]) return byEmailRows[0];
   }
   if (normalizedName) {
-    return db.prepare(`SELECT * FROM users WHERE lower(trim(full_name)) = ? AND deleted_at IS NULL ORDER BY id DESC`).get(normalizedName);
+    const { rows } = await pgDb.query(`SELECT * FROM users WHERE lower(trim(full_name)) = $1 AND deleted_at IS NULL ORDER BY id DESC`, [normalizedName]);
+    return rows[0] || null;
   }
   return null;
 }
 
-function buildLegacyEmail(row) {
+async function buildLegacyEmail(row) {
   const provided = normalizeText(row.Email).toLowerCase();
   if (provided && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(provided)) return provided;
   const base = `${slugify(row['Full Name'] || row.Driver || 'rider')}@legacy.onfleet.africa`;
-  if (!db.prepare(`SELECT 1 FROM users WHERE email = ?`).get(base)) return base;
+  const { rows } = await pgDb.query(`SELECT 1 FROM users WHERE email = $1`, [base]);
+  if (!rows[0]) return base;
   return `${slugify(row['Full Name'] || row.Driver || 'rider')}-${uuid().slice(0, 6)}@legacy.onfleet.africa`;
 }
 
-function upsertUserFromDriverRow(row) {
+async function upsertUserFromDriverRow(row) {
   const fullName = normalizeText(row['Full Name']);
   if (!fullName) throw new Error('Full Name is required');
-  const email = buildLegacyEmail(row);
-  const existing = findUser({ email, fullName });
+  const email = await buildLegacyEmail(row);
+  const existing = await findUser({ email, fullName });
   const payload = {
     email,
     phone: normalizeText(row['Mobile Phone']) || null,
@@ -226,19 +232,19 @@ function upsertUserFromDriverRow(row) {
   };
 
   if (existing) {
-    db.prepare(`UPDATE users SET
-      email = ?,
-      phone = COALESCE(?, phone),
-      full_name = ?,
-      id_number = COALESCE(?, id_number),
-      address = COALESCE(?, address),
-      province = COALESCE(?, province),
-      country_of_origin = COALESCE(?, country_of_origin),
-      avatar_url = COALESCE(?, avatar_url),
+    await pgDb.query(`UPDATE users SET
+      email = $1,
+      phone = COALESCE($2, phone),
+      full_name = $3,
+      id_number = COALESCE($4, id_number),
+      address = COALESCE($5, address),
+      province = COALESCE($6, province),
+      country_of_origin = COALESCE($7, country_of_origin),
+      avatar_url = COALESCE($8, avatar_url),
       role = 'rider',
-      status = ?,
+      status = $9,
       updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?`).run(
+      WHERE id = $10`, [
       payload.email,
       payload.phone,
       payload.full_name,
@@ -249,15 +255,16 @@ function upsertUserFromDriverRow(row) {
       payload.avatar_url,
       payload.status,
       existing.id
-    );
-    return db.prepare(`SELECT * FROM users WHERE id = ?`).get(existing.id);
+    ]);
+    const { rows } = await pgDb.query(`SELECT * FROM users WHERE id = $1`, [existing.id]);
+    return rows[0];
   }
 
   const passwordHash = `imported:${uuid()}`;
-  const info = db.prepare(`INSERT INTO users
+  const { rows } = await pgDb.query(`INSERT INTO users
     (email, phone, password_hash, full_name, role, status, id_number, address, province, country_of_origin, avatar_url)
-    VALUES (?,?,?,?, 'rider', ?, ?, ?, ?, ?, ?)`)
-    .run(
+    VALUES ($1,$2,$3,$4, 'rider', $5, $6, $7, $8, $9, $10)
+    RETURNING *`, [
       payload.email,
       payload.phone,
       passwordHash,
@@ -268,21 +275,22 @@ function upsertUserFromDriverRow(row) {
       payload.province,
       payload.country_of_origin,
       payload.avatar_url
-    );
-  return db.prepare(`SELECT * FROM users WHERE id = ?`).get(info.lastInsertRowid);
+    ]);
+  return rows[0];
 }
 
-function getOrCreateApplicationForUser(userId, row = {}) {
-  const existing = db.prepare(`SELECT * FROM applications WHERE user_id = ? ORDER BY id DESC LIMIT 1`).get(userId);
+async function getOrCreateApplicationForUser(userId, row = {}) {
+  const { rows: existingRows } = await pgDb.query(`SELECT * FROM applications WHERE user_id = $1 ORDER BY id DESC LIMIT 1`, [userId]);
+  const existing = existingRows[0];
   if (existing) {
-    db.prepare(`UPDATE applications SET
-      payout_preference = COALESCE(?, payout_preference),
-      bank_name = COALESCE(?, bank_name),
-      account_number = COALESCE(?, account_number),
-      ewallet_number = COALESCE(?, ewallet_number),
-      delivery_platforms = COALESCE(?, delivery_platforms),
-      status = COALESCE(?, status)
-      WHERE id = ?`).run(
+    await pgDb.query(`UPDATE applications SET
+      payout_preference = COALESCE($1, payout_preference),
+      bank_name = COALESCE($2, bank_name),
+      account_number = COALESCE($3, account_number),
+      ewallet_number = COALESCE($4, ewallet_number),
+      delivery_platforms = COALESCE($5, delivery_platforms),
+      status = COALESCE($6, status)
+      WHERE id = $7`, [
       inferPayoutPreference(row),
       normalizeText(row['Bank Name']) || null,
       normalizeText(row['Account Number']) || null,
@@ -290,13 +298,15 @@ function getOrCreateApplicationForUser(userId, row = {}) {
       normalizeText(row['Which Platform Do You Use?'] || row['My Fleet']) || null,
       mapApplicationStatus(row['Application Status']),
       existing.id
-    );
-    return db.prepare(`SELECT * FROM applications WHERE id = ?`).get(existing.id);
+    ]);
+    const { rows } = await pgDb.query(`SELECT * FROM applications WHERE id = $1`, [existing.id]);
+    return rows[0];
   }
 
-  const info = db.prepare(`INSERT INTO applications
+  const { rows } = await pgDb.query(`INSERT INTO applications
     (user_id, delivery_platforms, payout_preference, bank_name, account_number, ewallet_number, status)
-    VALUES (?,?,?,?,?,?,?)`).run(
+    VALUES ($1,$2,$3,$4,$5,$6,$7)
+    RETURNING *`, [
       userId,
       normalizeText(row['Which Platform Do You Use?'] || row['My Fleet']) || null,
       inferPayoutPreference(row),
@@ -304,29 +314,28 @@ function getOrCreateApplicationForUser(userId, row = {}) {
       normalizeText(row['Account Number']) || null,
       normalizeText(row['eWallet Number']) || null,
       mapApplicationStatus(row['Application Status'])
-    );
-  return db.prepare(`SELECT * FROM applications WHERE id = ?`).get(info.lastInsertRowid);
+    ]);
+  return rows[0];
 }
 
-function upsertKycDoc(userId, docType, rawValue) {
+async function upsertKycDoc(userId, docType, rawValue) {
   const url = extractFirstUrl(rawValue);
   if (!url) return false;
-  const existing = db.prepare(`SELECT id FROM kyc_documents WHERE user_id = ? AND doc_type = ? AND file_path = ?`).get(userId, docType, url);
-  if (existing) return false;
-  db.prepare(`INSERT INTO kyc_documents (user_id, doc_type, file_path, original_name, status)
-    VALUES (?,?,?,?, 'approved')`).run(userId, docType, url, normalizeText(rawValue).slice(0, 255) || docType);
+  const { rows } = await pgDb.query(`SELECT id FROM kyc_documents WHERE user_id = $1 AND doc_type = $2 AND file_path = $3`, [userId, docType, url]);
+  if (rows[0]) return false;
+  await pgDb.query(`INSERT INTO kyc_documents (user_id, doc_type, file_path, original_name, status)
+    VALUES ($1,$2,$3,$4, 'approved')`, [userId, docType, url, normalizeText(rawValue).slice(0, 255) || docType]);
   return true;
 }
 
-function upsertApplicationDoc(applicationId, userId, docType, rawValue, extra = {}) {
+async function upsertApplicationDoc(applicationId, userId, docType, rawValue, extra = {}) {
   const filePath = extractFirstUrl(rawValue);
   if (!filePath) return false;
-  const existing = db.prepare(`SELECT id FROM application_documents WHERE application_id = ? AND doc_type = ? AND file_path = ?`).get(applicationId, docType, filePath);
-  if (existing) return false;
-  db.prepare(`INSERT INTO application_documents
+  const { rows } = await pgDb.query(`SELECT id FROM application_documents WHERE application_id = $1 AND doc_type = $2 AND file_path = $3`, [applicationId, docType, filePath]);
+  if (rows[0]) return false;
+  await pgDb.query(`INSERT INTO application_documents
     (application_id, user_id, doc_type, file_path, original_name, mime_type, extracted_amount, extracted_text, status, uploaded_by)
-    VALUES (?,?,?,?,?,?,?,?, 'verified', ?)`)
-    .run(
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8, 'verified', $9)`, [
       applicationId,
       userId,
       docType,
@@ -336,27 +345,28 @@ function upsertApplicationDoc(applicationId, userId, docType, rawValue, extra = 
       extra.extracted_amount ?? null,
       extra.extracted_text ?? null,
       userId
-    );
+    ]);
   return true;
 }
 
-function resolveBike(row) {
+async function resolveBike(row) {
   const registration = normalizeText(row.Bike || row['Vehicle Reg'] || row.registration || row['Bike Registration']);
   const vin = normalizeText(row.VIN || row.vin);
   if (vin) {
-    const byVin = db.prepare(`SELECT * FROM bikes WHERE vin = ?`).get(vin);
-    if (byVin) return byVin;
+    const { rows: byVin } = await pgDb.query(`SELECT * FROM bikes WHERE vin = $1`, [vin]);
+    if (byVin[0]) return byVin[0];
   }
   if (registration) {
-    return db.prepare(`SELECT * FROM bikes WHERE registration = ?`).get(registration);
+    const { rows } = await pgDb.query(`SELECT * FROM bikes WHERE registration = $1`, [registration]);
+    return rows[0] || null;
   }
   return null;
 }
 
-function upsertBikeFromFleetRow(row) {
+async function upsertBikeFromFleetRow(row) {
   const vin = normalizeText(row.VIN) || `LEGACY-VIN-${uuid().slice(0, 8)}`;
   const registration = normalizeText(row['Vehicle Reg']) || null;
-  const existing = resolveBike(row);
+  const existing = await resolveBike(row);
   const payload = {
     vin,
     registration,
@@ -379,18 +389,18 @@ function upsertBikeFromFleetRow(row) {
   };
 
   if (existing) {
-    db.prepare(`UPDATE bikes SET
-      registration = COALESCE(?, registration),
-      make = ?,
-      model = ?,
-      fleet = COALESCE(NULLIF(?, ''), fleet),
-      year = COALESCE(?, year),
-      color = COALESCE(?, color),
-      rental_weekly = COALESCE(?, rental_weekly),
-      total_weeks = COALESCE(?, total_weeks),
-      status = ?,
-      notes = COALESCE(?, notes)
-      WHERE id = ?`).run(
+    await pgDb.query(`UPDATE bikes SET
+      registration = COALESCE($1, registration),
+      make = $2,
+      model = $3,
+      fleet = COALESCE(NULLIF($4, ''), fleet),
+      year = COALESCE($5, year),
+      color = COALESCE($6, color),
+      rental_weekly = COALESCE($7, rental_weekly),
+      total_weeks = COALESCE($8, total_weeks),
+      status = $9,
+      notes = COALESCE($10, notes)
+      WHERE id = $11`, [
       payload.registration,
       payload.make,
       payload.model,
@@ -402,24 +412,26 @@ function upsertBikeFromFleetRow(row) {
       payload.status,
       payload.notes,
       existing.id
-    );
-    return db.prepare(`SELECT * FROM bikes WHERE id = ?`).get(existing.id);
+    ]);
+    const { rows } = await pgDb.query(`SELECT * FROM bikes WHERE id = $1`, [existing.id]);
+    return rows[0];
   }
 
-  const info = db.prepare(`INSERT INTO bikes
+  const { rows } = await pgDb.query(`INSERT INTO bikes
     (vin, registration, make, model, fleet, year, color, rental_weekly, total_weeks, status, condition, notes)
-    VALUES (?,?,?,?,?,?,?,?,?,?, 'used', ?)`)
-    .run(payload.vin, payload.registration, payload.make, payload.model, payload.fleet, payload.year, payload.color, payload.rental_weekly, payload.total_weeks, payload.status, payload.notes);
-  return db.prepare(`SELECT * FROM bikes WHERE id = ?`).get(info.lastInsertRowid);
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, 'used', $11)
+    RETURNING *`, [payload.vin, payload.registration, payload.make, payload.model, payload.fleet, payload.year, payload.color, payload.rental_weekly, payload.total_weeks, payload.status, payload.notes]);
+  return rows[0];
 }
 
-function upsertAgreementFromFleetRow(row) {
-  const bike = resolveBike(row);
+async function upsertAgreementFromFleetRow(row) {
+  const bike = await resolveBike(row);
   if (!bike) throw new Error('Bike not found');
-  const user = findUser({ fullName: row.Driver });
+  const user = await findUser({ fullName: row.Driver });
   if (!user) throw new Error('Rider not found');
-  const application = getOrCreateApplicationForUser(user.id, { 'Application Status': 'approved' });
-  const existing = db.prepare(`SELECT * FROM agreements WHERE bike_id = ? AND user_id = ? ORDER BY id DESC LIMIT 1`).get(bike.id, user.id);
+  const application = await getOrCreateApplicationForUser(user.id, { 'Application Status': 'approved' });
+  const { rows: existingRows } = await pgDb.query(`SELECT * FROM agreements WHERE bike_id = $1 AND user_id = $2 ORDER BY id DESC LIMIT 1`, [bike.id, user.id]);
+  const existing = existingRows[0];
   const weeklyAmount = parseMoney(row['Payment to be collected']) || Number(bike.rental_weekly || 850);
   const totalReceived = parseMoney(row['Total Received From Flexclub']);
   const outstandingBalance = Math.max(0, parseMoney(row['Outstanding Balance']));
@@ -433,16 +445,16 @@ function upsertAgreementFromFleetRow(row) {
   const status = mapAgreementStatus(row.STATUS);
 
   if (existing) {
-    db.prepare(`UPDATE agreements SET
-      weekly_amount = ?,
-      total_weeks = ?,
-      total_amount = ?,
-      start_date = ?,
-      end_date = ?,
-      status = ?,
-      application_id = ?,
-      notes = COALESCE(?, notes)
-      WHERE id = ?`).run(
+    await pgDb.query(`UPDATE agreements SET
+      weekly_amount = $1,
+      total_weeks = $2,
+      total_amount = $3,
+      start_date = $4,
+      end_date = $5,
+      status = $6,
+      application_id = $7,
+      notes = COALESCE($8, notes)
+      WHERE id = $9`, [
       weeklyAmount,
       totalWeeks,
       totalAmount,
@@ -452,33 +464,37 @@ function upsertAgreementFromFleetRow(row) {
       application.id,
       `Imported from fleet CSV on ${new Date().toISOString()}`,
       existing.id
-    );
-    const scheduleCount = db.prepare(`SELECT COUNT(*) count FROM payment_schedules WHERE agreement_id = ?`).get(existing.id).count;
-    if (!scheduleCount) buildPaymentSchedule(existing.id, weeklyAmount, totalWeeks, startDate);
-    return db.prepare(`SELECT * FROM agreements WHERE id = ?`).get(existing.id);
+    ]);
+    const { rows: countRows } = await pgDb.query(`SELECT COUNT(*) count FROM payment_schedules WHERE agreement_id = $1`, [existing.id]);
+    if (!Number(countRows[0].count)) await buildPaymentSchedule(existing.id, weeklyAmount, totalWeeks, startDate);
+    const { rows } = await pgDb.query(`SELECT * FROM agreements WHERE id = $1`, [existing.id]);
+    return rows[0];
   }
 
-  const info = db.prepare(`INSERT INTO agreements
+  const { rows: insertRows } = await pgDb.query(`INSERT INTO agreements
     (agreement_no, user_id, bike_id, application_id, weekly_amount, total_weeks, total_amount, start_date, end_date, status, notes)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
-    .run(agreementNo || generateAgreementNo(), user.id, bike.id, application.id, weeklyAmount, totalWeeks, totalAmount, startDate, endDate, status, `Imported from fleet CSV on ${new Date().toISOString()}`);
-  buildPaymentSchedule(info.lastInsertRowid, weeklyAmount, totalWeeks, startDate);
-  db.prepare(`UPDATE bikes SET status = ? WHERE id = ?`).run(status === 'completed' ? 'paid_off' : 'active', bike.id);
-  return db.prepare(`SELECT * FROM agreements WHERE id = ?`).get(info.lastInsertRowid);
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+    RETURNING id`, [agreementNo || generateAgreementNo(), user.id, bike.id, application.id, weeklyAmount, totalWeeks, totalAmount, startDate, endDate, status, `Imported from fleet CSV on ${new Date().toISOString()}`]);
+  const newAgreementId = insertRows[0].id;
+  await buildPaymentSchedule(newAgreementId, weeklyAmount, totalWeeks, startDate);
+  await pgDb.query(`UPDATE bikes SET status = $1 WHERE id = $2`, [status === 'completed' ? 'paid_off' : 'active', bike.id]);
+  const { rows } = await pgDb.query(`SELECT * FROM agreements WHERE id = $1`, [newAgreementId]);
+  return rows[0];
 }
 
-function resolveAgreementForPayment(row) {
+async function resolveAgreementForPayment(row) {
   const registration = normalizeText(row.registration || row.Bike || row['Vehicle Reg'] || row['Bike Registration']);
   const riderName = normalizeText(row.rider_name || row.Driver || row.Rider || row['Full Name']);
   if (!registration) return null;
 
-  const bike = db.prepare(`SELECT * FROM bikes WHERE UPPER(COALESCE(registration, '')) = UPPER(?)`).get(registration);
+  const { rows: bikeRows } = await pgDb.query(`SELECT * FROM bikes WHERE UPPER(COALESCE(registration, '')) = UPPER($1)`, [registration]);
+  const bike = bikeRows[0];
   if (!bike) return null;
 
   if (riderName) {
-    const user = findUser({ fullName: riderName });
+    const user = await findUser({ fullName: riderName });
     if (user) {
-      const exact = db.prepare(`SELECT * FROM agreements WHERE bike_id = ? AND user_id = ? ORDER BY
+      const { rows: exactRows } = await pgDb.query(`SELECT * FROM agreements WHERE bike_id = $1 AND user_id = $2 ORDER BY
         CASE status
           WHEN 'active' THEN 0
           WHEN 'defaulted' THEN 1
@@ -489,12 +505,12 @@ function resolveAgreementForPayment(row) {
           ELSE 6
         END,
         id DESC
-        LIMIT 1`).get(bike.id, user.id);
-      if (exact) return exact;
+        LIMIT 1`, [bike.id, user.id]);
+      if (exactRows[0]) return exactRows[0];
     }
   }
 
-  return db.prepare(`SELECT * FROM agreements WHERE bike_id = ? ORDER BY
+  const { rows } = await pgDb.query(`SELECT * FROM agreements WHERE bike_id = $1 ORDER BY
     CASE status
       WHEN 'active' THEN 0
       WHEN 'defaulted' THEN 1
@@ -505,24 +521,25 @@ function resolveAgreementForPayment(row) {
       ELSE 6
     END,
     id DESC
-    LIMIT 1`).get(bike.id);
+    LIMIT 1`, [bike.id]);
+  return rows[0] || null;
 }
 
-function insertImportedPayment(row, recordedBy) {
+async function insertImportedPayment(row, recordedBy) {
   const registration = normalizeText(row.registration || row.Bike || row['Vehicle Reg'] || row['Bike Registration']);
   if (!registration) throw new Error('Bike registration is required');
-  const agreement = resolveAgreementForPayment(row);
+  const agreement = await resolveAgreementForPayment(row);
   if (!agreement) throw new Error(`Agreement not found for registration ${registration}`);
   const amount = parseMoney(row['Amount Collected'] || row.amount);
   if (!amount) throw new Error('Amount missing');
   const reference = buildImportedPaymentReference(row);
-  const exists = db.prepare(`SELECT id FROM payments WHERE reference = ?`).get(reference);
-  if (exists) return { skipped: true, reference };
+  const { rows: existsRows } = await pgDb.query(`SELECT id FROM payments WHERE reference = $1`, [reference]);
+  if (existsRows[0]) return { skipped: true, reference };
   const paidAt = parseDateFlexible(row['Date Created'] || row.paid_at) || new Date().toISOString().slice(0, 10);
-  const info = db.prepare(`INSERT INTO payments
+  const { rows: insertRows } = await pgDb.query(`INSERT INTO payments
     (agreement_id, user_id, amount, currency, method, reference, status, paid_at, recorded_by, notes, fee_amount, net_amount)
-    VALUES (?,?,?,?,?,?, 'success', ?, ?, ?, ?, ?)`)
-    .run(
+    VALUES ($1,$2,$3,$4,$5,$6, 'success', $7, $8, $9, $10, $11)
+    RETURNING id`, [
       agreement.id,
       agreement.user_id,
       amount,
@@ -534,9 +551,10 @@ function insertImportedPayment(row, recordedBy) {
       normalizeText(row.notes) || `Imported from collections CSV for registration ${registration}`,
       0,
       amount
-    );
+    ]);
+  const paymentId = insertRows[0].id;
 
-  const schedules = db.prepare(`SELECT * FROM payment_schedules WHERE agreement_id = ? ORDER BY week_number`).all(agreement.id);
+  const { rows: schedules } = await pgDb.query(`SELECT * FROM payment_schedules WHERE agreement_id = $1 ORDER BY week_number`, [agreement.id]);
   let remaining = amount;
   for (const schedule of schedules) {
     if (remaining <= 0) break;
@@ -545,37 +563,37 @@ function insertImportedPayment(row, recordedBy) {
     const applied = Math.min(remaining, owed);
     const newPaid = +(Number(schedule.amount_paid || 0) + applied).toFixed(2);
     const status = newPaid >= Number(schedule.amount_due) ? 'paid' : 'partial';
-    db.prepare(`UPDATE payment_schedules SET amount_paid = ?, status = ?, paid_at = COALESCE(paid_at, ?) WHERE id = ?`)
-      .run(newPaid, status, paidAt, schedule.id);
+    await pgDb.query(`UPDATE payment_schedules SET amount_paid = $1, status = $2, paid_at = COALESCE(paid_at, $3) WHERE id = $4`,
+      [newPaid, status, paidAt, schedule.id]);
     remaining = +(remaining - applied).toFixed(2);
   }
 
-  return { id: info.lastInsertRowid, reference };
+  return { id: paymentId, reference };
 }
 
-function importRidersCsv(buffer) {
+async function importRidersCsv(buffer) {
   const rows = parseCsv(buffer.toString('utf8'));
   const summary = { total_rows: rows.length, users_created: 0, users_updated: 0, applications_linked: 0, documents_linked: 0, errors: [] };
   for (const [index, row] of rows.entries()) {
     try {
-      const before = findUser({ email: row.Email, fullName: row['Full Name'] });
-      const user = upsertUserFromDriverRow(row);
+      const before = await findUser({ email: row.Email, fullName: row['Full Name'] });
+      const user = await upsertUserFromDriverRow(row);
       if (before) summary.users_updated += 1;
       else summary.users_created += 1;
-      const application = getOrCreateApplicationForUser(user.id, row);
+      const application = await getOrCreateApplicationForUser(user.id, row);
       if (application) summary.applications_linked += 1;
       const docsAdded = [
-        upsertKycDoc(user.id, 'selfie', row['Profile Picture']),
-        upsertKycDoc(user.id, 'proof_of_address', row['Proof of Address']),
-        upsertKycDoc(user.id, 'id_document', row['Upload Copy/Image of ID or passport']),
-        upsertKycDoc(user.id, 'drivers_license', row['Upload Valid License']),
-        upsertKycDoc(user.id, 'bank_statement', row['Upload 3 Months Bank Statement']),
-        upsertApplicationDoc(application.id, user.id, 'id_document', row['Upload Copy/Image of ID or passport']),
-        upsertApplicationDoc(application.id, user.id, 'drivers_license', row['Upload Valid License']),
-        upsertApplicationDoc(application.id, user.id, 'other', row['Upload Bank Confirmation Letter']),
-        upsertApplicationDoc(application.id, user.id, 'payslip', row['Payslip 1 File'], { extracted_amount: parseMoney(row['Pay 1']) || null }),
-        upsertApplicationDoc(application.id, user.id, 'payslip', row['Payslip 2 File'], { extracted_amount: parseMoney(row['Pay 2']) || null }),
-        upsertApplicationDoc(application.id, user.id, 'payslip', row['Payslip 3 File'], { extracted_amount: parseMoney(row['Pay 3']) || null })
+        await upsertKycDoc(user.id, 'selfie', row['Profile Picture']),
+        await upsertKycDoc(user.id, 'proof_of_address', row['Proof of Address']),
+        await upsertKycDoc(user.id, 'id_document', row['Upload Copy/Image of ID or passport']),
+        await upsertKycDoc(user.id, 'drivers_license', row['Upload Valid License']),
+        await upsertKycDoc(user.id, 'bank_statement', row['Upload 3 Months Bank Statement']),
+        await upsertApplicationDoc(application.id, user.id, 'id_document', row['Upload Copy/Image of ID or passport']),
+        await upsertApplicationDoc(application.id, user.id, 'drivers_license', row['Upload Valid License']),
+        await upsertApplicationDoc(application.id, user.id, 'other', row['Upload Bank Confirmation Letter']),
+        await upsertApplicationDoc(application.id, user.id, 'payslip', row['Payslip 1 File'], { extracted_amount: parseMoney(row['Pay 1']) || null }),
+        await upsertApplicationDoc(application.id, user.id, 'payslip', row['Payslip 2 File'], { extracted_amount: parseMoney(row['Pay 2']) || null }),
+        await upsertApplicationDoc(application.id, user.id, 'payslip', row['Payslip 3 File'], { extracted_amount: parseMoney(row['Pay 3']) || null })
       ].filter(Boolean).length;
       summary.documents_linked += docsAdded;
     } catch (error) {
@@ -585,13 +603,13 @@ function importRidersCsv(buffer) {
   return summary;
 }
 
-function importBikesCsv(buffer) {
+async function importBikesCsv(buffer) {
   const rows = parseCsv(buffer.toString('utf8'));
   const summary = { total_rows: rows.length, bikes_created: 0, bikes_updated: 0, errors: [] };
   for (const [index, row] of rows.entries()) {
     try {
-      const existing = resolveBike(row);
-      upsertBikeFromFleetRow(row);
+      const existing = await resolveBike(row);
+      await upsertBikeFromFleetRow(row);
       if (existing) summary.bikes_updated += 1;
       else summary.bikes_created += 1;
     } catch (error) {
@@ -601,17 +619,19 @@ function importBikesCsv(buffer) {
   return summary;
 }
 
-function importAgreementsCsv(buffer) {
+async function importAgreementsCsv(buffer) {
   const rows = parseCsv(buffer.toString('utf8'));
   const summary = { total_rows: rows.length, agreements_created: 0, agreements_updated: 0, errors: [] };
   for (const [index, row] of rows.entries()) {
     try {
-      const bike = resolveBike(row);
-      const rider = findUser({ fullName: row.Driver });
-      const existing = bike && rider
-        ? db.prepare(`SELECT id FROM agreements WHERE bike_id = ? AND user_id = ? ORDER BY id DESC LIMIT 1`).get(bike.id, rider.id)
-        : null;
-      upsertAgreementFromFleetRow(row);
+      const bike = await resolveBike(row);
+      const rider = await findUser({ fullName: row.Driver });
+      let existing = null;
+      if (bike && rider) {
+        const { rows: existingRows } = await pgDb.query(`SELECT id FROM agreements WHERE bike_id = $1 AND user_id = $2 ORDER BY id DESC LIMIT 1`, [bike.id, rider.id]);
+        existing = existingRows[0] || null;
+      }
+      await upsertAgreementFromFleetRow(row);
       if (existing) summary.agreements_updated += 1;
       else summary.agreements_created += 1;
     } catch (error) {
@@ -621,12 +641,12 @@ function importAgreementsCsv(buffer) {
   return summary;
 }
 
-function importPaymentsCsv(buffer, recordedBy) {
+async function importPaymentsCsv(buffer, recordedBy) {
   const rows = parseCsv(buffer.toString('utf8'));
   const summary = { total_rows: rows.length, payments_created: 0, skipped: 0, errors: [] };
   for (const [index, row] of rows.entries()) {
     try {
-      const result = insertImportedPayment(row, recordedBy);
+      const result = await insertImportedPayment(row, recordedBy);
       if (result.skipped) summary.skipped += 1;
       else summary.payments_created += 1;
     } catch (error) {
@@ -636,18 +656,18 @@ function importPaymentsCsv(buffer, recordedBy) {
   return summary;
 }
 
-function importLegacyBundle({ ridersFile, bikesFile, paymentsFile, recordedBy }) {
+async function importLegacyBundle({ ridersFile, bikesFile, paymentsFile, recordedBy }) {
   const output = {};
-  if (ridersFile) output.riders = importRidersCsv(ridersFile.buffer);
+  if (ridersFile) output.riders = await importRidersCsv(ridersFile.buffer);
   if (bikesFile) {
-    output.bikes = importBikesCsv(bikesFile.buffer);
-    output.agreements = importAgreementsCsv(bikesFile.buffer);
+    output.bikes = await importBikesCsv(bikesFile.buffer);
+    output.agreements = await importAgreementsCsv(bikesFile.buffer);
   }
-  if (paymentsFile) output.payments = importPaymentsCsv(paymentsFile.buffer, recordedBy);
+  if (paymentsFile) output.payments = await importPaymentsCsv(paymentsFile.buffer, recordedBy);
   return output;
 }
 
-function importUserTagsCsv(buffer, { tag }) {
+async function importUserTagsCsv(buffer, { tag }) {
   const rows = parseCsv(buffer.toString('utf8'));
   const summary = {
     tag: normalizeText(tag),
@@ -662,7 +682,7 @@ function importUserTagsCsv(buffer, { tag }) {
 
   for (const [index, row] of rows.entries()) {
     try {
-      const result = addUserTagByEmail(pickEmailField(row), tag);
+      const result = await addUserTagByEmail(pickEmailField(row), tag);
       if (result.status === 'tagged') summary.tagged += 1;
       else if (result.status === 'already_tagged') summary.already_tagged += 1;
       else if (result.status === 'missing_email') summary.missing_email += 1;

@@ -3,14 +3,15 @@ const crypto = require('crypto');
 const multer = require('multer');
 const axios = require('axios');
 const { v4: uuid } = require('uuid');
-const db = require('../db');
+const pgDb = require('../pgDb');
 const { authRequired, adminOnly } = require('../middleware/auth');
-const { logAudit, recalcScheduleStatuses } = require('../utils/helpers');
-const { sendNotification } = require('../services/notifier');
+const { logAudit, recalcScheduleStatuses, rebuildScheduleAllocations } = require('../utils/helpersPg');
+const { sendNotification } = require('../services/notifierPg');
 const { applyCsvMapping, previewImportCsv } = require('../services/csvPreview');
-const { resolveAgreementForPayment, parseMoney, parseDateFlexible } = require('../services/csvImports');
+const { parseMoney, parseDateFlexible } = require('../services/csvImports');
+const asyncRouter = require('../utils/asyncRouter');
 
-const router = express.Router();
+const router = asyncRouter(express.Router());
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 3 * 1024 * 1024 } });
 const PAYSTACK_BASE = 'https://api.paystack.co';
 
@@ -23,32 +24,34 @@ function calcGrossAmount(amountZAR) {
   return +(amountZAR + fee).toFixed(2);
 }
 function creditedAmount(payment) {
-  return Number(payment?.net_amount || payment?.amount || 0);
+  return Number(payment?.net_amount) || Number(payment?.amount) || 0;
 }
 
 function adminVisibleAgreementClause(aAlias = 'a', bAlias = 'b', uAlias = 'u') {
   return `${bAlias}.organization_id IS NULL AND ${uAlias}.organization_id IS NULL`;
 }
 
-function applyPaymentToSchedule(agreementId, amountZAR) {
-  const agreement = db.prepare('SELECT status FROM agreements WHERE id = ?').get(agreementId);
+async function applyPaymentToSchedule(agreementId, amountZAR, db = pgDb) {
+  const { rows: agreementRows } = await db.query('SELECT status FROM agreements WHERE id = $1', [agreementId]);
+  const agreement = agreementRows[0];
   if (!agreement) throw new Error('Agreement not found');
   if (agreement.status === 'discontinued') throw new Error('This agreement has been discontinued');
-  const schedule = db.prepare(`SELECT * FROM payment_schedules WHERE agreement_id = ?
-    AND status != 'paid' AND status != 'waived' ORDER BY week_number ASC`).all(agreementId);
+  const { rows: schedule } = await db.query(`SELECT * FROM payment_schedules WHERE agreement_id = $1
+    AND status != 'paid' AND status != 'waived' ORDER BY week_number ASC`, [agreementId]);
   let remaining = amountZAR;
-  const upd = db.prepare(`UPDATE payment_schedules SET amount_paid = ?, status = ?, paid_at = ? WHERE id = ?`);
   for (const row of schedule) {
     if (remaining <= 0) break;
-    const owe = +(row.amount_due - row.amount_paid).toFixed(2);
+    const amountDue = Number(row.amount_due);
+    const amountPaid = Number(row.amount_paid);
+    const owe = +(amountDue - amountPaid).toFixed(2);
     const apply = Math.min(remaining, owe);
-    const newPaid = +(row.amount_paid + apply).toFixed(2);
-    const status = newPaid >= row.amount_due ? 'paid' : 'partial';
+    const newPaid = +(amountPaid + apply).toFixed(2);
+    const status = newPaid >= amountDue ? 'paid' : 'partial';
     const paidAt = status === 'paid' ? new Date().toISOString() : row.paid_at;
-    upd.run(newPaid, status, paidAt, row.id);
+    await db.query(`UPDATE payment_schedules SET amount_paid = $1, status = $2, paid_at = $3 WHERE id = $4`, [newPaid, status, paidAt, row.id]);
     remaining = +(remaining - apply).toFixed(2);
   }
-  recalcScheduleStatuses(agreementId);
+  await recalcScheduleStatuses(agreementId, db);
   return remaining;
 }
 
@@ -92,13 +95,53 @@ function buildBulkPaymentReference(row, fallbackPrefix = 'CSV') {
   return [baseReference, registration, paidAtToken].filter(Boolean).join('-');
 }
 
-function recordManualPayment({ agreement_id, amount, method, reference, paid_at, notes, recorded_by }) {
-  const agreement = db.prepare('SELECT * FROM agreements WHERE id = ?').get(agreement_id);
+// Postgres equivalent of csvImports.js's resolveAgreementForPayment — only
+// used by this file's /bulk-import route. csvImports.js itself is still
+// SQLite-based and not converted yet.
+const AGREEMENT_STATUS_PRIORITY_SQL = `CASE status
+  WHEN 'active' THEN 0 WHEN 'defaulted' THEN 1 WHEN 'paused' THEN 2
+  WHEN 'completed' THEN 3 WHEN 'cancelled' THEN 4 WHEN 'discontinued' THEN 5 ELSE 6 END`;
+
+async function resolveAgreementForPayment(row) {
+  const registration = String(row.registration || row.Bike || row['Vehicle Reg'] || row['Bike Registration'] || '').trim();
+  const riderName = String(row.rider_name || row.Driver || row.Rider || row['Full Name'] || '').trim();
+  if (!registration) return null;
+
+  const { rows: bikeRows } = await pgDb.query(`SELECT * FROM bikes WHERE UPPER(COALESCE(registration, '')) = UPPER($1)`, [registration]);
+  const bike = bikeRows[0];
+  if (!bike) return null;
+
+  if (riderName) {
+    const { rows: userRows } = await pgDb.query(
+      `SELECT * FROM users WHERE LOWER(TRIM(full_name)) = LOWER(TRIM($1)) AND deleted_at IS NULL ORDER BY id DESC`,
+      [riderName]
+    );
+    const user = userRows[0];
+    if (user) {
+      const { rows: exactRows } = await pgDb.query(
+        `SELECT * FROM agreements WHERE bike_id = $1 AND user_id = $2 ORDER BY ${AGREEMENT_STATUS_PRIORITY_SQL}, id DESC LIMIT 1`,
+        [bike.id, user.id]
+      );
+      if (exactRows[0]) return exactRows[0];
+    }
+  }
+
+  const { rows: fallbackRows } = await pgDb.query(
+    `SELECT * FROM agreements WHERE bike_id = $1 ORDER BY ${AGREEMENT_STATUS_PRIORITY_SQL}, id DESC LIMIT 1`,
+    [bike.id]
+  );
+  return fallbackRows[0] || null;
+}
+
+async function recordManualPayment({ agreement_id, amount, method, reference, paid_at, notes, recorded_by }) {
+  const { rows: agreementRows } = await pgDb.query('SELECT * FROM agreements WHERE id = $1', [agreement_id]);
+  const agreement = agreementRows[0];
   if (!agreement) throw new Error('Agreement not found');
   if (agreement.status === 'discontinued') throw new Error('This agreement has been discontinued');
   const ref = reference || `MAN-${uuid().slice(0, 10)}`;
-  const info = db.prepare(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, status, paid_at, recorded_by, notes, fee_amount, net_amount)
-    VALUES (?,?,?,?, ?, ?, 'success', ?, ?, ?, ?, ?)`).run(
+  const { rows: insertedRows } = await pgDb.query(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, status, paid_at, recorded_by, notes, fee_amount, net_amount)
+    VALUES ($1,$2,$3,$4,$5,$6, 'success', $7,$8,$9,$10,$11) RETURNING id`,
+    [
       agreement_id,
       agreement.user_id,
       Number(amount),
@@ -110,58 +153,15 @@ function recordManualPayment({ agreement_id, amount, method, reference, paid_at,
       notes || null,
       0,
       Number(amount)
-    );
-  applyPaymentToSchedule(agreement_id, Number(amount));
-  return { id: info.lastInsertRowid, reference: ref };
-}
-
-function rebuildScheduleAllocations(agreementId) {
-  const today = new Date().toISOString().slice(0, 10);
-  const schedules = db.prepare(`SELECT * FROM payment_schedules WHERE agreement_id = ? ORDER BY week_number ASC`).all(agreementId);
-  if (!schedules.length) return;
-
-  const reset = db.prepare(`UPDATE payment_schedules SET amount_paid = ?, paid_at = ?, status = ? WHERE id = ?`);
-  for (const schedule of schedules) {
-    if (schedule.status === 'waived') {
-      reset.run(0, null, 'waived', schedule.id);
-    } else {
-      reset.run(0, null, schedule.due_date < today ? 'overdue' : 'pending', schedule.id);
-    }
-  }
-
-  const payments = db.prepare(`SELECT * FROM payments WHERE agreement_id = ? AND status = 'success' ORDER BY COALESCE(paid_at, created_at) ASC, id ASC`).all(agreementId);
-  const applicable = db.prepare(`SELECT * FROM payment_schedules WHERE agreement_id = ? AND status != 'waived' ORDER BY week_number ASC`).all(agreementId);
-  const updateApplied = db.prepare(`UPDATE payment_schedules SET amount_paid = ?, paid_at = ?, status = ? WHERE id = ?`);
-
-  for (const payment of payments) {
-    let remaining = creditedAmount(payment);
-    for (const schedule of applicable) {
-      if (remaining <= 0) break;
-      const owed = +(Number(schedule.amount_due) - Number(schedule.amount_paid || 0)).toFixed(2);
-      if (owed <= 0) continue;
-      const applied = Math.min(remaining, owed);
-      schedule.amount_paid = +(Number(schedule.amount_paid || 0) + applied).toFixed(2);
-      schedule.paid_at = schedule.paid_at || payment.paid_at || payment.created_at || null;
-      schedule.status = schedule.amount_paid >= Number(schedule.amount_due) ? 'paid' : 'partial';
-      updateApplied.run(schedule.amount_paid, schedule.paid_at, schedule.status, schedule.id);
-      remaining = +(remaining - applied).toFixed(2);
-    }
-  }
-
-  for (const schedule of applicable) {
-    let status = schedule.status;
-    if (Number(schedule.amount_paid || 0) >= Number(schedule.amount_due || 0)) status = 'paid';
-    else if (Number(schedule.amount_paid || 0) > 0 && schedule.due_date < today) status = 'overdue';
-    else if (Number(schedule.amount_paid || 0) > 0) status = 'partial';
-    else if (schedule.due_date < today) status = 'overdue';
-    else status = 'pending';
-    updateApplied.run(schedule.amount_paid || 0, schedule.paid_at || null, status, schedule.id);
-  }
+    ]);
+  await applyPaymentToSchedule(agreement_id, Number(amount));
+  return { id: insertedRows[0].id, reference: ref };
 }
 
 router.post('/paystack/init', authRequired, async (req, res) => {
   const { agreement_id, amount } = req.body;
-  const ag = db.prepare('SELECT * FROM agreements WHERE id = ? AND user_id = ?').get(agreement_id, req.user.id);
+  const { rows: agRows } = await pgDb.query('SELECT * FROM agreements WHERE id = $1 AND user_id = $2', [agreement_id, req.user.id]);
+  const ag = agRows[0];
   if (!ag) return res.status(404).json({ error: 'Agreement not found' });
   if (ag.status === 'discontinued') return res.status(400).json({ error: 'This agreement has been discontinued because the bike was stolen' });
 
@@ -181,9 +181,9 @@ router.post('/paystack/init', authRequired, async (req, res) => {
       metadata: { agreement_id, user_id: req.user.id }
     }, { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } });
 
-    db.prepare(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, paystack_reference, status, fee_amount, net_amount)
-      VALUES (?,?,?,?, 'paystack', ?, ?, 'pending', ?, ?)`).run(
-      agreement_id, req.user.id, grossAmount, 'ZAR', reference, reference, fee, netAmount);
+    await pgDb.query(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, paystack_reference, status, fee_amount, net_amount)
+      VALUES ($1,$2,$3,$4, 'paystack', $5, $6, 'pending', $7, $8)`,
+      [agreement_id, req.user.id, grossAmount, 'ZAR', reference, reference, fee, netAmount]);
 
     res.json({
       authorization_url: resp.data.data.authorization_url,
@@ -203,13 +203,15 @@ router.get('/paystack/verify/:reference', authRequired, async (req, res) => {
   try {
     const resp = await axios.get(`${PAYSTACK_BASE}/transaction/verify/${req.params.reference}`, { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } });
     const data = resp.data.data;
-    const payment = db.prepare('SELECT * FROM payments WHERE reference = ?').get(req.params.reference);
+    const { rows: paymentRows } = await pgDb.query('SELECT * FROM payments WHERE reference = $1', [req.params.reference]);
+    const payment = paymentRows[0];
     if (!payment) return res.status(404).json({ error: 'Payment not found' });
 
     // Ensure the payment belongs to the requesting user's agreement (or admin)
     const isAdmin = ['admin', 'superadmin'].includes(req.user.role);
     if (!isAdmin) {
-      const agreement = db.prepare('SELECT user_id FROM agreements WHERE id = ?').get(payment.agreement_id);
+      const { rows: agreementRows } = await pgDb.query('SELECT user_id FROM agreements WHERE id = $1', [payment.agreement_id]);
+      const agreement = agreementRows[0];
       if (!agreement || agreement.user_id !== req.user.id) {
         return res.status(403).json({ error: 'Forbidden' });
       }
@@ -217,17 +219,21 @@ router.get('/paystack/verify/:reference', authRequired, async (req, res) => {
 
     if (data.status === 'success' && payment.status !== 'success') {
       const grossAmount = data.amount / 100;
-      const netAmount = payment.net_amount || grossAmount; // use stored net, fallback to gross if old record
+      const netAmount = Number(payment.net_amount) || grossAmount; // use stored net, fallback to gross if old record
       const fee = calcPaystackFee(netAmount);
-      db.prepare(`UPDATE payments SET status = 'success', paid_at = CURRENT_TIMESTAMP, amount = ?, fee_amount = ?, net_amount = ? WHERE id = ?`).run(grossAmount, fee, netAmount, payment.id);
-      applyPaymentToSchedule(payment.agreement_id, netAmount);
-      logAudit(req.user.id, 'payment.success', 'payments', payment.id, { amount: grossAmount, fee, net_amount: netAmount });
+      await pgDb.query(`UPDATE payments SET status = 'success', paid_at = NOW(), amount = $1, fee_amount = $2, net_amount = $3 WHERE id = $4`, [grossAmount, fee, netAmount, payment.id]);
+      await applyPaymentToSchedule(payment.agreement_id, netAmount);
+      await logAudit(req.user.id, 'payment.success', 'payments', payment.id, { amount: grossAmount, fee, net_amount: netAmount });
+      payment.status = 'success';
+      payment.net_amount = netAmount;
+      payment.amount = grossAmount;
     }
+    const netAmountForResponse = Number(payment.net_amount) || (data.amount / 100);
     res.json({
       status: data.status,
       amount: data.amount / 100,
-      fee: calcPaystackFee(payment.net_amount || data.amount / 100),
-      net_amount: payment.net_amount || data.amount / 100,
+      fee: calcPaystackFee(netAmountForResponse),
+      net_amount: netAmountForResponse,
       credited_amount: creditedAmount(payment),
       payment
     });
@@ -236,7 +242,7 @@ router.get('/paystack/verify/:reference', authRequired, async (req, res) => {
   }
 });
 
-router.post('/paystack/webhook', (req, res) => {
+router.post('/paystack/webhook', async (req, res) => {
   // Always validate Paystack HMAC signature — reject if missing or invalid
   const sig = req.headers['x-paystack-signature'];
   const secretKey = process.env.PAYSTACK_SECRET_KEY;
@@ -267,13 +273,13 @@ router.post('/paystack/webhook', (req, res) => {
     const riderId = Number(meta.rider_user_id);
     if (orgId && riderId) {
       // Use COALESCE so an already-stored code is never overwritten by a null
-      db.prepare(`UPDATE rider_subscriptions
+      await pgDb.query(`UPDATE rider_subscriptions
         SET status = 'active',
-            paystack_subscription_code = COALESCE(paystack_subscription_code, ?),
-            paystack_customer_code = COALESCE(paystack_customer_code, ?),
-            updated_at = CURRENT_TIMESTAMP
-        WHERE organization_id = ? AND rider_user_id = ? AND status != 'cancelled'`)
-        .run(subscriptionCode || null, customerCode || null, orgId, riderId);
+            paystack_subscription_code = COALESCE(paystack_subscription_code, $1),
+            paystack_customer_code = COALESCE(paystack_customer_code, $2),
+            updated_at = NOW()
+        WHERE organization_id = $3 AND rider_user_id = $4 AND status != 'cancelled'`,
+        [subscriptionCode || null, customerCode || null, orgId, riderId]);
     }
   // Rider charge.success — credit the fleet wallet and record the payment
   } else if (event.event === 'charge.success' && isRiderEvent) {
@@ -288,61 +294,64 @@ router.post('/paystack/webhook', (req, res) => {
     let agreementId = Number(meta.agreement_id) || null;
 
     if (!orgId && subscriptionCode) {
-      const sub = db.prepare(`SELECT * FROM rider_subscriptions WHERE paystack_subscription_code = ?`).get(subscriptionCode);
+      const { rows: subRows } = await pgDb.query(`SELECT * FROM rider_subscriptions WHERE paystack_subscription_code = $1`, [subscriptionCode]);
+      const sub = subRows[0];
       if (sub) { orgId = sub.organization_id; riderId = sub.rider_user_id; agreementId = agreementId || sub.agreement_id || null; }
     }
     if (!orgId && customerCode) {
-      const user = db.prepare(`SELECT id, organization_id FROM users WHERE id IN (SELECT rider_user_id FROM rider_subscriptions WHERE paystack_customer_code = ?) LIMIT 1`)
-        .get(customerCode);
+      const { rows: userRows } = await pgDb.query(`SELECT id, organization_id FROM users WHERE id IN (SELECT rider_user_id FROM rider_subscriptions WHERE paystack_customer_code = $1) LIMIT 1`,
+        [customerCode]);
+      const user = userRows[0];
       if (user) { orgId = user.organization_id; riderId = user.id; }
     }
     // Resolve agreement_id from rider_subscriptions — prefer the row tied to the current subscription code
     if (!agreementId && riderId && orgId) {
-      const sub = subscriptionCode
-        ? db.prepare(`SELECT agreement_id FROM rider_subscriptions WHERE paystack_subscription_code = ? AND organization_id = ? LIMIT 1`).get(subscriptionCode, orgId)
-        : db.prepare(`SELECT agreement_id FROM rider_subscriptions WHERE rider_user_id = ? AND organization_id = ? ORDER BY id DESC LIMIT 1`).get(riderId, orgId);
-      if (sub?.agreement_id) agreementId = sub.agreement_id;
+      const { rows: subRows } = subscriptionCode
+        ? await pgDb.query(`SELECT agreement_id FROM rider_subscriptions WHERE paystack_subscription_code = $1 AND organization_id = $2 LIMIT 1`, [subscriptionCode, orgId])
+        : await pgDb.query(`SELECT agreement_id FROM rider_subscriptions WHERE rider_user_id = $1 AND organization_id = $2 ORDER BY id DESC LIMIT 1`, [riderId, orgId]);
+      if (subRows[0]?.agreement_id) agreementId = subRows[0].agreement_id;
     }
     // Final fallback: rider's most recent non-cancelled agreement
     // NOTE: 'overdue' is NOT a valid agreements.status — valid values are active/paused/defaulted/completed/cancelled/discontinued
     if (!agreementId && riderId) {
-      const ag = db.prepare(`SELECT id FROM agreements WHERE user_id = ? AND status IN ('active','paused','defaulted') ORDER BY id DESC LIMIT 1`).get(riderId);
-      if (ag) agreementId = ag.id;
+      const { rows: agRows } = await pgDb.query(`SELECT id FROM agreements WHERE user_id = $1 AND status IN ('active','paused','defaulted') ORDER BY id DESC LIMIT 1`, [riderId]);
+      if (agRows[0]) agreementId = agRows[0].id;
     }
 
     if (orgId && grossAmountZAR > 0) {
-      creditFleetWalletFromWebhook(orgId, grossAmountZAR, riderId || null, reference);
+      await creditFleetWalletFromWebhook(orgId, grossAmountZAR, riderId || null, reference);
       // Keep rider_subscriptions in sync: store subscription + customer codes on the row
       // so future lookups work even if Paystack metadata is absent on recurring charges.
       // COALESCE avoids overwriting already-correct values.
       if (subscriptionCode && orgId && riderId) {
-        db.prepare(`UPDATE rider_subscriptions
+        await pgDb.query(`UPDATE rider_subscriptions
           SET status = 'active',
-              paystack_subscription_code = COALESCE(paystack_subscription_code, ?),
-              paystack_customer_code = COALESCE(paystack_customer_code, ?),
-              updated_at = CURRENT_TIMESTAMP
-          WHERE organization_id = ? AND rider_user_id = ? AND status != 'cancelled'`)
-          .run(subscriptionCode, customerCode || null, orgId, riderId);
+              paystack_subscription_code = COALESCE(paystack_subscription_code, $1),
+              paystack_customer_code = COALESCE(paystack_customer_code, $2),
+              updated_at = NOW()
+          WHERE organization_id = $3 AND rider_user_id = $4 AND status != 'cancelled'`,
+          [subscriptionCode, customerCode || null, orgId, riderId]);
       } else if (subscriptionCode) {
-        db.prepare(`UPDATE rider_subscriptions SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE paystack_subscription_code = ? AND status != 'cancelled'`)
-          .run(subscriptionCode);
+        await pgDb.query(`UPDATE rider_subscriptions SET status = 'active', updated_at = NOW() WHERE paystack_subscription_code = $1 AND status != 'cancelled'`,
+          [subscriptionCode]);
       }
       if (agreementId) {
         const fee = +(grossAmountZAR * 0.015).toFixed(2);
         const net = +(grossAmountZAR - fee).toFixed(2);
         // Wrap INSERT and schedule application in one transaction — if the process crashes
         // mid-way, the whole thing rolls back and the next webhook retry redoes both.
-        db.transaction(() => {
-          const alreadyRecorded = db.prepare(`SELECT id FROM payments WHERE paystack_reference = ? OR reference = ?`).get(reference, reference);
-          if (alreadyRecorded) return;
-          db.prepare(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, paystack_reference, status, fee_amount, net_amount, paid_at, notes)
-            VALUES (?,?,?,'ZAR','paystack',?,?,'success',?,?,CURRENT_TIMESTAMP,'Recurring subscription payment')`)
-            .run(agreementId, riderId || null, grossAmountZAR, reference, reference, fee, net);
-          const ag = db.prepare('SELECT status FROM agreements WHERE id = ?').get(agreementId);
+        await pgDb.withTransaction(async (client) => {
+          const { rows: alreadyRecordedRows } = await client.query(`SELECT id FROM payments WHERE paystack_reference = $1 OR reference = $1`, [reference]);
+          if (alreadyRecordedRows[0]) return;
+          await client.query(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, paystack_reference, status, fee_amount, net_amount, paid_at, notes)
+            VALUES ($1,$2,$3,'ZAR','paystack',$4,$5,'success',$6,$7,NOW(),'Recurring subscription payment')`,
+            [agreementId, riderId || null, grossAmountZAR, reference, reference, fee, net]);
+          const { rows: agRows } = await client.query('SELECT status FROM agreements WHERE id = $1', [agreementId]);
+          const ag = agRows[0];
           if (ag && ag.status !== 'discontinued') {
-            applyPaymentToSchedule(agreementId, grossAmountZAR);
+            await applyPaymentToSchedule(agreementId, grossAmountZAR, client);
           }
-        })();
+        });
       } else {
         console.error(`[webhook] charge.success: could not resolve agreementId for rider ${riderId} org ${orgId} ref ${reference} — wallet credited but schedule not updated`);
       }
@@ -351,8 +360,8 @@ router.post('/paystack/webhook', (req, res) => {
   } else if (event.event === 'subscription.disable' && isRiderEvent) {
     const subscriptionCode = event.data.subscription_code;
     if (subscriptionCode) {
-      db.prepare(`UPDATE rider_subscriptions SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE paystack_subscription_code = ?`)
-        .run(subscriptionCode);
+      await pgDb.query(`UPDATE rider_subscriptions SET status = 'cancelled', updated_at = NOW() WHERE paystack_subscription_code = $1`,
+        [subscriptionCode]);
     }
   } else if (event.event === 'subscription.create' && isFleetEvent) {
     const customerCode = event.data.customer?.customer_code;
@@ -361,17 +370,24 @@ router.post('/paystack/webhook', (req, res) => {
     const key = getKeyForPlanCode(planCode);
     if (key) {
       // Prefer lookup by customer code; fall back to metadata org_id for first-time subscribers
-      const org = (customerCode && db.prepare('SELECT * FROM organizations WHERE paystack_customer_code = ?').get(customerCode))
-        || (orgIdMeta && db.prepare('SELECT * FROM organizations WHERE id = ?').get(Number(orgIdMeta)));
+      let org = null;
+      if (customerCode) {
+        const { rows } = await pgDb.query('SELECT * FROM organizations WHERE paystack_customer_code = $1', [customerCode]);
+        org = rows[0];
+      }
+      if (!org && orgIdMeta) {
+        const { rows } = await pgDb.query('SELECT * FROM organizations WHERE id = $1', [Number(orgIdMeta)]);
+        org = rows[0];
+      }
       if (org) {
         const plan = FLEET_BILLING_PLAN_ENTITLEMENTS[key];
         if (plan) {
-          db.prepare(`UPDATE organizations SET plan_key = ?, status = 'active',
-            paystack_subscription_code = ?,
-            paystack_customer_code = COALESCE(paystack_customer_code, ?),
-            max_bikes = ?, max_admin_users = ?,
-            updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
-            .run(key, subscriptionCode, customerCode || null, plan.max_bikes, plan.max_admin_users, org.id);
+          await pgDb.query(`UPDATE organizations SET plan_key = $1, status = 'active',
+            paystack_subscription_code = $2,
+            paystack_customer_code = COALESCE(paystack_customer_code, $3),
+            max_bikes = $4, max_admin_users = $5,
+            updated_at = NOW() WHERE id = $6`,
+            [key, subscriptionCode, customerCode || null, plan.max_bikes, plan.max_admin_users, org.id]);
         }
       }
     }
@@ -382,36 +398,56 @@ router.post('/paystack/webhook', (req, res) => {
     const orgIdMeta = event.data.metadata?.organization_id;
     const key = getKeyForPlanCode(planCode);
     if (key) {
-      const org = (customerCode && db.prepare('SELECT * FROM organizations WHERE paystack_customer_code = ?').get(customerCode))
-        || (orgIdMeta && db.prepare('SELECT * FROM organizations WHERE id = ?').get(Number(orgIdMeta)));
+      let org = null;
+      if (customerCode) {
+        const { rows } = await pgDb.query('SELECT * FROM organizations WHERE paystack_customer_code = $1', [customerCode]);
+        org = rows[0];
+      }
+      if (!org && orgIdMeta) {
+        const { rows } = await pgDb.query('SELECT * FROM organizations WHERE id = $1', [Number(orgIdMeta)]);
+        org = rows[0];
+      }
       if (org) {
         const plan = FLEET_BILLING_PLAN_ENTITLEMENTS[key];
         if (plan) {
-          db.prepare(`UPDATE organizations SET plan_key = ?, status = 'active',
-            ${subscriptionCode ? 'paystack_subscription_code = ?,' : ''}
-            paystack_customer_code = COALESCE(paystack_customer_code, ?),
-            max_bikes = ?, max_admin_users = ?,
-            updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
-            .run(key, ...(subscriptionCode ? [subscriptionCode] : []), customerCode || null, plan.max_bikes, plan.max_admin_users, org.id);
+          const params = [key];
+          let subClause = '';
+          if (subscriptionCode) {
+            params.push(subscriptionCode);
+            subClause = `paystack_subscription_code = $${params.length},`;
+          }
+          params.push(customerCode || null, plan.max_bikes, plan.max_admin_users);
+          const customerIdx = params.length - 2;
+          const maxBikesIdx = params.length - 1;
+          const maxAdminsIdx = params.length;
+          params.push(org.id);
+          const idIdx = params.length;
+          await pgDb.query(`UPDATE organizations SET plan_key = $1, status = 'active',
+            ${subClause}
+            paystack_customer_code = COALESCE(paystack_customer_code, $${customerIdx}),
+            max_bikes = $${maxBikesIdx}, max_admin_users = $${maxAdminsIdx},
+            updated_at = NOW() WHERE id = $${idIdx}`, params);
         }
       }
     }
   } else if (event.event === 'subscription.disable' && !isRiderEvent) {
     const subscriptionCode = event.data.subscription_code;
     if (subscriptionCode) {
-      db.prepare("UPDATE organizations SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE paystack_subscription_code = ?")
-        .run(subscriptionCode);
+      await pgDb.query("UPDATE organizations SET status = 'cancelled', updated_at = NOW() WHERE paystack_subscription_code = $1",
+        [subscriptionCode]);
     }
   } else if (event.event === 'invoice.payment_failed') {
     const subscriptionCode = event.data.subscription?.subscription_code;
     if (subscriptionCode) {
-      db.prepare("UPDATE organizations SET status = 'past_due', updated_at = CURRENT_TIMESTAMP WHERE paystack_subscription_code = ?")
-        .run(subscriptionCode);
-      const org = db.prepare('SELECT id FROM organizations WHERE paystack_subscription_code = ?').get(subscriptionCode);
+      await pgDb.query("UPDATE organizations SET status = 'past_due', updated_at = NOW() WHERE paystack_subscription_code = $1",
+        [subscriptionCode]);
+      const { rows: orgRows } = await pgDb.query('SELECT id FROM organizations WHERE paystack_subscription_code = $1', [subscriptionCode]);
+      const org = orgRows[0];
       if (org) {
-        const orgAdmins = db.prepare(
-          `SELECT id, full_name FROM users WHERE organization_id = ? AND role IN ('fleet_owner_admin','fleet_owner_ops') AND status = 'active' AND deleted_at IS NULL`
-        ).all(org.id);
+        const { rows: orgAdmins } = await pgDb.query(
+          `SELECT id, full_name FROM users WHERE organization_id = $1 AND role IN ('fleet_owner_admin','fleet_owner_ops') AND status = 'active' AND deleted_at IS NULL`,
+          [org.id]
+        );
         for (const admin of orgAdmins) {
           sendNotification({
             userId: admin.id,
@@ -433,36 +469,38 @@ router.post('/paystack/webhook', (req, res) => {
     const metaAgreementId = Number(meta.agreement_id) || null;
 
     // Look up pre-existing payment record (used by the admin/rider portal path)
-    const payment = db.prepare('SELECT * FROM payments WHERE reference = ? OR paystack_reference = ?').get(ref, ref);
+    const { rows: paymentRows } = await pgDb.query('SELECT * FROM payments WHERE reference = $1 OR paystack_reference = $1', [ref]);
+    const payment = paymentRows[0];
 
     if (payment && payment.status !== 'success') {
-      const netAmount = payment.net_amount || grossAmountZAR;
+      const netAmount = Number(payment.net_amount) || grossAmountZAR;
       const fee = calcPaystackFee(netAmount);
-      db.prepare(`UPDATE payments SET status = 'success', paid_at = CURRENT_TIMESTAMP, amount = ?, fee_amount = ?, net_amount = ? WHERE id = ?`)
-        .run(grossAmountZAR, fee, netAmount, payment.id);
-      applyPaymentToSchedule(payment.agreement_id, netAmount);
+      await pgDb.query(`UPDATE payments SET status = 'success', paid_at = NOW(), amount = $1, fee_amount = $2, net_amount = $3 WHERE id = $4`,
+        [grossAmountZAR, fee, netAmount, payment.id]);
+      await applyPaymentToSchedule(payment.agreement_id, netAmount);
       // Credit the fleet wallet if this agreement belongs to a fleet organisation
       if (grossAmountZAR > 0) {
-        const agScope = db.prepare(
-          `SELECT b.organization_id FROM agreements a JOIN bikes b ON b.id = a.bike_id WHERE a.id = ?`
-        ).get(payment.agreement_id);
-        if (agScope?.organization_id) {
-          creditFleetWalletFromWebhook(agScope.organization_id, grossAmountZAR, payment.user_id, ref);
+        const { rows: agScopeRows } = await pgDb.query(
+          `SELECT b.organization_id FROM agreements a JOIN bikes b ON b.id = a.bike_id WHERE a.id = $1`, [payment.agreement_id]
+        );
+        if (agScopeRows[0]?.organization_id) {
+          await creditFleetWalletFromWebhook(agScopeRows[0].organization_id, grossAmountZAR, payment.user_id, ref);
         }
       }
     } else if (!payment && metaAgreementId && metaOrgId && grossAmountZAR > 0) {
       // Fleet one-time payment link — no pre-inserted record; build from webhook metadata
-      const agreement = db.prepare('SELECT * FROM agreements WHERE id = ?').get(metaAgreementId);
+      const { rows: agreementRows } = await pgDb.query('SELECT * FROM agreements WHERE id = $1', [metaAgreementId]);
+      const agreement = agreementRows[0];
       if (agreement && agreement.status !== 'discontinued') {
-        const alreadyRecorded = db.prepare('SELECT id FROM payments WHERE paystack_reference = ?').get(ref);
-        if (!alreadyRecorded) {
+        const { rows: alreadyRecordedRows } = await pgDb.query('SELECT id FROM payments WHERE paystack_reference = $1', [ref]);
+        if (!alreadyRecordedRows[0]) {
           const fee = +(grossAmountZAR * 0.015).toFixed(2);
           const net = +(grossAmountZAR - fee).toFixed(2);
-          db.prepare(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, paystack_reference, status, fee_amount, net_amount, paid_at, notes)
-            VALUES (?,?,?,'ZAR','paystack',?,?,'success',?,?,CURRENT_TIMESTAMP,'Paystack payment')`)
-            .run(metaAgreementId, metaRiderId || agreement.user_id, grossAmountZAR, ref, ref, fee, net);
-          try { applyPaymentToSchedule(metaAgreementId, grossAmountZAR); } catch (_) {}
-          creditFleetWalletFromWebhook(metaOrgId, grossAmountZAR, metaRiderId || agreement.user_id, ref);
+          await pgDb.query(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, paystack_reference, status, fee_amount, net_amount, paid_at, notes)
+            VALUES ($1,$2,$3,'ZAR','paystack',$4,$5,'success',$6,$7,NOW(),'Paystack payment')`,
+            [metaAgreementId, metaRiderId || agreement.user_id, grossAmountZAR, ref, ref, fee, net]);
+          try { await applyPaymentToSchedule(metaAgreementId, grossAmountZAR); } catch (_) {}
+          await creditFleetWalletFromWebhook(metaOrgId, grossAmountZAR, metaRiderId || agreement.user_id, ref);
         }
       }
     }
@@ -497,37 +535,37 @@ function isRiderPlanCode(planCode) {
   });
 }
 
-function ensureFleetWallet(organizationId) {
-  db.prepare(`INSERT OR IGNORE INTO fleet_wallets (organization_id) VALUES (?)`).run(organizationId);
+async function ensureFleetWallet(organizationId, db = pgDb) {
+  await db.query(`INSERT INTO fleet_wallets (organization_id) VALUES ($1) ON CONFLICT (organization_id) DO NOTHING`, [organizationId]);
 }
 
-function creditFleetWalletFromWebhook(organizationId, grossAmountZAR, riderId, reference) {
+async function creditFleetWalletFromWebhook(organizationId, grossAmountZAR, riderId, reference) {
   const fee = +(grossAmountZAR * 0.035 + 1).toFixed(2);
   const net = +(grossAmountZAR - fee).toFixed(2);
-  ensureFleetWallet(organizationId);
-  db.transaction(() => {
+  await ensureFleetWallet(organizationId);
+  await pgDb.withTransaction(async (client) => {
     if (reference) {
-      const dup = db.prepare(`SELECT id FROM fleet_wallet_transactions WHERE paystack_reference = ? AND organization_id = ?`).get(reference, organizationId);
-      if (dup) return;
+      const { rows: dupRows } = await client.query(`SELECT id FROM fleet_wallet_transactions WHERE paystack_reference = $1 AND organization_id = $2`, [reference, organizationId]);
+      if (dupRows[0]) return;
     }
-    db.prepare(`UPDATE fleet_wallets SET balance = balance + ?, total_collected = total_collected + ?, updated_at = CURRENT_TIMESTAMP WHERE organization_id = ?`)
-      .run(net, net, organizationId);
-    db.prepare(`INSERT INTO fleet_wallet_transactions (organization_id, type, amount, fee_amount, net_amount, description, paystack_reference, rider_user_id, available_at)
-      VALUES (?,?,?,?,?,?,?,?, datetime('now', '+48 hours'))`)
-      .run(organizationId, 'credit', grossAmountZAR, fee, net, 'Weekly rider rental payment', reference || null, riderId || null);
-  })();
+    await client.query(`UPDATE fleet_wallets SET balance = balance + $1, total_collected = total_collected + $2, updated_at = NOW() WHERE organization_id = $3`,
+      [net, net, organizationId]);
+    await client.query(`INSERT INTO fleet_wallet_transactions (organization_id, type, amount, fee_amount, net_amount, description, paystack_reference, rider_user_id, available_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8, NOW() + INTERVAL '48 hours')`,
+      [organizationId, 'credit', grossAmountZAR, fee, net, 'Weekly rider rental payment', reference || null, riderId || null]);
+  });
 }
 
-router.post('/manual', authRequired, adminOnly, (req, res) => {
+router.post('/manual', authRequired, adminOnly, async (req, res) => {
   try {
-    const visibleAgreement = db.prepare(`SELECT a.id
+    const { rows: visibleAgreementRows } = await pgDb.query(`SELECT a.id
       FROM agreements a
       JOIN bikes b ON b.id = a.bike_id
       JOIN users u ON u.id = a.user_id
-      WHERE a.id = ? AND ${adminVisibleAgreementClause('a', 'b', 'u')}`).get(req.body.agreement_id);
-    if (!visibleAgreement) return res.status(404).json({ error: 'Agreement not found' });
-    const result = recordManualPayment({ ...req.body, recorded_by: req.user.id });
-    logAudit(req.user.id, 'payment.manual', 'payments', result.id, { amount: req.body.amount, method: req.body.method });
+      WHERE a.id = $1 AND ${adminVisibleAgreementClause('a', 'b', 'u')}`, [req.body.agreement_id]);
+    if (!visibleAgreementRows[0]) return res.status(404).json({ error: 'Agreement not found' });
+    const result = await recordManualPayment({ ...req.body, recorded_by: req.user.id });
+    await logAudit(req.user.id, 'payment.manual', 'payments', result.id, { amount: req.body.amount, method: req.body.method });
     res.json(result);
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -553,7 +591,7 @@ router.get('/bulk-template', authRequired, adminOnly, (req, res) => {
   res.send(csv);
 });
 
-router.post('/bulk-import', authRequired, adminOnly, upload.single('file'), (req, res) => {
+router.post('/bulk-import', authRequired, adminOnly, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'CSV file is required' });
   const mappedBuffer = req.body?.mappings ? applyCsvMapping(req.file.buffer, 'payments_bulk', JSON.parse(req.body.mappings)) : req.file.buffer;
   const rows = parseCsv(mappedBuffer.toString('utf8'));
@@ -564,18 +602,18 @@ router.post('/bulk-import', authRequired, adminOnly, upload.single('file'), (req
     try {
       const registration = String(row.registration || '').trim();
       if (!registration) throw new Error('Bike registration is required');
-      const agreement = resolveAgreementForPayment(row);
+      const agreement = await resolveAgreementForPayment(row);
       if (!agreement) throw new Error(`Agreement not found for registration ${registration}`);
       const amount = parseMoney(row.amount);
       if (!amount || amount <= 0) throw new Error(`Invalid or missing amount "${row.amount}"`);
       const paidAt = parseDateFlexible(row.paid_at) || new Date().toISOString().slice(0, 10);
       const reference = buildBulkPaymentReference({ ...row, paid_at: paidAt });
-      const exists = db.prepare('SELECT id FROM payments WHERE reference = ?').get(reference);
-      if (exists) {
+      const { rows: existsRows } = await pgDb.query('SELECT id FROM payments WHERE reference = $1', [reference]);
+      if (existsRows[0]) {
         summary.skipped += 1;
         continue;
       }
-      recordManualPayment({
+      await recordManualPayment({
         agreement_id: agreement.id,
         amount,
         method: row.method || 'eft',
@@ -590,35 +628,36 @@ router.post('/bulk-import', authRequired, adminOnly, upload.single('file'), (req
       summary.errors.push({ row: index + 2, error: error.message });
     }
   }
-  logAudit(req.user.id, 'payment.bulk_import', 'payments', null, { ...summary, mappings: req.body?.mappings ? JSON.parse(req.body.mappings) : null });
+  await logAudit(req.user.id, 'payment.bulk_import', 'payments', null, { ...summary, mappings: req.body?.mappings ? JSON.parse(req.body.mappings) : null });
   res.json(summary);
 });
 
-router.get('/agreement/:id', authRequired, (req, res) => {
+router.get('/agreement/:id', authRequired, async (req, res) => {
   const isAdminPortalUser = ['admin', 'superadmin'].includes(req.user.role);
-  const ag = db.prepare(`SELECT a.user_id
+  const { rows: agRows } = await pgDb.query(`SELECT a.user_id
     FROM agreements a
     JOIN bikes b ON b.id = a.bike_id
     JOIN users u ON u.id = a.user_id
-    WHERE a.id = ?${isAdminPortalUser ? ` AND ${adminVisibleAgreementClause('a', 'b', 'u')}` : ''}`).get(req.params.id);
+    WHERE a.id = $1${isAdminPortalUser ? ` AND ${adminVisibleAgreementClause('a', 'b', 'u')}` : ''}`, [req.params.id]);
+  const ag = agRows[0];
   if (!ag) return res.status(404).json({ error: 'Not found' });
   if (ag.user_id !== req.user.id && !isAdminPortalUser) return res.status(403).json({ error: 'Forbidden' });
-  const payments = db.prepare(`SELECT * FROM payments WHERE agreement_id = ? ORDER BY created_at DESC`).all(req.params.id);
+  const { rows: payments } = await pgDb.query(`SELECT * FROM payments WHERE agreement_id = $1 ORDER BY created_at DESC`, [req.params.id]);
   res.json({ payments });
 });
 
-router.get('/all', authRequired, adminOnly, (req, res) => {
-  const payments = db.prepare(`SELECT p.*, u.full_name, u.email, a.agreement_no
+router.get('/all', authRequired, adminOnly, async (req, res) => {
+  const { rows: payments } = await pgDb.query(`SELECT p.*, u.full_name, u.email, a.agreement_no
     FROM payments p
     JOIN users u ON u.id = p.user_id
     JOIN agreements a ON a.id = p.agreement_id
     JOIN bikes b ON b.id = a.bike_id
     WHERE ${adminVisibleAgreementClause('a', 'b', 'u')}
-    ORDER BY p.created_at DESC LIMIT 500`).all();
+    ORDER BY p.created_at DESC LIMIT 500`);
   res.json({ payments });
 });
 
-router.post('/bulk-delete', authRequired, adminOnly, (req, res) => {
+router.post('/bulk-delete', authRequired, adminOnly, async (req, res) => {
   const paymentIds = Array.from(new Set((Array.isArray(req.body.payment_ids) ? req.body.payment_ids : [])
     .map((value) => Number(value))
     .filter((value) => Number.isInteger(value) && value > 0)));
@@ -628,22 +667,22 @@ router.post('/bulk-delete', authRequired, adminOnly, (req, res) => {
   const deleted = [];
   const notFound = [];
   const agreementIds = new Set();
-  const removePayment = db.prepare('DELETE FROM payments WHERE id = ?');
 
   for (const paymentId of paymentIds) {
-    const payment = db.prepare('SELECT id, agreement_id, reference, amount, net_amount, status FROM payments WHERE id = ?').get(paymentId);
+    const { rows: paymentRows } = await pgDb.query('SELECT id, agreement_id, reference, amount, net_amount, status FROM payments WHERE id = $1', [paymentId]);
+    const payment = paymentRows[0];
     if (!payment) {
       notFound.push(paymentId);
       continue;
     }
-    removePayment.run(payment.id);
+    await pgDb.query('DELETE FROM payments WHERE id = $1', [payment.id]);
     agreementIds.add(payment.agreement_id);
     deleted.push(payment);
   }
 
-  for (const agreementId of agreementIds) rebuildScheduleAllocations(agreementId);
+  for (const agreementId of agreementIds) await rebuildScheduleAllocations(agreementId);
 
-  logAudit(req.user.id, 'payment.bulk_delete', 'payments', null, {
+  await logAudit(req.user.id, 'payment.bulk_delete', 'payments', null, {
     requested: paymentIds.length,
     deleted_count: deleted.length,
     not_found_count: notFound.length,
@@ -668,17 +707,18 @@ router.post('/bulk-delete', authRequired, adminOnly, (req, res) => {
   });
 });
 
-router.post('/:id/reverse', authRequired, adminOnly, (req, res) => {
-  const payment = db.prepare(`SELECT p.* FROM payments p
+router.post('/:id/reverse', authRequired, adminOnly, async (req, res) => {
+  const { rows: paymentRows } = await pgDb.query(`SELECT p.* FROM payments p
     JOIN agreements a ON a.id = p.agreement_id
     JOIN bikes b ON b.id = a.bike_id
     JOIN users u ON u.id = a.user_id
-    WHERE p.id = ? AND ${adminVisibleAgreementClause('a', 'b', 'u')}`).get(req.params.id);
+    WHERE p.id = $1 AND ${adminVisibleAgreementClause('a', 'b', 'u')}`, [req.params.id]);
+  const payment = paymentRows[0];
   if (!payment) return res.status(404).json({ error: 'Payment not found' });
   if (payment.status === 'reversed') return res.status(400).json({ error: 'Payment is already reversed' });
-  db.prepare(`UPDATE payments SET status = 'reversed' WHERE id = ?`).run(payment.id);
-  rebuildScheduleAllocations(payment.agreement_id);
-  logAudit(req.user.id, 'payment.reversed', 'payments', payment.id, { original_status: payment.status, amount: payment.amount }, req.ip);
+  await pgDb.query(`UPDATE payments SET status = 'reversed' WHERE id = $1`, [payment.id]);
+  await rebuildScheduleAllocations(payment.agreement_id);
+  await logAudit(req.user.id, 'payment.reversed', 'payments', payment.id, { original_status: payment.status, amount: payment.amount }, req.ip);
   res.json({ ok: true });
 });
 

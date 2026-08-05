@@ -266,7 +266,7 @@ exports.up = (pgm) => {
       method TEXT NOT NULL CHECK (method IN ('paystack','eft','cash','card','other')),
       reference TEXT UNIQUE,
       paystack_reference TEXT,
-      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','success','failed','refunded')),
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','success','failed','refunded','reversed')),
       paid_at TIMESTAMPTZ,
       recorded_by INTEGER REFERENCES users(id),
       notes TEXT,

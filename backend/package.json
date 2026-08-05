@@ -6,6 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "seed": "node src/seed.js",
     "reset-admin": "node src/reset-admin.js",
     "campaign:password-reset-special": "node src/scripts/password-reset-special-audience.js",
@@ -34,6 +36,8 @@
     "uuid": "^9.0.1"
   },
   "devDependencies": {
-    "nodemon": "^3.0.2"
+    "nodemon": "^3.0.2",
+    "supertest": "^7.2.2",
+    "vitest": "^4.1.10"
   }
 }

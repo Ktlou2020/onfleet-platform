@@ -298,7 +298,7 @@ exports.up = (pgm) => {
       started_at TIMESTAMPTZ,
       completed_at TIMESTAMPTZ,
       completion_notes TEXT,
-      odometer_km INTEGER,
+      odometer_km NUMERIC(10,2),
       next_service_date DATE,
       next_service_km INTEGER,
       bike_status_after TEXT,

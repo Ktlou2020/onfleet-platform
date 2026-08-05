@@ -5,19 +5,23 @@ const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const db = require('../db');
+const pgDb = require('../pgDb');
 const { authRequired, adminOnly } = require('../middleware/auth');
 const axios = require('axios');
-const { logAudit, recalcScheduleStatuses } = require('../utils/helpers');
+const { logAudit, recalcScheduleStatuses } = require('../utils/helpersPg');
 const { generateStrategicReport } = require('../services/strategicReport');
 const { requireValidMime } = require('../utils/validateUpload');
-const { sendNotification, sendHtmlEmail, detectEmailProvider } = require('../services/notifier');
+const { sendHtmlEmail, detectEmailProvider } = require('../services/notifier');
+const { sendNotification } = require('../services/notifierPg');
 const { getTemplate, listTemplates, previewTemplate } = require('../services/emailTemplates');
+const asyncRouter = require('../utils/asyncRouter');
 
-const router = express.Router();
+const router = asyncRouter(express.Router());
 const { branding: brandingUploadDir } = require('../uploadPaths');
 const FLEET_OWNER_ROLE_VALUES = ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'];
-const FLEET_OWNER_ROLE_SQL = FLEET_OWNER_ROLE_VALUES.map(() => '?').join(',');
+function roleInPlaceholders(startIndex) {
+  return FLEET_OWNER_ROLE_VALUES.map((_, i) => `$${startIndex + i}`).join(',');
+}
 const heroImageUpload = multer({
   storage: multer.diskStorage({
     destination: brandingUploadDir,
@@ -45,7 +49,7 @@ function readEnv(name, fallback = '') {
 
 function passwordResetExpiryIso() {
   const ttlMinutes = Number(readEnv('PASSWORD_RESET_TOKEN_TTL_MINUTES', '60') || 60);
-  return new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  return new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString();
 }
 
 function hashResetToken(token) {
@@ -62,7 +66,7 @@ function normalizeBulkUserIds(rawIds) {
   return [...new Set(rawIds.map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0))];
 }
 
-function selectBulkTargets({ user_ids, role, status }) {
+async function selectBulkTargets({ user_ids, role, status }) {
   const ids = normalizeBulkUserIds(user_ids);
   let sql = `SELECT id, email, full_name, role, status, user_tags
     FROM users
@@ -70,35 +74,37 @@ function selectBulkTargets({ user_ids, role, status }) {
   const params = [];
 
   if (ids.length) {
-    sql += ` AND id IN (${ids.map(() => '?').join(',')})`;
+    sql += ` AND id IN (${ids.map((_, i) => `$${params.length + i + 1}`).join(',')})`;
     params.push(...ids);
   } else {
     if (role && ['rider', 'admin', 'superadmin', 'technician'].includes(role)) {
-      sql += ' AND role = ?';
+      sql += ` AND role = $${params.length + 1}`;
       params.push(role);
     }
     if (status && status !== 'all') {
-      sql += ' AND status = ?';
+      sql += ` AND status = $${params.length + 1}`;
       params.push(status);
     }
   }
 
   sql += ' ORDER BY created_at DESC';
-  return db.prepare(sql).all(...params);
+  const { rows } = await pgDb.query(sql, params);
+  return rows;
 }
 
-function issuePasswordResetToken(userId, req) {
+async function issuePasswordResetToken(userId, req) {
   const rawToken = crypto.randomBytes(32).toString('hex');
   const tokenHash = hashResetToken(rawToken);
-  db.prepare(`UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE user_id = ? AND used_at IS NULL`).run(userId);
-  db.prepare(`INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, requested_ip, user_agent)
-    VALUES (?,?,?,?,?)`).run(
-    userId,
-    tokenHash,
-    passwordResetExpiryIso(),
-    req.ip || null,
-    req.get('user-agent') || null
-  );
+  await pgDb.query(`UPDATE password_reset_tokens SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL`, [userId]);
+  await pgDb.query(`INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, requested_ip, user_agent)
+    VALUES ($1,$2,$3,$4,$5)`,
+    [
+      userId,
+      tokenHash,
+      passwordResetExpiryIso(),
+      req.ip || null,
+      req.get('user-agent') || null
+    ]);
   return buildResetUrl(rawToken);
 }
 
@@ -108,14 +114,15 @@ function buildBulkResetMessage(user, resetUrl, actorName, customMessage) {
   return `Hi ${firstName},\n\n${intro}We received a request to reset your OnFleet password.\n\nReset link: ${resetUrl}\n\nThis link expires in ${readEnv('PASSWORD_RESET_TOKEN_TTL_MINUTES', '60') || 60} minutes. If you were not expecting this email, please contact the OnFleet team.\n\nKind Regards\nOnFleet Team`;
 }
 
-function getSetting(key) {
-  return db.prepare('SELECT setting_value FROM app_settings WHERE setting_key = ?').get(key)?.setting_value || null;
+async function getSetting(key) {
+  const { rows } = await pgDb.query('SELECT setting_value FROM app_settings WHERE setting_key = $1', [key]);
+  return rows[0]?.setting_value || null;
 }
 
-function setSetting(key, value) {
-  db.prepare(`INSERT INTO app_settings (setting_key, setting_value, updated_at)
-    VALUES (?, ?, CURRENT_TIMESTAMP)
-    ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value, updated_at = CURRENT_TIMESTAMP`).run(key, value || null);
+async function setSetting(key, value) {
+  await pgDb.query(`INSERT INTO app_settings (setting_key, setting_value, updated_at)
+    VALUES ($1, $2, NOW())
+    ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = NOW()`, [key, value || null]);
 }
 
 function fleetOrgScope(alias = 'b', orgAlias = 'o') {
@@ -142,9 +149,9 @@ function superadminPortalApplicationScope(aAlias = 'a', uAlias = 'u', bAlias = '
   return `${uAlias}.organization_id IS NULL AND (${bAlias}.id IS NULL OR ${superadminVisibleBikeScope(bAlias)})`;
 }
 
-function listFleetOwnerOrganizations() {
+async function listFleetOwnerOrganizations() {
   const scope = fleetOrgScope('b', 'o');
-  const rows = db.prepare(`SELECT
+  const { rows } = await pgDb.query(`SELECT
       o.id,
       o.name,
       o.slug,
@@ -160,8 +167,8 @@ function listFleetOwnerOrganizations() {
       o.max_admin_users,
       o.created_at,
       o.updated_at,
-      COALESCE((SELECT COUNT(*) FROM users u WHERE u.organization_id = o.id AND u.deleted_at IS NULL AND u.role IN (${FLEET_OWNER_ROLE_SQL})), 0) AS member_count,
-      COALESCE((SELECT COUNT(*) FROM users u WHERE u.organization_id = o.id AND u.deleted_at IS NULL AND u.status = 'active' AND u.role IN (${FLEET_OWNER_ROLE_SQL})), 0) AS active_member_count,
+      COALESCE((SELECT COUNT(*) FROM users u WHERE u.organization_id = o.id AND u.deleted_at IS NULL AND u.role IN (${roleInPlaceholders(1)})), 0) AS member_count,
+      COALESCE((SELECT COUNT(*) FROM users u WHERE u.organization_id = o.id AND u.deleted_at IS NULL AND u.status = 'active' AND u.role IN (${roleInPlaceholders(5)})), 0) AS active_member_count,
       COALESCE((SELECT COUNT(*) FROM bikes b WHERE ${scope}), 0) AS bike_count,
       COALESCE((SELECT COUNT(*) FROM bikes b WHERE ${scope} AND b.status = 'active'), 0) AS active_bikes,
       COALESCE((SELECT COUNT(*) FROM bikes b WHERE ${scope} AND b.status = 'ready_to_go'), 0) AS ready_bikes,
@@ -182,7 +189,7 @@ function listFleetOwnerOrganizations() {
         JOIN bikes b ON b.id = a.bike_id
         WHERE ${scope}
           AND p.status = 'success'
-          AND COALESCE(p.paid_at, p.created_at) >= datetime('now', '-30 days')), 0) AS revenue_30d,
+          AND COALESCE(p.paid_at, p.created_at) >= NOW() - INTERVAL '30 days'), 0) AS revenue_30d,
       COALESCE((SELECT SUM(COALESCE(NULLIF(p.net_amount, 0), p.amount))
         FROM payments p
         JOIN agreements a ON a.id = p.agreement_id
@@ -219,7 +226,7 @@ function listFleetOwnerOrganizations() {
       WHEN o.status = 'suspended' THEN 3
       ELSE 4
     END,
-    o.created_at DESC`).all(...FLEET_OWNER_ROLE_VALUES, ...FLEET_OWNER_ROLE_VALUES);
+    o.created_at DESC`, [...FLEET_OWNER_ROLE_VALUES, ...FLEET_OWNER_ROLE_VALUES]);
 
   return rows.map((row) => {
     const trialDaysLeft = row.trial_ends_at
@@ -246,8 +253,8 @@ function listFleetOwnerOrganizations() {
   });
 }
 
-function listFleetOwnerUsers() {
-  const rows = db.prepare(`SELECT
+async function listFleetOwnerUsers() {
+  const { rows } = await pgDb.query(`SELECT
       u.id,
       u.email,
       u.full_name,
@@ -267,7 +274,7 @@ function listFleetOwnerUsers() {
       o.fleet_size,
       o.max_bikes,
       o.max_admin_users,
-      COALESCE((SELECT COUNT(*) FROM users u2 WHERE u2.organization_id = o.id AND u2.deleted_at IS NULL AND u2.role IN (${FLEET_OWNER_ROLE_SQL})), 0) AS organization_member_count,
+      COALESCE((SELECT COUNT(*) FROM users u2 WHERE u2.organization_id = o.id AND u2.deleted_at IS NULL AND u2.role IN (${roleInPlaceholders(1)})), 0) AS organization_member_count,
       COALESCE((SELECT COUNT(*) FROM bikes b WHERE ${fleetOrgScope('b', 'o')}), 0) AS organization_bike_count,
       COALESCE((SELECT SUM(COALESCE(NULLIF(p.net_amount, 0), p.amount))
         FROM payments p
@@ -275,7 +282,7 @@ function listFleetOwnerUsers() {
         JOIN bikes b ON b.id = a.bike_id
         WHERE ${fleetOrgScope('b', 'o')}
           AND p.status = 'success'
-          AND COALESCE(p.paid_at, p.created_at) >= datetime('now', '-30 days')), 0) AS organization_revenue_30d,
+          AND COALESCE(p.paid_at, p.created_at) >= NOW() - INTERVAL '30 days'), 0) AS organization_revenue_30d,
       (SELECT MAX(COALESCE(p.paid_at, p.created_at))
         FROM payments p
         JOIN agreements a ON a.id = p.agreement_id
@@ -284,7 +291,7 @@ function listFleetOwnerUsers() {
           AND p.status = 'success') AS organization_last_payment_at
     FROM users u
     JOIN organizations o ON o.id = u.organization_id
-    WHERE u.deleted_at IS NULL AND u.role IN (${FLEET_OWNER_ROLE_SQL})
+    WHERE u.deleted_at IS NULL AND u.role IN (${roleInPlaceholders(5)})
     ORDER BY o.name ASC,
       CASE
         WHEN u.role = 'fleet_owner_admin' THEN 0
@@ -292,7 +299,7 @@ function listFleetOwnerUsers() {
         WHEN u.role = 'fleet_owner_billing' THEN 2
         ELSE 3
       END,
-      u.created_at ASC`).all(...FLEET_OWNER_ROLE_VALUES, ...FLEET_OWNER_ROLE_VALUES);
+      u.created_at ASC`, [...FLEET_OWNER_ROLE_VALUES, ...FLEET_OWNER_ROLE_VALUES]);
 
   return rows.map((row) => ({
     ...row,
@@ -303,95 +310,114 @@ function listFleetOwnerUsers() {
   }));
 }
 
-router.get('/branding', superadminOnly, (req, res) => {
-  res.json({ hero_image_url: getSetting('landing_hero_image_url') });
+router.get('/branding', superadminOnly, async (req, res) => {
+  res.json({ hero_image_url: await getSetting('landing_hero_image_url') });
 });
 
-router.post('/branding/hero-image', superadminOnly, heroImageUpload.single('image'), requireValidMime(['image/jpeg', 'image/png', 'image/webp']), (req, res) => {
+router.post('/branding/hero-image', superadminOnly, heroImageUpload.single('image'), requireValidMime(['image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Hero image file is required' });
   const publicPath = `/uploads/branding/${req.file.filename}`;
-  setSetting('landing_hero_image_url', publicPath);
-  logAudit(req.user.id, 'branding.hero_image', 'app_settings', null, { hero_image_url: publicPath });
+  await setSetting('landing_hero_image_url', publicPath);
+  await logAudit(req.user.id, 'branding.hero_image', 'app_settings', null, { hero_image_url: publicPath });
   res.json({ ok: true, hero_image_url: publicPath });
 });
 
-router.get('/dashboard', (req, res) => {
+router.get('/dashboard', async (req, res) => {
   const agreementScope = superadminPortalAgreementScope('a', 'b', 'u');
   const applicationScope = superadminPortalApplicationScope('a', 'u', 'b');
-  const stats = {
-    riders: db.prepare(`SELECT COUNT(*) c FROM users WHERE role = 'rider' AND deleted_at IS NULL AND organization_id IS NULL`).get().c,
-    admins: db.prepare(`SELECT COUNT(*) c FROM users WHERE role IN ('admin','superadmin') AND deleted_at IS NULL`).get().c,
-    active_agreements: db.prepare(`SELECT COUNT(*) c
+  const q = (sql, params = []) => pgDb.query(sql, params).then((r) => r.rows[0]);
+  const [
+    riders, admins, active_agreements, completed_agreements,
+    bikes_available, bikes_allocated, bikes_maintenance,
+    pending_applications, pending_kyc,
+    revenue_total, revenue_30d, overdue_amount, overdue_count, default_action_count,
+    upcoming_services, expiring_insurance, expiring_license_disc,
+    weeklyResult
+  ] = await Promise.all([
+    q(`SELECT COUNT(*) c FROM users WHERE role = 'rider' AND deleted_at IS NULL AND organization_id IS NULL`),
+    q(`SELECT COUNT(*) c FROM users WHERE role IN ('admin','superadmin') AND deleted_at IS NULL`),
+    q(`SELECT COUNT(*) c
       FROM agreements a
       JOIN bikes b ON b.id = a.bike_id
       JOIN users u ON u.id = a.user_id
-      WHERE a.status = 'active' AND ${agreementScope}`).get().c,
-    completed_agreements: db.prepare(`SELECT COUNT(*) c
+      WHERE a.status = 'active' AND ${agreementScope}`),
+    q(`SELECT COUNT(*) c
       FROM agreements a
       JOIN bikes b ON b.id = a.bike_id
       JOIN users u ON u.id = a.user_id
-      WHERE a.status = 'completed' AND ${agreementScope}`).get().c,
-    bikes_available: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE status = 'ready_to_go' AND organization_id IS NULL`).get().c,
-    bikes_allocated: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE status = 'active' AND organization_id IS NULL`).get().c,
-    bikes_maintenance: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE status = 'repairs' AND organization_id IS NULL`).get().c,
-    pending_applications: db.prepare(`SELECT COUNT(*) c
+      WHERE a.status = 'completed' AND ${agreementScope}`),
+    q(`SELECT COUNT(*) c FROM bikes WHERE status = 'ready_to_go' AND organization_id IS NULL`),
+    q(`SELECT COUNT(*) c FROM bikes WHERE status = 'active' AND organization_id IS NULL`),
+    q(`SELECT COUNT(*) c FROM bikes WHERE status = 'repairs' AND organization_id IS NULL`),
+    q(`SELECT COUNT(*) c
       FROM applications a
       JOIN users u ON u.id = a.user_id
       LEFT JOIN bikes b ON b.id = a.preferred_bike_id
-      WHERE a.status IN ('submitted','under_review') AND ${applicationScope}`).get().c,
-    pending_kyc: db.prepare(`SELECT COUNT(*) c
+      WHERE a.status IN ('submitted','under_review') AND ${applicationScope}`),
+    q(`SELECT COUNT(*) c
       FROM application_documents d
       JOIN applications a ON a.id = d.application_id
       JOIN users u ON u.id = a.user_id
       LEFT JOIN bikes b ON b.id = a.preferred_bike_id
-      WHERE d.status = 'uploaded' AND ${applicationScope}`).get().c,
-    revenue_total: db.prepare(`SELECT COALESCE(SUM(COALESCE(NULLIF(p.net_amount,0), p.amount)),0) s
+      WHERE d.status = 'uploaded' AND ${applicationScope}`),
+    q(`SELECT COALESCE(SUM(COALESCE(NULLIF(p.net_amount,0), p.amount)),0) s
       FROM payments p
       JOIN agreements a ON a.id = p.agreement_id
       JOIN bikes b ON b.id = a.bike_id
       JOIN users u ON u.id = a.user_id
-      WHERE p.status = 'success' AND ${agreementScope}`).get().s,
-    revenue_30d: db.prepare(`SELECT COALESCE(SUM(COALESCE(NULLIF(p.net_amount,0), p.amount)),0) s
+      WHERE p.status = 'success' AND ${agreementScope}`),
+    q(`SELECT COALESCE(SUM(COALESCE(NULLIF(p.net_amount,0), p.amount)),0) s
       FROM payments p
       JOIN agreements a ON a.id = p.agreement_id
       JOIN bikes b ON b.id = a.bike_id
       JOIN users u ON u.id = a.user_id
-      WHERE p.status = 'success' AND COALESCE(p.paid_at, p.created_at) >= datetime('now','-30 days') AND ${agreementScope}`).get().s,
-    overdue_amount: db.prepare(`SELECT COALESCE(SUM(ps.amount_due - ps.amount_paid),0) s
+      WHERE p.status = 'success' AND COALESCE(p.paid_at, p.created_at) >= NOW() - INTERVAL '30 days' AND ${agreementScope}`),
+    q(`SELECT COALESCE(SUM(ps.amount_due - ps.amount_paid),0) s
       FROM payment_schedules ps
       JOIN agreements a ON a.id = ps.agreement_id
       JOIN bikes b ON b.id = a.bike_id
       JOIN users u ON u.id = a.user_id
-      WHERE ps.status = 'overdue' AND ${agreementScope}`).get().s,
-    overdue_count: db.prepare(`SELECT COUNT(DISTINCT ps.agreement_id) c
+      WHERE ps.status = 'overdue' AND ${agreementScope}`),
+    q(`SELECT COUNT(DISTINCT ps.agreement_id) c
       FROM payment_schedules ps
       JOIN agreements a ON a.id = ps.agreement_id
       JOIN bikes b ON b.id = a.bike_id
       JOIN users u ON u.id = a.user_id
-      WHERE ps.status = 'overdue' AND ${agreementScope}`).get().c,
-    default_action_count: db.prepare(`SELECT COUNT(*) c
+      WHERE ps.status = 'overdue' AND ${agreementScope}`),
+    q(`SELECT COUNT(*) c
       FROM agreements a
       JOIN bikes b ON b.id = a.bike_id
       JOIN users u ON u.id = a.user_id
       WHERE a.status = 'defaulted'
         AND b.status NOT IN ('stolen','written_off','sold')
-        AND ${agreementScope}`).get().c,
-    upcoming_services: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE next_service_date IS NOT NULL AND next_service_date <= date('now','+14 days') AND status = 'active' AND organization_id IS NULL`).get().c,
-    expiring_insurance: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE insurance_expiry IS NOT NULL AND insurance_expiry <= date('now','+30 days') AND organization_id IS NULL`).get().c,
-    expiring_license_disc: db.prepare(`SELECT COUNT(*) c FROM bikes WHERE license_disc_expiry IS NOT NULL AND license_disc_expiry <= date('now','+30 days') AND organization_id IS NULL`).get().c
-  };
-  const weekly = db.prepare(`SELECT strftime('%Y-%W', COALESCE(p.paid_at, p.created_at)) week, COALESCE(SUM(COALESCE(NULLIF(p.net_amount,0), p.amount)),0) total
+        AND ${agreementScope}`),
+    q(`SELECT COUNT(*) c FROM bikes WHERE next_service_date IS NOT NULL AND next_service_date <= (CURRENT_DATE + 14) AND status = 'active' AND organization_id IS NULL`),
+    q(`SELECT COUNT(*) c FROM bikes WHERE insurance_expiry IS NOT NULL AND insurance_expiry <= (CURRENT_DATE + 30) AND organization_id IS NULL`),
+    q(`SELECT COUNT(*) c FROM bikes WHERE license_disc_expiry IS NOT NULL AND license_disc_expiry <= (CURRENT_DATE + 30) AND organization_id IS NULL`),
+    pgDb.query(`SELECT TO_CHAR(COALESCE(p.paid_at, p.created_at), 'IYYY-IW') week, COALESCE(SUM(COALESCE(NULLIF(p.net_amount,0), p.amount)),0) total
     FROM payments p
     JOIN agreements a ON a.id = p.agreement_id
     JOIN bikes b ON b.id = a.bike_id
     JOIN users u ON u.id = a.user_id
-    WHERE p.status = 'success' AND COALESCE(p.paid_at, p.created_at) >= datetime('now','-90 days') AND ${agreementScope}
-    GROUP BY week ORDER BY week`).all();
+    WHERE p.status = 'success' AND COALESCE(p.paid_at, p.created_at) >= NOW() - INTERVAL '90 days' AND ${agreementScope}
+    GROUP BY week ORDER BY week`)
+  ]);
+  const stats = {
+    riders: Number(riders.c), admins: Number(admins.c),
+    active_agreements: Number(active_agreements.c), completed_agreements: Number(completed_agreements.c),
+    bikes_available: Number(bikes_available.c), bikes_allocated: Number(bikes_allocated.c), bikes_maintenance: Number(bikes_maintenance.c),
+    pending_applications: Number(pending_applications.c), pending_kyc: Number(pending_kyc.c),
+    revenue_total: Number(revenue_total.s), revenue_30d: Number(revenue_30d.s),
+    overdue_amount: Number(overdue_amount.s), overdue_count: Number(overdue_count.c),
+    default_action_count: Number(default_action_count.c),
+    upcoming_services: Number(upcoming_services.c), expiring_insurance: Number(expiring_insurance.c), expiring_license_disc: Number(expiring_license_disc.c)
+  };
+  const weekly = weeklyResult.rows.map((row) => ({ week: row.week, total: Number(row.total) }));
   res.json({ stats, weekly_revenue: weekly });
 });
 
-router.get('/fleet-owners/dashboard', (req, res) => {
-  const organizations = listFleetOwnerOrganizations();
+router.get('/fleet-owners/dashboard', async (req, res) => {
+  const organizations = await listFleetOwnerOrganizations();
   const summary = {
     organizations: organizations.length,
     trialing: organizations.filter((org) => org.status === 'trialing').length,
@@ -412,29 +438,32 @@ router.get('/fleet-owners/dashboard', (req, res) => {
   res.json({ summary, organizations });
 });
 
-router.get('/fleet-owners', superadminOnly, (req, res) => {
+router.get('/fleet-owners', superadminOnly, async (req, res) => {
   res.json({
     roles: FLEET_OWNER_ROLE_VALUES,
-    organizations: listFleetOwnerOrganizations(),
-    users: listFleetOwnerUsers()
+    organizations: await listFleetOwnerOrganizations(),
+    users: await listFleetOwnerUsers()
   });
 });
 
-router.post('/impersonate/:org_id', superadminOnly, (req, res) => {
+router.post('/impersonate/:org_id', superadminOnly, async (req, res) => {
   const orgId = Number(req.params.org_id);
   if (!Number.isInteger(orgId) || orgId <= 0) return res.status(400).json({ error: 'Invalid org id' });
 
-  const org = db.prepare('SELECT id, name FROM organizations WHERE id = ?').get(orgId);
+  const { rows: orgRows } = await pgDb.query('SELECT id, name FROM organizations WHERE id = $1', [orgId]);
+  const org = orgRows[0];
   if (!org) return res.status(404).json({ error: 'Organization not found' });
 
-  const target = db.prepare(
+  const { rows: targetRows } = await pgDb.query(
     `SELECT u.id, u.email, u.full_name, u.role, u.organization_id,
       o.name organization_name, o.slug organization_slug, o.status organization_status, o.plan_key organization_plan_key
      FROM users u
      LEFT JOIN organizations o ON o.id = u.organization_id
-     WHERE u.organization_id = ? AND u.deleted_at IS NULL AND u.status = 'active'
-     ORDER BY CASE u.role WHEN 'fleet_owner_admin' THEN 0 ELSE 1 END LIMIT 1`
-  ).get(orgId);
+     WHERE u.organization_id = $1 AND u.deleted_at IS NULL AND u.status = 'active'
+     ORDER BY CASE u.role WHEN 'fleet_owner_admin' THEN 0 ELSE 1 END LIMIT 1`,
+    [orgId]
+  );
+  const target = targetRows[0];
 
   if (!target) return res.status(404).json({ error: 'No active users found in this organization' });
 
@@ -444,7 +473,7 @@ router.post('/impersonate/:org_id', superadminOnly, (req, res) => {
     { expiresIn: '1h' }
   );
 
-  logAudit(req.user.id, 'superadmin.impersonate', 'organizations', orgId, {
+  await logAudit(req.user.id, 'superadmin.impersonate', 'organizations', orgId, {
     org_name: org.name, target_user_id: target.id, target_email: target.email
   }, req.ip);
 
@@ -459,11 +488,12 @@ const FLEET_PLAN_ENTITLEMENTS = {
   enterprise: { status: 'active',   max_bikes: 999, max_admin_users: 50 }
 };
 
-router.post('/organizations/:id/plan', superadminOnly, (req, res) => {
+router.post('/organizations/:id/plan', superadminOnly, async (req, res) => {
   const orgId = Number(req.params.id);
   if (!Number.isInteger(orgId) || orgId <= 0) return res.status(400).json({ error: 'Invalid organization id' });
 
-  const org = db.prepare('SELECT * FROM organizations WHERE id = ?').get(orgId);
+  const { rows: orgRows } = await pgDb.query('SELECT * FROM organizations WHERE id = $1', [orgId]);
+  const org = orgRows[0];
   if (!org) return res.status(404).json({ error: 'Organization not found' });
 
   const planKey = String(req.body.plan_key || '').trim();
@@ -479,10 +509,10 @@ router.post('/organizations/:id/plan', superadminOnly, (req, res) => {
   const maxBikes = Number(req.body.max_bikes) || defaults.max_bikes;
   const maxAdmins = Number(req.body.max_admin_users) || defaults.max_admin_users;
 
-  db.prepare(`UPDATE organizations SET plan_key = ?, status = ?, max_bikes = ?, max_admin_users = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
-    .run(planKey, newStatus, maxBikes, maxAdmins, orgId);
+  await pgDb.query(`UPDATE organizations SET plan_key = $1, status = $2, max_bikes = $3, max_admin_users = $4, updated_at = NOW() WHERE id = $5`,
+    [planKey, newStatus, maxBikes, maxAdmins, orgId]);
 
-  logAudit(req.user.id, 'organization.plan_changed', 'organizations', orgId, {
+  await logAudit(req.user.id, 'organization.plan_changed', 'organizations', orgId, {
     from_plan: org.plan_key,
     to_plan: planKey,
     from_status: org.status,
@@ -494,17 +524,18 @@ router.post('/organizations/:id/plan', superadminOnly, (req, res) => {
   res.json({ ok: true, plan_key: planKey, status: newStatus, max_bikes: maxBikes, max_admin_users: maxAdmins });
 });
 
-router.post('/fleet-owners/:id/status', superadminOnly, (req, res) => {
+router.post('/fleet-owners/:id/status', superadminOnly, async (req, res) => {
   const userId = Number(req.params.id);
   const status = String(req.body.status || '').trim();
   if (!Number.isInteger(userId) || userId <= 0) return res.status(400).json({ error: 'Invalid fleet owner id' });
   if (!['active', 'suspended'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
 
-  const target = db.prepare(`SELECT id, email, full_name, role, status, organization_id FROM users WHERE id = ? AND deleted_at IS NULL`).get(userId);
+  const { rows: targetRows } = await pgDb.query(`SELECT id, email, full_name, role, status, organization_id FROM users WHERE id = $1 AND deleted_at IS NULL`, [userId]);
+  const target = targetRows[0];
   if (!target || !FLEET_OWNER_ROLE_VALUES.includes(target.role)) return res.status(404).json({ error: 'Fleet owner not found' });
 
-  db.prepare(`UPDATE users SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(status, userId);
-  logAudit(req.user.id, 'fleet_owner.user_status', 'users', userId, {
+  await pgDb.query(`UPDATE users SET status = $1, updated_at = NOW() WHERE id = $2`, [status, userId]);
+  await logAudit(req.user.id, 'fleet_owner.user_status', 'users', userId, {
     email: target.email,
     from: target.status,
     to: status,
@@ -513,26 +544,27 @@ router.post('/fleet-owners/:id/status', superadminOnly, (req, res) => {
   res.json({ ok: true });
 });
 
-router.get('/organizations/:id/wallet', superadminOnly, (req, res) => {
+router.get('/organizations/:id/wallet', superadminOnly, async (req, res) => {
   const orgId = Number(req.params.id);
   if (!Number.isInteger(orgId) || orgId <= 0) return res.status(400).json({ error: 'Invalid organization id' });
 
-  const org = db.prepare('SELECT id, name FROM organizations WHERE id = ?').get(orgId);
-  if (!org) return res.status(404).json({ error: 'Organization not found' });
+  const { rows: orgRows } = await pgDb.query('SELECT id, name FROM organizations WHERE id = $1', [orgId]);
+  if (!orgRows[0]) return res.status(404).json({ error: 'Organization not found' });
 
-  const wallet = db.prepare('SELECT balance, total_collected, total_withdrawn, updated_at FROM fleet_wallets WHERE organization_id = ?').get(orgId)
-    || { balance: 0, total_collected: 0, total_withdrawn: 0, updated_at: null };
-  const transactions = db.prepare(`SELECT id, type, amount, fee_amount, net_amount, description, actor_user_id, created_at
-    FROM fleet_wallet_transactions WHERE organization_id = ? ORDER BY created_at DESC LIMIT 25`).all(orgId);
+  const { rows: walletRows } = await pgDb.query('SELECT balance, total_collected, total_withdrawn, updated_at FROM fleet_wallets WHERE organization_id = $1', [orgId]);
+  const wallet = walletRows[0] || { balance: 0, total_collected: 0, total_withdrawn: 0, updated_at: null };
+  const { rows: transactions } = await pgDb.query(`SELECT id, type, amount, fee_amount, net_amount, description, actor_user_id, created_at
+    FROM fleet_wallet_transactions WHERE organization_id = $1 ORDER BY created_at DESC LIMIT 25`, [orgId]);
 
   res.json({ wallet, transactions });
 });
 
-router.post('/organizations/:id/wallet-adjustment', superadminOnly, (req, res) => {
+router.post('/organizations/:id/wallet-adjustment', superadminOnly, async (req, res) => {
   const orgId = Number(req.params.id);
   if (!Number.isInteger(orgId) || orgId <= 0) return res.status(400).json({ error: 'Invalid organization id' });
 
-  const org = db.prepare('SELECT id, name FROM organizations WHERE id = ?').get(orgId);
+  const { rows: orgRows } = await pgDb.query('SELECT id, name FROM organizations WHERE id = $1', [orgId]);
+  const org = orgRows[0];
   if (!org) return res.status(404).json({ error: 'Organization not found' });
 
   const amount = Number(req.body.amount);
@@ -540,65 +572,72 @@ router.post('/organizations/:id/wallet-adjustment', superadminOnly, (req, res) =
   const reason = String(req.body.reason || '').trim();
   if (!reason) return res.status(400).json({ error: 'A reason is required for a manual wallet adjustment' });
 
-  const balance = applyWalletAdjustmentAdmin(orgId, amount, reason, req.user.id);
+  const balance = await applyWalletAdjustmentAdmin(orgId, amount, reason, req.user.id);
 
-  logAudit(req.user.id, 'wallet.manual_adjustment', 'fleet_wallets', orgId,
+  await logAudit(req.user.id, 'wallet.manual_adjustment', 'fleet_wallets', orgId,
     { org_name: org.name, amount, reason, new_balance: balance }, req.ip);
 
   res.json({ ok: true, balance });
 });
 
-router.delete('/organizations/:id', superadminOnly, (req, res) => {
-  const orgId = Number(req.params.id);
-  if (!Number.isInteger(orgId) || orgId <= 0) return res.status(400).json({ error: 'Invalid organization id' });
-
-  const org = db.prepare('SELECT * FROM organizations WHERE id = ?').get(orgId);
-  if (!org) return res.status(404).json({ error: 'Organization not found' });
-
-  const userCount = db.prepare('SELECT COUNT(*) as n FROM users WHERE organization_id = ?').get(orgId).n;
-
-  // Disable FK enforcement for this cascading delete. better-sqlite3 is synchronous
-  // so no concurrent request can interleave between PRAGMA OFF and PRAGMA ON.
-  db.prepare('PRAGMA foreign_keys = OFF').run();
-  const deleteTx = db.transaction(() => {
-    db.prepare('DELETE FROM fleet_wallet_transactions WHERE organization_id = ?').run(orgId);
-    db.prepare('DELETE FROM fleet_payout_requests WHERE organization_id = ?').run(orgId);
-    db.prepare('DELETE FROM fleet_wallets WHERE organization_id = ?').run(orgId);
-    db.prepare('DELETE FROM rider_subscriptions WHERE organization_id = ?').run(orgId);
-    db.prepare('DELETE FROM collections_actions WHERE organization_id = ?').run(orgId);
-    db.prepare('DELETE FROM api_keys WHERE organization_id = ?').run(orgId);
-    db.prepare('DELETE FROM hubs WHERE organization_id = ?').run(orgId);
-    db.prepare('DELETE FROM bikes WHERE organization_id = ?').run(orgId);
-    db.prepare('DELETE FROM users WHERE organization_id = ?').run(orgId);
-    db.prepare('DELETE FROM organizations WHERE id = ?').run(orgId);
-  });
+router.delete('/organizations/:id', superadminOnly, async (req, res) => {
   try {
-    deleteTx();
-  } finally {
-    db.prepare('PRAGMA foreign_keys = ON').run();
+    const orgId = Number(req.params.id);
+    if (!Number.isInteger(orgId) || orgId <= 0) return res.status(400).json({ error: 'Invalid organization id' });
+
+    const { rows: orgRows } = await pgDb.query('SELECT * FROM organizations WHERE id = $1', [orgId]);
+    const org = orgRows[0];
+    if (!org) return res.status(404).json({ error: 'Organization not found' });
+
+    const { rows: userCountRows } = await pgDb.query('SELECT COUNT(*) as n FROM users WHERE organization_id = $1', [orgId]);
+    const userCount = Number(userCountRows[0].n);
+
+    // Unlike the old SQLite tool, this does not disable FK enforcement — Postgres
+    // will correctly refuse to delete an organization that still has agreements,
+    // payments, or other business history attached to its bikes/users, rather than
+    // silently orphaning those rows the way `PRAGMA foreign_keys = OFF` did.
+    await pgDb.withTransaction(async (client) => {
+      await client.query('DELETE FROM fleet_wallet_transactions WHERE organization_id = $1', [orgId]);
+      await client.query('DELETE FROM fleet_payout_requests WHERE organization_id = $1', [orgId]);
+      await client.query('DELETE FROM fleet_wallets WHERE organization_id = $1', [orgId]);
+      await client.query('DELETE FROM rider_subscriptions WHERE organization_id = $1', [orgId]);
+      await client.query('DELETE FROM collections_actions WHERE organization_id = $1', [orgId]);
+      await client.query('DELETE FROM api_keys WHERE organization_id = $1', [orgId]);
+      await client.query('UPDATE bikes SET hub_id = NULL WHERE organization_id = $1', [orgId]);
+      await client.query('DELETE FROM hubs WHERE organization_id = $1', [orgId]);
+      await client.query('DELETE FROM bikes WHERE organization_id = $1', [orgId]);
+      await client.query('DELETE FROM users WHERE organization_id = $1', [orgId]);
+      await client.query('DELETE FROM organizations WHERE id = $1', [orgId]);
+    });
+
+    await logAudit(req.user.id, 'organization.deleted', 'organizations', orgId, {
+      name: org.name,
+      plan_key: org.plan_key,
+      status: org.status,
+      deleted_users: userCount
+    }, req.ip);
+
+    res.json({ ok: true, deleted_users: userCount });
+  } catch (error) {
+    if (error.code === '23503') {
+      return res.status(409).json({ error: 'This organization still has agreements, payments, or other records attached and cannot be deleted. Suspend it instead.' });
+    }
+    res.status(500).json({ error: error.message || 'Could not delete organization' });
   }
-
-  logAudit(req.user.id, 'organization.deleted', 'organizations', orgId, {
-    name: org.name,
-    plan_key: org.plan_key,
-    status: org.status,
-    deleted_users: userCount
-  }, req.ip);
-
-  res.json({ ok: true, deleted_users: userCount });
 });
 
-router.post('/fleet-owners/:id/role', superadminOnly, (req, res) => {
+router.post('/fleet-owners/:id/role', superadminOnly, async (req, res) => {
   const userId = Number(req.params.id);
   const role = String(req.body.role || '').trim();
   if (!Number.isInteger(userId) || userId <= 0) return res.status(400).json({ error: 'Invalid fleet owner id' });
   if (!FLEET_OWNER_ROLE_VALUES.includes(role)) return res.status(400).json({ error: 'Invalid fleet owner role' });
 
-  const target = db.prepare(`SELECT id, email, full_name, role, organization_id FROM users WHERE id = ? AND deleted_at IS NULL`).get(userId);
+  const { rows: targetRows } = await pgDb.query(`SELECT id, email, full_name, role, organization_id FROM users WHERE id = $1 AND deleted_at IS NULL`, [userId]);
+  const target = targetRows[0];
   if (!target || !FLEET_OWNER_ROLE_VALUES.includes(target.role)) return res.status(404).json({ error: 'Fleet owner not found' });
 
-  db.prepare(`UPDATE users SET role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(role, userId);
-  logAudit(req.user.id, 'fleet_owner.user_role', 'users', userId, {
+  await pgDb.query(`UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2`, [role, userId]);
+  await logAudit(req.user.id, 'fleet_owner.user_role', 'users', userId, {
     email: target.email,
     from: target.role,
     to: role,
@@ -611,11 +650,12 @@ router.post('/fleet-owners/:id/send-password-reset', superadminOnly, async (req,
   const userId = Number(req.params.id);
   if (!Number.isInteger(userId) || userId <= 0) return res.status(400).json({ error: 'Invalid fleet owner id' });
 
-  const target = db.prepare(`SELECT id, email, full_name, role, status, organization_id FROM users WHERE id = ? AND deleted_at IS NULL`).get(userId);
+  const { rows: targetRows } = await pgDb.query(`SELECT id, email, full_name, role, status, organization_id FROM users WHERE id = $1 AND deleted_at IS NULL`, [userId]);
+  const target = targetRows[0];
   if (!target || !FLEET_OWNER_ROLE_VALUES.includes(target.role)) return res.status(404).json({ error: 'Fleet owner not found' });
   if (target.status !== 'active') return res.status(400).json({ error: 'Only active fleet owners can receive password reset links' });
 
-  const resetUrl = issuePasswordResetToken(target.id, req);
+  const resetUrl = await issuePasswordResetToken(target.id, req);
   try {
     await sendNotification({
       userId: target.id,
@@ -629,7 +669,7 @@ router.post('/fleet-owners/:id/send-password-reset', superadminOnly, async (req,
     return res.status(502).json({ error: 'Password reset link was created but the email could not be delivered. Check email provider configuration.' });
   }
 
-  logAudit(req.user.id, 'fleet_owner.password_reset', 'users', userId, {
+  await logAudit(req.user.id, 'fleet_owner.password_reset', 'users', userId, {
     email: target.email,
     organization_id: target.organization_id
   }, req.ip);
@@ -652,23 +692,24 @@ router.get('/email-provider-status', (req, res) => {
   });
 });
 
-router.get('/users', (req, res) => {
+router.get('/users', async (req, res) => {
   const role = req.query.role;
   const sql = `SELECT id, email, full_name, phone, role, status, country_of_origin, avatar_url, user_tags, created_at
     FROM users
-    WHERE deleted_at IS NULL ${role ? 'AND role = ?' : ''}
+    WHERE deleted_at IS NULL ${role ? 'AND role = $1' : ''}
     ORDER BY created_at DESC`;
-  const users = role ? db.prepare(sql).all(role) : db.prepare(sql).all();
+  const { rows: users } = await pgDb.query(sql, role ? [role] : []);
   res.json({ users });
 });
 
-router.get('/users/:id', (req, res) => {
-  const user = db.prepare('SELECT * FROM users WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
+router.get('/users/:id', async (req, res) => {
+  const { rows: userRows } = await pgDb.query('SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL', [req.params.id]);
+  const user = userRows[0];
   if (!user) return res.status(404).json({ error: 'Not found' });
   delete user.password_hash;
-  const docs = db.prepare(`SELECT * FROM kyc_documents WHERE user_id = ?`).all(req.params.id);
-  const apps = db.prepare(`SELECT * FROM applications WHERE user_id = ?`).all(req.params.id);
-  const ags = db.prepare(`SELECT a.*, b.make, b.model FROM agreements a JOIN bikes b ON b.id = a.bike_id WHERE a.user_id = ?`).all(req.params.id);
+  const { rows: docs } = await pgDb.query(`SELECT * FROM kyc_documents WHERE user_id = $1`, [req.params.id]);
+  const { rows: apps } = await pgDb.query(`SELECT * FROM applications WHERE user_id = $1`, [req.params.id]);
+  const { rows: ags } = await pgDb.query(`SELECT a.*, b.make, b.model FROM agreements a JOIN bikes b ON b.id = a.bike_id WHERE a.user_id = $1`, [req.params.id]);
   res.json({ user, kyc_documents: docs, applications: apps, agreements: ags });
 });
 
@@ -678,13 +719,14 @@ router.post('/users', superadminOnly, async (req, res) => {
     return res.status(400).json({ error: 'email, password, full_name and valid role are required' });
   }
   const normalizedEmail = String(email).trim().toLowerCase();
-  const exists = db.prepare('SELECT id FROM users WHERE email = ? AND deleted_at IS NULL').get(normalizedEmail);
-  if (exists) return res.status(409).json({ error: 'Email already exists' });
+  const { rows: existsRows } = await pgDb.query('SELECT id FROM users WHERE email = $1 AND deleted_at IS NULL', [normalizedEmail]);
+  if (existsRows[0]) return res.status(409).json({ error: 'Email already exists' });
   const hash = await bcrypt.hash(password, 10);
-  const info = db.prepare(`INSERT INTO users (email, password_hash, full_name, phone, role, status)
-    VALUES (?,?,?,?,?, 'active')`).run(normalizedEmail, hash, full_name, phone || null, role);
-  logAudit(req.user.id, 'user.create', 'users', info.lastInsertRowid, { role });
-  res.json({ id: info.lastInsertRowid });
+  const { rows: insertedRows } = await pgDb.query(`INSERT INTO users (email, password_hash, full_name, phone, role, status)
+    VALUES ($1,$2,$3,$4,$5, 'active') RETURNING id`, [normalizedEmail, hash, full_name, phone || null, role]);
+  const newUserId = insertedRows[0].id;
+  await logAudit(req.user.id, 'user.create', 'users', newUserId, { role });
+  res.json({ id: newUserId });
 });
 
 router.post('/users/bulk-email', async (req, res) => {
@@ -694,7 +736,7 @@ router.post('/users/bulk-email', async (req, res) => {
   const includeInApp = !!req.body.include_in_app;
   if (!subject || !message) return res.status(400).json({ error: 'Subject and message are required' });
 
-  const targets = selectBulkTargets({
+  const targets = await selectBulkTargets({
     user_ids: req.body.user_ids,
     role: req.body.role,
     status: req.body.status || 'active'
@@ -734,7 +776,7 @@ router.post('/users/bulk-email', async (req, res) => {
     }
   }
 
-  logAudit(req.user.id, 'users.bulk_email', 'users', null, {
+  await logAudit(req.user.id, 'users.bulk_email', 'users', null, {
     targeted: cappedTargets.length,
     email_sent: emailSent,
     email_failed: emailFailed,
@@ -761,11 +803,11 @@ router.post('/users/bulk-email', async (req, res) => {
 router.post('/users/bulk-password-reset', async (req, res) => {
   try {
   const customMessage = String(req.body.message || '').trim();
-  const targets = selectBulkTargets({
+  const targets = (await selectBulkTargets({
     user_ids: req.body.user_ids,
     role: req.body.role,
     status: req.body.status || 'active'
-  }).filter((user) => user.status === 'active');
+  })).filter((user) => user.status === 'active');
 
   if (!targets.length) return res.status(400).json({ error: 'No active users found for password reset' });
 
@@ -777,7 +819,7 @@ router.post('/users/bulk-password-reset', async (req, res) => {
 
   for (const target of cappedTargets) {
     try {
-      const resetUrl = issuePasswordResetToken(target.id, req);
+      const resetUrl = await issuePasswordResetToken(target.id, req);
       await sendNotification({
         userId: target.id,
         channel: 'email',
@@ -792,7 +834,7 @@ router.post('/users/bulk-password-reset', async (req, res) => {
     }
   }
 
-  logAudit(req.user.id, 'users.bulk_password_reset', 'users', null, {
+  await logAudit(req.user.id, 'users.bulk_password_reset', 'users', null, {
     targeted: cappedTargets.length,
     emailed,
     failed,
@@ -814,62 +856,65 @@ router.post('/users/bulk-password-reset', async (req, res) => {
   }
 });
 
-router.post('/users/:id/status', (req, res) => {
+router.post('/users/:id/status', async (req, res) => {
   const { status } = req.body;
   if (!['active', 'suspended'].includes(status)) return res.status(400).json({ error: 'Invalid' });
-  const target = db.prepare('SELECT role FROM users WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
+  const { rows: targetRows } = await pgDb.query('SELECT role FROM users WHERE id = $1 AND deleted_at IS NULL', [req.params.id]);
+  const target = targetRows[0];
   if (!target) return res.status(404).json({ error: 'User not found' });
   if (target.role === 'superadmin') return res.status(403).json({ error: 'Cannot change status of superadmin' });
-  db.prepare(`UPDATE users SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL`).run(status, req.params.id);
-  logAudit(req.user.id, 'user.status', 'users', Number(req.params.id), { status });
+  await pgDb.query(`UPDATE users SET status = $1, updated_at = NOW() WHERE id = $2 AND deleted_at IS NULL`, [status, req.params.id]);
+  await logAudit(req.user.id, 'user.status', 'users', Number(req.params.id), { status });
   res.json({ ok: true });
 });
 
-router.post('/users/:id/role', superadminOnly, (req, res) => {
+router.post('/users/:id/role', superadminOnly, async (req, res) => {
   const { role } = req.body;
   if (!['rider', 'admin', 'superadmin', 'technician'].includes(role)) {
     return res.status(400).json({ error: 'Invalid role' });
   }
-  const target = db.prepare(`SELECT id, role, email FROM users WHERE id = ? AND deleted_at IS NULL`).get(req.params.id);
+  const { rows: targetRows } = await pgDb.query(`SELECT id, role, email FROM users WHERE id = $1 AND deleted_at IS NULL`, [req.params.id]);
+  const target = targetRows[0];
   if (!target) return res.status(404).json({ error: 'User not found' });
   if (target.id === req.user.id) return res.status(400).json({ error: 'You cannot change your own role' });
-  db.prepare(`UPDATE users SET role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(role, target.id);
-  logAudit(req.user.id, 'user.role', 'users', Number(req.params.id), { from: target.role, to: role, email: target.email });
+  await pgDb.query(`UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2`, [role, target.id]);
+  await logAudit(req.user.id, 'user.role', 'users', Number(req.params.id), { from: target.role, to: role, email: target.email });
   res.json({ ok: true });
 });
 
-router.delete('/users/:id', superadminOnly, (req, res) => {
-  const target = db.prepare('SELECT * FROM users WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
+router.delete('/users/:id', superadminOnly, async (req, res) => {
+  const { rows: targetRows } = await pgDb.query('SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL', [req.params.id]);
+  const target = targetRows[0];
   if (!target) return res.status(404).json({ error: 'User not found' });
   if (target.id === req.user.id) return res.status(400).json({ error: 'You cannot remove your own account' });
   if (target.role === 'technician') return res.status(400).json({ error: 'Workshop technicians cannot be deleted here. Use the Workshop Staff tab to suspend this user.' });
   const tombstoneEmail = `removed+${target.id}+${Date.now()}@onfleet.local`;
-  db.prepare(`UPDATE users
-    SET deleted_at = CURRENT_TIMESTAMP, status = 'suspended', email = ?, phone = NULL, full_name = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?`).run(tombstoneEmail, `Removed User ${target.id}`, target.id);
-  logAudit(req.user.id, 'user.remove', 'users', Number(req.params.id), { previous_role: target.role });
+  await pgDb.query(`UPDATE users
+    SET deleted_at = NOW(), status = 'suspended', email = $1, phone = NULL, full_name = $2, updated_at = NOW()
+    WHERE id = $3`, [tombstoneEmail, `Removed User ${target.id}`, target.id]);
+  await logAudit(req.user.id, 'user.remove', 'users', Number(req.params.id), { previous_role: target.role });
   res.json({ ok: true });
 });
 
-router.get('/audit-logs', (req, res) => {
+router.get('/audit-logs', async (req, res) => {
   const limit = Math.min(Number(req.query.limit || 500), 2000);
   const { date_from, date_to, action, actor_id } = req.query;
   const where = [];
   const params = [];
-  if (date_from) { where.push(`l.created_at >= ?`); params.push(date_from); }
-  if (date_to) { where.push(`l.created_at <= ?`); params.push(date_to + 'T23:59:59'); }
-  if (action) { where.push(`l.action = ?`); params.push(action); }
-  if (actor_id) { where.push(`l.actor_id = ?`); params.push(Number(actor_id)); }
+  if (date_from) { where.push(`l.created_at >= $${params.length + 1}`); params.push(date_from); }
+  if (date_to) { where.push(`l.created_at <= $${params.length + 1}`); params.push(date_to + 'T23:59:59'); }
+  if (action) { where.push(`l.action = $${params.length + 1}`); params.push(action); }
+  if (actor_id) { where.push(`l.actor_id = $${params.length + 1}`); params.push(Number(actor_id)); }
   const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
-  const logs = db.prepare(`SELECT l.*, u.full_name FROM audit_logs l LEFT JOIN users u ON u.id = l.actor_id ${whereClause} ORDER BY l.created_at DESC LIMIT ?`).all(...params, limit);
-  const actions = db.prepare(`SELECT DISTINCT action FROM audit_logs ORDER BY action`).all().map((r) => r.action);
-  res.json({ logs, actions });
+  const { rows: logs } = await pgDb.query(`SELECT l.*, u.full_name FROM audit_logs l LEFT JOIN users u ON u.id = l.actor_id ${whereClause} ORDER BY l.created_at DESC LIMIT $${params.length + 1}`, [...params, limit]);
+  const { rows: actionRows } = await pgDb.query(`SELECT DISTINCT action FROM audit_logs ORDER BY action`);
+  res.json({ logs, actions: actionRows.map((r) => r.action) });
 });
 
 // ---------- FLEET PAYOUT REQUESTS ----------
 
-router.get('/fleet-payouts', (req, res) => {
-  const requests = db.prepare(`SELECT p.*, o.name AS org_name, u.full_name AS requested_by_name,
+router.get('/fleet-payouts', async (req, res) => {
+  const { rows: requests } = await pgDb.query(`SELECT p.*, o.name AS org_name, u.full_name AS requested_by_name,
       pu.full_name AS processed_by_name
     FROM fleet_payout_requests p
     JOIN organizations o ON o.id = p.organization_id
@@ -878,14 +923,15 @@ router.get('/fleet-payouts', (req, res) => {
     ORDER BY
       CASE p.status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END,
       p.created_at DESC
-    LIMIT 200`).all();
+    LIMIT 200`);
   res.json({ requests });
 });
 
-router.post('/fleet-payouts/:id/process', superadminOnly, (req, res) => {
+router.post('/fleet-payouts/:id/process', superadminOnly, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid payout request id' });
-  const request = db.prepare('SELECT * FROM fleet_payout_requests WHERE id = ?').get(id);
+  const { rows: requestRows } = await pgDb.query('SELECT * FROM fleet_payout_requests WHERE id = $1', [id]);
+  const request = requestRows[0];
   if (!request) return res.status(404).json({ error: 'Payout request not found' });
   if (request.status === 'paid') return res.status(400).json({ error: 'Payout already marked as paid' });
 
@@ -898,17 +944,17 @@ router.post('/fleet-payouts/:id/process', superadminOnly, (req, res) => {
 
   if (newStatus === 'rejected' && request.status !== 'paid') {
     // Refund the wallet balance
-    db.transaction(() => {
-      db.prepare(`UPDATE fleet_wallets SET balance = balance + ?, total_withdrawn = total_withdrawn - ?, updated_at = CURRENT_TIMESTAMP WHERE organization_id = ?`)
-        .run(request.amount_requested, request.amount_requested, request.organization_id);
-      db.prepare(`DELETE FROM fleet_wallet_transactions WHERE payout_request_id = ?`).run(id);
-    })();
+    await pgDb.withTransaction(async (client) => {
+      await client.query(`UPDATE fleet_wallets SET balance = balance + $1, total_withdrawn = total_withdrawn - $2, updated_at = NOW() WHERE organization_id = $3`,
+        [request.amount_requested, request.amount_requested, request.organization_id]);
+      await client.query(`DELETE FROM fleet_wallet_transactions WHERE payout_request_id = $1`, [id]);
+    });
   }
 
-  db.prepare(`UPDATE fleet_payout_requests SET status = ?, admin_notes = ?, processed_by = ?, processed_at = CURRENT_TIMESTAMP WHERE id = ?`)
-    .run(newStatus, admin_notes || null, req.user.id, id);
+  await pgDb.query(`UPDATE fleet_payout_requests SET status = $1, admin_notes = $2, processed_by = $3, processed_at = NOW() WHERE id = $4`,
+    [newStatus, admin_notes || null, req.user.id, id]);
 
-  logAudit(req.user.id, `fleet.payout.${newStatus}`, 'fleet_payout_requests', id, { action, admin_notes }, req.ip);
+  await logAudit(req.user.id, `fleet.payout.${newStatus}`, 'fleet_payout_requests', id, { action, admin_notes }, req.ip);
 
   const payoutMessages = {
     approved: (fmt) => `Your payout request of ${fmt} has been approved and is being processed. Funds will arrive in your bank account within 1–2 business days.`,
@@ -950,10 +996,12 @@ router.post('/fleet-owners/email', superadminOnly, async (req, res) => {
 
   let targetOrgs;
   if (Array.isArray(org_ids) && org_ids.length) {
-    const placeholders = org_ids.map(() => '?').join(',');
-    targetOrgs = db.prepare(`SELECT id, name, contact_email, trial_ends_at FROM organizations WHERE id IN (${placeholders})`).all(...org_ids);
+    const placeholders = org_ids.map((_, i) => `$${i + 1}`).join(',');
+    const { rows } = await pgDb.query(`SELECT id, name, contact_email, trial_ends_at FROM organizations WHERE id IN (${placeholders})`, org_ids);
+    targetOrgs = rows;
   } else {
-    targetOrgs = db.prepare(`SELECT id, name, contact_email, trial_ends_at FROM organizations`).all();
+    const { rows } = await pgDb.query(`SELECT id, name, contact_email, trial_ends_at FROM organizations`);
+    targetOrgs = rows;
   }
 
   targetOrgs = targetOrgs.filter((o) => o.contact_email);
@@ -989,7 +1037,7 @@ router.post('/fleet-owners/email', superadminOnly, async (req, res) => {
     }
   }
 
-  logAudit(req.user.id, 'admin.fleet_owner.email', 'organizations', null,
+  await logAudit(req.user.id, 'admin.fleet_owner.email', 'organizations', null,
     { template_key, org_ids, sent: results.sent, failed: results.failed.length }, req.ip);
 
   res.json(results);
@@ -1003,66 +1051,69 @@ function paystackHeaders() {
   return { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` };
 }
 
-function ensureFleetWalletAdmin(organizationId) {
-  db.prepare('INSERT OR IGNORE INTO fleet_wallets (organization_id) VALUES (?)').run(organizationId);
+async function ensureFleetWalletAdmin(organizationId) {
+  await pgDb.query('INSERT INTO fleet_wallets (organization_id) VALUES ($1) ON CONFLICT (organization_id) DO NOTHING', [organizationId]);
 }
 
-function creditFleetWalletAdmin(organizationId, grossAmountZAR, riderId, reference) {
+async function creditFleetWalletAdmin(organizationId, grossAmountZAR, riderId, reference) {
   const fee = +(grossAmountZAR * 0.035 + 1).toFixed(2);
   const net = +(grossAmountZAR - fee).toFixed(2);
-  ensureFleetWalletAdmin(organizationId);
-  db.transaction(() => {
+  await ensureFleetWalletAdmin(organizationId);
+  await pgDb.withTransaction(async (client) => {
     if (reference) {
-      const dup = db.prepare('SELECT id FROM fleet_wallet_transactions WHERE paystack_reference = ? AND organization_id = ?').get(reference, organizationId);
-      if (dup) return;
+      const { rows: dupRows } = await client.query('SELECT id FROM fleet_wallet_transactions WHERE paystack_reference = $1 AND organization_id = $2', [reference, organizationId]);
+      if (dupRows[0]) return;
     }
-    db.prepare('UPDATE fleet_wallets SET balance = balance + ?, total_collected = total_collected + ?, updated_at = CURRENT_TIMESTAMP WHERE organization_id = ?')
-      .run(net, net, organizationId);
-    db.prepare(`INSERT INTO fleet_wallet_transactions (organization_id, type, amount, fee_amount, net_amount, description, paystack_reference, rider_user_id, available_at)
-      VALUES (?,?,?,?,?,?,?,?, datetime('now', '+48 hours'))`)
-      .run(organizationId, 'credit', grossAmountZAR, fee, net, 'Weekly rider rental payment (admin sync)', reference || null, riderId || null);
-  })();
+    await client.query('UPDATE fleet_wallets SET balance = balance + $1, total_collected = total_collected + $2, updated_at = NOW() WHERE organization_id = $3',
+      [net, net, organizationId]);
+    await client.query(`INSERT INTO fleet_wallet_transactions (organization_id, type, amount, fee_amount, net_amount, description, paystack_reference, rider_user_id, available_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8, NOW() + INTERVAL '48 hours')`,
+      [organizationId, 'credit', grossAmountZAR, fee, net, 'Weekly rider rental payment (admin sync)', reference || null, riderId || null]);
+  });
 }
 
 // Manual admin correction to a fleet wallet balance — no Paystack fee, available immediately.
 // Returns the resulting balance. `amount` may be negative to debit.
-function applyWalletAdjustmentAdmin(organizationId, amount, reason, actorUserId) {
-  ensureFleetWalletAdmin(organizationId);
-  const balance = db.transaction(() => {
-    db.prepare('UPDATE fleet_wallets SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP WHERE organization_id = ?')
-      .run(amount, organizationId);
-    db.prepare(`INSERT INTO fleet_wallet_transactions (organization_id, type, amount, fee_amount, net_amount, description, actor_user_id)
-      VALUES (?, 'adjustment', ?, 0, ?, ?, ?)`)
-      .run(organizationId, amount, amount, reason, actorUserId);
-    return db.prepare('SELECT balance FROM fleet_wallets WHERE organization_id = ?').get(organizationId).balance;
-  })();
-  return balance;
+async function applyWalletAdjustmentAdmin(organizationId, amount, reason, actorUserId) {
+  await ensureFleetWalletAdmin(organizationId);
+  const balance = await pgDb.withTransaction(async (client) => {
+    await client.query('UPDATE fleet_wallets SET balance = balance + $1, updated_at = NOW() WHERE organization_id = $2',
+      [amount, organizationId]);
+    await client.query(`INSERT INTO fleet_wallet_transactions (organization_id, type, amount, fee_amount, net_amount, description, actor_user_id)
+      VALUES ($1, 'adjustment', $2, 0, $3, $4, $5)`,
+      [organizationId, amount, amount, reason, actorUserId]);
+    const { rows } = await client.query('SELECT balance FROM fleet_wallets WHERE organization_id = $1', [organizationId]);
+    return rows[0].balance;
+  });
+  return Number(balance);
 }
 
-function applyPaymentToScheduleAdmin(agreementId, amountZAR) {
-  const agreement = db.prepare('SELECT status FROM agreements WHERE id = ?').get(agreementId);
+async function applyPaymentToScheduleAdmin(agreementId, amountZAR) {
+  const { rows: agreementRows } = await pgDb.query('SELECT status FROM agreements WHERE id = $1', [agreementId]);
+  const agreement = agreementRows[0];
   if (!agreement) throw new Error('Agreement not found');
   if (agreement.status === 'discontinued') throw new Error('Agreement discontinued');
-  const schedule = db.prepare(`SELECT * FROM payment_schedules WHERE agreement_id = ? AND status != 'paid' AND status != 'waived' ORDER BY week_number ASC`).all(agreementId);
+  const { rows: schedule } = await pgDb.query(`SELECT * FROM payment_schedules WHERE agreement_id = $1 AND status != 'paid' AND status != 'waived' ORDER BY week_number ASC`, [agreementId]);
   let remaining = amountZAR;
-  const upd = db.prepare('UPDATE payment_schedules SET amount_paid = ?, status = ?, paid_at = ? WHERE id = ?');
   for (const row of schedule) {
     if (remaining <= 0) break;
-    const owe = +(row.amount_due - row.amount_paid).toFixed(2);
+    const amountDue = Number(row.amount_due);
+    const amountPaid = Number(row.amount_paid);
+    const owe = +(amountDue - amountPaid).toFixed(2);
     const apply = Math.min(remaining, owe);
-    const newPaid = +(row.amount_paid + apply).toFixed(2);
-    const status = newPaid >= row.amount_due ? 'paid' : 'partial';
+    const newPaid = +(amountPaid + apply).toFixed(2);
+    const status = newPaid >= amountDue ? 'paid' : 'partial';
     const paidAt = status === 'paid' ? new Date().toISOString() : row.paid_at;
-    upd.run(newPaid, status, paidAt, row.id);
+    await pgDb.query('UPDATE payment_schedules SET amount_paid = $1, status = $2, paid_at = $3 WHERE id = $4', [newPaid, status, paidAt, row.id]);
     remaining = +(remaining - apply).toFixed(2);
   }
-  recalcScheduleStatuses(agreementId);
+  await recalcScheduleStatuses(agreementId);
   return remaining;
 }
 
 // Resolve agreementId + orgId + riderId from a Paystack transaction object.
 // Returns null values for fields that cannot be resolved.
-function resolvePaystackTxnScope(txn, hintOrgId) {
+async function resolvePaystackTxnScope(txn, hintOrgId) {
   const meta = txn.metadata || {};
   const customerCode = txn.customer?.customer_code;
   const subscriptionCode = txn.subscription?.subscription_code;
@@ -1072,15 +1123,17 @@ function resolvePaystackTxnScope(txn, hintOrgId) {
   let riderId = Number(meta.rider_user_id) || null;
 
   if (agreementId) {
-    const ag = db.prepare('SELECT id, user_id FROM agreements WHERE id = ?').get(agreementId);
+    const { rows: agRows } = await pgDb.query('SELECT id, user_id FROM agreements WHERE id = $1', [agreementId]);
+    const ag = agRows[0];
     if (!ag) agreementId = null;
     else if (!riderId) riderId = ag.user_id;
   }
 
   if ((!agreementId || !orgId) && customerCode) {
-    const sub = subscriptionCode
-      ? db.prepare('SELECT agreement_id, organization_id, rider_user_id FROM rider_subscriptions WHERE paystack_subscription_code = ? LIMIT 1').get(subscriptionCode)
-      : db.prepare('SELECT agreement_id, organization_id, rider_user_id FROM rider_subscriptions WHERE paystack_customer_code = ? ORDER BY id DESC LIMIT 1').get(customerCode);
+    const { rows: subRows } = subscriptionCode
+      ? await pgDb.query('SELECT agreement_id, organization_id, rider_user_id FROM rider_subscriptions WHERE paystack_subscription_code = $1 LIMIT 1', [subscriptionCode])
+      : await pgDb.query('SELECT agreement_id, organization_id, rider_user_id FROM rider_subscriptions WHERE paystack_customer_code = $1 ORDER BY id DESC LIMIT 1', [customerCode]);
+    const sub = subRows[0];
     if (sub) {
       if (!agreementId && sub.agreement_id) agreementId = sub.agreement_id;
       if (!orgId && sub.organization_id) orgId = sub.organization_id;
@@ -1089,13 +1142,13 @@ function resolvePaystackTxnScope(txn, hintOrgId) {
   }
 
   if (!orgId && agreementId) {
-    const scope = db.prepare('SELECT b.organization_id FROM agreements a JOIN bikes b ON b.id = a.bike_id WHERE a.id = ?').get(agreementId);
-    if (scope?.organization_id) orgId = scope.organization_id;
+    const { rows: scopeRows } = await pgDb.query('SELECT b.organization_id FROM agreements a JOIN bikes b ON b.id = a.bike_id WHERE a.id = $1', [agreementId]);
+    if (scopeRows[0]?.organization_id) orgId = scopeRows[0].organization_id;
   }
 
   if (!riderId && agreementId) {
-    const ag = db.prepare('SELECT user_id FROM agreements WHERE id = ?').get(agreementId);
-    if (ag) riderId = ag.user_id;
+    const { rows: agRows } = await pgDb.query('SELECT user_id FROM agreements WHERE id = $1', [agreementId]);
+    if (agRows[0]) riderId = agRows[0].user_id;
   }
 
   return { agreementId, orgId, riderId };
@@ -1103,7 +1156,7 @@ function resolvePaystackTxnScope(txn, hintOrgId) {
 
 // Insert payment row + apply to schedule + credit wallet for a verified Paystack transaction.
 // Returns { result, payment_id } where result is 'synced' or 'already_recorded'.
-function replayPaystackTxn(txn, hintOrgId, actorUserId, ip) {
+async function replayPaystackTxn(txn, hintOrgId, actorUserId, ip) {
   const reference = txn.reference;
   const grossAmountZAR = (txn.amount || 0) / 100;
   if (grossAmountZAR <= 0) throw new Error('Zero-amount transaction');
@@ -1111,13 +1164,15 @@ function replayPaystackTxn(txn, hintOrgId, actorUserId, ip) {
   // Only a prior Paystack payment (matched by paystack_reference) counts as already recorded.
   // A manual EFT entry with a coincidentally identical reference is a separate payment and
   // must not block this Paystack record from being created and crediting the wallet.
-  const existing = db.prepare('SELECT id, status FROM payments WHERE paystack_reference = ?').get(reference);
+  const { rows: existingRows } = await pgDb.query('SELECT id, status FROM payments WHERE paystack_reference = $1', [reference]);
+  const existing = existingRows[0];
   if (existing && existing.status === 'success') return { result: 'already_recorded', payment_id: existing.id };
 
-  const { agreementId, orgId, riderId } = resolvePaystackTxnScope(txn, hintOrgId);
+  const { agreementId, orgId, riderId } = await resolvePaystackTxnScope(txn, hintOrgId);
   if (!agreementId) throw new Error('Could not resolve agreement_id for this transaction');
 
-  const agreement = db.prepare('SELECT status FROM agreements WHERE id = ?').get(agreementId);
+  const { rows: agreementRows } = await pgDb.query('SELECT status FROM agreements WHERE id = $1', [agreementId]);
+  const agreement = agreementRows[0];
   if (!agreement) throw new Error('Agreement not found');
 
   // Use same fee formula as creditFleetWalletAdmin so the payment record matches the wallet credit.
@@ -1126,27 +1181,26 @@ function replayPaystackTxn(txn, hintOrgId, actorUserId, ip) {
   // Use the actual Paystack payment date so payments appear correctly in history.
   const paidAt = txn.paid_at || txn.created_at || new Date().toISOString();
 
-  let paymentId;
-  db.transaction(() => {
-    const alreadyPs = db.prepare('SELECT id FROM payments WHERE paystack_reference = ?').get(reference);
-    if (alreadyPs) { paymentId = alreadyPs.id; return; }
+  const paymentId = await pgDb.withTransaction(async (client) => {
+    const { rows: alreadyPsRows } = await client.query('SELECT id FROM payments WHERE paystack_reference = $1', [reference]);
+    if (alreadyPsRows[0]) return alreadyPsRows[0].id;
 
-    const info = db.prepare(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, paystack_reference, status, fee_amount, net_amount, paid_at, notes)
-      VALUES (?,?,?,'ZAR','paystack',?,?,'success',?,?,?,'Synced from Paystack admin tool')`)
-      .run(agreementId, riderId, grossAmountZAR, reference, reference, fee, net, paidAt);
-    paymentId = info.lastInsertRowid;
-  })();
+    const { rows: insertedRows } = await client.query(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, paystack_reference, status, fee_amount, net_amount, paid_at, notes)
+      VALUES ($1,$2,$3,'ZAR','paystack',$4,$5,'success',$6,$7,$8,'Synced from Paystack admin tool') RETURNING id`,
+      [agreementId, riderId, grossAmountZAR, reference, reference, fee, net, paidAt]);
+    return insertedRows[0].id;
+  });
 
   if (agreement.status !== 'discontinued') {
-    try { applyPaymentToScheduleAdmin(agreementId, grossAmountZAR); } catch (e) {
+    try { await applyPaymentToScheduleAdmin(agreementId, grossAmountZAR); } catch (e) {
       console.error(`[admin sync] schedule apply error for agreement ${agreementId}:`, e.message);
     }
   }
 
-  if (orgId) creditFleetWalletAdmin(orgId, grossAmountZAR, riderId, reference);
+  if (orgId) await creditFleetWalletAdmin(orgId, grossAmountZAR, riderId, reference);
 
   if (actorUserId) {
-    logAudit(actorUserId, 'admin.paystack.replay_charge', 'payments', paymentId,
+    await logAudit(actorUserId, 'admin.paystack.replay_charge', 'payments', paymentId,
       { reference, agreement_id: agreementId, org_id: orgId, amount: grossAmountZAR }, ip);
   }
 
@@ -1188,8 +1242,8 @@ router.post('/paystack/diagnose', superadminOnly, async (req, res) => {
       };
       // Check if we can find this customer's email in our DB
       if (sub?.customer?.email) {
-        const user = db.prepare('SELECT id, email, full_name, role FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1').get(sub.customer.email);
-        out.local_user_match = user || null;
+        const { rows: userRows } = await pgDb.query('SELECT id, email, full_name, role FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1', [sub.customer.email]);
+        out.local_user_match = userRows[0] || null;
       }
       // Also fetch transactions for this customer
       if (sub?.customer?.customer_code) {
@@ -1299,15 +1353,17 @@ async function fetchPlanSubscriptions(planCode) {
 // Given a Paystack subscription object and a target org, find the matching
 // local rider + agreement by matching the customer's email to a user in our DB
 // who has an agreement on a bike belonging to this org.
-function resolveSubscriptionToAgreement(psSub, orgId) {
+async function resolveSubscriptionToAgreement(psSub, orgId) {
   const email = psSub.customer?.email;
   if (!email) return null;
-  const user = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1').get(email);
+  const { rows: userRows } = await pgDb.query('SELECT id FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1', [email]);
+  const user = userRows[0];
   if (!user) return null;
-  const ag = db.prepare(`SELECT a.id FROM agreements a
+  const { rows: agRows } = await pgDb.query(`SELECT a.id FROM agreements a
     JOIN bikes b ON b.id = a.bike_id
-    WHERE a.user_id = ? AND b.organization_id = ? AND a.status IN ('active','paused','defaulted','completed')
-    ORDER BY a.id DESC LIMIT 1`).get(user.id, orgId);
+    WHERE a.user_id = $1 AND b.organization_id = $2 AND a.status IN ('active','paused','defaulted','completed')
+    ORDER BY a.id DESC LIMIT 1`, [user.id, orgId]);
+  const ag = agRows[0];
   return ag ? { riderId: user.id, agreementId: ag.id } : null;
 }
 
@@ -1348,7 +1404,7 @@ async function processSubscriptionInvoices(psSub, orgId, riderId, agreementId, a
     if (orgId && !txn.metadata.organization_id) txn.metadata.organization_id = orgId;
 
     try {
-      const outcome = replayPaystackTxn(txn, orgId, actorUserId, ip);
+      const outcome = await replayPaystackTxn(txn, orgId, actorUserId, ip);
       if (outcome.result === 'already_recorded') results.skipped++;
       else results.synced++;
     } catch (err) {
@@ -1383,16 +1439,18 @@ async function syncOneSubscription(subCode, orgId, actorUserId, ip, results, see
 
   // Check if email matches a local user
   if (diag.customer_email) {
-    const user = db.prepare('SELECT id, full_name FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1').get(diag.customer_email);
+    const { rows: userRows } = await pgDb.query('SELECT id, full_name FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1', [diag.customer_email]);
+    const user = userRows[0];
     diag.email_match = user ? { id: user.id, name: user.full_name } : null;
   }
 
   // Backfill customer code if we don't have it.
-  const localRow = db.prepare('SELECT id, paystack_customer_code, rider_user_id, agreement_id FROM rider_subscriptions WHERE paystack_subscription_code = ?').get(subCode);
+  const { rows: localRowRows } = await pgDb.query('SELECT id, paystack_customer_code, rider_user_id, agreement_id FROM rider_subscriptions WHERE paystack_subscription_code = $1', [subCode]);
+  const localRow = localRowRows[0];
   const customerCode = psSub.customer?.customer_code;
   if (localRow && !localRow.paystack_customer_code && customerCode) {
-    db.prepare('UPDATE rider_subscriptions SET paystack_customer_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-      .run(customerCode, localRow.id);
+    await pgDb.query('UPDATE rider_subscriptions SET paystack_customer_code = $1, updated_at = NOW() WHERE id = $2',
+      [customerCode, localRow.id]);
   }
 
   // Resolve org match via email if we don't have a local row.
@@ -1400,14 +1458,14 @@ async function syncOneSubscription(subCode, orgId, actorUserId, ip, results, see
   let riderId = localRow?.rider_user_id || null;
   let agreementId = localRow?.agreement_id || null;
   if (!riderId || !agreementId) {
-    const match = resolveSubscriptionToAgreement(psSub, orgId);
+    const match = await resolveSubscriptionToAgreement(psSub, orgId);
     if (match) { riderId = riderId || match.riderId; agreementId = agreementId || match.agreementId; }
   }
   if (!agreementId && hintAgreementId) {
     agreementId = hintAgreementId;
     if (!riderId) {
-      const ag = db.prepare('SELECT user_id FROM agreements WHERE id = ?').get(agreementId);
-      if (ag) riderId = ag.user_id;
+      const { rows: agRows } = await pgDb.query('SELECT user_id FROM agreements WHERE id = $1', [agreementId]);
+      if (agRows[0]) riderId = agRows[0].user_id;
     }
     diag.hint_agreement_used = true;
   }
@@ -1415,11 +1473,11 @@ async function syncOneSubscription(subCode, orgId, actorUserId, ip, results, see
   diag.agreement_id = agreementId;
 
   if (!localRow && riderId && agreementId) {
-    db.prepare(`INSERT OR IGNORE INTO rider_subscriptions
+    await pgDb.query(`INSERT INTO rider_subscriptions
       (organization_id, rider_user_id, agreement_id, paystack_subscription_code, paystack_customer_code, plan_code, weekly_amount, status)
-      VALUES (?,?,?,?,?,?,?,?)`)
-      .run(orgId, riderId, agreementId, subCode, customerCode || null, psSub.plan?.plan_code || null,
-        (psSub.amount || 0) / 100, psSub.status === 'active' ? 'active' : 'cancelled');
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING`,
+      [orgId, riderId, agreementId, subCode, customerCode || null, psSub.plan?.plan_code || null,
+        (psSub.amount || 0) / 100, psSub.status === 'active' ? 'active' : 'cancelled']);
   }
 
   await processSubscriptionInvoices(psSub, orgId, riderId, agreementId, actorUserId, ip, results);
@@ -1437,7 +1495,7 @@ async function syncOneSubscription(subCode, orgId, actorUserId, ip, results, see
         if (agreementId && !txn.metadata.agreement_id) txn.metadata.agreement_id = agreementId;
         if (orgId && !txn.metadata.organization_id) txn.metadata.organization_id = orgId;
         try {
-          const outcome = replayPaystackTxn(txn, orgId, actorUserId, ip);
+          const outcome = await replayPaystackTxn(txn, orgId, actorUserId, ip);
           if (outcome.result === 'already_recorded') results.skipped++;
           else results.synced++;
         } catch (err) {
@@ -1469,8 +1527,8 @@ router.post('/paystack/sync-org', superadminOnly, async (req, res) => {
   let hintAgreementId = null;
   const hintAgreementNumber = req.body?.hint_agreement_number ? String(req.body.hint_agreement_number).trim() : null;
   if (hintAgreementNumber) {
-    const ag = db.prepare('SELECT id FROM agreements WHERE agreement_number = ?').get(hintAgreementNumber);
-    if (ag) hintAgreementId = ag.id;
+    const { rows: agRows } = await pgDb.query('SELECT id FROM agreements WHERE agreement_no = $1', [hintAgreementNumber]);
+    if (agRows[0]) hintAgreementId = agRows[0].id;
     else return res.status(400).json({ error: `Agreement not found: ${hintAgreementNumber}` });
   }
 
@@ -1491,13 +1549,13 @@ router.post('/paystack/sync-org', superadminOnly, async (req, res) => {
         results.errors.push({ subscription_code: code, reason: err.message });
       }
     }
-    logAudit(req.user.id, 'admin.paystack.sync_org', 'organizations', orgId, results, req.ip);
+    await logAudit(req.user.id, 'admin.paystack.sync_org', 'organizations', orgId, results, req.ip);
     return res.json(results);
   }
 
   // ── Path 1: rider_subscriptions rows with Paystack codes ──────────────────
-  const localSubs = db.prepare(`SELECT * FROM rider_subscriptions
-    WHERE organization_id = ? AND (paystack_customer_code IS NOT NULL OR paystack_subscription_code IS NOT NULL)`).all(orgId);
+  const { rows: localSubs } = await pgDb.query(`SELECT * FROM rider_subscriptions
+    WHERE organization_id = $1 AND (paystack_customer_code IS NOT NULL OR paystack_subscription_code IS NOT NULL)`, [orgId]);
   results.debug.local_sub_rows = localSubs.length;
 
   for (const sub of localSubs) {
@@ -1517,7 +1575,7 @@ router.post('/paystack/sync-org', superadminOnly, async (req, res) => {
         results.checked += txns.length;
         for (const txn of txns) {
           try {
-            const outcome = replayPaystackTxn(txn, orgId, req.user.id, req.ip);
+            const outcome = await replayPaystackTxn(txn, orgId, req.user.id, req.ip);
             if (outcome.result === 'already_recorded') results.skipped++;
             else results.synced++;
           } catch (err) {
@@ -1547,7 +1605,7 @@ router.post('/paystack/sync-org', superadminOnly, async (req, res) => {
 
     for (const psSub of psSubs) {
       if (seenSubCodes.has(psSub.subscription_code)) continue;
-      const match = resolveSubscriptionToAgreement(psSub, orgId);
+      const match = await resolveSubscriptionToAgreement(psSub, orgId);
       if (!match) continue;
       try {
         await syncOneSubscription(psSub.subscription_code, orgId, req.user.id, req.ip, results, seenSubCodes);
@@ -1557,40 +1615,40 @@ router.post('/paystack/sync-org', superadminOnly, async (req, res) => {
     }
   }
 
-  logAudit(req.user.id, 'admin.paystack.sync_org', 'organizations', orgId, results, req.ip);
+  await logAudit(req.user.id, 'admin.paystack.sync_org', 'organizations', orgId, results, req.ip);
   res.json(results);
 });
 
 // ── GET /admin/org-agreements ─────────────────────────────────────────────────
 // Returns active/defaulted/paused agreements for an org (for dropdowns).
-router.get('/org-agreements', superadminOnly, (req, res) => {
+router.get('/org-agreements', superadminOnly, async (req, res) => {
   const orgId = Number(req.query.org_id);
   if (!orgId) return res.status(400).json({ error: 'org_id required' });
-  const agreements = db.prepare(`
+  const { rows: agreements } = await pgDb.query(`
     SELECT a.id, a.agreement_no, a.status, a.created_at,
            u.id as rider_id, u.full_name as rider_name, u.email as rider_email,
            b.registration as bike_reg
     FROM agreements a
     JOIN users u ON u.id = a.user_id
     JOIN bikes b ON b.id = a.bike_id
-    WHERE b.organization_id = ?
+    WHERE b.organization_id = $1
       AND a.status IN ('active','paused','defaulted')
     ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.id DESC
-  `).all(orgId);
+  `, [orgId]);
   res.json(agreements);
 });
 
 // ── GET /admin/agreement-schedule ─────────────────────────────────────────────
 // Returns all payment schedule weeks for an agreement (for the payment modal).
-router.get('/agreement-schedule', superadminOnly, (req, res) => {
+router.get('/agreement-schedule', superadminOnly, async (req, res) => {
   const agreementId = Number(req.query.agreement_id);
   if (!agreementId) return res.status(400).json({ error: 'agreement_id required' });
-  const weeks = db.prepare(`
+  const { rows: weeks } = await pgDb.query(`
     SELECT id, week_number, due_date, amount_due, amount_paid, status, paid_at
     FROM payment_schedules
-    WHERE agreement_id = ?
+    WHERE agreement_id = $1
     ORDER BY week_number ASC
-  `).all(agreementId);
+  `, [agreementId]);
   res.json(weeks);
 });
 
@@ -1598,7 +1656,7 @@ router.get('/agreement-schedule', superadminOnly, (req, res) => {
 // Manually record a Paystack payment, apply it to a contract schedule, and
 // credit the fleet wallet.  Body: { org_id, agreement_id, amount, reference?,
 // paid_at?, schedule_week_ids? }
-router.post('/record-paystack-payment', superadminOnly, (req, res) => {
+router.post('/record-paystack-payment', superadminOnly, async (req, res) => {
   const { org_id, agreement_id, amount, reference, paid_at, schedule_week_ids } = req.body;
 
   if (!agreement_id || !amount || Number(amount) <= 0) {
@@ -1606,10 +1664,11 @@ router.post('/record-paystack-payment', superadminOnly, (req, res) => {
   }
 
   const grossAmountZAR = Number(amount);
-  const agreement = db.prepare(`
+  const { rows: agreementRows } = await pgDb.query(`
     SELECT a.id, a.status, a.user_id, b.organization_id
-    FROM agreements a JOIN bikes b ON b.id = a.bike_id WHERE a.id = ?
-  `).get(Number(agreement_id));
+    FROM agreements a JOIN bikes b ON b.id = a.bike_id WHERE a.id = $1
+  `, [Number(agreement_id)]);
+  const agreement = agreementRows[0];
   if (!agreement) return res.status(404).json({ error: 'Agreement not found' });
 
   const orgId = Number(org_id) || agreement.organization_id;
@@ -1617,68 +1676,68 @@ router.post('/record-paystack-payment', superadminOnly, (req, res) => {
   const ref = (reference || '').trim() || `ADMIN-PS-${Date.now()}`;
   const paymentDate = paid_at ? new Date(paid_at).toISOString() : new Date().toISOString();
 
-  const dupCheck = db.prepare('SELECT id FROM payments WHERE paystack_reference = ? OR reference = ?').get(ref, ref);
-  if (dupCheck) return res.status(409).json({ error: `Reference already exists: ${ref}` });
+  const { rows: dupRows } = await pgDb.query('SELECT id FROM payments WHERE paystack_reference = $1 OR reference = $1', [ref]);
+  if (dupRows[0]) return res.status(409).json({ error: `Reference already exists: ${ref}` });
 
   // No platform fee for admin-recorded payments — the entered amount goes directly to the wallet.
-  let paymentId;
-  db.transaction(() => {
-    const info = db.prepare(`
+  const paymentId = await pgDb.withTransaction(async (client) => {
+    const { rows: insertedRows } = await client.query(`
       INSERT INTO payments
         (agreement_id, user_id, amount, currency, method, reference, paystack_reference,
          status, fee_amount, net_amount, paid_at, notes)
-      VALUES (?,?,?,'ZAR','paystack',?,?,'success',0,?,?,'Admin-recorded Paystack payment')
-    `).run(Number(agreement_id), riderId, grossAmountZAR, ref, ref, grossAmountZAR, paymentDate);
-    paymentId = info.lastInsertRowid;
+      VALUES ($1,$2,$3,'ZAR','paystack',$4,$5,'success',0,$6,$7,'Admin-recorded Paystack payment') RETURNING id
+    `, [Number(agreement_id), riderId, grossAmountZAR, ref, ref, grossAmountZAR, paymentDate]);
+    const newPaymentId = insertedRows[0].id;
 
     const weekIds = Array.isArray(schedule_week_ids)
       ? schedule_week_ids.map(Number).filter(Boolean)
       : [];
     if (weekIds.length) {
-      const upd = db.prepare(
-        'UPDATE payment_schedules SET amount_paid=?, status=?, paid_at=? WHERE id=? AND agreement_id=?'
-      );
       let remaining = grossAmountZAR;
       for (const wid of weekIds) {
         if (remaining <= 0) break;
-        const row = db.prepare('SELECT * FROM payment_schedules WHERE id=? AND agreement_id=?')
-          .get(wid, Number(agreement_id));
+        const { rows: rowRows } = await client.query('SELECT * FROM payment_schedules WHERE id=$1 AND agreement_id=$2',
+          [wid, Number(agreement_id)]);
+        const row = rowRows[0];
         if (!row || row.status === 'paid' || row.status === 'waived') continue;
-        const owe = +(row.amount_due - row.amount_paid).toFixed(2);
+        const amountDue = Number(row.amount_due);
+        const amountPaid = Number(row.amount_paid);
+        const owe = +(amountDue - amountPaid).toFixed(2);
         const apply = Math.min(remaining, owe);
-        const newPaid = +(row.amount_paid + apply).toFixed(2);
-        const newStatus = newPaid >= row.amount_due ? 'paid' : 'partial';
-        upd.run(newPaid, newStatus, newStatus === 'paid' ? paymentDate : (row.paid_at || null),
-          wid, Number(agreement_id));
+        const newPaid = +(amountPaid + apply).toFixed(2);
+        const newStatus = newPaid >= amountDue ? 'paid' : 'partial';
+        await client.query('UPDATE payment_schedules SET amount_paid=$1, status=$2, paid_at=$3 WHERE id=$4 AND agreement_id=$5',
+          [newPaid, newStatus, newStatus === 'paid' ? paymentDate : (row.paid_at || null), wid, Number(agreement_id)]);
         remaining = +(remaining - apply).toFixed(2);
       }
     }
-  })();
+    return newPaymentId;
+  });
 
   if (agreement.status !== 'discontinued') {
     const weekIds = Array.isArray(schedule_week_ids) ? schedule_week_ids : [];
     if (weekIds.length) {
-      recalcScheduleStatuses(Number(agreement_id));
+      await recalcScheduleStatuses(Number(agreement_id));
     } else {
-      try { applyPaymentToScheduleAdmin(Number(agreement_id), grossAmountZAR); } catch (e) {
+      try { await applyPaymentToScheduleAdmin(Number(agreement_id), grossAmountZAR); } catch (e) {
         console.error('[admin record payment] schedule apply error:', e.message);
       }
     }
   }
 
   // Credit wallet with the full entered amount — no platform fee deduction for manual entries.
-  ensureFleetWalletAdmin(orgId);
-  db.transaction(() => {
-    const dup = db.prepare('SELECT id FROM fleet_wallet_transactions WHERE paystack_reference = ? AND organization_id = ?').get(ref, orgId);
-    if (dup) return;
-    db.prepare('UPDATE fleet_wallets SET balance = balance + ?, total_collected = total_collected + ?, updated_at = CURRENT_TIMESTAMP WHERE organization_id = ?')
-      .run(grossAmountZAR, grossAmountZAR, orgId);
-    db.prepare(`INSERT INTO fleet_wallet_transactions (organization_id, type, amount, fee_amount, net_amount, description, paystack_reference, rider_user_id, available_at)
-      VALUES (?,?,?,0,?,?,?,?, datetime('now', '+48 hours'))`)
-      .run(orgId, 'credit', grossAmountZAR, grossAmountZAR, 'Admin-recorded Paystack payment', ref, riderId || null);
-  })();
+  await ensureFleetWalletAdmin(orgId);
+  await pgDb.withTransaction(async (client) => {
+    const { rows: dupWalletRows } = await client.query('SELECT id FROM fleet_wallet_transactions WHERE paystack_reference = $1 AND organization_id = $2', [ref, orgId]);
+    if (dupWalletRows[0]) return;
+    await client.query('UPDATE fleet_wallets SET balance = balance + $1, total_collected = total_collected + $2, updated_at = NOW() WHERE organization_id = $3',
+      [grossAmountZAR, grossAmountZAR, orgId]);
+    await client.query(`INSERT INTO fleet_wallet_transactions (organization_id, type, amount, fee_amount, net_amount, description, paystack_reference, rider_user_id, available_at)
+      VALUES ($1,$2,$3,0,$4,$5,$6,$7, NOW() + INTERVAL '48 hours')`,
+      [orgId, 'credit', grossAmountZAR, grossAmountZAR, 'Admin-recorded Paystack payment', ref, riderId || null]);
+  });
 
-  logAudit(req.user.id, 'admin.record_paystack_payment', 'payments', paymentId,
+  await logAudit(req.user.id, 'admin.record_paystack_payment', 'payments', paymentId,
     { agreement_id, org_id: orgId, amount: grossAmountZAR, reference: ref, paid_at: paymentDate }, req.ip);
 
   res.json({ success: true, payment_id: paymentId, amount: grossAmountZAR, reference: ref, net_to_wallet: grossAmountZAR });

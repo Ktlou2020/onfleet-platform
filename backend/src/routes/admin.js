@@ -677,8 +677,8 @@ router.post('/fleet-owners/:id/send-password-reset', superadminOnly, async (req,
   res.json({ ok: true });
 });
 
-router.get('/strategy-report', (req, res) => {
-  res.json(generateStrategicReport());
+router.get('/strategy-report', async (req, res) => {
+  res.json(await generateStrategicReport());
 });
 
 router.get('/email-provider-status', (req, res) => {

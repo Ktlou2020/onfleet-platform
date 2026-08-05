@@ -1,12 +1,13 @@
-const db = require('../db');
+const pgDb = require('../pgDb');
 
 function pct(value, total) {
   if (!total) return 0;
   return +((value / total) * 100).toFixed(1);
 }
 
-function scalar(query, ...params) {
-  const row = db.prepare(query).get(...params) || {};
+async function scalar(query, params = []) {
+  const { rows } = await pgDb.query(query, params);
+  const row = rows[0] || {};
   return Number(Object.values(row)[0] || 0);
 }
 
@@ -19,8 +20,8 @@ function rowsToMix(rows, keyName = 'label') {
   })).sort((a, b) => b.count - a.count);
 }
 
-function buildPlatformMix() {
-  const rows = db.prepare(`SELECT delivery_platforms FROM applications WHERE COALESCE(delivery_platforms,'') != ''`).all();
+async function buildPlatformMix() {
+  const { rows } = await pgDb.query(`SELECT delivery_platforms FROM applications WHERE COALESCE(delivery_platforms,'') != ''`);
   const counts = new Map();
   for (const row of rows) {
     String(row.delivery_platforms || '').split(',').map((item) => item.trim()).filter(Boolean)
@@ -31,8 +32,8 @@ function buildPlatformMix() {
     .sort((a, b) => b.count - a.count);
 }
 
-function buildBikeRoi() {
-  return db.prepare(`SELECT
+async function buildBikeRoi() {
+  const { rows } = await pgDb.query(`SELECT
       b.id,
       b.make,
       b.model,
@@ -43,17 +44,18 @@ function buildBikeRoi() {
         JOIN agreements a ON a.id = p.agreement_id
         WHERE a.bike_id = b.id AND p.status = 'success'), 0) AS collected,
       COALESCE((SELECT SUM(cost) FROM service_records s WHERE s.bike_id = b.id), 0) AS service_costs
-    FROM bikes b`).all().map((bike) => {
-      const total_cost = Number(bike.purchase_price) + Number(bike.service_costs);
-      const net_roi_value = +(Number(bike.collected) - total_cost).toFixed(2);
-      const roi_pct = total_cost > 0 ? +((net_roi_value / total_cost) * 100).toFixed(1) : 0;
-      return {
-        ...bike,
-        total_cost: +total_cost.toFixed(2),
-        net_roi_value,
-        roi_pct
-      };
-    }).sort((a, b) => b.net_roi_value - a.net_roi_value);
+    FROM bikes b`);
+  return rows.map((bike) => {
+    const total_cost = Number(bike.purchase_price) + Number(bike.service_costs);
+    const net_roi_value = +(Number(bike.collected) - total_cost).toFixed(2);
+    const roi_pct = total_cost > 0 ? +((net_roi_value / total_cost) * 100).toFixed(1) : 0;
+    return {
+      ...bike,
+      total_cost: +total_cost.toFixed(2),
+      net_roi_value,
+      roi_pct
+    };
+  }).sort((a, b) => b.net_roi_value - a.net_roi_value);
 }
 
 function buildInsights(context) {
@@ -124,47 +126,60 @@ function buildInsights(context) {
   return insights;
 }
 
-function generateStrategicReport() {
-  const riders = scalar(`SELECT COUNT(*) FROM users WHERE role = 'rider' AND deleted_at IS NULL`);
-  const admins = scalar(`SELECT COUNT(*) FROM users WHERE role IN ('admin','superadmin') AND deleted_at IS NULL`);
-  const activeAgreements = scalar(`SELECT COUNT(*) FROM agreements WHERE status = 'active'`);
-  const completedAgreements = scalar(`SELECT COUNT(*) FROM agreements WHERE status = 'completed'`);
-  const totalBikes = scalar(`SELECT COUNT(*) FROM bikes`);
-  const availableBikes = scalar(`SELECT COUNT(*) FROM bikes WHERE status = 'ready_to_go'`);
-  const allocatedBikes = scalar(`SELECT COUNT(*) FROM bikes WHERE status = 'active'`);
-  const maintenanceBikes = scalar(`SELECT COUNT(*) FROM bikes WHERE status = 'repairs'`);
-  const totalSubmitted = scalar(`SELECT COUNT(*) FROM applications`);
-  const submitted = scalar(`SELECT COUNT(*) FROM applications WHERE status = 'submitted'`);
-  const underReview = scalar(`SELECT COUNT(*) FROM applications WHERE status = 'under_review'`);
-  const approved = scalar(`SELECT COUNT(*) FROM applications WHERE status = 'approved'`);
-  const rejected = scalar(`SELECT COUNT(*) FROM applications WHERE status = 'rejected'`);
-  const preApproved = scalar(`SELECT COUNT(*) FROM applications WHERE auto_decision = 'pre_approved'`);
-  const autoDeclined = scalar(`SELECT COUNT(*) FROM applications WHERE auto_decision = 'auto_declined'`);
-  const grossReceived = scalar(`SELECT COALESCE(SUM(amount),0) FROM payments WHERE status = 'success'`);
-  const transactionFees = scalar(`SELECT COALESCE(SUM(fee_amount),0) FROM payments WHERE status = 'success'`);
-  const creditedRevenue = scalar(`SELECT COALESCE(SUM(COALESCE(NULLIF(net_amount,0), amount)),0) FROM payments WHERE status = 'success'`);
-  const overdueAmount = scalar(`SELECT COALESCE(SUM(amount_due - amount_paid),0) FROM payment_schedules WHERE status = 'overdue'`);
-  const overdueAgreements = scalar(`SELECT COUNT(DISTINCT agreement_id) FROM payment_schedules WHERE status = 'overdue'`);
+async function generateStrategicReport() {
+  const [
+    riders, admins, activeAgreements, completedAgreements,
+    totalBikes, availableBikes, allocatedBikes, maintenanceBikes,
+    totalSubmitted, submitted, underReview, approved, rejected,
+    preApproved, autoDeclined, grossReceived, transactionFees,
+    creditedRevenue, overdueAmount, overdueAgreements
+  ] = await Promise.all([
+    scalar(`SELECT COUNT(*) FROM users WHERE role = 'rider' AND deleted_at IS NULL`),
+    scalar(`SELECT COUNT(*) FROM users WHERE role IN ('admin','superadmin') AND deleted_at IS NULL`),
+    scalar(`SELECT COUNT(*) FROM agreements WHERE status = 'active'`),
+    scalar(`SELECT COUNT(*) FROM agreements WHERE status = 'completed'`),
+    scalar(`SELECT COUNT(*) FROM bikes`),
+    scalar(`SELECT COUNT(*) FROM bikes WHERE status = 'ready_to_go'`),
+    scalar(`SELECT COUNT(*) FROM bikes WHERE status = 'active'`),
+    scalar(`SELECT COUNT(*) FROM bikes WHERE status = 'repairs'`),
+    scalar(`SELECT COUNT(*) FROM applications`),
+    scalar(`SELECT COUNT(*) FROM applications WHERE status = 'submitted'`),
+    scalar(`SELECT COUNT(*) FROM applications WHERE status = 'under_review'`),
+    scalar(`SELECT COUNT(*) FROM applications WHERE status = 'approved'`),
+    scalar(`SELECT COUNT(*) FROM applications WHERE status = 'rejected'`),
+    scalar(`SELECT COUNT(*) FROM applications WHERE auto_decision = 'pre_approved'`),
+    scalar(`SELECT COUNT(*) FROM applications WHERE auto_decision = 'auto_declined'`),
+    scalar(`SELECT COALESCE(SUM(amount),0) FROM payments WHERE status = 'success'`),
+    scalar(`SELECT COALESCE(SUM(fee_amount),0) FROM payments WHERE status = 'success'`),
+    scalar(`SELECT COALESCE(SUM(COALESCE(NULLIF(net_amount,0), amount)),0) FROM payments WHERE status = 'success'`),
+    scalar(`SELECT COALESCE(SUM(amount_due - amount_paid),0) FROM payment_schedules WHERE status = 'overdue'`),
+    scalar(`SELECT COUNT(DISTINCT agreement_id) FROM payment_schedules WHERE status = 'overdue'`)
+  ]);
 
-  const payoutMix = rowsToMix(db.prepare(`SELECT COALESCE(payout_preference, 'unknown') AS payout_preference, COUNT(*) AS count
-    FROM applications GROUP BY COALESCE(payout_preference, 'unknown')`).all(), 'label');
-  const provinceMix = rowsToMix(db.prepare(`SELECT COALESCE(province, 'Unknown') AS province, COUNT(*) AS count
-    FROM users WHERE role = 'rider' AND deleted_at IS NULL GROUP BY COALESCE(province, 'Unknown')`).all(), 'label');
-  const platformMix = buildPlatformMix();
-  const bikeRoi = buildBikeRoi();
+  const [payoutMixRows, provinceMixRows, platformMix, bikeRoi, monthlyRevenueRows, signupTrendRows, avgWeeklyRow] = await Promise.all([
+    pgDb.query(`SELECT COALESCE(payout_preference, 'unknown') AS payout_preference, COUNT(*) AS count
+      FROM applications GROUP BY COALESCE(payout_preference, 'unknown')`),
+    pgDb.query(`SELECT COALESCE(province, 'Unknown') AS province, COUNT(*) AS count
+      FROM users WHERE role = 'rider' AND deleted_at IS NULL GROUP BY COALESCE(province, 'Unknown')`),
+    buildPlatformMix(),
+    buildBikeRoi(),
+    pgDb.query(`SELECT TO_CHAR(COALESCE(paid_at, created_at), 'YYYY-MM') AS month,
+        ROUND(SUM(COALESCE(NULLIF(net_amount,0), amount))::numeric, 2) AS total
+      FROM payments
+      WHERE status = 'success' AND COALESCE(paid_at, created_at) >= NOW() - INTERVAL '6 months'
+      GROUP BY month ORDER BY month`),
+    pgDb.query(`SELECT TO_CHAR(created_at, 'YYYY-MM') AS month, COUNT(*) AS count
+      FROM users WHERE role = 'rider' AND deleted_at IS NULL AND created_at >= NOW() - INTERVAL '6 months'
+      GROUP BY month ORDER BY month`),
+    pgDb.query(`SELECT ROUND(AVG(average_weekly_earnings)::numeric, 2) AS avg_weekly
+      FROM applications WHERE average_weekly_earnings > 0`)
+  ]);
 
-  const monthlyRevenue = db.prepare(`SELECT strftime('%Y-%m', COALESCE(paid_at, created_at)) AS month,
-      ROUND(SUM(COALESCE(NULLIF(net_amount,0), amount)), 2) AS total
-    FROM payments
-    WHERE status = 'success' AND COALESCE(paid_at, created_at) >= datetime('now','-6 months')
-    GROUP BY month ORDER BY month`).all().map((row) => ({ month: row.month, total: Number(row.total || 0) }));
-
-  const signupTrend = db.prepare(`SELECT strftime('%Y-%m', created_at) AS month, COUNT(*) AS count
-    FROM users WHERE role = 'rider' AND deleted_at IS NULL AND created_at >= datetime('now','-6 months')
-    GROUP BY month ORDER BY month`).all().map((row) => ({ month: row.month, count: Number(row.count || 0) }));
-
-  const avgWeekly = db.prepare(`SELECT ROUND(AVG(average_weekly_earnings), 2) AS avg_weekly
-    FROM applications WHERE average_weekly_earnings > 0`).get()?.avg_weekly || 0;
+  const payoutMix = rowsToMix(payoutMixRows.rows, 'label');
+  const provinceMix = rowsToMix(provinceMixRows.rows, 'label');
+  const monthlyRevenue = monthlyRevenueRows.rows.map((row) => ({ month: row.month, total: Number(row.total || 0) }));
+  const signupTrend = signupTrendRows.rows.map((row) => ({ month: row.month, count: Number(row.count || 0) }));
+  const avgWeekly = avgWeeklyRow.rows[0]?.avg_weekly || 0;
 
   const report = {
     generated_at: new Date().toISOString(),

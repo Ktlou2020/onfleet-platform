@@ -1,34 +1,35 @@
 const express = require('express');
-const db = require('../db');
+const pgDb = require('../pgDb');
 const { authRequired, adminOnly } = require('../middleware/auth');
-const { sendNotification } = require('../services/notifier');
+const { sendNotification } = require('../services/notifierPg');
+const asyncRouter = require('../utils/asyncRouter');
 
-const router = express.Router();
+const router = asyncRouter(express.Router());
 
-router.get('/mine', authRequired, (req, res) => {
-  const list = db.prepare(`SELECT * FROM notifications WHERE user_id = ?
-                           ORDER BY COALESCE(sent_at, created_at) DESC LIMIT 100`).all(req.user.id);
+router.get('/mine', authRequired, async (req, res) => {
+  const { rows: list } = await pgDb.query(`SELECT * FROM notifications WHERE user_id = $1
+                           ORDER BY COALESCE(sent_at, created_at) DESC LIMIT 100`, [req.user.id]);
   res.json({ notifications: list });
 });
 
-router.post('/mine/read-all', authRequired, (req, res) => {
-  db.prepare(`UPDATE notifications SET status = 'read' WHERE user_id = ? AND status != 'read'`).run(req.user.id);
+router.post('/mine/read-all', authRequired, async (req, res) => {
+  await pgDb.query(`UPDATE notifications SET status = 'read' WHERE user_id = $1 AND status != 'read'`, [req.user.id]);
   res.json({ ok: true });
 });
 
-router.get('/', authRequired, adminOnly, (req, res) => {
+router.get('/', authRequired, adminOnly, async (req, res) => {
   const limit = Math.min(Number(req.query.limit || 200), 500);
-  const list = db.prepare(`SELECT n.*, u.full_name, u.email, u.role
+  const { rows: list } = await pgDb.query(`SELECT n.*, u.full_name, u.email, u.role
     FROM notifications n
     LEFT JOIN users u ON u.id = n.user_id
     ORDER BY COALESCE(n.sent_at, n.created_at) DESC
-    LIMIT ?`).all(limit);
+    LIMIT $1`, [limit]);
   res.json({ notifications: list });
 });
 
-router.post('/:id/read', authRequired, (req, res) => {
-  db.prepare(`UPDATE notifications SET status = 'read' WHERE id = ? AND user_id = ?`)
-    .run(req.params.id, req.user.id);
+router.post('/:id/read', authRequired, async (req, res) => {
+  await pgDb.query(`UPDATE notifications SET status = 'read' WHERE id = $1 AND user_id = $2`,
+    [req.params.id, req.user.id]);
   res.json({ ok: true });
 });
 
@@ -43,7 +44,8 @@ router.post('/send', authRequired, adminOnly, async (req, res) => {
 });
 
 router.post('/:id/resend', authRequired, adminOnly, async (req, res) => {
-  const original = db.prepare('SELECT * FROM notifications WHERE id = ?').get(req.params.id);
+  const { rows } = await pgDb.query('SELECT * FROM notifications WHERE id = $1', [req.params.id]);
+  const original = rows[0];
   if (!original) return res.status(404).json({ error: 'Notification not found' });
   try {
     const id = await sendNotification({

@@ -1,77 +1,87 @@
+import { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth';
 import InstallPrompt from './components/InstallPrompt';
 import AnalyticsTracker from './analytics';
-import Landing from './pages/Landing';
-import Login from './pages/Login';
-import Signup from './pages/Signup';
-import ForgotPassword from './pages/ForgotPassword';
-import ResetPassword from './pages/ResetPassword';
-import FleetOwnerPilot from './pages/FleetOwnerPilot';
-import FleetOwnerWorkspace from './pages/FleetOwnerWorkspace';
-import FleetLogin from './pages/FleetLogin';
-import FleetSignup from './pages/FleetSignup';
-import FleetOwnerShell from './pages/fleet/FleetOwnerShell';
-import FleetDashboard from './pages/fleet/Dashboard';
-import FleetOwnerBikes from './pages/fleet/Bikes';
-import FleetOwnerAgreements from './pages/fleet/Agreements';
-import FleetAgreementDetail from './pages/fleet/AgreementDetail';
-import FleetOwnerPayments from './pages/fleet/Payments';
-import FleetOwnerRiders from './pages/fleet/Riders';
-import FleetOwnerHelp from './pages/fleet/Help';
-import FleetBilling from './pages/fleet/Billing';
-import FleetWallet from './pages/fleet/Wallet';
-import FleetCollections from './pages/fleet/Collections';
-import FleetHubs from './pages/fleet/Hubs';
-import FleetApiKeys from './pages/fleet/ApiKeys';
-import FleetTracking from './pages/fleet/Tracking';
-import FleetReports from './pages/fleet/Reports';
-import FleetTeam from './pages/fleet/Team';
-import RiderPortal from './pages/RiderPortal';
-import RiderShell from './pages/rider/RiderShell';
-import RiderDashboard from './pages/rider/Dashboard';
-import RiderAgreements from './pages/rider/Agreements';
-import RiderAgreementDetail from './pages/rider/AgreementDetail';
-import RiderApplication from './pages/rider/Application';
-import RiderProfile from './pages/rider/Profile';
-import RiderPayments from './pages/rider/Payments';
-import RiderNotifications from './pages/rider/Notifications';
-import PaymentCallback from './pages/rider/PaymentCallback';
-
-import AdminShell from './pages/admin/AdminShell';
-import AdminDashboard from './pages/admin/Dashboard';
-import AdminApplications from './pages/admin/Applications';
-import AdminApplicationDetail from './pages/admin/ApplicationDetail';
-import AdminAgreements from './pages/admin/Agreements';
-import AdminAgreementDetail from './pages/admin/AgreementDetail';
-import AdminBikes from './pages/admin/Bikes';
-import AdminBikeDetail from './pages/admin/BikeDetail';
-import AdminPayments from './pages/admin/Payments';
-import AdminNotifications from './pages/admin/Notifications';
-import AdminUsers from './pages/admin/Users';
-import AdminAuditLogs from './pages/admin/AuditLogs';
-import AdminStrategyReport from './pages/admin/StrategyReport';
-import AdminImports from './pages/admin/Imports';
-import AdminFleetDashboard from './pages/admin/FleetDashboard';
-import AdminFleetOwners from './pages/admin/FleetOwners';
-import AdminFleetPayouts from './pages/admin/FleetPayouts';
-import AdminTracking from './pages/admin/Tracking';
-import AdminLeads from './pages/admin/Leads';
-import AdminWorkshop from './pages/admin/Workshop';
-import WorkshopLogin from './pages/workshop/Login';
-import WorkshopShell from './pages/workshop/WorkshopShell';
-import WorkshopDashboard from './pages/workshop/Dashboard';
-import WorkshopJobCards from './pages/workshop/JobCards';
-import WorkshopJobCard from './pages/workshop/JobCard';
-import FleetImpersonate from './pages/fleet/FleetImpersonate';
-import FleetRiderApply from './pages/FleetRiderApply';
-import Privacy from './pages/Privacy';
-import Terms from './pages/Terms';
 import { canViewFleetSection, getDefaultFleetRoute, isAdminPortalRole } from './pages/fleet/access';
-import ControlRoom from './pages/ControlRoom';
-import ControlRoomAlerts from './pages/ControlRoomAlerts';
+
+const Landing = lazy(() => import('./pages/Landing'));
+const Login = lazy(() => import('./pages/Login'));
+const Signup = lazy(() => import('./pages/Signup'));
+const ForgotPassword = lazy(() => import('./pages/ForgotPassword'));
+const ResetPassword = lazy(() => import('./pages/ResetPassword'));
+const FleetOwnerPilot = lazy(() => import('./pages/FleetOwnerPilot'));
+const FleetOwnerWorkspace = lazy(() => import('./pages/FleetOwnerWorkspace'));
+const FleetLogin = lazy(() => import('./pages/FleetLogin'));
+const FleetSignup = lazy(() => import('./pages/FleetSignup'));
+const FleetOwnerShell = lazy(() => import('./pages/fleet/FleetOwnerShell'));
+const FleetDashboard = lazy(() => import('./pages/fleet/Dashboard'));
+const FleetOwnerBikes = lazy(() => import('./pages/fleet/Bikes'));
+const FleetOwnerAgreements = lazy(() => import('./pages/fleet/Agreements'));
+const FleetAgreementDetail = lazy(() => import('./pages/fleet/AgreementDetail'));
+const FleetOwnerPayments = lazy(() => import('./pages/fleet/Payments'));
+const FleetOwnerRiders = lazy(() => import('./pages/fleet/Riders'));
+const FleetOwnerHelp = lazy(() => import('./pages/fleet/Help'));
+const FleetBilling = lazy(() => import('./pages/fleet/Billing'));
+const FleetWallet = lazy(() => import('./pages/fleet/Wallet'));
+const FleetCollections = lazy(() => import('./pages/fleet/Collections'));
+const FleetHubs = lazy(() => import('./pages/fleet/Hubs'));
+const FleetApiKeys = lazy(() => import('./pages/fleet/ApiKeys'));
+const FleetTracking = lazy(() => import('./pages/fleet/Tracking'));
+const FleetReports = lazy(() => import('./pages/fleet/Reports'));
+const FleetTeam = lazy(() => import('./pages/fleet/Team'));
+const RiderPortal = lazy(() => import('./pages/RiderPortal'));
+const RiderShell = lazy(() => import('./pages/rider/RiderShell'));
+const RiderDashboard = lazy(() => import('./pages/rider/Dashboard'));
+const RiderAgreements = lazy(() => import('./pages/rider/Agreements'));
+const RiderAgreementDetail = lazy(() => import('./pages/rider/AgreementDetail'));
+const RiderApplication = lazy(() => import('./pages/rider/Application'));
+const RiderProfile = lazy(() => import('./pages/rider/Profile'));
+const RiderPayments = lazy(() => import('./pages/rider/Payments'));
+const RiderNotifications = lazy(() => import('./pages/rider/Notifications'));
+const PaymentCallback = lazy(() => import('./pages/rider/PaymentCallback'));
+
+const AdminShell = lazy(() => import('./pages/admin/AdminShell'));
+const AdminDashboard = lazy(() => import('./pages/admin/Dashboard'));
+const AdminApplications = lazy(() => import('./pages/admin/Applications'));
+const AdminApplicationDetail = lazy(() => import('./pages/admin/ApplicationDetail'));
+const AdminAgreements = lazy(() => import('./pages/admin/Agreements'));
+const AdminAgreementDetail = lazy(() => import('./pages/admin/AgreementDetail'));
+const AdminBikes = lazy(() => import('./pages/admin/Bikes'));
+const AdminBikeDetail = lazy(() => import('./pages/admin/BikeDetail'));
+const AdminPayments = lazy(() => import('./pages/admin/Payments'));
+const AdminNotifications = lazy(() => import('./pages/admin/Notifications'));
+const AdminUsers = lazy(() => import('./pages/admin/Users'));
+const AdminAuditLogs = lazy(() => import('./pages/admin/AuditLogs'));
+const AdminStrategyReport = lazy(() => import('./pages/admin/StrategyReport'));
+const AdminImports = lazy(() => import('./pages/admin/Imports'));
+const AdminFleetDashboard = lazy(() => import('./pages/admin/FleetDashboard'));
+const AdminFleetOwners = lazy(() => import('./pages/admin/FleetOwners'));
+const AdminFleetPayouts = lazy(() => import('./pages/admin/FleetPayouts'));
+const AdminTracking = lazy(() => import('./pages/admin/Tracking'));
+const AdminLeads = lazy(() => import('./pages/admin/Leads'));
+const AdminWorkshop = lazy(() => import('./pages/admin/Workshop'));
+const WorkshopLogin = lazy(() => import('./pages/workshop/Login'));
+const WorkshopShell = lazy(() => import('./pages/workshop/WorkshopShell'));
+const WorkshopDashboard = lazy(() => import('./pages/workshop/Dashboard'));
+const WorkshopJobCards = lazy(() => import('./pages/workshop/JobCards'));
+const WorkshopJobCard = lazy(() => import('./pages/workshop/JobCard'));
+const FleetImpersonate = lazy(() => import('./pages/fleet/FleetImpersonate'));
+const FleetRiderApply = lazy(() => import('./pages/FleetRiderApply'));
+const Privacy = lazy(() => import('./pages/Privacy'));
+const Terms = lazy(() => import('./pages/Terms'));
+const ControlRoom = lazy(() => import('./pages/ControlRoom'));
+const ControlRoomAlerts = lazy(() => import('./pages/ControlRoomAlerts'));
 
 const WORKSHOP_ROLES = ['technician', 'admin', 'superadmin'];
+
+// Each route's page component is its own lazily-fetched chunk (see the lazy()
+// imports above) — this fallback fills the gap between navigating to a route
+// and its chunk arriving. Kept intentionally minimal (no logo/animation) so
+// it never looks like a competing loading state next to each page's own.
+function RouteLoading() {
+  return <div style={{ minHeight: '100vh', background: 'var(--bg)' }} />;
+}
 
 function PrivateRoute({ children, role }) {
   const { user, loading } = useAuth();
@@ -109,86 +119,88 @@ export default function App() {
   return (
     <AuthProvider>
       <AnalyticsTracker />
-      <Routes>
-        <Route path="/" element={<HomeRoute />} />
-        <Route path="/login" element={<Login />} />
-        <Route path="/signup" element={<Signup />} />
-        <Route path="/forgot-password" element={<ForgotPassword />} />
-        <Route path="/reset-password" element={<ResetPassword />} />
-        <Route path="/fleet" element={<FleetOwnerPilot />} />
-        <Route path="/privacy" element={<Privacy />} />
-        <Route path="/terms" element={<Terms />} />
-        <Route path="/rider-portal/:token" element={<RiderPortal />} />
-        <Route path="/fleet/login" element={<FleetLogin />} />
-        <Route path="/fleet/signup" element={<FleetSignup />} />
-        <Route path="/fleet/impersonate" element={<FleetImpersonate />} />
-        <Route path="/fleet/workspace" element={<FleetOwnerWorkspace />} />
-        <Route path="/fleet/rider-apply/:slug" element={<FleetRiderApply />} />
-        <Route path="/fleet/app" element={<PrivateRoute role="fleet_owner"><FleetOwnerShell /></PrivateRoute>}>
-          <Route index element={<FleetRouteGate section="dashboard"><FleetDashboard /></FleetRouteGate>} />
-          <Route path="bikes" element={<FleetRouteGate section="bikes"><FleetOwnerBikes /></FleetRouteGate>} />
-          <Route path="tracking" element={<FleetRouteGate section="tracking"><FleetTracking /></FleetRouteGate>} />
-          <Route path="agreements" element={<FleetRouteGate section="agreements"><FleetOwnerAgreements /></FleetRouteGate>} />
-          <Route path="agreements/:id" element={<FleetRouteGate section="agreements"><FleetAgreementDetail /></FleetRouteGate>} />
-          <Route path="payments" element={<FleetRouteGate section="payments"><FleetOwnerPayments /></FleetRouteGate>} />
-          <Route path="riders" element={<FleetRouteGate section="riders"><FleetOwnerRiders /></FleetRouteGate>} />
-          <Route path="wallet" element={<FleetRouteGate section="wallet"><FleetWallet /></FleetRouteGate>} />
-          <Route path="billing" element={<FleetRouteGate section="billing"><FleetBilling /></FleetRouteGate>} />
-          <Route path="collections" element={<FleetRouteGate section="collections"><FleetCollections /></FleetRouteGate>} />
-          <Route path="hubs" element={<FleetRouteGate section="hubs"><FleetHubs /></FleetRouteGate>} />
-          <Route path="api-keys" element={<FleetRouteGate section="api_keys"><FleetApiKeys /></FleetRouteGate>} />
-          <Route path="reports" element={<FleetRouteGate section="reporting"><FleetReports /></FleetRouteGate>} />
-          <Route path="team" element={<FleetRouteGate section="team"><FleetTeam /></FleetRouteGate>} />
-          <Route path="help" element={<FleetRouteGate section="help"><FleetOwnerHelp /></FleetRouteGate>} />
-        </Route>
+      <Suspense fallback={<RouteLoading />}>
+        <Routes>
+          <Route path="/" element={<HomeRoute />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/signup" element={<Signup />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
+          <Route path="/fleet" element={<FleetOwnerPilot />} />
+          <Route path="/privacy" element={<Privacy />} />
+          <Route path="/terms" element={<Terms />} />
+          <Route path="/rider-portal/:token" element={<RiderPortal />} />
+          <Route path="/fleet/login" element={<FleetLogin />} />
+          <Route path="/fleet/signup" element={<FleetSignup />} />
+          <Route path="/fleet/impersonate" element={<FleetImpersonate />} />
+          <Route path="/fleet/workspace" element={<FleetOwnerWorkspace />} />
+          <Route path="/fleet/rider-apply/:slug" element={<FleetRiderApply />} />
+          <Route path="/fleet/app" element={<PrivateRoute role="fleet_owner"><FleetOwnerShell /></PrivateRoute>}>
+            <Route index element={<FleetRouteGate section="dashboard"><FleetDashboard /></FleetRouteGate>} />
+            <Route path="bikes" element={<FleetRouteGate section="bikes"><FleetOwnerBikes /></FleetRouteGate>} />
+            <Route path="tracking" element={<FleetRouteGate section="tracking"><FleetTracking /></FleetRouteGate>} />
+            <Route path="agreements" element={<FleetRouteGate section="agreements"><FleetOwnerAgreements /></FleetRouteGate>} />
+            <Route path="agreements/:id" element={<FleetRouteGate section="agreements"><FleetAgreementDetail /></FleetRouteGate>} />
+            <Route path="payments" element={<FleetRouteGate section="payments"><FleetOwnerPayments /></FleetRouteGate>} />
+            <Route path="riders" element={<FleetRouteGate section="riders"><FleetOwnerRiders /></FleetRouteGate>} />
+            <Route path="wallet" element={<FleetRouteGate section="wallet"><FleetWallet /></FleetRouteGate>} />
+            <Route path="billing" element={<FleetRouteGate section="billing"><FleetBilling /></FleetRouteGate>} />
+            <Route path="collections" element={<FleetRouteGate section="collections"><FleetCollections /></FleetRouteGate>} />
+            <Route path="hubs" element={<FleetRouteGate section="hubs"><FleetHubs /></FleetRouteGate>} />
+            <Route path="api-keys" element={<FleetRouteGate section="api_keys"><FleetApiKeys /></FleetRouteGate>} />
+            <Route path="reports" element={<FleetRouteGate section="reporting"><FleetReports /></FleetRouteGate>} />
+            <Route path="team" element={<FleetRouteGate section="team"><FleetTeam /></FleetRouteGate>} />
+            <Route path="help" element={<FleetRouteGate section="help"><FleetOwnerHelp /></FleetRouteGate>} />
+          </Route>
 
-        <Route path="/" element={<PrivateRoute role="rider"><RiderShell /></PrivateRoute>}>
-          <Route path="dashboard" element={<RiderDashboard />} />
-          <Route path="agreements" element={<RiderAgreements />} />
-          <Route path="agreements/:id" element={<RiderAgreementDetail />} />
-          <Route path="application" element={<RiderApplication />} />
-          <Route path="kyc" element={<Navigate to="/application" replace />} />
-          <Route path="payments" element={<RiderPayments />} />
-          <Route path="notifications" element={<RiderNotifications />} />
-          <Route path="profile" element={<RiderProfile />} />
-          <Route path="payments/callback" element={<PaymentCallback />} />
-        </Route>
+          <Route path="/" element={<PrivateRoute role="rider"><RiderShell /></PrivateRoute>}>
+            <Route path="dashboard" element={<RiderDashboard />} />
+            <Route path="agreements" element={<RiderAgreements />} />
+            <Route path="agreements/:id" element={<RiderAgreementDetail />} />
+            <Route path="application" element={<RiderApplication />} />
+            <Route path="kyc" element={<Navigate to="/application" replace />} />
+            <Route path="payments" element={<RiderPayments />} />
+            <Route path="notifications" element={<RiderNotifications />} />
+            <Route path="profile" element={<RiderProfile />} />
+            <Route path="payments/callback" element={<PaymentCallback />} />
+          </Route>
 
-        <Route path="/admin" element={<PrivateRoute role="admin"><AdminShell /></PrivateRoute>}>
-          <Route index element={<AdminDashboard />} />
-          <Route path="applications" element={<AdminApplications />} />
-          <Route path="applications/:id" element={<AdminApplicationDetail />} />
-          <Route path="agreements" element={<AdminAgreements />} />
-          <Route path="agreements/:id" element={<AdminAgreementDetail />} />
-          <Route path="bikes" element={<AdminBikes />} />
-          <Route path="bikes/:id" element={<AdminBikeDetail />} />
-          <Route path="payments" element={<AdminPayments />} />
-          <Route path="notifications" element={<AdminNotifications />} />
-          <Route path="imports" element={<AdminImports />} />
-          <Route path="strategy" element={<AdminStrategyReport />} />
-          <Route path="fleet-dashboard" element={<AdminFleetDashboard />} />
-          <Route path="fleet-owners" element={<AdminFleetOwners />} />
-          <Route path="fleet-payouts" element={<AdminFleetPayouts />} />
-          <Route path="pilot" element={<Navigate to="/admin/leads" replace />} />
-          <Route path="leads" element={<AdminLeads />} />
-          <Route path="tracking" element={<AdminTracking />} />
-          <Route path="workshop" element={<AdminWorkshop />} />
-          <Route path="users" element={<AdminUsers />} />
-          <Route path="audit" element={<AdminAuditLogs />} />
-        </Route>
+          <Route path="/admin" element={<PrivateRoute role="admin"><AdminShell /></PrivateRoute>}>
+            <Route index element={<AdminDashboard />} />
+            <Route path="applications" element={<AdminApplications />} />
+            <Route path="applications/:id" element={<AdminApplicationDetail />} />
+            <Route path="agreements" element={<AdminAgreements />} />
+            <Route path="agreements/:id" element={<AdminAgreementDetail />} />
+            <Route path="bikes" element={<AdminBikes />} />
+            <Route path="bikes/:id" element={<AdminBikeDetail />} />
+            <Route path="payments" element={<AdminPayments />} />
+            <Route path="notifications" element={<AdminNotifications />} />
+            <Route path="imports" element={<AdminImports />} />
+            <Route path="strategy" element={<AdminStrategyReport />} />
+            <Route path="fleet-dashboard" element={<AdminFleetDashboard />} />
+            <Route path="fleet-owners" element={<AdminFleetOwners />} />
+            <Route path="fleet-payouts" element={<AdminFleetPayouts />} />
+            <Route path="pilot" element={<Navigate to="/admin/leads" replace />} />
+            <Route path="leads" element={<AdminLeads />} />
+            <Route path="tracking" element={<AdminTracking />} />
+            <Route path="workshop" element={<AdminWorkshop />} />
+            <Route path="users" element={<AdminUsers />} />
+            <Route path="audit" element={<AdminAuditLogs />} />
+          </Route>
 
-        <Route path="/control-room" element={<PrivateRoute role="control_room"><ControlRoom /></PrivateRoute>}>
-          <Route index element={<AdminTracking readOnly />} />
-          <Route path="alerts" element={<ControlRoomAlerts />} />
-        </Route>
+          <Route path="/control-room" element={<PrivateRoute role="control_room"><ControlRoom /></PrivateRoute>}>
+            <Route index element={<AdminTracking readOnly />} />
+            <Route path="alerts" element={<ControlRoomAlerts />} />
+          </Route>
 
-        <Route path="/workshop/login" element={<WorkshopLogin />} />
-        <Route path="/workshop/app" element={<PrivateRoute role="workshop"><WorkshopShell /></PrivateRoute>}>
-          <Route index element={<WorkshopDashboard />} />
-          <Route path="job-cards" element={<WorkshopJobCards />} />
-          <Route path="job-cards/:id" element={<WorkshopJobCard />} />
-        </Route>
-      </Routes>
+          <Route path="/workshop/login" element={<WorkshopLogin />} />
+          <Route path="/workshop/app" element={<PrivateRoute role="workshop"><WorkshopShell /></PrivateRoute>}>
+            <Route index element={<WorkshopDashboard />} />
+            <Route path="job-cards" element={<WorkshopJobCards />} />
+            <Route path="job-cards/:id" element={<WorkshopJobCard />} />
+          </Route>
+        </Routes>
+      </Suspense>
       <InstallPrompt />
     </AuthProvider>
   );

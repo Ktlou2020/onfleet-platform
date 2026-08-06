@@ -905,6 +905,7 @@ export default function Tracking({ readOnly = false }) {
     setSelected(device.id);
     setDetailTab('activity');
     setTrips([]);
+    setActivityStats(null);
     setPings([]);
     setDayPings([]);
     setPingDate(todayStr);
@@ -921,14 +922,16 @@ export default function Tracking({ readOnly = false }) {
     }
     try {
       const deviceBikeId = device.bike_id;
-      const [, { data: cmds }, tripsRes] = await Promise.all([
+      const [, { data: cmds }, tripsRes, statsRes] = await Promise.all([
         loadTrail(device.id, trailRange, version),
         api.get(`/tracking/devices/${device.id}/commands`),
         deviceBikeId ? api.get(`/tracking/trips?bike_id=${deviceBikeId}&limit=30`) : Promise.resolve({ data: [] }),
+        deviceBikeId ? api.get(`/tracking/trips/stats?bike_id=${deviceBikeId}`) : Promise.resolve({ data: null }),
       ]);
       if (mountedRef.current && selectVersionRef.current === version) {
         setCommands(cmds);
         setTrips(tripsRes.data);
+        setActivityStats(statsRes.data);
       }
     } catch { /* silent */ }
     loadDayPings(device.id, todayStr);

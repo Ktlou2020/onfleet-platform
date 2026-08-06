@@ -282,51 +282,41 @@ router.get('/devices/:id/commands', authRequired, trackingReadOnly, async (req, 
 router.get('/map', authRequired, trackingReadOnly, async (req, res) => {
   const connected = teltonikaServer.getConnectedIMEIs();
 
-  // Get all devices with a linked bike
-  const { rows: devices } = await pgDb.query(
-    `SELECT id, imei, model, label, last_seen_at, bike_id FROM tracking_devices WHERE bike_id IS NOT NULL`
+  // Devices, bike/org/rider info, and the latest GPS ping per bike used to be
+  // 3 round-trips merged in JS — one query now that tracking and business
+  // data share a database, with a LATERAL join for "latest ping per bike".
+  const { rows } = await pgDb.query(
+    `SELECT td.id, td.imei, td.model, td.label, td.last_seen_at, td.bike_id,
+            b.registration, b.make, b.model AS bike_model,
+            b.status AS bike_status, b.color AS bike_color, b.vin AS bike_vin, b.year AS bike_year,
+            b.last_known_lat AS lat, b.last_known_lng AS lng, b.last_location_at,
+            b.odometer_km,
+            b.organization_id, o.name AS organization_name,
+            (SELECT u.full_name FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_name,
+            (SELECT u.phone    FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_phone,
+            (SELECT u.address  FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_address,
+            (SELECT u.city     FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_city,
+            p.speed_kmh, p.heading, p.ignition, p.satellites, p.altitude, p.io_data
+     FROM tracking_devices td
+     JOIN bikes b ON b.id = td.bike_id
+     LEFT JOIN organizations o ON o.id = b.organization_id
+     LEFT JOIN LATERAL (
+       SELECT speed_kmh, heading, ignition, satellites, altitude, io_data
+       FROM gps_pings gp WHERE gp.bike_id = b.id ORDER BY gp.recorded_at DESC LIMIT 1
+     ) p ON true
+     WHERE td.bike_id IS NOT NULL AND b.last_known_lat IS NOT NULL`
   );
-  if (!devices.length) return res.json([]);
 
-  const bikeIds = [...new Set(devices.map(d => d.bike_id))];
-
-  // Latest ping per bike (Postgres LATERAL / DISTINCT ON)
-  const { rows: latestPings } = await pgDb.query(
-    `SELECT DISTINCT ON (bike_id) bike_id, speed_kmh, heading, ignition, satellites, altitude, io_data
-     FROM gps_pings WHERE bike_id = ANY($1) ORDER BY bike_id, recorded_at DESC`,
-    [bikeIds]
-  );
-  const pingMap = {};
-  for (const p of latestPings) pingMap[p.bike_id] = p;
-
-  // Bike + org + rider info from SQLite
-  const bikeMap = await getBikeMap(bikeIds);
   const riskMap = riskService.getCurrentScores();
-
-  const result = devices
-    .filter(d => bikeMap[d.bike_id]?.last_known_lat != null)
-    .map(d => {
-      const b = bikeMap[d.bike_id] || {};
-      const p = pingMap[d.bike_id] || {};
-      const risk = riskMap[d.bike_id];
-      return {
-        id: d.id, imei: d.imei, model: d.model, label: d.label,
-        last_seen_at: d.last_seen_at,
-        bike_id: d.bike_id,
-        registration: b.registration, make: b.make, bike_model: b.model,
-        bike_status: b.status, bike_color: b.color, bike_vin: b.vin, bike_year: b.year,
-        lat: b.last_known_lat, lng: b.last_known_lng, last_location_at: b.last_location_at,
-        odometer_km: b.odometer_km,
-        organization_id: b.organization_id, organization_name: b.organization_name,
-        speed_kmh: p.speed_kmh, heading: p.heading, ignition: p.ignition,
-        satellites: p.satellites, altitude: p.altitude, io_data: p.io_data,
-        rider_name: b.rider_name, rider_phone: b.rider_phone,
-        rider_address: b.rider_address, rider_city: b.rider_city,
-        device_status: deviceStatus(d.imei, d.last_seen_at, connected),
-        connected: isOnline(d.imei, d.last_seen_at, connected),
-        risk_score: risk?.score ?? null, risk_level: risk?.level ?? null, risk_reasons: risk?.reasons ?? null,
-      };
-    });
+  const result = rows.map(r => {
+    const risk = riskMap[r.bike_id];
+    return {
+      ...r,
+      device_status: deviceStatus(r.imei, r.last_seen_at, connected),
+      connected: isOnline(r.imei, r.last_seen_at, connected),
+      risk_score: risk?.score ?? null, risk_level: risk?.level ?? null, risk_reasons: risk?.reasons ?? null,
+    };
+  });
   res.json(result);
 });
 

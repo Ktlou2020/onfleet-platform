@@ -3089,39 +3089,32 @@ router.get('/tracking/map', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.vi
   if (!orgBikeIds.length) return res.json([]);
 
   const connected = teltonikaServer.getConnectedIMEIs();
-  const { rows: devices } = await pgDb.query(
-    `SELECT id, imei, model, label, last_seen_at, speed_limit_kmh, bike_id FROM tracking_devices WHERE bike_id = ANY($1)`,
+  // Devices, bike/rider info, and the latest GPS ping per bike used to be 3
+  // round-trips merged in JS — one query now that tracking and business data
+  // share a database, with a LATERAL join for "latest ping per bike".
+  const { rows } = await pgDb.query(
+    `SELECT td.id, td.imei, td.model, td.label, td.last_seen_at, td.speed_limit_kmh, td.bike_id,
+            b.registration, b.make, b.model AS bike_model,
+            b.status AS bike_status, b.color AS bike_color, b.vin AS bike_vin, b.year AS bike_year,
+            b.last_known_lat AS lat, b.last_known_lng AS lng, b.last_location_at,
+            b.odometer_km,
+            (SELECT u.full_name FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_name,
+            (SELECT u.phone    FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_phone,
+            p.speed_kmh, p.heading, p.ignition, p.satellites, p.altitude, p.io_data
+     FROM tracking_devices td
+     JOIN bikes b ON b.id = td.bike_id
+     LEFT JOIN LATERAL (
+       SELECT speed_kmh, heading, ignition, satellites, altitude, io_data
+       FROM gps_pings gp WHERE gp.bike_id = b.id ORDER BY gp.recorded_at DESC LIMIT 1
+     ) p ON true
+     WHERE td.bike_id = ANY($1)`,
     [orgBikeIds]
   );
-  if (!devices.length) return res.json([]);
 
-  const bikeIds = devices.map(d => d.bike_id);
-  const bikeMap = await getOrgBikeMap(bikeIds);
-  const { rows: latestPings } = await pgDb.query(
-    `SELECT DISTINCT ON (bike_id) bike_id, speed_kmh, heading, ignition, satellites, altitude, io_data
-     FROM gps_pings WHERE bike_id = ANY($1) ORDER BY bike_id, recorded_at DESC`,
-    [bikeIds]
-  );
-  const pingMap = {};
-  for (const p of latestPings) pingMap[p.bike_id] = p;
-
-  const result = devices.map(d => {
-    const b = bikeMap[d.bike_id] || {};
-    const p = pingMap[d.bike_id] || {};
-    return {
-      id: d.id, imei: d.imei, model: d.model, label: d.label,
-      last_seen_at: d.last_seen_at, speed_limit_kmh: d.speed_limit_kmh,
-      bike_id: d.bike_id,
-      registration: b.registration, make: b.make, bike_model: b.model,
-      bike_status: b.status, bike_color: b.color, bike_vin: b.vin, bike_year: b.year,
-      lat: b.last_known_lat, lng: b.last_known_lng, last_location_at: b.last_location_at,
-      odometer_km: b.odometer_km,
-      speed_kmh: p.speed_kmh, heading: p.heading, ignition: p.ignition,
-      satellites: p.satellites, altitude: p.altitude, io_data: p.io_data,
-      rider_name: b.rider_name, rider_phone: b.rider_phone,
-      connected: connected.includes(d.imei) ? 1 : 0,
-    };
-  });
+  const result = rows.map(r => ({
+    ...r,
+    connected: connected.includes(r.imei) ? 1 : 0,
+  }));
   res.json(result);
 });
 
@@ -3132,22 +3125,22 @@ router.get('/tracking/devices', companyRoleAllowed(FLEET_RESOURCE_ACCESS.trackin
   if (!orgBikeIds.length) return res.json([]);
 
   const connected = teltonikaServer.getConnectedIMEIs();
-  const { rows: devices } = await pgDb.query(
-    `SELECT * FROM tracking_devices WHERE bike_id = ANY($1) ORDER BY connected DESC, last_seen_at DESC`,
+  const { rows } = await pgDb.query(
+    `SELECT td.*,
+            b.registration, b.make, b.model AS bike_model, b.color AS bike_color,
+            b.last_known_lat, b.last_known_lng, b.last_location_at,
+            (SELECT u.full_name FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_name,
+            (SELECT u.phone    FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_phone
+     FROM tracking_devices td
+     JOIN bikes b ON b.id = td.bike_id
+     WHERE td.bike_id = ANY($1)
+     ORDER BY td.connected DESC, td.last_seen_at DESC`,
     [orgBikeIds]
   );
-  const bikeMap = await getOrgBikeMap(devices.map(d => d.bike_id).filter(Boolean));
-  const result = devices.map(d => {
-    const b = bikeMap[d.bike_id] || {};
-    return {
-      ...d,
-      connected: connected.includes(d.imei) ? 1 : 0,
-      registration: b.registration, make: b.make, bike_model: b.model, bike_color: b.color,
-      last_known_lat: b.last_known_lat, last_known_lng: b.last_known_lng,
-      last_location_at: b.last_location_at,
-      rider_name: b.rider_name, rider_phone: b.rider_phone,
-    };
-  });
+  const result = rows.map(r => ({
+    ...r,
+    connected: connected.includes(r.imei) ? 1 : 0,
+  }));
   res.json(result);
 });
 

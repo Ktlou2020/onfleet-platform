@@ -85,17 +85,21 @@ function transformValue(table, col, v) {
   if (BOOL_COLS.has(key)) return v === 1 || v === true;
   if (DATE_COLS.has(key)) return toDate(v);
   if (col.endsWith('_at')) return toTimestamptz(v);
+  // Postgres rejects NUL bytes in text columns outright regardless of
+  // encoding — strip them rather than fail the row. Seen in practice in
+  // OCR/PDF-extracted text and a handful of upload filenames.
+  if (typeof v === 'string' && v.includes('\x00')) return v.replace(/\x00/g, '');
   return v ?? null;
 }
 
 // ── Generic helpers (same shape as scripts/migrate-tracking-to-postgres.js) ─
 
-function rows(table, cols) {
-  return db.prepare(`SELECT ${cols.join(', ')} FROM ${table}`).all();
+function rows(table, cols, where) {
+  return db.prepare(`SELECT ${cols.join(', ')} FROM ${table}${where ? ` WHERE ${where}` : ''}`).all();
 }
 
-async function insertBatched(table, cols) {
-  const data = rows(table, cols);
+async function insertBatched(table, cols, conflictCol = 'id', where) {
+  const data = rows(table, cols, where);
   if (!data.length) { console.log(`  ${table}: 0 rows (skipped)`); return 0; }
 
   let inserted = 0;
@@ -106,7 +110,7 @@ async function insertBatched(table, cols) {
     ).join(', ');
     const values = batch.flatMap(row => cols.map(c => transformValue(table, c, row[c])));
     await pgDb.query(
-      `INSERT INTO ${T(table)} (${cols.join(', ')}) VALUES ${placeholders} ON CONFLICT (id) DO NOTHING`,
+      `INSERT INTO ${T(table)} (${cols.join(', ')}) VALUES ${placeholders} ON CONFLICT (${conflictCol}) DO NOTHING`,
       values
     );
     inserted += batch.length;
@@ -126,7 +130,7 @@ async function resetSequence(table, idCol = 'id') {
 
 const TABLES = [
   { name: 'organizations', cols: ['id','name','slug','contact_email','contact_phone','city','fleet_size','plan_key','status','trial_started_at','trial_ends_at','paystack_customer_code','paystack_subscription_code','max_bikes','max_admin_users','bank_account_name','bank_name','bank_account_number','bank_branch_code','address','registration_number','vat_number','created_at','updated_at'] },
-  { name: 'app_settings', cols: ['setting_key','setting_value','updated_at'], noSequence: true },
+  { name: 'app_settings', cols: ['setting_key','setting_value','updated_at'], noSequence: true, conflictCol: 'setting_key' },
   { name: 'hubs', cols: ['id','organization_id','name','address','city','contact_name','contact_phone','notes','created_at'] },
   { name: 'users', cols: ['id','email','phone','password_hash','full_name','role','organization_id','status','id_number','date_of_birth','address','city','province','postal_code','emergency_contact_name','emergency_contact_phone','avatar_url','country_of_origin','user_tags','deleted_at','created_at','updated_at'] },
   { name: 'bikes', cols: ['id','vin','registration','make','model','fleet','organization_id','hub_id','year','engine_cc','color','condition','purchase_price','rental_weekly','total_weeks','status','gps_device_id','last_known_lat','last_known_lng','last_location_at','odometer_km','next_service_km','next_service_date','insurance_provider','insurance_policy_no','insurance_expiry','license_disc_no','license_disc_expiry','rc1_file_path','rc1_original_name','license_disc_file_path','license_disc_original_name','image_url','notes','created_at'] },
@@ -142,9 +146,15 @@ const TABLES = [
   { name: 'job_card_photos', cols: ['id','job_card_id','file_path','original_name','caption','created_by','created_at'] },
   { name: 'labour_rates', cols: ['id','name','description','item_type','unit_cost','active','created_by','created_at','updated_at'] },
   { name: 'service_records', cols: ['id','bike_id','agreement_id','job_card_id','service_date','odometer_km','service_type','description','cost','next_service_km','next_service_date','performed_by','invoice_file_path','invoice_original_name','created_at'] },
-  { name: 'notifications', cols: ['id','user_id','channel','type','title','message','status','sent_at','created_at'] },
-  { name: 'audit_logs', cols: ['id','actor_id','action','entity','entity_id','metadata','ip','created_at'] },
-  { name: 'password_reset_tokens', cols: ['id','user_id','token_hash','expires_at','used_at','requested_ip','user_agent','created_at'] },
+  // 2 rows in production reference a user_id that no longer exists in
+  // `users` at all (not soft-deleted — genuinely absent) — excluded rather
+  // than failing the FK constraint, since there's no user to attach them to.
+  { name: 'notifications', cols: ['id','user_id','channel','type','title','message','status','sent_at','created_at'], where: 'user_id IS NULL OR user_id IN (SELECT id FROM users)' },
+  // 26 rows in production reference an actor_id no longer present in
+  // `users` (same class as the notifications.user_id orphans above).
+  { name: 'audit_logs', cols: ['id','actor_id','action','entity','entity_id','metadata','ip','created_at'], where: 'actor_id IS NULL OR actor_id IN (SELECT id FROM users)' },
+  // 3 rows reference a user_id no longer present in `users` (same class as above).
+  { name: 'password_reset_tokens', cols: ['id','user_id','token_hash','expires_at','used_at','requested_ip','user_agent','created_at'], where: 'user_id IN (SELECT id FROM users)' },
   { name: 'fleet_wallets', cols: ['id','organization_id','balance','total_collected','total_withdrawn','updated_at'] },
   { name: 'fleet_payout_requests', cols: ['id','organization_id','requested_by','amount_requested','withdrawal_fee','net_payout','status','bank_account_name','bank_name','bank_account_number','bank_branch_code','admin_notes','processed_by','processed_at','created_at'] },
   { name: 'fleet_wallet_transactions', cols: ['id','organization_id','type','amount','fee_amount','net_amount','description','paystack_reference','rider_user_id','payout_request_id','actor_user_id','available_at','created_at'] },
@@ -163,14 +173,14 @@ async function main() {
   console.log(`\n── Migrating business data SQLite → Postgres (schema: ${SCHEMA}) ──\n`);
 
   for (const t of TABLES) {
-    await insertBatched(t.name, t.cols);
+    await insertBatched(t.name, t.cols, t.conflictCol || 'id', t.where);
     if (!t.noSequence) await resetSequence(t.name);
   }
 
   console.log('\n── Verifying row counts ──\n');
   let allMatch = true;
   for (const t of TABLES) {
-    const sqliteCount = db.prepare(`SELECT COUNT(*) as n FROM ${t.name}`).get().n;
+    const sqliteCount = db.prepare(`SELECT COUNT(*) as n FROM ${t.name}${t.where ? ` WHERE ${t.where}` : ''}`).get().n;
     const { rows: pgRows } = await pgDb.query(`SELECT COUNT(*) as n FROM ${T(t.name)}`);
     const pgCount = Number(pgRows[0].n);
     const match = sqliteCount === pgCount;

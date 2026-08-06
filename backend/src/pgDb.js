@@ -29,7 +29,7 @@ const pool = process.env.DATABASE_URL
       ssl,
       max: 10,
       idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 5_000,
+      connectionTimeoutMillis: process.env.PG_CONNECT_TIMEOUT_MS ? Number(process.env.PG_CONNECT_TIMEOUT_MS) : 5_000,
     })
   : null;
 

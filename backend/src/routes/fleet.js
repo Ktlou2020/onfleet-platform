@@ -1651,6 +1651,25 @@ router.get('/bikes', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.view), async
   }
 });
 
+router.get('/bikes/:id/service', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.view), async (req, res) => {
+  try {
+    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const bikeId = toInt(req.params.id);
+    const bike = await getScopedBike(organization, bikeId);
+    if (!bike) return res.status(404).json({ error: 'Bike not found in your fleet' });
+
+    const { rows } = await pgDb.query(`SELECT id, bike_id, agreement_id, service_date, odometer_km, service_type,
+        description, cost, next_service_km, next_service_date, performed_by,
+        invoice_file_path, invoice_original_name, job_card_id, created_at
+      FROM service_records
+      WHERE bike_id = $1
+      ORDER BY service_date DESC, id DESC`, [bikeId]);
+    res.json({ service: rows });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not load service history' });
+  }
+});
+
 router.post('/bikes', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.manage), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req.user.organization_id);

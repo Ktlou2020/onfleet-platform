@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Bike as BikeIcon, Pencil, Plus } from 'lucide-react';
+import { Bike as BikeIcon, Pencil, Plus, Wrench } from 'lucide-react';
 import { FleetHelpTip } from './helpSupport';
 import toast from 'react-hot-toast';
 import api from '../../api';
@@ -55,6 +55,22 @@ function getServiceUrgency(nextServiceDate, nextServiceKm, odometerKm) {
   return null;
 }
 
+const SERVICEABLE_STATUS_OPTIONS = bikeStatusOptions.filter((option) => ['active', 'ready_to_go', 'repairs', 'not_available', 'stationary'].includes(option.value));
+
+function buildInitialServiceForm(bike = {}) {
+  return {
+    service_date: new Date().toISOString().slice(0, 10),
+    service_type: 'monthly',
+    description: '',
+    cost: '',
+    odometer_km: bike?.odometer_km || '',
+    next_service_km: bike?.odometer_km ? Number(bike.odometer_km) + 3000 : '',
+    next_service_date: '',
+    performed_by: '',
+    bike_status_after_service: ''
+  };
+}
+
 function buildInitialForm() {
   return {
     vin: '',
@@ -95,6 +111,13 @@ export default function FleetOwnerBikes() {
   const [showAdd, setShowAdd] = useState(false);
   const [editingBike, setEditingBike] = useState(null);
   const [form, setForm] = useState(buildInitialForm());
+  const [historyBike, setHistoryBike] = useState(null);
+  const [serviceRecords, setServiceRecords] = useState([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [showLogService, setShowLogService] = useState(false);
+  const [serviceForm, setServiceForm] = useState(buildInitialServiceForm());
+  const [loggingService, setLoggingService] = useState(false);
+  const [serviceKmTouched, setServiceKmTouched] = useState(false);
 
   const load = async () => {
     const response = await api.get('/fleet/bikes', { params: filter ? { status: filter } : {} });
@@ -167,6 +190,57 @@ export default function FleetOwnerBikes() {
       notes: bike.notes || ''
     });
     setShowAdd(true);
+  };
+
+  const openHistory = async (bike) => {
+    setHistoryBike(bike);
+    setLoadingHistory(true);
+    try {
+      const { data } = await api.get(`/fleet/bikes/${bike.id}/service`);
+      setServiceRecords(data.service || []);
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not load service history');
+      setServiceRecords([]);
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  const closeHistory = () => {
+    setHistoryBike(null);
+    setServiceRecords([]);
+    setShowLogService(false);
+  };
+
+  const openLogService = () => {
+    setServiceForm(buildInitialServiceForm(historyBike));
+    setServiceKmTouched(false);
+    setShowLogService(true);
+  };
+
+  const onOdometerChange = (value) => {
+    setServiceForm((f) => ({
+      ...f,
+      odometer_km: value,
+      next_service_km: serviceKmTouched ? f.next_service_km : (value ? Number(value) + 3000 : '')
+    }));
+  };
+
+  const logService = async () => {
+    if (!serviceForm.service_date || !serviceForm.service_type) {
+      return toast.error('Service date and type are required');
+    }
+    setLoggingService(true);
+    try {
+      await api.post('/fleet/maintenance/log', { ...serviceForm, bike_id: historyBike.id });
+      toast.success('Service logged');
+      setShowLogService(false);
+      await Promise.all([openHistory(historyBike), load()]);
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not log service');
+    } finally {
+      setLoggingService(false);
+    }
   };
 
   const saveBike = async () => {
@@ -290,6 +364,7 @@ export default function FleetOwnerBikes() {
                 {discMeta && <div className="text-xs" style={{ marginTop: 6, color: discMeta.tone }}>{discMeta.label}</div>}
                 {bike.rider_name && <div className="text-xs muted mt-2">Rider: {bike.rider_name}</div>}
                 {bike.agreement_no && <div className="text-xs muted">Agreement: {bike.agreement_no}</div>}
+                <button className="btn btn-sm btn-secondary mt-3" style={{ width: '100%' }} onClick={() => openHistory(bike)}><Wrench size={14} /> Service &amp; repair history</button>
                 {canManage && (
                   <div className="card mt-3" style={{ background: 'var(--surface-2)', padding: 12 }}>
                     <div className="fleet-help-meta" style={{ marginBottom: 8 }}>
@@ -347,6 +422,57 @@ export default function FleetOwnerBikes() {
             <button className="btn btn-secondary" onClick={closeModal}>Cancel</button>
             <button className="btn" onClick={saveBike} disabled={saving}>{saving ? 'Saving…' : editingBike ? 'Save changes' : 'Add bike'}</button>
           </div>
+        </Modal>
+      )}
+
+      {historyBike && (
+        <Modal title={`Service & repair history · ${historyBike.registration || `Bike #${historyBike.id}`}`} onClose={closeHistory}>
+          <div className="flex-between mb-3" style={{ gap: 12, flexWrap: 'wrap' }}>
+            <div className="muted text-sm">Includes services logged here and repairs completed by the OnFleet workshop.</div>
+            {canManage && !showLogService && <button className="btn btn-sm" onClick={openLogService}>+ Log service / repair</button>}
+          </div>
+
+          {showLogService && (
+            <div className="card mb-4" style={{ background: 'var(--surface-2)' }}>
+              <div className="grid grid-2">
+                <div className="field"><label className="label">Date</label><input type="date" value={serviceForm.service_date} onChange={(e) => setServiceForm((f) => ({ ...f, service_date: e.target.value }))} /></div>
+                <div className="field"><label className="label">Type</label><select value={serviceForm.service_type} onChange={(e) => setServiceForm((f) => ({ ...f, service_type: e.target.value }))}><option value="monthly">Monthly service</option><option value="major">Major service</option><option value="repair">Repair</option><option value="tyres">Tyres</option></select></div>
+                <div className="field"><label className="label">Odometer (km)</label><input type="number" value={serviceForm.odometer_km} onChange={(e) => onOdometerChange(e.target.value)} placeholder="Current km" /></div>
+                <div className="field"><label className="label">Cost (R)</label><input type="number" value={serviceForm.cost} onChange={(e) => setServiceForm((f) => ({ ...f, cost: e.target.value }))} /></div>
+                <div className="field">
+                  <label className="label">Next service km</label>
+                  <input type="number" value={serviceForm.next_service_km} onChange={(e) => { setServiceKmTouched(true); setServiceForm((f) => ({ ...f, next_service_km: e.target.value })); }} />
+                  <div className="text-xs muted mt-1">Defaults to 3,000 km after this reading — edit if this bike needs a different interval.</div>
+                </div>
+                <div className="field"><label className="label">Next service date</label><input type="date" value={serviceForm.next_service_date} onChange={(e) => setServiceForm((f) => ({ ...f, next_service_date: e.target.value }))} /></div>
+                <div className="field"><label className="label">Performed by</label><input value={serviceForm.performed_by} onChange={(e) => setServiceForm((f) => ({ ...f, performed_by: e.target.value }))} placeholder="Workshop or mechanic name" /></div>
+                <div className="field"><label className="label">Bike status after</label><select value={serviceForm.bike_status_after_service} onChange={(e) => setServiceForm((f) => ({ ...f, bike_status_after_service: e.target.value }))}><option value="">No change</option>{SERVICEABLE_STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
+              </div>
+              <div className="field"><label className="label">Description</label><textarea rows={2} value={serviceForm.description} onChange={(e) => setServiceForm((f) => ({ ...f, description: e.target.value }))} placeholder="What was done" /></div>
+              <div className="row" style={{ justifyContent: 'flex-end' }}>
+                <button className="btn btn-secondary" onClick={() => setShowLogService(false)}>Cancel</button>
+                <button className="btn" onClick={logService} disabled={loggingService}>{loggingService ? 'Logging…' : 'Log service'}</button>
+              </div>
+            </div>
+          )}
+
+          {loadingHistory ? <Loading /> : (
+            <table className="table">
+              <thead><tr><th>Date</th><th>Type</th><th>Odometer</th><th>Cost</th><th>Invoice</th></tr></thead>
+              <tbody>
+                {serviceRecords.map((serviceRow) => (
+                  <tr key={serviceRow.id}>
+                    <td>{fmtDate(serviceRow.service_date)}</td>
+                    <td>{serviceRow.service_type}{serviceRow.job_card_id ? ' (workshop)' : ''}</td>
+                    <td>{serviceRow.odometer_km ? `${Number(serviceRow.odometer_km).toLocaleString('en-ZA')} km` : '—'}</td>
+                    <td>{fmt(serviceRow.cost)}</td>
+                    <td>{serviceRow.invoice_file_path ? <a href={serviceRow.invoice_file_path} target="_blank" rel="noreferrer">{serviceRow.invoice_original_name || 'Open'}</a> : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {!loadingHistory && !serviceRecords.length && <div className="muted text-sm">No service records yet.</div>}
         </Modal>
       )}
     </>

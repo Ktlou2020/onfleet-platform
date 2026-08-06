@@ -3,8 +3,9 @@ require('dotenv').config();
 
 const fs = require('fs');
 const path = require('path');
-const db = require('../db');
-const { normalizeBikeStatus, bikeHasActiveAgreement, setBikeStatus } = require('../utils/bikeStatus');
+const pgDb = require('../pgDb');
+const { normalizeBikeStatus } = require('../utils/bikeStatus');
+const { bikeHasActiveAgreement, setBikeStatus } = require('../utils/bikeStatusPg');
 
 function readArg(flag) {
   const index = process.argv.indexOf(flag);
@@ -72,13 +73,13 @@ function pick(row, candidates) {
   return '';
 }
 
-function findBike(row) {
+async function findBike(row) {
   const id = pick(row, ['id', 'bike id', 'bike_id']);
   const registration = pick(row, ['registration', 'vehicle reg', 'bike registration']);
   const vin = pick(row, ['vin']);
-  if (id) return db.prepare(`SELECT * FROM bikes WHERE id = ?`).get(id);
-  if (registration) return db.prepare(`SELECT * FROM bikes WHERE registration = ?`).get(registration);
-  if (vin) return db.prepare(`SELECT * FROM bikes WHERE vin = ?`).get(vin);
+  if (id) return (await pgDb.query(`SELECT * FROM bikes WHERE id = $1`, [id])).rows[0] || null;
+  if (registration) return (await pgDb.query(`SELECT * FROM bikes WHERE registration = $1`, [registration])).rows[0] || null;
+  if (vin) return (await pgDb.query(`SELECT * FROM bikes WHERE vin = $1`, [vin])).rows[0] || null;
   return null;
 }
 
@@ -95,70 +96,77 @@ CSV must include a status column plus one bike identifier column:
 `);
 }
 
-const filePath = readArg('--file');
-const dryRun = hasFlag('--dry-run');
-if (!filePath) {
-  usage();
-  process.exit(1);
-}
-
-const resolvedPath = path.resolve(process.cwd(), filePath);
-if (!fs.existsSync(resolvedPath)) {
-  console.error(`CSV file not found: ${resolvedPath}`);
-  process.exit(1);
-}
-
-const rows = parseCsv(fs.readFileSync(resolvedPath, 'utf8'));
-const summary = {
-  file: resolvedPath,
-  dry_run: dryRun,
-  total_rows: rows.length,
-  updated: 0,
-  paused_agreements: 0,
-  not_found: 0,
-  missing_status: 0,
-  missing_identifier: 0,
-  errors: []
-};
-
-for (let index = 0; index < rows.length; index += 1) {
-  const row = rows[index];
-  const rawStatus = pick(row, ['status', 'bike status']);
-  if (!rawStatus) {
-    summary.missing_status += 1;
-    summary.errors.push({ row: index + 2, error: 'Missing status value' });
-    continue;
+async function main() {
+  const filePath = readArg('--file');
+  const dryRun = hasFlag('--dry-run');
+  if (!filePath) {
+    usage();
+    process.exit(1);
   }
 
-  const hasAnyIdentifier = Boolean(pick(row, ['id', 'bike id', 'bike_id', 'registration', 'vehicle reg', 'bike registration', 'vin']));
-  if (!hasAnyIdentifier) {
-    summary.missing_identifier += 1;
-    summary.errors.push({ row: index + 2, error: 'Missing bike identifier (id, registration, or vin)' });
-    continue;
+  const resolvedPath = path.resolve(process.cwd(), filePath);
+  if (!fs.existsSync(resolvedPath)) {
+    console.error(`CSV file not found: ${resolvedPath}`);
+    process.exit(1);
   }
 
-  const bike = findBike(row);
-  if (!bike) {
-    summary.not_found += 1;
-    summary.errors.push({ row: index + 2, error: 'Bike not found', registration: pick(row, ['registration', 'vehicle reg', 'bike registration']) || null, vin: pick(row, ['vin']) || null });
-    continue;
-  }
+  const rows = parseCsv(fs.readFileSync(resolvedPath, 'utf8'));
+  const summary = {
+    file: resolvedPath,
+    dry_run: dryRun,
+    total_rows: rows.length,
+    updated: 0,
+    paused_agreements: 0,
+    not_found: 0,
+    missing_status: 0,
+    missing_identifier: 0,
+    errors: []
+  };
 
-  try {
-    if (dryRun) {
-      const hasActiveAgreement = bikeHasActiveAgreement(bike.id);
-      const nextStatus = normalizeBikeStatus(rawStatus, { bikeId: bike.id, hasAllocation: hasActiveAgreement });
-      summary.updated += 1;
-      if (nextStatus === 'repairs' && hasActiveAgreement) summary.paused_agreements += 1;
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    const rawStatus = pick(row, ['status', 'bike status']);
+    if (!rawStatus) {
+      summary.missing_status += 1;
+      summary.errors.push({ row: index + 2, error: 'Missing status value' });
       continue;
     }
 
-    const result = setBikeStatus(bike.id, rawStatus);
-    summary.updated += 1;
-    summary.paused_agreements += result.paused_agreements || 0;
-  } catch (error) {
-    summary.errors.push({ row: index + 2, bike_id: bike.id, error: error.message });
+    const hasAnyIdentifier = Boolean(pick(row, ['id', 'bike id', 'bike_id', 'registration', 'vehicle reg', 'bike registration', 'vin']));
+    if (!hasAnyIdentifier) {
+      summary.missing_identifier += 1;
+      summary.errors.push({ row: index + 2, error: 'Missing bike identifier (id, registration, or vin)' });
+      continue;
+    }
+
+    const bike = await findBike(row);
+    if (!bike) {
+      summary.not_found += 1;
+      summary.errors.push({ row: index + 2, error: 'Bike not found', registration: pick(row, ['registration', 'vehicle reg', 'bike registration']) || null, vin: pick(row, ['vin']) || null });
+      continue;
+    }
+
+    try {
+      if (dryRun) {
+        const hasActiveAgreement = await bikeHasActiveAgreement(bike.id);
+        const nextStatus = normalizeBikeStatus(rawStatus, { bikeId: bike.id, hasAllocation: hasActiveAgreement });
+        summary.updated += 1;
+        if (nextStatus === 'repairs' && hasActiveAgreement) summary.paused_agreements += 1;
+        continue;
+      }
+
+      const result = await setBikeStatus(bike.id, rawStatus);
+      summary.updated += 1;
+      summary.paused_agreements += result.paused_agreements || 0;
+    } catch (error) {
+      summary.errors.push({ row: index + 2, bike_id: bike.id, error: error.message });
+    }
   }
+
+  console.log(JSON.stringify(summary, null, 2));
 }
 
-console.log(JSON.stringify(summary, null, 2));
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

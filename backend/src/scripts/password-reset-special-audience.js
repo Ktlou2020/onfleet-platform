@@ -1,6 +1,6 @@
 const crypto = require('crypto');
-const db = require('../db');
-const { sendNotification } = require('../services/notifier');
+const pgDb = require('../pgDb');
+const { sendNotification } = require('../services/notifierPg');
 
 const DEFAULT_TAG = process.env.SPECIAL_AUDIENCE_TAG || 'password-reset-batch-2026-05';
 const DRY_RUN = ['1', 'true', 'yes'].includes(String(process.env.DRY_RUN || '').toLowerCase());
@@ -131,7 +131,7 @@ function mergeTag(existingValue, tag) {
 
 function passwordResetExpiryIso() {
   const ttlMinutes = Number(readEnv('PASSWORD_RESET_TOKEN_TTL_MINUTES', '60') || 60);
-  return new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  return new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString();
 }
 
 function hashResetToken(token) {
@@ -153,8 +153,11 @@ async function main() {
   const normalizedEmails = [...new Set(TARGET_EMAILS.map(normalizeEmail).filter(Boolean))];
   if (!normalizedEmails.length) throw new Error('No target emails configured');
 
-  const placeholders = normalizedEmails.map(() => '?').join(',');
-  const matchedUsers = db.prepare(`SELECT id, email, full_name, status, user_tags FROM users WHERE deleted_at IS NULL AND lower(email) IN (${placeholders})`).all(...normalizedEmails);
+  const placeholders = normalizedEmails.map((_, i) => `$${i + 1}`).join(',');
+  const { rows: matchedUsers } = await pgDb.query(
+    `SELECT id, email, full_name, status, user_tags FROM users WHERE deleted_at IS NULL AND lower(email) IN (${placeholders})`,
+    normalizedEmails
+  );
   const matchedEmailSet = new Set(matchedUsers.map((user) => normalizeEmail(user.email)));
   const missingEmails = normalizedEmails.filter((email) => !matchedEmailSet.has(email));
 
@@ -167,7 +170,7 @@ async function main() {
   for (const user of matchedUsers) {
     const nextTags = mergeTag(user.user_tags, DEFAULT_TAG);
     if (!DRY_RUN) {
-      db.prepare(`UPDATE users SET user_tags = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(nextTags, user.id);
+      await pgDb.query(`UPDATE users SET user_tags = $1, updated_at = NOW() WHERE id = $2`, [nextTags, user.id]);
     }
     taggedCount += 1;
 
@@ -182,9 +185,9 @@ async function main() {
 
     try {
       if (!DRY_RUN) {
-        db.prepare(`UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE user_id = ? AND used_at IS NULL`).run(user.id);
-        db.prepare(`INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, requested_ip, user_agent)
-          VALUES (?,?,?,?,?)`).run(user.id, tokenHash, passwordResetExpiryIso(), 'campaign-script', 'password-reset-special-audience');
+        await pgDb.query(`UPDATE password_reset_tokens SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL`, [user.id]);
+        await pgDb.query(`INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, requested_ip, user_agent)
+          VALUES ($1,$2,$3,$4,$5)`, [user.id, tokenHash, passwordResetExpiryIso(), 'campaign-script', 'password-reset-special-audience']);
         await sendNotification({
           userId: user.id,
           channel: 'email',

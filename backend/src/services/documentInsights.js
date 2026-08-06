@@ -16,16 +16,36 @@ function normalizeAmount(raw) {
   return Number.isFinite(value) ? +value.toFixed(2) : null;
 }
 
+// A payslip's realistic monthly take-home; anything above this is treated as
+// a failed extraction (e.g. an ID number or two glued-together figures)
+// rather than a real value.
+const MAX_PLAUSIBLE_PAYSLIP_AMOUNT = 500000;
+
+// A single coherent number: comma- or space-grouped thousands (e.g.
+// "12,500.00" / "12 500.00"), or a plain contiguous digit run (e.g.
+// "12500.00"). Deliberately does NOT allow bare whitespace to separate
+// arbitrary digit runs — that was the previous pattern's flaw: two distinct
+// figures sitting near each other in OCR'd/parsed text (a date and an
+// amount, two table columns) got captured as one blob and, once
+// normalizeAmount stripped the whitespace between them, glued into a single
+// bogus value.
+const AMOUNT = String.raw`\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d{1,3}(?:\s\d{3})+(?:\.\d{1,2})?|\d{1,7}(?:\.\d{1,2})?`;
+// The currency marker must not be preceded by a letter — otherwise it also
+// matches a stray "r"/"R" inside an ordinary word (e.g. "Employer9603...",
+// "ID Number9603...") and swallows whatever digits follow, which is how SA
+// ID numbers on payslips were getting captured as "amounts" in production.
+const CURRENCY = String.raw`(?<![A-Za-z])(?:R|ZAR)`;
+
 function extractAmountCandidates(text = '') {
   const patterns = [
-    /(?:total\s+paid|net\s+pay|netpay|nett\s+pay|amount\s+paid|take\s+home|salary\s+paid|total\s+earnings?)\D{0,25}(?:R|ZAR)?\s*([\d\s,.]{3,})/gi,
-    /(?:R|ZAR)\s*([\d\s,.]{3,})/gi
+    new RegExp(String.raw`(?:total\s+paid|net\s+pay|netpay|nett\s+pay|amount\s+paid|take\s+home|salary\s+paid|total\s+earnings?)\D{0,25}(?:${CURRENCY})?\s*(${AMOUNT})`, 'gi'),
+    new RegExp(String.raw`${CURRENCY}\s*(${AMOUNT})`, 'gi')
   ];
   const values = [];
   for (const pattern of patterns) {
     for (const match of text.matchAll(pattern)) {
       const amount = normalizeAmount(match[1]);
-      if (amount && amount > 0) values.push(amount);
+      if (amount && amount > 0 && amount <= MAX_PLAUSIBLE_PAYSLIP_AMOUNT) values.push(amount);
     }
   }
   return [...new Set(values)].sort((a, b) => b - a);
@@ -169,5 +189,7 @@ module.exports = {
   extractPayslipInsights,
   extractLicenseDiscInsights,
   normalizeLicenseDiscNo,
-  extractLicenseDiscFields
+  extractLicenseDiscFields,
+  extractAmountCandidates,
+  normalizeAmount
 };

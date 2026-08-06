@@ -552,6 +552,53 @@ router.get('/parts-suggestions', authRequired, workshopOnly, async (req, res) =>
   }
 });
 
+// OEM parts catalogue lookup — searches by part number or description,
+// scoped to a bike make/model. Returns nothing if that model has no
+// ingested catalogue yet (see scripts/ingest-parts-catalog.js); the
+// frontend falls back to the free-text description field in that case.
+router.get('/parts-catalog/search', authRequired, workshopOnly, async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    const make = String(req.query.make || '').trim();
+    const model = String(req.query.model || '').trim();
+    if (q.length < 2) return res.json({ results: [] });
+
+    const conditions = ['(LOWER(part_number) LIKE $1 OR LOWER(description) LIKE $1)'];
+    const params = [`%${q.toLowerCase()}%`];
+    if (make) { params.push(make); conditions.push(`LOWER(make) = LOWER($${params.length})`); }
+    if (model) { params.push(model); conditions.push(`LOWER(model) = LOWER($${params.length})`); }
+
+    const { rows: results } = await pgDb.query(`
+      SELECT id, make, model, group_code, group_name, ref_no, part_number, description, remark, qty_required, diagram_image_path
+      FROM parts_catalog
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY part_number
+      LIMIT 25
+    `, params);
+    res.json({ results });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Whether a given bike make/model has an ingested OEM catalogue at all —
+// lets the frontend decide whether to show the catalogue picker or just
+// the plain free-text field, without a search round-trip on every keystroke.
+router.get('/parts-catalog/available', authRequired, workshopOnly, async (req, res) => {
+  try {
+    const make = String(req.query.make || '').trim();
+    const model = String(req.query.model || '').trim();
+    if (!make || !model) return res.json({ available: false });
+    const { rows } = await pgDb.query(
+      `SELECT 1 FROM parts_catalog WHERE LOWER(make) = LOWER($1) AND LOWER(model) = LOWER($2) LIMIT 1`,
+      [make, model]
+    );
+    res.json({ available: rows.length > 0 });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Upcoming service schedule — bikes due within N days
 router.get('/upcoming-services', authRequired, workshopOnly, async (req, res) => {
   try {

@@ -56,6 +56,54 @@ function PartsSuggestions({ query, onSelect }) {
   );
 }
 
+// OEM parts catalogue lookup, scoped to this job's bike make/model. Only
+// ingested models (see scripts/ingest-parts-catalog.js) return results —
+// other bikes just get nothing here and the plain description field above
+// still works as free text, no separate "unsupported model" state needed.
+function CatalogPartsSuggestions({ query, make, model, onSelect }) {
+  const [results, setResults] = useState([]);
+  useEffect(() => {
+    if (!query || query.length < 2 || !make || !model) { setResults([]); return; }
+    const t = setTimeout(() => {
+      api.get('/workshop/parts-catalog/search', { params: { q: query, make, model } })
+        .then((r) => setResults(r.data.results))
+        .catch(() => {});
+    }, 250);
+    return () => clearTimeout(t);
+  }, [query, make, model]);
+
+  if (!results.length) return null;
+  return (
+    <div className="card" style={{ position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 41, padding: 6, maxHeight: 260, overflowY: 'auto', border: '1px solid var(--primary)' }}>
+      <div className="text-xs muted" style={{ padding: '2px 6px 6px' }}>OEM catalogue — {make} {model}</div>
+      {results.map((r) => (
+        <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          <button
+            className="btn btn-secondary btn-sm"
+            style={{ flex: 1, justifyContent: 'space-between', textAlign: 'left' }}
+            onClick={() => onSelect(r)}
+          >
+            <span>
+              <strong>{r.part_number}</strong> — {r.description}
+              <span className="muted text-xs"> · {r.group_name}{r.ref_no ? ` (ref ${r.ref_no})` : ''}</span>
+            </span>
+          </button>
+          {r.diagram_image_path && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              title="View diagram"
+              onClick={() => window.open(r.diagram_image_path, '_blank', 'noopener')}
+            >
+              <Image size={14} />
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function buildPrintHTML(card, bikeReg, bikeMake, bikeModel) {
   const itemRows = card.items.map((item) => `
     <tr>
@@ -854,10 +902,19 @@ export default function WorkshopJobCard() {
                 placeholder="e.g. Oil filter, Labour – brake pad replacement"
                 autoComplete="off"
               />
-              <PartsSuggestions
-                query={itemForm.description}
-                onSelect={(s) => setItemForm((f) => ({ ...f, description: s.description, item_type: s.item_type, unit_cost: String(s.avg_unit_cost || '') }))}
-              />
+              {itemForm.item_type === 'part' ? (
+                <CatalogPartsSuggestions
+                  query={itemForm.description}
+                  make={bikeMake}
+                  model={bikeModel}
+                  onSelect={(r) => setItemForm((f) => ({ ...f, description: `${r.part_number} — ${r.description}` }))}
+                />
+              ) : (
+                <PartsSuggestions
+                  query={itemForm.description}
+                  onSelect={(s) => setItemForm((f) => ({ ...f, description: s.description, item_type: s.item_type, unit_cost: String(s.avg_unit_cost || '') }))}
+                />
+              )}
             </div>
           </div>
           <div className="field">

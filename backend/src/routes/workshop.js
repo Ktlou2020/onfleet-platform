@@ -310,7 +310,13 @@ router.post('/job-cards/:id/complete', authRequired, workshopOnly, async (req, r
 
     const { completion_notes, odometer_km, next_service_date, next_service_km, bike_status_after } = req.body;
     const parsedOdometer = odometer_km ? Number(odometer_km) : null;
-    const parsedNextKm = next_service_km ? Number(next_service_km) : null;
+    if (card.bike_id && (!Number.isFinite(parsedOdometer) || parsedOdometer <= 0)) {
+      return res.status(400).json({ error: 'Odometer reading is required to complete a job on a bike — it calibrates the bike\'s tracked odometer and sets the next service due date.' });
+    }
+    // Default the next-service trigger to 3,000 km after this reading (the
+    // platform's standard service interval) unless the technician overrode
+    // it — keeps the rule enforced server-side, not just as a frontend default.
+    const parsedNextKm = next_service_km ? Number(next_service_km) : (parsedOdometer ? parsedOdometer + 3000 : null);
 
     await pgDb.query(`
       UPDATE job_cards SET status = 'completed', completed_at = NOW(),

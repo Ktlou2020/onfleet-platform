@@ -14,6 +14,10 @@ const BIKE_STATUSES = ['active', 'ready_to_go', 'repairs', 'not_available', 'sta
 const EMPTY_ITEM = { item_type: 'labor', description: '', quantity: '1', unit_cost: '' };
 const EMPTY_COMPLETE = { completion_notes: '', odometer_km: '', next_service_date: '', next_service_km: '', bike_status_after: 'active' };
 
+function buildInitialCompleteForm(card) {
+  return { ...EMPTY_COMPLETE, odometer_km: card?.bike_odometer_km || '' };
+}
+
 function elapsed(startedAt, pausedAt, totalPausedSeconds) {
   if (!startedAt) return null;
   const start = new Date(startedAt).getTime();
@@ -177,6 +181,7 @@ export default function WorkshopJobCard() {
   const [confirmComplete, setConfirmComplete] = useState(false);
   const [showComplete, setShowComplete] = useState(false);
   const [completeForm, setCompleteForm] = useState(EMPTY_COMPLETE);
+  const [completeKmTouched, setCompleteKmTouched] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const loadPhotos = async () => {
@@ -230,6 +235,9 @@ export default function WorkshopJobCard() {
   };
 
   const completeJob = async () => {
+    if (hasBike && !completeForm.odometer_km) {
+      return toast.error('Odometer reading is required to complete a job on a bike');
+    }
     try {
       setBusy(true);
       const { data } = await api.post(`/workshop/job-cards/${id}/complete`, completeForm);
@@ -477,7 +485,8 @@ export default function WorkshopJobCard() {
                 className="btn btn-sm"
                 onClick={() => {
                   if (card.items.length === 0) { setConfirmComplete(true); return; }
-                  setCompleteForm(EMPTY_COMPLETE);
+                  setCompleteForm(buildInitialCompleteForm(card));
+                  setCompleteKmTouched(false);
                   setShowComplete(true);
                 }}
                 disabled={busy}
@@ -879,8 +888,17 @@ export default function WorkshopJobCard() {
           </div>
           <div className="grid grid-2" style={{ gap: 12 }}>
             <div className="field">
-              <label className="label">Odometer reading (km)</label>
-              <input type="number" value={completeForm.odometer_km} onChange={(e) => setCompleteForm((f) => ({ ...f, odometer_km: e.target.value }))} placeholder="Current km" />
+              <label className="label">Odometer reading (km){hasBike ? ' *' : ''}</label>
+              <input
+                type="number"
+                value={completeForm.odometer_km}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setCompleteForm((f) => ({ ...f, odometer_km: value, next_service_km: completeKmTouched ? f.next_service_km : (value ? Number(value) + 3000 : '') }));
+                }}
+                placeholder="Current km"
+              />
+              {hasBike && <div className="text-xs muted mt-1">Required — calibrates this bike's tracked odometer.</div>}
             </div>
             <div className="field">
               <label className="label">Next service date</label>
@@ -888,7 +906,8 @@ export default function WorkshopJobCard() {
             </div>
             <div className="field">
               <label className="label">Next service at (km)</label>
-              <input type="number" value={completeForm.next_service_km} onChange={(e) => setCompleteForm((f) => ({ ...f, next_service_km: e.target.value }))} placeholder="e.g. 15000" />
+              <input type="number" value={completeForm.next_service_km} onChange={(e) => { setCompleteKmTouched(true); setCompleteForm((f) => ({ ...f, next_service_km: e.target.value })); }} placeholder="e.g. 15000" />
+              <div className="text-xs muted mt-1">Defaults to 3,000 km after the odometer reading above.</div>
             </div>
             {hasBike && (
               <div className="field">
@@ -924,7 +943,7 @@ export default function WorkshopJobCard() {
           body="This job has no line items and will complete with R0.00 cost. Are you sure you want to continue?"
           confirmLabel="Yes, complete"
           busy={busy}
-          onConfirm={() => { setConfirmComplete(false); setCompleteForm(EMPTY_COMPLETE); setShowComplete(true); }}
+          onConfirm={() => { setConfirmComplete(false); setCompleteForm(buildInitialCompleteForm(card)); setCompleteKmTouched(false); setShowComplete(true); }}
           onClose={() => setConfirmComplete(false)}
         />
       )}

@@ -86,8 +86,22 @@ function parseDateFlexible(value, fallback = null) {
       const [year, month, day] = parts;
       return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
     }
-    const [month, day, year] = parts;
-    if (year.length === 4) return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+    const [first, second, year] = parts;
+    if (year.length === 4) {
+      // Ambiguous between DD/MM/YYYY (South African/international — what
+      // this platform's CSV sources actually use) and MM/DD/YYYY (US).
+      // Default to day-first; if that puts an impossible value (>12) in the
+      // month slot, the source must have been month-first, so swap. Bounds-
+      // check both before trusting either, rather than silently writing a
+      // swapped-but-still-"valid" date (e.g. 5 March read as May 3) into a
+      // real agreement's start_date or a payment's paid_at.
+      let day = first, month = second;
+      if (Number(month) > 12) { [day, month] = [second, first]; }
+      const dayNum = Number(day), monthNum = Number(month);
+      if (monthNum >= 1 && monthNum <= 12 && dayNum >= 1 && dayNum <= 31) {
+        return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      }
+    }
   }
   const parsed = new Date(raw);
   if (Number.isNaN(parsed.getTime())) return fallback;

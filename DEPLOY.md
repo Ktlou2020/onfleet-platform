@@ -113,7 +113,7 @@ Before going fully live with **real money**:
 - [ ] Wire up **SMTP** for email reminders (e.g. SendGrid, Mailgun)
 - [ ] Generate a strong `JWT_SECRET` — `openssl rand -hex 32`
 - [ ] Move file uploads from local disk to **S3 / Cloudflare R2** (multer-s3) for horizontal scaling
-- [ ] (Optional) Migrate from SQLite to **PostgreSQL** when you exceed ~10k agreements — schema in `backend/src/db.js` translates 1:1
+- [x] Migrated from SQLite to **PostgreSQL** — all business data now lives in the same Postgres database as GPS tracking data (`backend/src/pgDb.js`)
 - [ ] Change all default seed passwords (`admin123`, `rider123`)
 - [ ] Set up automated DB backups (your hosting provider's snapshot feature)
 

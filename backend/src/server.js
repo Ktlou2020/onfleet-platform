@@ -30,12 +30,15 @@ process.on('uncaughtException', (err) => {
 });
 
 const { ensureSuperadminFromEnv } = require('./services/bootstrapSuperadmin');
-const superadminBootstrap = ensureSuperadminFromEnv();
-if (superadminBootstrap?.skipped) {
-  console.log(`ℹ️  Superadmin bootstrap skipped: ${superadminBootstrap.reason}`);
-} else {
-  console.log(`🔐 Superadmin ${superadminBootstrap.created ? 'created' : 'updated'} for ${superadminBootstrap.email}`);
-}
+ensureSuperadminFromEnv().then((superadminBootstrap) => {
+  if (superadminBootstrap?.skipped) {
+    console.log(`ℹ️  Superadmin bootstrap skipped: ${superadminBootstrap.reason}`);
+  } else {
+    console.log(`🔐 Superadmin ${superadminBootstrap.created ? 'created' : 'already exists'} for ${superadminBootstrap.email}`);
+  }
+}).catch((err) => {
+  console.error('[startup] Superadmin bootstrap failed:', err.message);
+});
 
 if (process.env.NODE_ENV !== 'test') {
   require('./migrations/trackingPgSchema').runTrackingSchema().then(() => {

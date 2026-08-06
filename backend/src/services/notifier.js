@@ -1,6 +1,5 @@
 const axios = require('axios');
 const nodemailer = require('nodemailer');
-const db = require('../db');
 
 let transporter;
 
@@ -217,30 +216,4 @@ async function sendHtmlEmail(to, subject, htmlContent) {
   console.log(`[HTML-EMAIL→${emailTo}] ${subject}`);
 }
 
-async function sendSMS(to, body) {
-  console.log(`[SMS→${to}] ${body}`);
-}
-
-async function sendWhatsApp(to, body) {
-  console.log(`[WhatsApp→${to}] ${body}`);
-}
-
-async function sendNotification({ userId, channel, type, title, message, throwOnError = true }) {
-  const user = userId ? db.prepare('SELECT email, phone FROM users WHERE id = ?').get(userId) : null;
-  const info = db.prepare(`INSERT INTO notifications (user_id, channel, type, title, message, status)
-                           VALUES (?,?,?,?,?, 'pending')`).run(userId || null, channel, type, title || null, message);
-  try {
-    if (channel === 'email' && user?.email) await sendEmail(user.email, title || type, message);
-    else if (channel === 'sms' && user?.phone) await sendSMS(user.phone, message);
-    else if (channel === 'whatsapp' && user?.phone) await sendWhatsApp(user.phone, message);
-    db.prepare(`UPDATE notifications SET status = 'sent', sent_at = CURRENT_TIMESTAMP WHERE id = ?`)
-      .run(info.lastInsertRowid);
-  } catch (e) {
-    console.error(`[notification:${channel}:${type}]`, e.message);
-    db.prepare(`UPDATE notifications SET status = 'failed' WHERE id = ?`).run(info.lastInsertRowid);
-    if (throwOnError) throw e;
-  }
-  return info.lastInsertRowid;
-}
-
-module.exports = { sendEmail, sendHtmlEmail, sendNotification, detectEmailProvider };
+module.exports = { sendEmail, sendHtmlEmail, detectEmailProvider };

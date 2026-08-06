@@ -1,6 +1,5 @@
 const fs = require('fs');
 const path = require('path');
-const db = require('../db');
 const { contracts: contractDir } = require('../uploadPaths');
 
 function publicPath(filename) {
@@ -209,49 +208,6 @@ function writeContractSnapshot({ agreement, rider, bike, application, signatureD
   return publicPath(filename);
 }
 
-function getAgreementContractContext(agreementId) {
-  const agreement = db.prepare(`SELECT a.*, b.make, b.model, b.registration, b.image_url, b.vin,
-      b.year, b.engine_cc, b.color,
-      b.last_known_lat, b.last_known_lng, b.last_location_at, b.next_service_date,
-      b.next_service_km, b.odometer_km, b.status AS bike_status,
-      u.full_name, u.email, u.phone, u.id_number, u.address, u.city, u.province, u.postal_code
-    FROM agreements a
-    JOIN bikes b ON b.id = a.bike_id
-    JOIN users u ON u.id = a.user_id
-    WHERE a.id = ?`).get(agreementId);
-  if (!agreement) return null;
-  const application = agreement.application_id ? db.prepare('SELECT * FROM applications WHERE id = ?').get(agreement.application_id) : null;
-  return { agreement, rider: agreement, bike: agreement, application };
-}
-
-function ensureContractSnapshotForAgreement({ agreementId, kind }) {
-  const context = getAgreementContractContext(agreementId);
-  if (!context) return null;
-
-  const absolutePath = buildContractAbsolutePath(context.agreement.agreement_no, kind);
-  if (!fs.existsSync(absolutePath)) {
-    writeContractSnapshot({
-      ...context,
-      signatureData: kind === 'signed' ? context.agreement.signature_data : null,
-      kind
-    });
-  }
-
-  const generatedPublicPath = publicPath(buildContractFilename(context.agreement.agreement_no, kind));
-  if (kind === 'signed' && context.agreement.signed_contract_path !== generatedPublicPath) {
-    db.prepare(`UPDATE agreements SET signed_contract_path = ? WHERE id = ?`).run(generatedPublicPath, agreementId);
-  }
-  if (kind === 'unsigned' && (context.agreement.contract_file_path !== generatedPublicPath || context.agreement.contract_pdf_path !== generatedPublicPath)) {
-    db.prepare(`UPDATE agreements SET contract_file_path = ?, contract_pdf_path = ? WHERE id = ?`).run(generatedPublicPath, generatedPublicPath, agreementId);
-  }
-
-  return {
-    absolutePath,
-    publicPath: generatedPublicPath,
-    context
-  };
-}
-
 function parseContractFilename(filename = '') {
   const normalized = path.basename(String(filename || ''));
   if (normalized.endsWith('-signed.html')) {
@@ -261,19 +217,6 @@ function parseContractFilename(filename = '') {
     return { safeNo: normalized.slice(0, -'-unsigned.html'.length), kind: 'unsigned' };
   }
   return null;
-}
-
-function ensureContractSnapshotForRelativePath(relativePath = '') {
-  const normalized = String(relativePath || '').replace(/^[/\\]+/, '');
-  if (!normalized.startsWith('contracts/')) return null;
-
-  const parsed = parseContractFilename(normalized.slice('contracts/'.length));
-  if (!parsed) return null;
-
-  const agreement = db.prepare(`SELECT id, agreement_no FROM agreements`).all().find((row) => safeAgreementNo(row.agreement_no) === parsed.safeNo);
-  if (!agreement) return null;
-
-  return ensureContractSnapshotForAgreement({ agreementId: agreement.id, kind: parsed.kind });
 }
 
 function rentToOwnContractTemplate({ org, agreement, rider, bike }) {
@@ -527,31 +470,8 @@ function rentToOwnContractTemplate({ org, agreement, rider, bike }) {
 </html>`;
 }
 
-function getFleetOwnerContractContext(agreementId, organizationId) {
-  const context = getAgreementContractContext(agreementId);
-  if (!context) return null;
-  const org = db.prepare('SELECT * FROM organizations WHERE id = ?').get(organizationId);
-  if (!org) return null;
-  return { ...context, org };
-}
-
-function writeFleetOwnerContractSnapshot(agreementId, organizationId) {
-  const context = getFleetOwnerContractContext(agreementId, organizationId);
-  if (!context) return null;
-  const { org, agreement, rider, bike } = context;
-  const filename = buildContractFilename(agreement.agreement_no, 'fleet-rto');
-  const filePath = path.join(contractDir, filename);
-  fs.writeFileSync(filePath, rentToOwnContractTemplate({ org, agreement, rider, bike }));
-  return publicPath(filename);
-}
-
 module.exports = {
   writeContractSnapshot,
-  ensureContractSnapshotForAgreement,
-  ensureContractSnapshotForRelativePath,
-  getAgreementContractContext,
-  writeFleetOwnerContractSnapshot,
-  getFleetOwnerContractContext,
   // Pure (no DB access) — reused by services/contractsPg.js
   buildContractFilename,
   buildContractAbsolutePath,

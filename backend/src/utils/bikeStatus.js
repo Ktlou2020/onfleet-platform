@@ -1,5 +1,3 @@
-const db = require('../db');
-
 const BIKE_STATUS_OPTIONS = [
   { value: 'active', label: 'Active' },
   { value: 'not_available', label: 'Not available' },
@@ -23,14 +21,12 @@ function getBikeStatusLabel(status) {
   return BIKE_STATUS_LABELS[status] || status || '—';
 }
 
-function bikeHasActiveAgreement(bikeId) {
-  if (!bikeId) return false;
-  return !!db.prepare(`SELECT 1 FROM agreements WHERE bike_id = ? AND status = 'active' LIMIT 1`).get(bikeId);
-}
-
-function inferHasAllocation({ bikeId = null, row = null, hasAllocation = null } = {}) {
+// Whether a bike has an active agreement must be resolved by the caller
+// (via utils/bikeStatusPg.js's async bikeHasActiveAgreement) and passed in
+// as `hasAllocation` — this function stays synchronous/pure so it can be
+// used by CSV-import mapping, which has no DB access of its own.
+function inferHasAllocation({ row = null, hasAllocation = null } = {}) {
   if (typeof hasAllocation === 'boolean') return hasAllocation;
-  if (bikeId) return bikeHasActiveAgreement(bikeId);
   if (row && typeof row === 'object') {
     const riderHint = [row.Driver, row['Allocated Rider'], row['Rider Name'], row['Full Name']]
       .map((value) => String(value || '').trim())
@@ -58,43 +54,10 @@ function normalizeBikeStatus(rawStatus, options = {}) {
   return hasAllocation ? 'active' : 'ready_to_go';
 }
 
-function pauseActiveBikeAgreements(bikeId) {
-  const result = db.prepare(`UPDATE agreements SET status = 'paused' WHERE bike_id = ? AND status = 'active'`).run(bikeId);
-  return result.changes || 0;
-}
-
-function setBikeStatus(bikeId, requestedStatus) {
-  const bike = db.prepare(`SELECT id, status FROM bikes WHERE id = ?`).get(bikeId);
-  if (!bike) throw new Error('Bike not found');
-
-  const hasActiveAgreement = bikeHasActiveAgreement(bikeId);
-  const nextStatus = normalizeBikeStatus(requestedStatus, { bikeId, hasAllocation: hasActiveAgreement });
-  if (nextStatus === 'active' && !hasActiveAgreement) {
-    throw new Error('Active status requires a current active agreement');
-  }
-
-  let pausedAgreements = 0;
-  if (nextStatus === 'repairs') {
-    pausedAgreements = pauseActiveBikeAgreements(bikeId);
-  }
-
-  db.prepare(`UPDATE bikes SET status = ? WHERE id = ?`).run(nextStatus, bikeId);
-
-  return {
-    previous_status: bike.status,
-    next_status: nextStatus,
-    paused_agreements: pausedAgreements,
-    had_active_agreement: hasActiveAgreement
-  };
-}
-
 module.exports = {
   BIKE_STATUS_OPTIONS,
   BIKE_STATUS_VALUES,
   BIKE_STATUS_LABELS,
   getBikeStatusLabel,
-  normalizeBikeStatus,
-  bikeHasActiveAgreement,
-  pauseActiveBikeAgreements,
-  setBikeStatus
+  normalizeBikeStatus
 };

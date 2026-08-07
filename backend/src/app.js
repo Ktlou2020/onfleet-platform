@@ -6,6 +6,7 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const path = require('path');
 const fs = require('fs');
+const rateLimit = require('express-rate-limit');
 
 const UPLOAD_DIRS = require('./uploadPaths');
 const uploadRoots = [
@@ -158,6 +159,19 @@ function buildApp() {
     if (!absolutePath) return sendMissingUpload(res, relativePath);
     return res.sendFile(absolutePath);
   });
+
+  // Defense-in-depth: a generous ceiling on top of the tighter per-route
+  // limiters already on auth/pilot endpoints. Paystack's webhook is excluded
+  // since it's server-to-server and shouldn't compete with user traffic.
+  const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 300,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: (req) => req.path.startsWith('/payments/paystack/webhook'),
+    message: { error: 'Too many requests. Please try again shortly.' }
+  });
+  app.use('/api', apiLimiter);
 
   app.use('/api/auth', require('./routes/auth'));
   app.use('/api/kyc', require('./routes/kyc'));

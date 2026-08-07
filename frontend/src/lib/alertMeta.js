@@ -14,6 +14,8 @@ export const ALERT_LABELS = {
   device_offline:   'Device offline',
   engine_cut_auto:  'Engine cut (auto)',
   theft_risk:       'AI theft/anomaly risk',
+  long_trip:        'Unusually long trip',
+  bike_dormant:     'Bike inactive for days',
 };
 
 export const ALERT_COLORS = {
@@ -32,21 +34,23 @@ export const ALERT_COLORS = {
   device_offline:   '#94a3b8',
   engine_cut_auto:  '#7c3aed',
   theft_risk:       '#7c3aed',
+  long_trip:        '#eab308',
+  bike_dormant:     '#94a3b8',
 };
 
 export const ALERT_SEVERITY = {
   panic: 'critical', tamper: 'critical', power_disconnect: 'critical', movement: 'critical', theft_risk: 'critical',
   speeding: 'high', harsh_brake: 'high', geofence_exit: 'high',
-  harsh_accel: 'medium', harsh_cornering: 'medium', geofence_enter: 'medium', low_battery: 'medium',
-  idle: 'low', device_offline: 'low', engine_cut_auto: 'high',
+  harsh_accel: 'medium', harsh_cornering: 'medium', geofence_enter: 'medium', low_battery: 'medium', long_trip: 'medium',
+  idle: 'low', device_offline: 'low', engine_cut_auto: 'high', bike_dormant: 'low',
 };
 
 export const ALERT_FILTER_GROUPS = [
   { id: '',         label: 'All' },
   { id: 'critical', label: 'Critical', types: ['panic','tamper','power_disconnect','movement','theft_risk'] },
-  { id: 'driving',  label: 'Driving',  types: ['speeding','harsh_brake','harsh_accel','harsh_cornering','idle'] },
+  { id: 'driving',  label: 'Driving',  types: ['speeding','harsh_brake','harsh_accel','harsh_cornering','idle','long_trip'] },
   { id: 'location', label: 'Location', types: ['geofence_enter','geofence_exit','engine_cut_auto'] },
-  { id: 'vehicle',  label: 'Vehicle',  types: ['low_battery','device_offline'] },
+  { id: 'vehicle',  label: 'Vehicle',  types: ['low_battery','device_offline','bike_dormant'] },
 ];
 
 export const CRITICAL_ALERT_TYPES = new Set(['panic','tamper','power_disconnect','movement','theft_risk']);

@@ -1,6 +1,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
+const rateLimit = require('express-rate-limit');
 const pgDb = require('../pgDb');
 const { authRequired, adminOnly } = require('../middleware/auth');
 // Postgres versions — see each *Pg module's header comment for why it's a
@@ -11,6 +12,14 @@ const { sendEmail } = require('../services/notifierPg');
 const asyncRouter = require('../utils/asyncRouter');
 
 const router = asyncRouter(express.Router());
+
+const leadSubmitLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many submissions. Please try again later.' }
+});
 
 const LEAD_STATUSES = ['new', 'contacted', 'demo_scheduled', 'trial_started', 'converted', 'archived'];
 const PLAN_OPTIONS = ['trial', 'small', 'medium', 'large', 'enterprise'];
@@ -146,7 +155,7 @@ router.get('/plans', (req, res) => {
   });
 });
 
-router.post('/leads', async (req, res) => {
+router.post('/leads', leadSubmitLimiter, async (req, res) => {
   try {
     const company_name = String(req.body.company_name || '').trim();
     const contact_name = String(req.body.contact_name || '').trim();

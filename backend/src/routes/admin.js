@@ -889,10 +889,34 @@ router.delete('/users/:id', superadminOnly, async (req, res) => {
   if (target.id === req.user.id) return res.status(400).json({ error: 'You cannot remove your own account' });
   if (target.role === 'technician') return res.status(400).json({ error: 'Workshop technicians cannot be deleted here. Use the Workshop Staff tab to suspend this user.' });
   const tombstoneEmail = `removed+${target.id}+${Date.now()}@onfleet.local`;
-  await pgDb.query(`UPDATE users
-    SET deleted_at = NOW(), status = 'suspended', email = $1, phone = NULL, full_name = $2, updated_at = NOW()
-    WHERE id = $3`, [tombstoneEmail, `Removed User ${target.id}`, target.id]);
-  await logAudit(req.user.id, 'user.remove', 'users', Number(req.params.id), { previous_role: target.role });
+
+  const { rows: kycFiles } = await pgDb.query(
+    `SELECT id, file_path FROM kyc_documents WHERE user_id = $1 AND file_path IS NOT NULL`, [target.id]
+  );
+
+  await pgDb.withTransaction(async (client) => {
+    await client.query(`UPDATE users
+      SET deleted_at = NOW(), status = 'suspended', email = $1, phone = NULL, full_name = $2,
+          id_number = NULL, date_of_birth = NULL, address = NULL, city = NULL, province = NULL, postal_code = NULL,
+          emergency_contact_name = NULL, emergency_contact_phone = NULL, avatar_url = NULL, updated_at = NOW()
+      WHERE id = $3`, [tombstoneEmail, `Removed User ${target.id}`, target.id]);
+    await client.query(`UPDATE kyc_documents SET file_path = NULL, original_name = NULL WHERE user_id = $1`, [target.id]);
+    await client.query(`UPDATE applications
+      SET bank_name = NULL, account_holder = NULL, account_number = NULL, branch_code = NULL, ewallet_number = NULL
+      WHERE user_id = $1`, [target.id]);
+  });
+
+  // Best-effort: remove the underlying KYC scan files from disk now that no DB row references them.
+  const { kyc: kycUploadDir } = require('../uploadPaths');
+  for (const doc of kycFiles) {
+    const normalized = path.normalize(doc.file_path || '');
+    if (!normalized || normalized.includes('..') || path.isAbsolute(normalized)) continue;
+    const absolute = path.join(kycUploadDir, normalized);
+    if (!absolute.startsWith(kycUploadDir + path.sep)) continue;
+    fs.unlink(absolute, (err) => { if (err && err.code !== 'ENOENT') console.error('[user.remove] failed to delete KYC file:', err.message); });
+  }
+
+  await logAudit(req.user.id, 'user.remove', 'users', Number(req.params.id), { previous_role: target.role, kyc_files_removed: kycFiles.length });
   res.json({ ok: true });
 });
 

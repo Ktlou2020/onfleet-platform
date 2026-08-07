@@ -598,6 +598,9 @@ router.get('/:id', authRequired, async (req, res) => {
   if (app.user_id !== req.user.id && !isAdminPortalUser) {
     return res.status(403).json({ error: 'Forbidden' });
   }
+  if (app.user_id !== req.user.id) {
+    await logAudit(req.user.id, 'application.view', 'applications', app.id, { subject_user_id: app.user_id }, req.ip);
+  }
 
   const documents = await hydrateDocuments(app.id);
   const { rows: agreementRows } = await pgDb.query(`SELECT id, agreement_no, contract_file_path, signed_contract_path, signed_at, status

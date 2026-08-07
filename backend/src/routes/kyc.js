@@ -48,6 +48,9 @@ router.get('/file/:id', authRequired, async (req, res) => {
   if (!doc) return res.status(404).end();
   if (doc.user_id !== req.user.id && !['admin', 'superadmin'].includes(req.user.role))
     return res.status(403).end();
+  if (doc.user_id !== req.user.id) {
+    await logAudit(req.user.id, 'kyc.view', 'kyc_documents', doc.id, { subject_user_id: doc.user_id, doc_type: doc.doc_type }, req.ip);
+  }
 
   // Resolve to an absolute path and verify it stays within uploadDir
   const normalized = path.normalize(doc.file_path || '');
@@ -68,6 +71,7 @@ router.get('/all', authRequired, adminOnly, async (req, res) => {
   const { rows: docs } = await pgDb.query(`SELECT k.*, u.full_name, u.email FROM kyc_documents k
                            JOIN users u ON u.id = k.user_id
                            WHERE k.status = $1 ORDER BY k.uploaded_at DESC`, [status]);
+  await logAudit(req.user.id, 'kyc.list', 'kyc_documents', null, { status, count: docs.length }, req.ip);
   res.json({ documents: docs });
 });
 

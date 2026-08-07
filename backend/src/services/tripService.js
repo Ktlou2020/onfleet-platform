@@ -59,7 +59,18 @@ const COOLDOWNS_MS = {
   low_battery:      60 * 60_000,
   power_disconnect: 10 * 60_000,
   device_offline:  240 * 60_000, // 4-hour cooldown — don't spam if stays offline
+  long_trip:       120 * 60_000,
+  bike_dormant:   1200 * 60_000, // 20h — dormancy check runs once/day, this just guards against re-fires on restart
 };
+
+// A single continuous trip longer than this is unusual for a delivery bike
+// and worth flagging (possible unauthorized long-distance use, or a stuck
+// ignition/movement signal that never ends the trip).
+const LONG_TRIP_THRESHOLD_MS = 4 * 60 * 60 * 1000;
+
+// A bike with an online tracker that hasn't recorded a single trip in this
+// many days is dormant — worth a look (parked/hidden, or simply idle stock).
+const DORMANT_BIKE_DAYS = 3;
 
 // Alert types that are OFF by default (no panic button wired on standard installs)
 const ALERT_DISABLED_BY_DEFAULT = new Set(['panic']);
@@ -80,6 +91,8 @@ const ALERT_LABELS = {
   movement:         'Unauthorized movement',
   tamper:           'GPS tamper detected',
   device_offline:   'Device offline',
+  long_trip:        'Unusually long trip',
+  bike_dormant:     'Bike inactive for days',
 };
 
 function haversineKm(lat1, lng1, lat2, lng2) {
@@ -209,6 +222,7 @@ async function processPing(bikeId, deviceId, lat, lng, speed, ignition, recorded
         lastTs: ts,
         idleStart: null,
         noSignalStoppedSince: null,
+        longTripFired: false,
         distanceKm: 0,
         maxSpeed: speed,
         totalSpeed: speed,
@@ -236,6 +250,11 @@ async function processPing(bikeId, deviceId, lat, lng, speed, ignition, recorded
     }
   } else {
     state.idleStart = null;
+  }
+
+  if (!state.longTripFired && (ts - state.startTs) >= LONG_TRIP_THRESHOLD_MS) {
+    state.longTripFired = true;
+    await fireAlert(bikeId, deviceId, 'long_trip', { lat, lng, duration_sec: Math.round((ts - state.startTs) / 1000) }, recordedAt, ts);
   }
 
   // With an ignition signal, end the trip the instant it goes off — unchanged behavior.
@@ -289,6 +308,7 @@ async function hydrateOpenTrips() {
         lastTs:     row.last_ping_at ? new Date(row.last_ping_at).getTime() : new Date(row.started_at).getTime(),
         idleStart:  null,
         noSignalStoppedSince: null,
+        longTripFired: (Date.now() - new Date(row.started_at).getTime()) >= LONG_TRIP_THRESHOLD_MS,
         distanceKm: row.distance_km  || 0,
         maxSpeed:   row.max_speed_kmh || 0,
         totalSpeed: 0,
@@ -325,4 +345,28 @@ async function checkOfflineDevices() {
   }
 }
 
-module.exports = { processPing, hydrateOpenTrips, reloadAlertSettings, checkOfflineDevices };
+async function checkDormantBikes() {
+  try {
+    const { rows } = await pgDb.query(`
+      SELECT b.id AS bike_id, d.id AS device_id, MAX(t.started_at) AS last_trip_at
+      FROM bikes b
+      JOIN tracking_devices d ON d.bike_id = b.id AND d.connected = TRUE
+      LEFT JOIN trips t ON t.bike_id = b.id
+      WHERE b.status NOT IN ('sold', 'written_off', 'stolen')
+      GROUP BY b.id, d.id
+      HAVING MAX(t.started_at) IS NULL OR MAX(t.started_at) < NOW() - INTERVAL '${DORMANT_BIKE_DAYS} days'
+    `);
+    const nowIso = new Date().toISOString();
+    const nowMs = Date.now();
+    for (const row of rows) {
+      await fireAlert(row.bike_id, row.device_id, 'bike_dormant', {
+        last_trip_at: row.last_trip_at,
+        dormant_days: DORMANT_BIKE_DAYS,
+      }, nowIso, nowMs);
+    }
+  } catch (e) {
+    console.error('[dormancy-check] failed:', e.message);
+  }
+}
+
+module.exports = { processPing, hydrateOpenTrips, reloadAlertSettings, checkOfflineDevices, checkDormantBikes };

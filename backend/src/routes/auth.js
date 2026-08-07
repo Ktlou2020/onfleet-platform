@@ -618,6 +618,7 @@ router.post('/forgot-password',
   });
 
 router.post('/reset-password',
+  passwordResetLimiter,
   body('token').notEmpty(),
   body('new_password').isLength({ min: 6 }),
   async (req, res) => {

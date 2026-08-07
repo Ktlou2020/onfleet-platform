@@ -49,7 +49,7 @@ function isOnline(imei, lastSeenAt, connectedImeis) {
 const ALL_ALERT_TYPES = [
   'geofence_enter','geofence_exit','harsh_brake','harsh_accel','harsh_cornering',
   'idle','speeding','panic','power_disconnect','low_battery','movement','tamper','device_offline',
-  'theft_risk',
+  'theft_risk','long_trip','bike_dormant',
 ];
 
 // Bike/org/rider map for a list of bike IDs — bikes/organizations/users all

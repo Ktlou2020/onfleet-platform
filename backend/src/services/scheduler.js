@@ -342,6 +342,10 @@ function start() {
   cron.schedule('30 2 * * *', runBaselineRebuild);
   setTimeout(runBaselineRebuild, 30_000);
 
+  // Dormant-bike check — daily at 06:10, alongside the other daily fleet checks
+  const { checkDormantBikes } = require('./tripService');
+  cron.schedule('10 6 * * *', () => checkDormantBikes().catch(e => console.error('[dormancy-check]', e.message)));
+
   console.log('🕒 Scheduler started');
 }
 

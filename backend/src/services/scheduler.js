@@ -351,6 +351,15 @@ function start() {
   const { runAddressVerification } = require('./addressVerification');
   cron.schedule('20 6 * * *', () => runAddressVerification().catch(e => console.error('[address-verification]', e.message)));
 
+  // Postgres backup — daily at 03:00 (quiet hours, before the 06:00 daily-reminders wave)
+  const { runScheduledBackup } = require('./backupService');
+  cron.schedule('0 3 * * *', () => runScheduledBackup().catch(e => console.error('[backup]', e.message)));
+
+  // Automated collections escalation — daily at 07:00, after the daily reminders
+  // wave so today's fresh reminders aren't double-counted as "still overdue"
+  const { runAutomatedDunning } = require('./dunningService');
+  cron.schedule('0 7 * * *', () => runAutomatedDunning().catch(e => console.error('[dunning]', e.message)));
+
   console.log('🕒 Scheduler started');
 }
 

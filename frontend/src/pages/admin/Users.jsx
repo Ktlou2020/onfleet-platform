@@ -28,6 +28,7 @@ export default function AdminUsers() {
   const { user } = useAuth();
   const [users, setUsers] = useState(null);
   const [providerInfo, setProviderInfo] = useState(null);
+  const [scorecards, setScorecards] = useState({}); // user_id -> scorecard
   const [filter, setFilter] = useState('');
   const [search, setSearch] = useState('');
   const [tagFilter, setTagFilter] = useState('');
@@ -53,12 +54,14 @@ export default function AdminUsers() {
   });
 
   const load = async () => {
-    const [usersRes, providerRes] = await Promise.all([
+    const [usersRes, providerRes, scorecardsRes] = await Promise.all([
       api.get('/admin/users'),
-      api.get('/admin/email-provider-status')
+      api.get('/admin/email-provider-status'),
+      api.get('/admin/riders/scorecards').catch(() => ({ data: { riders: [] } }))
     ]);
     setUsers(usersRes.data.users || []);
     setProviderInfo(providerRes.data || null);
+    setScorecards(Object.fromEntries((scorecardsRes.data.riders || []).map((r) => [r.user_id, r])));
   };
 
   useEffect(() => { load(); }, []);
@@ -324,6 +327,7 @@ export default function AdminUsers() {
               <th>Country</th>
               <th>Role</th>
               <th>Status</th>
+              <th>Risk score</th>
               <th>Joined</th>
               <th></th>
             </tr>
@@ -376,6 +380,18 @@ export default function AdminUsers() {
                     )}
                   </td>
                   <td><Badge status={account.status} /></td>
+                  <td>
+                    {(() => {
+                      if (account.role !== 'rider') return <span className="muted">—</span>;
+                      const sc = scorecards[account.id];
+                      if (!sc) return <span className="muted" title="No active agreement to score">—</span>;
+                      const color = sc.score >= 70 ? '#22c55e' : sc.score >= 40 ? '#eab308' : '#ef4444';
+                      const title = `${sc.critical_alerts_90d} critical alert(s), ${sc.driving_alerts_90d} driving alert(s) in last 90d · ${sc.payment_late_or_overdue}/${sc.payment_reckoned} payments late or overdue · address ${sc.address_match_status}`;
+                      return (
+                        <span title={title} style={{ fontWeight: 700, color }}>{sc.score}</span>
+                      );
+                    })()}
+                  </td>
                   <td>{fmtDate(account.created_at)}</td>
                   <td>
                     <div className="row" style={{ flexWrap: 'wrap' }}>

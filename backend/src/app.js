@@ -187,6 +187,7 @@ function buildApp() {
   app.use('/api/workshop', require('./routes/workshop'));
   app.use('/api/v1', require('./routes/apiV1'));
   app.use('/api/tracking', require('./routes/tracking'));
+  app.use('/api/claims', require('./routes/claims'));
   app.use('/api/public', require('./routes/public'));
 
   // Serve built frontend (production preview)

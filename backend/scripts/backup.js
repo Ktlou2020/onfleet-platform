@@ -90,7 +90,7 @@ async function backupSqlite() {
   return { ...fileInfo(destPath), table_row_counts: tableCounts };
 }
 
-async function backupPostgres() {
+async function backupPostgres(outDir) {
   if (!process.env.DATABASE_URL) {
     console.log('[postgres] DATABASE_URL not set — skipping');
     return null;
@@ -142,7 +142,7 @@ async function main() {
   };
 
   if (doSqlite) manifest.sqlite = await backupSqlite();
-  if (doPostgres) manifest.postgres = await backupPostgres();
+  if (doPostgres) manifest.postgres = await backupPostgres(outDir);
 
   fs.writeFileSync(path.join(outDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
   console.log(`\nManifest written to ${path.join(outDir, 'manifest.json')}`);
@@ -150,7 +150,13 @@ async function main() {
   process.exit(0);
 }
 
-main().catch(err => {
-  console.error('\nBackup failed:', err.message);
-  process.exit(1);
-});
+// Only auto-run when invoked directly (`node scripts/backup.js`) — not when
+// required as a module by the scheduled-backup service.
+if (require.main === module) {
+  main().catch(err => {
+    console.error('\nBackup failed:', err.message);
+    process.exit(1);
+  });
+}
+
+module.exports = { backupPostgres, fileInfo };

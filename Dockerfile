@@ -8,6 +8,8 @@ RUN npm run build
 
 FROM node:20-alpine AS backend
 WORKDIR /app
+# postgresql-client gives us pg_dump/pg_restore for the automated backup job
+RUN apk add --no-cache postgresql-client
 # Install backend deps
 COPY backend/package*.json ./backend/
 RUN cd backend && npm install --production

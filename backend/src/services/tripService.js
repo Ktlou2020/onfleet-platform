@@ -23,6 +23,17 @@ const nightMovementCandidates = new Map();
 const NIGHT_MOVEMENT_SUSTAINED_MS = 90 * 1000;
 const NIGHT_MOVEMENT_MIN_DISPLACEMENT_M = 80;
 
+// Towing debounce: bikeId → { streakStartTs, streakStartLat, streakStartLng }
+// A bike can only travel real road distance with the ignition off if it's
+// being carried/towed — same sustained+displacement shape as night-movement,
+// but keyed on ignition-off instead of time of day, and only for devices
+// that actually report an ignition signal (without one we can't tell towing
+// apart from ordinary riding at all).
+const towingCandidates = new Map();
+const TOWING_MIN_SPEED_KMH = 8;
+const TOWING_SUSTAINED_MS = 60 * 1000;
+const TOWING_MIN_DISPLACEMENT_M = 150;
+
 // Alert settings cache: alertType → { enabled, notify_enabled, recipientIds: number[] }
 let alertSettingsCache = {};
 // Per-device alert settings: deviceId → alertType → { enabled, notify_enabled, recipientIds }
@@ -71,6 +82,7 @@ const COOLDOWNS_MS = {
   long_trip:       120 * 60_000,
   bike_dormant:   1200 * 60_000, // 20h — dormancy check runs once/day, this just guards against re-fires on restart
   night_movement:   15 * 60_000,
+  towing:           15 * 60_000,
 };
 
 // SA has no DST — Africa/Johannesburg is always UTC+2 (matches riskService.js's sastHour helper)
@@ -90,7 +102,7 @@ const DORMANT_BIKE_DAYS = 3;
 // Alert types that are OFF by default (no panic button wired on standard installs)
 const ALERT_DISABLED_BY_DEFAULT = new Set(['panic']);
 
-const CRITICAL_TYPES = new Set(['panic', 'tamper', 'power_disconnect', 'movement', 'night_movement']);
+const CRITICAL_TYPES = new Set(['panic', 'tamper', 'power_disconnect', 'movement', 'night_movement', 'towing']);
 
 const ALERT_LABELS = {
   geofence_enter:   'Entered geofence',
@@ -109,6 +121,7 @@ const ALERT_LABELS = {
   long_trip:        'Unusually long trip',
   bike_dormant:     'Bike inactive for days',
   night_movement:   'Movement during high-theft hours (00:00–04:00)',
+  towing:           'Possible towing (ignition off, sustained movement)',
 };
 
 function haversineKm(lat1, lng1, lat2, lng2) {
@@ -244,6 +257,28 @@ async function processPing(bikeId, deviceId, lat, lng, speed, ignition, recorded
     }
   } else {
     nightMovementCandidates.delete(bikeId);
+  }
+
+  // Ignition off + real sustained road distance can only mean the bike is
+  // being carried/towed — only checkable on devices that report an ignition
+  // signal at all (see towingCandidates comment above).
+  const towingCondition = hasIgnitionSignal && !ignitionOn && speed > TOWING_MIN_SPEED_KMH;
+  if (towingCondition) {
+    const candidate = towingCandidates.get(bikeId);
+    if (!candidate) {
+      towingCandidates.set(bikeId, { streakStartTs: ts, streakStartLat: lat, streakStartLng: lng });
+    } else {
+      const elapsedMs = ts - candidate.streakStartTs;
+      const displacementM = haversineKm(candidate.streakStartLat, candidate.streakStartLng, lat, lng) * 1000;
+      if (elapsedMs >= TOWING_SUSTAINED_MS && displacementM >= TOWING_MIN_DISPLACEMENT_M) {
+        await fireAlert(bikeId, deviceId, 'towing', {
+          lat, lng, speed_kmh: speed,
+          sustained_sec: Math.round(elapsedMs / 1000), displacement_m: Math.round(displacementM),
+        }, recordedAt, ts);
+      }
+    }
+  } else {
+    towingCandidates.delete(bikeId);
   }
 
   const state = openTrips.get(bikeId);

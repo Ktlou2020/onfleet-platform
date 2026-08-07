@@ -1,6 +1,6 @@
 'use strict';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { RefreshCw, BellOff, CheckCircle2, Wifi, WifiOff, X } from 'lucide-react';
+import { RefreshCw, BellOff, CheckCircle2, Wifi, WifiOff, X, User, Phone } from 'lucide-react';
 import api from '../api';
 import toast from 'react-hot-toast';
 import { Modal } from '../components/ui';
@@ -281,6 +281,12 @@ export default function ControlRoomAlerts() {
                       <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
                         {a.bike_registration || `Bike #${a.bike_id}`} · {fmtSASTtime(a.created_at)}
                       </div>
+                      {a.rider_name && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 11, color: 'var(--text)', marginTop: 3 }}>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}><User size={11} />{a.rider_name}</span>
+                          {a.rider_phone && <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}><Phone size={11} />{a.rider_phone}</span>}
+                        </div>
+                      )}
                       {payload.speed_kmh && <div style={{ fontSize: 11, color, marginTop: 2 }}>{Math.round(payload.speed_kmh)} km/h{payload.limit_kmh ? ` (limit ${payload.limit_kmh})` : ''}</div>}
                       {payload.geofence_name && a.alert_type !== 'engine_cut_auto' && <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>Zone: {payload.geofence_name}</div>}
                       {a.alert_type === 'engine_cut_auto' && <div style={{ fontSize: 11, color: '#7c3aed', marginTop: 2 }}>{payload.queued ? 'Queued — will send on reconnect' : 'Command sent'}{payload.geofence_name ? ` · triggered by: ${payload.geofence_name}` : ''}</div>}

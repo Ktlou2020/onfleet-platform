@@ -49,7 +49,7 @@ function isOnline(imei, lastSeenAt, connectedImeis) {
 const ALL_ALERT_TYPES = [
   'geofence_enter','geofence_exit','harsh_brake','harsh_accel','harsh_cornering',
   'idle','speeding','panic','power_disconnect','low_battery','movement','tamper','device_offline',
-  'theft_risk','long_trip','bike_dormant','night_movement',
+  'theft_risk','long_trip','bike_dormant','night_movement','towing',
 ];
 
 // Bike/org/rider map for a list of bike IDs — bikes/organizations/users all
@@ -74,14 +74,29 @@ async function getBikeMap(bikeIds) {
   return map;
 }
 
-// Batch-fetch bike registrations for a set of tracking rows that each carry
-// a bike_id — one query instead of one SELECT per row.
+// Batch-fetch bike registration + current rider (name/phone only — never
+// full address/PII here, this feeds alert lists control room sees constantly)
+// for a set of tracking rows that each carry a bike_id — one query instead
+// of one SELECT per row.
 async function attachBikeRegistrations(rowsWithBikeId, bikeIdKey = 'bike_id') {
   const ids = [...new Set(rowsWithBikeId.map(r => r[bikeIdKey]).filter(Boolean))];
-  if (!ids.length) { for (const r of rowsWithBikeId) r.bike_registration = null; return; }
-  const { rows: bikes } = await pgDb.query('SELECT id, registration FROM bikes WHERE id = ANY($1)', [ids]);
-  const regByBikeId = new Map(bikes.map(b => [b.id, b.registration]));
-  for (const r of rowsWithBikeId) r.bike_registration = regByBikeId.get(r[bikeIdKey]) || null;
+  if (!ids.length) {
+    for (const r of rowsWithBikeId) { r.bike_registration = null; r.rider_name = null; r.rider_phone = null; }
+    return;
+  }
+  const { rows: bikes } = await pgDb.query(`
+    SELECT b.id, b.registration,
+      (SELECT u.full_name FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_name,
+      (SELECT u.phone     FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_phone
+    FROM bikes b WHERE b.id = ANY($1)
+  `, [ids]);
+  const byId = new Map(bikes.map(b => [b.id, b]));
+  for (const r of rowsWithBikeId) {
+    const b = byId.get(r[bikeIdKey]);
+    r.bike_registration = b?.registration || null;
+    r.rider_name = b?.rider_name || null;
+    r.rider_phone = b?.rider_phone || null;
+  }
 }
 
 // ---------- Devices ----------
@@ -563,6 +578,37 @@ router.post('/alerts/resolve-bulk', authRequired, trackingReadOnly, async (req, 
 
   const skipped = ids.length - resolved.length;
   res.json({ resolved, resolved_count: resolved.length, skipped_count: skipped });
+});
+
+// ---------- Bike notes ----------
+// Free-text operational log control room/admin attach to a bike. Explicitly
+// on trackingReadOnly (not adminOnly) — control room is otherwise read-only
+// on tracking, but writing a note here is the one exception they need.
+
+router.get('/bikes/:bikeId/notes', authRequired, trackingReadOnly, async (req, res) => {
+  const { rows } = await pgDb.query(`
+    SELECT n.id, n.bike_id, n.note, n.created_at, n.author_id, u.full_name AS author_name
+    FROM bike_notes n LEFT JOIN users u ON u.id = n.author_id
+    WHERE n.bike_id = $1 ORDER BY n.created_at DESC LIMIT 100
+  `, [req.params.bikeId]);
+  res.json(rows);
+});
+
+router.post('/bikes/:bikeId/notes', authRequired, trackingReadOnly, async (req, res) => {
+  const note = String(req.body.note || '').trim();
+  if (!note) return res.status(400).json({ error: 'Note text is required' });
+  if (note.length > 2000) return res.status(400).json({ error: 'Note is too long (max 2000 characters)' });
+  const { rows: bikeRows } = await pgDb.query('SELECT id FROM bikes WHERE id = $1', [req.params.bikeId]);
+  if (!bikeRows[0]) return res.status(404).json({ error: 'Bike not found' });
+
+  const { rows } = await pgDb.query(
+    `INSERT INTO bike_notes (bike_id, author_id, note) VALUES ($1,$2,$3) RETURNING id, bike_id, note, created_at, author_id`,
+    [req.params.bikeId, req.user.id, note]
+  );
+  const created = rows[0];
+  created.author_name = req.user.full_name;
+  await logAudit(req.user.id, 'bike.note_added', 'bike_notes', created.id, { bike_id: Number(req.params.bikeId) }, req.ip);
+  res.json(created);
 });
 
 router.post('/alerts/acknowledge-all', authRequired, trackingReadOnly, async (req, res) => {

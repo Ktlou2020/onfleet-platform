@@ -498,6 +498,11 @@ export default function Tracking({ readOnly = false }) {
   const [dayPings,     setDayPings]     = useState([]);  // newest-first, pings for pingDate
   const [pingDate,     setPingDate]     = useState(() => todayInSAST());
   const [pingDateLoading, setPingDateLoading] = useState(false);
+  const [bikeNotes,    setBikeNotes]    = useState([]);
+  const [newNoteText,  setNewNoteText]  = useState('');
+  const [savingNote,   setSavingNote]   = useState(false);
+  const [bikeAlertHistory, setBikeAlertHistory] = useState([]);
+  const [loadingBikeAlertHistory, setLoadingBikeAlertHistory] = useState(false);
 
   // ── trip replay ──────────────────────────────────────────────
   const [replayTrip,    setReplayTrip]    = useState(null);
@@ -649,6 +654,37 @@ export default function Tracking({ readOnly = false }) {
       setTrips(data);
       setActivityStats(stats);
     } catch { /* silent */ }
+  }, []);
+
+  const loadBikeNotes = useCallback(async (bikeId) => {
+    try {
+      const { data } = await api.get(`/tracking/bikes/${bikeId}/notes`);
+      setBikeNotes(data);
+    } catch { /* silent */ }
+  }, []);
+
+  const addBikeNote = useCallback(async (bikeId) => {
+    const note = newNoteText.trim();
+    if (!note) return;
+    setSavingNote(true);
+    try {
+      const { data } = await api.post(`/tracking/bikes/${bikeId}/notes`, { note });
+      setBikeNotes((prev) => [data, ...prev]);
+      setNewNoteText('');
+    } catch (err) {
+      toast.error(err?.response?.data?.error || 'Failed to save note');
+    } finally {
+      setSavingNote(false);
+    }
+  }, [newNoteText]);
+
+  const loadBikeAlertHistory = useCallback(async (bikeId) => {
+    setLoadingBikeAlertHistory(true);
+    try {
+      const { data } = await api.get(`/tracking/alerts?bike_id=${bikeId}&limit=50`);
+      setBikeAlertHistory(data);
+    } catch { /* silent */ }
+    finally { setLoadingBikeAlertHistory(false); }
   }, []);
 
   useEffect(() => {
@@ -1766,12 +1802,14 @@ export default function Tracking({ readOnly = false }) {
 
             {/* Detail tabs */}
             <div style={{ display: 'flex', marginTop: 10, marginBottom: -14, marginLeft: -14, marginRight: -14, borderTop: '1px solid var(--border)', paddingTop: 2 }}>
-              {[['activity', 'Activity'], ['trips', 'Trips'], ['bike', 'Bike'], ['driver', 'Driver'], ...(!readOnly ? [['info', 'Controls']] : [])].map(([tab, label]) => (
+              {[['activity', 'Activity'], ['trips', 'Trips'], ['bike', 'Bike'], ['driver', 'Driver'], ['history', 'History'], ['notes', 'Notes'], ...(!readOnly ? [['info', 'Controls']] : [])].map(([tab, label]) => (
                 <button
                   key={tab}
                   onClick={() => {
                     setDetailTab(tab);
                     if (tab === 'trips' && selectedDevice.bike_id) loadTrips(selectedDevice.bike_id);
+                    if (tab === 'history' && selectedDevice.bike_id) loadBikeAlertHistory(selectedDevice.bike_id);
+                    if (tab === 'notes' && selectedDevice.bike_id) loadBikeNotes(selectedDevice.bike_id);
                   }}
                   style={{
                     flex: 1, padding: '6px 8px 8px', fontSize: 11,
@@ -2088,6 +2126,83 @@ export default function Tracking({ readOnly = false }) {
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* ── History tab (per-bike alert history) ───────────────── */}
+          {detailTab === 'history' && (
+            <div style={{ padding: '10px 14px' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 10, display: 'flex', alignItems: 'center' }}>
+                Alert history
+                <button className="btn btn-sm" style={{ padding: '1px 5px', marginLeft: 'auto', background: 'transparent' }}
+                  onClick={() => selectedDevice.bike_id && loadBikeAlertHistory(selectedDevice.bike_id)}><RefreshCw size={10} /></button>
+              </div>
+              {!selectedDevice.bike_id ? (
+                <div style={{ fontSize: 12, color: 'var(--muted)' }}>This device has no bike assigned.</div>
+              ) : loadingBikeAlertHistory ? (
+                <div style={{ fontSize: 12, color: 'var(--muted)' }}>Loading…</div>
+              ) : bikeAlertHistory.length === 0 ? (
+                <div style={{ fontSize: 12, color: 'var(--muted)' }}>No alerts recorded for this bike yet.</div>
+              ) : bikeAlertHistory.map(a => {
+                const severity = ALERT_SEVERITY[a.alert_type];
+                const isCritical = severity === 'critical';
+                const color = ALERT_COLORS[a.alert_type] || '#94a3b8';
+                const label = ALERT_LABELS[a.alert_type] || a.alert_type;
+                return (
+                  <div key={a.id} style={{ marginBottom: 8, padding: '9px 10px', background: 'var(--surface)', borderRadius: 8, border: '1px solid var(--border)', borderLeft: `3px solid ${color}` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, flex: 1 }}>{label}</span>
+                      {isCritical && <span style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: color, padding: '0 4px', borderRadius: 4 }}>CRITICAL</span>}
+                      {a.resolved_at
+                        ? <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--muted)', border: '1px solid var(--border)', padding: '0 5px', borderRadius: 4 }}>CLOSED</span>
+                        : <span style={{ fontSize: 9, fontWeight: 700, color: '#f97316', border: '1px solid #f97316', padding: '0 5px', borderRadius: 4 }}>OPEN</span>}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 3 }}>{fmtSAST(a.created_at)}</div>
+                    {a.resolution_comment && (
+                      <div style={{ fontSize: 11, color: 'var(--text)', marginTop: 5, padding: '6px 8px', background: 'var(--surface-2)', borderRadius: 6 }}>
+                        {a.resolved_by_name ? `${a.resolved_by_name}: ` : ''}{a.resolution_comment}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* ── Notes tab ────────────────────────────────────────── */}
+          {detailTab === 'notes' && (
+            <div style={{ padding: '10px 14px' }}>
+              {!selectedDevice.bike_id ? (
+                <div style={{ fontSize: 12, color: 'var(--muted)' }}>This device has no bike assigned.</div>
+              ) : (<>
+                <div style={{ marginBottom: 12 }}>
+                  <textarea
+                    value={newNoteText}
+                    onChange={(e) => setNewNoteText(e.target.value)}
+                    placeholder="Add a note about this bike or rider…"
+                    rows={3}
+                    style={{ width: '100%', fontSize: 12, padding: 8, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', resize: 'vertical' }}
+                  />
+                  <button
+                    className="btn btn-sm btn-primary"
+                    style={{ marginTop: 6 }}
+                    disabled={savingNote || !newNoteText.trim()}
+                    onClick={() => addBikeNote(selectedDevice.bike_id)}
+                  >
+                    {savingNote ? 'Saving…' : 'Add note'}
+                  </button>
+                </div>
+                {bikeNotes.length === 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>No notes yet for this bike.</div>
+                ) : bikeNotes.map(n => (
+                  <div key={n.id} style={{ marginBottom: 8, padding: '9px 10px', background: 'var(--surface)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                    <div style={{ fontSize: 13, lineHeight: 1.4, wordBreak: 'break-word' }}>{n.note}</div>
+                    <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 5 }}>
+                      {n.author_name || 'Unknown'} · {fmtSAST(n.created_at)}
+                    </div>
+                  </div>
+                ))}
+              </>)}
             </div>
           )}
 

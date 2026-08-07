@@ -16,6 +16,7 @@ export const ALERT_LABELS = {
   theft_risk:       'AI theft/anomaly risk',
   long_trip:        'Unusually long trip',
   bike_dormant:     'Bike inactive for days',
+  night_movement:   'Movement during high-theft hours (00:00–04:00)',
 };
 
 export const ALERT_COLORS = {
@@ -36,10 +37,11 @@ export const ALERT_COLORS = {
   theft_risk:       '#7c3aed',
   long_trip:        '#eab308',
   bike_dormant:     '#94a3b8',
+  night_movement:   '#dc2626',
 };
 
 export const ALERT_SEVERITY = {
-  panic: 'critical', tamper: 'critical', power_disconnect: 'critical', movement: 'critical', theft_risk: 'critical',
+  panic: 'critical', tamper: 'critical', power_disconnect: 'critical', movement: 'critical', theft_risk: 'critical', night_movement: 'critical',
   speeding: 'high', harsh_brake: 'high', geofence_exit: 'high',
   harsh_accel: 'medium', harsh_cornering: 'medium', geofence_enter: 'medium', low_battery: 'medium', long_trip: 'medium',
   idle: 'low', device_offline: 'low', engine_cut_auto: 'high', bike_dormant: 'low',
@@ -47,10 +49,10 @@ export const ALERT_SEVERITY = {
 
 export const ALERT_FILTER_GROUPS = [
   { id: '',         label: 'All' },
-  { id: 'critical', label: 'Critical', types: ['panic','tamper','power_disconnect','movement','theft_risk'] },
+  { id: 'critical', label: 'Critical', types: ['panic','tamper','power_disconnect','movement','theft_risk','night_movement'] },
   { id: 'driving',  label: 'Driving',  types: ['speeding','harsh_brake','harsh_accel','harsh_cornering','idle','long_trip'] },
   { id: 'location', label: 'Location', types: ['geofence_enter','geofence_exit','engine_cut_auto'] },
   { id: 'vehicle',  label: 'Vehicle',  types: ['low_battery','device_offline','bike_dormant'] },
 ];
 
-export const CRITICAL_ALERT_TYPES = new Set(['panic','tamper','power_disconnect','movement','theft_risk']);
+export const CRITICAL_ALERT_TYPES = new Set(['panic','tamper','power_disconnect','movement','theft_risk','night_movement']);

@@ -13,6 +13,15 @@ const NO_IGNITION_TRIP_END_IDLE_MS = 5 * 60 * 1000;
 const alertCooldowns = new Map();
 // Previous external voltage: bikeId → last known ext_voltage_mv
 const prevExtVoltage = new Map();
+// Night-movement debounce: bikeId → { streakStartTs, streakStartLat, streakStartLng }
+// GPS speed can glitch above the "moving" threshold for a single ping from
+// multipath reflection or reacquisition jitter even on a bike that's parked
+// and stationary — this tracks a run of consecutive moving pings so a night
+// alert only fires once movement is both sustained AND has covered real
+// ground, not just a momentary noisy reading.
+const nightMovementCandidates = new Map();
+const NIGHT_MOVEMENT_SUSTAINED_MS = 90 * 1000;
+const NIGHT_MOVEMENT_MIN_DISPLACEMENT_M = 80;
 
 // Alert settings cache: alertType → { enabled, notify_enabled, recipientIds: number[] }
 let alertSettingsCache = {};
@@ -61,7 +70,13 @@ const COOLDOWNS_MS = {
   device_offline:  240 * 60_000, // 4-hour cooldown — don't spam if stays offline
   long_trip:       120 * 60_000,
   bike_dormant:   1200 * 60_000, // 20h — dormancy check runs once/day, this just guards against re-fires on restart
+  night_movement:   15 * 60_000,
 };
+
+// SA has no DST — Africa/Johannesburg is always UTC+2 (matches riskService.js's sastHour helper)
+function sastHour(ts) {
+  return (new Date(ts).getUTCHours() + 2) % 24;
+}
 
 // A single continuous trip longer than this is unusual for a delivery bike
 // and worth flagging (possible unauthorized long-distance use, or a stuck
@@ -75,7 +90,7 @@ const DORMANT_BIKE_DAYS = 3;
 // Alert types that are OFF by default (no panic button wired on standard installs)
 const ALERT_DISABLED_BY_DEFAULT = new Set(['panic']);
 
-const CRITICAL_TYPES = new Set(['panic', 'tamper', 'power_disconnect', 'movement']);
+const CRITICAL_TYPES = new Set(['panic', 'tamper', 'power_disconnect', 'movement', 'night_movement']);
 
 const ALERT_LABELS = {
   geofence_enter:   'Entered geofence',
@@ -93,6 +108,7 @@ const ALERT_LABELS = {
   device_offline:   'Device offline',
   long_trip:        'Unusually long trip',
   bike_dormant:     'Bike inactive for days',
+  night_movement:   'Movement during high-theft hours (00:00–04:00)',
 };
 
 function haversineKm(lat1, lng1, lat2, lng2) {
@@ -203,6 +219,31 @@ async function processPing(bikeId, deviceId, lat, lng, speed, ignition, recorded
 
   if (speed > speedLimitKmh) {
     await fireAlert(bikeId, deviceId, 'speeding', { lat, lng, speed_kmh: speed, limit_kmh: speedLimitKmh }, recordedAt, ts);
+  }
+
+  // 00:00–04:00 SAST is the typical window for bike theft (bikes should be
+  // parked overnight) — moving during that window is worth flagging, but only
+  // once movement is sustained and has covered real ground (see
+  // nightMovementCandidates comment above) so a single glitchy GPS ping on a
+  // parked bike can't fire a critical alert.
+  const nightHour = sastHour(ts);
+  const inNightWindow = nightHour >= 0 && nightHour < 4;
+  if (moving && inNightWindow) {
+    const candidate = nightMovementCandidates.get(bikeId);
+    if (!candidate) {
+      nightMovementCandidates.set(bikeId, { streakStartTs: ts, streakStartLat: lat, streakStartLng: lng });
+    } else {
+      const elapsedMs = ts - candidate.streakStartTs;
+      const displacementM = haversineKm(candidate.streakStartLat, candidate.streakStartLng, lat, lng) * 1000;
+      if (elapsedMs >= NIGHT_MOVEMENT_SUSTAINED_MS && displacementM >= NIGHT_MOVEMENT_MIN_DISPLACEMENT_M) {
+        await fireAlert(bikeId, deviceId, 'night_movement', {
+          lat, lng, speed_kmh: speed, sast_hour: nightHour,
+          sustained_sec: Math.round(elapsedMs / 1000), displacement_m: Math.round(displacementM),
+        }, recordedAt, ts);
+      }
+    }
+  } else {
+    nightMovementCandidates.delete(bikeId);
   }
 
   const state = openTrips.get(bikeId);

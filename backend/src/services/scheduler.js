@@ -346,6 +346,11 @@ function start() {
   const { checkDormantBikes } = require('./tripService');
   cron.schedule('10 6 * * *', () => checkDormantBikes().catch(e => console.error('[dormancy-check]', e.message)));
 
+  // Address verification — daily at 06:20 (after dormancy check, so it doesn't
+  // compete with it for the same overnight gps_pings window)
+  const { runAddressVerification } = require('./addressVerification');
+  cron.schedule('20 6 * * *', () => runAddressVerification().catch(e => console.error('[address-verification]', e.message)));
+
   console.log('🕒 Scheduler started');
 }
 

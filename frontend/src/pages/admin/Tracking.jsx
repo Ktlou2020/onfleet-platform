@@ -2069,6 +2069,23 @@ export default function Tracking({ readOnly = false }) {
                       <span style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.4, wordBreak: 'break-word' }}>{value || '—'}</span>
                     </div>
                   ))}
+                  <div style={{ display: 'flex', alignItems: 'flex-start', padding: '10px 0', gap: 12 }}>
+                    <span style={{ fontSize: 11, color: 'var(--muted)', width: 90, flexShrink: 0, textTransform: 'uppercase', letterSpacing: '.4px', paddingTop: 1 }}>Address check</span>
+                    {(() => {
+                      const status = selectedDevice.rider_address_match_status;
+                      const cfg = status === 'match'
+                        ? { icon: <CheckCircle size={13} color="#22c55e" />, text: 'Matches overnight parking location', color: '#22c55e' }
+                        : status === 'mismatch'
+                          ? { icon: <AlertCircle size={13} color="#f97316" />, text: "Bike's overnight location differs from address on file", color: '#f97316' }
+                          : { icon: <XCircle size={13} color="var(--muted)" />, text: 'Not enough overnight parking data yet', color: 'var(--muted)' };
+                      return (
+                        <span style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.4, color: cfg.color, display: 'flex', alignItems: 'flex-start', gap: 5 }}>
+                          <span style={{ flexShrink: 0, marginTop: 2 }}>{cfg.icon}</span>
+                          {cfg.text}
+                        </span>
+                      );
+                    })()}
+                  </div>
                 </div>
               )}
             </div>

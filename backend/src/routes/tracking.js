@@ -49,7 +49,7 @@ function isOnline(imei, lastSeenAt, connectedImeis) {
 const ALL_ALERT_TYPES = [
   'geofence_enter','geofence_exit','harsh_brake','harsh_accel','harsh_cornering',
   'idle','speeding','panic','power_disconnect','low_battery','movement','tamper','device_offline',
-  'theft_risk','long_trip','bike_dormant',
+  'theft_risk','long_trip','bike_dormant','night_movement',
 ];
 
 // Bike/org/rider map for a list of bike IDs — bikes/organizations/users all
@@ -64,7 +64,8 @@ async function getBikeMap(bikeIds) {
            (SELECT u.full_name FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_name,
            (SELECT u.phone    FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_phone,
            (SELECT u.address  FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_address,
-           (SELECT u.city     FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_city
+           (SELECT u.city     FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_city,
+           (SELECT u.address_match_status FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.bike_id = b.id AND a.status = 'active' ORDER BY a.created_at DESC LIMIT 1) AS rider_address_match_status
     FROM bikes b LEFT JOIN organizations o ON o.id = b.organization_id
     WHERE b.id = ANY($1)
   `, [bikeIds]);
@@ -112,6 +113,7 @@ router.get('/devices', authRequired, trackingReadOnly, async (req, res) => {
       rider_phone: bikeMap[d.bike_id].rider_phone,
       rider_address: bikeMap[d.bike_id].rider_address,
       rider_city: bikeMap[d.bike_id].rider_city,
+      rider_address_match_status: bikeMap[d.bike_id].rider_address_match_status,
     } : {}),
   }));
   res.json(result);

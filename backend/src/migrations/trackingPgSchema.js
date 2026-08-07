@@ -159,6 +159,33 @@ async function runTrackingSchema() {
     await pgDb.query(`ALTER TABLE geofences ADD COLUMN IF NOT EXISTS color TEXT`);
     await pgDb.query(`ALTER TABLE geofences ADD COLUMN IF NOT EXISTS polygon_coords JSONB`);
 
+    // Tracks which named seed zones have ever been planted, so a user deleting
+    // one doesn't cause it to reappear on the next deploy/restart — this file
+    // runs unconditionally on every boot (see server.js), and the old "insert
+    // if a geofence with this name doesn't currently exist" check couldn't
+    // tell "never seeded" apart from "seeded, then deliberately deleted".
+    await pgDb.query(`
+      CREATE TABLE IF NOT EXISTS geofence_seed_log (
+        name       TEXT PRIMARY KEY,
+        seeded_at  TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    async function seedZoneOnce(name, lat, lng, radius_m, zoneType, color) {
+      const { rows: seeded } = await pgDb.query('SELECT 1 FROM geofence_seed_log WHERE name = $1', [name]);
+      if (seeded.length) return; // already seeded before (still present or deliberately deleted) — leave it alone
+      const { rows: existing } = await pgDb.query(
+        'SELECT 1 FROM geofences WHERE name = $1 AND zone_type = $2', [name, zoneType]
+      );
+      if (!existing.length) {
+        await pgDb.query(
+          `INSERT INTO geofences (name, lat, lng, radius_m, zone_type, color, active) VALUES ($1,$2,$3,$4,$5,$6,TRUE)`,
+          [name, lat, lng, radius_m, zoneType, color]
+        );
+      }
+      await pgDb.query('INSERT INTO geofence_seed_log (name) VALUES ($1) ON CONFLICT DO NOTHING', [name]);
+    }
+
     // Seed stripping/chop-shop zones (AfriGIS data) as danger (auto engine-cut on entry)
     const noGoZones = [
       { name: 'Cleveland - Theft Zone',    lat: -26.2042, lng: 28.1192, radius_m:  150 },
@@ -172,12 +199,7 @@ async function runTrackingSchema() {
       { name: 'Zanspriut',                 lat: -26.0607, lng: 27.9147, radius_m:  465 },
     ];
     for (const z of noGoZones) {
-      await pgDb.query(
-        `INSERT INTO geofences (name, lat, lng, radius_m, zone_type, color, active)
-         SELECT $1,$2,$3,$4,'danger','#E53935',TRUE
-         WHERE NOT EXISTS (SELECT 1 FROM geofences WHERE name=$1 AND zone_type='danger')`,
-        [z.name, z.lat, z.lng, z.radius_m]
-      );
+      await seedZoneOnce(z.name, z.lat, z.lng, z.radius_m, 'danger', '#E53935');
     }
 
     // Seed SAPS-reported hijacking hotspots as caution (alert only, no auto engine-cut)
@@ -196,12 +218,7 @@ async function runTrackingSchema() {
       { name: 'Olievenhoutbosch Risk Zone',     lat: -25.9058, lng: 28.0097, radius_m:  900 },
     ];
     for (const z of cautionZones) {
-      await pgDb.query(
-        `INSERT INTO geofences (name, lat, lng, radius_m, zone_type, color, active)
-         SELECT $1,$2,$3,$4,'warning','#D97706',TRUE
-         WHERE NOT EXISTS (SELECT 1 FROM geofences WHERE name=$1 AND zone_type='warning')`,
-        [z.name, z.lat, z.lng, z.radius_m]
-      );
+      await seedZoneOnce(z.name, z.lat, z.lng, z.radius_m, 'warning', '#D97706');
     }
 
     console.log('[pgDb] Tracking schema ready');

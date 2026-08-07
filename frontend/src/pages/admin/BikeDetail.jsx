@@ -97,6 +97,7 @@ export default function AdminBikeDetail() {
   const [allocationForm, setAllocationForm] = useState(buildInitialAllocationForm());
   const [riderForm, setRiderForm] = useState(buildInitialRiderForm());
   const [service, setService] = useState({ service_date: new Date().toISOString().slice(0, 10), service_type: 'monthly', description: '', odometer_km: '', cost: 0, next_service_date: '', next_service_km: '', performed_by: 'OnFleet Workshop', invoice: null });
+  const [riderScorecard, setRiderScorecard] = useState(null);
 
   const load = () => api.get(`/bikes/${id}`).then((response) => {
     setData(response.data);
@@ -106,6 +107,13 @@ export default function AdminBikeDetail() {
   });
 
   useEffect(() => { load(); }, [id]);
+  useEffect(() => {
+    const riderId = data?.bike?.allocated_rider_id;
+    if (!riderId) { setRiderScorecard(null); return; }
+    api.get(`/admin/riders/${riderId}/scorecard`)
+      .then((response) => setRiderScorecard(response.data.scorecard))
+      .catch(() => setRiderScorecard(null));
+  }, [data?.bike?.allocated_rider_id]);
   useEffect(() => {
     api.get('/admin/users', { params: { role: 'rider' } })
       .then((response) => setRiders(response.data.users || []))
@@ -463,7 +471,18 @@ export default function AdminBikeDetail() {
           <div className="row" style={{ alignItems: 'center', gap: 16 }}>
             <div className="avatar" style={{ width: 72, height: 72, backgroundImage: bike.allocated_rider_avatar_url ? `url(${bike.allocated_rider_avatar_url})` : 'none', backgroundSize: 'cover', backgroundPosition: 'center', fontSize: 28 }}>{bike.allocated_rider_avatar_url ? '' : bike.allocated_rider_name?.[0]}</div>
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 20, fontWeight: 700 }}>{bike.allocated_rider_name}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <div style={{ fontSize: 20, fontWeight: 700 }}>{bike.allocated_rider_name}</div>
+                {riderScorecard && (() => {
+                  const color = riderScorecard.score >= 70 ? '#22c55e' : riderScorecard.score >= 40 ? '#eab308' : '#ef4444';
+                  const title = `${riderScorecard.critical_alerts_90d} critical alert(s), ${riderScorecard.driving_alerts_90d} driving alert(s) in last 90 days · ${riderScorecard.payment_late_or_overdue}/${riderScorecard.payment_reckoned} payments late or overdue · address ${riderScorecard.address_match_status}`;
+                  return (
+                    <span title={title} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, color: '#fff', background: color, padding: '3px 9px', borderRadius: 12 }}>
+                      Risk score {riderScorecard.score}
+                    </span>
+                  );
+                })()}
+              </div>
               {bike.allocated_rider_email && <div className="muted text-sm">{bike.allocated_rider_email}</div>}
               <CopyableContactValue value={bike.allocated_rider_phone} />
               {bike.allocated_rider_id_number && <div className="text-xs muted mt-1">ID / Passport / Asylum: {bike.allocated_rider_id_number}</div>}
@@ -472,6 +491,11 @@ export default function AdminBikeDetail() {
               <div className="row mt-2" style={{ gap: 8, flexWrap: 'wrap' }}>
                 <div className="text-xs muted">Agreement {bike.allocated_agreement_no || '—'}</div>
               </div>
+              {riderScorecard && (
+                <div className="text-xs muted mt-1">
+                  {riderScorecard.critical_alerts_90d} critical alert{riderScorecard.critical_alerts_90d === 1 ? '' : 's'} · {riderScorecard.driving_alerts_90d} driving alert{riderScorecard.driving_alerts_90d === 1 ? '' : 's'} (90d) · {riderScorecard.payment_late_or_overdue}/{riderScorecard.payment_reckoned} payments late or overdue · address {riderScorecard.address_match_status}
+                </div>
+              )}
             </div>
           </div>
         </div>

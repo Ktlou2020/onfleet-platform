@@ -159,6 +159,14 @@ const bikeSelectSql = `SELECT b.*,
     LIMIT 1
   ) AS allocated_rider_ewallet_number,
   (
+    SELECT u.id FROM agreements a
+    JOIN users u ON u.id = a.user_id
+    WHERE a.bike_id = b.id
+      AND a.status IN ${OPEN_AGREEMENT_STATUSES_SQL}
+    ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END, a.created_at DESC
+    LIMIT 1
+  ) AS allocated_rider_id,
+  (
     SELECT a.id FROM agreements a
     WHERE a.bike_id = b.id
       AND a.status IN ${OPEN_AGREEMENT_STATUSES_SQL}

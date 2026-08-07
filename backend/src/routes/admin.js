@@ -721,17 +721,8 @@ function computeRiderScore({ criticalAlerts90d, drivingAlerts90d, overdueRatio, 
   return Math.max(0, Math.round(score));
 }
 
-router.get('/riders/scorecards', async (req, res) => {
-  const { rows: riders } = await pgDb.query(`
-    SELECT DISTINCT ON (u.id) u.id AS user_id, u.full_name, u.phone, u.address_match_status,
-      a.id AS agreement_id, a.bike_id, b.registration AS bike_registration
-    FROM users u
-    JOIN agreements a ON a.user_id = u.id AND a.status = 'active'
-    JOIN bikes b ON b.id = a.bike_id
-    WHERE u.role = 'rider' AND u.deleted_at IS NULL
-    ORDER BY u.id, a.created_at DESC
-  `);
-  if (!riders.length) return res.json({ riders: [] });
+async function scoreRiders(riders) {
+  if (!riders.length) return [];
 
   const bikeIds = riders.map((r) => r.bike_id);
   const agreementIds = riders.map((r) => r.agreement_id);
@@ -759,7 +750,7 @@ router.get('/riders/scorecards', async (req, res) => {
     alertsByBike.get(row.bike_id)[row.alert_type] = Number(row.n);
   }
 
-  const scored = riders.map((r) => {
+  return riders.map((r) => {
     const bikeAlerts = alertsByBike.get(r.bike_id) || {};
     const criticalAlerts90d = SCORECARD_CRITICAL_ALERT_TYPES.reduce((sum, t) => sum + (bikeAlerts[t] || 0), 0);
     const drivingAlerts90d = SCORECARD_DRIVING_ALERT_TYPES.reduce((sum, t) => sum + (bikeAlerts[t] || 0), 0);
@@ -776,8 +767,34 @@ router.get('/riders/scorecards', async (req, res) => {
       address_match_status: r.address_match_status,
     };
   }).sort((a, b) => a.score - b.score);
+}
 
-  res.json({ riders: scored });
+router.get('/riders/scorecards', async (req, res) => {
+  const { rows: riders } = await pgDb.query(`
+    SELECT DISTINCT ON (u.id) u.id AS user_id, u.full_name, u.phone, u.address_match_status,
+      a.id AS agreement_id, a.bike_id, b.registration AS bike_registration
+    FROM users u
+    JOIN agreements a ON a.user_id = u.id AND a.status = 'active'
+    JOIN bikes b ON b.id = a.bike_id
+    WHERE u.role = 'rider' AND u.deleted_at IS NULL
+    ORDER BY u.id, a.created_at DESC
+  `);
+  res.json({ riders: await scoreRiders(riders) });
+});
+
+router.get('/riders/:userId/scorecard', async (req, res) => {
+  const { rows: riders } = await pgDb.query(`
+    SELECT DISTINCT ON (u.id) u.id AS user_id, u.full_name, u.phone, u.address_match_status,
+      a.id AS agreement_id, a.bike_id, b.registration AS bike_registration
+    FROM users u
+    JOIN agreements a ON a.user_id = u.id AND a.status = 'active'
+    JOIN bikes b ON b.id = a.bike_id
+    WHERE u.id = $1 AND u.deleted_at IS NULL
+    ORDER BY u.id, a.created_at DESC
+  `, [req.params.userId]);
+  const [scorecard] = await scoreRiders(riders);
+  if (!scorecard) return res.status(404).json({ error: 'No active agreement to score for this rider' });
+  res.json({ scorecard });
 });
 
 router.get('/users/:id', async (req, res) => {

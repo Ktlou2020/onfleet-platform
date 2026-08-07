@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import '../i18n';
 import { useAuth } from '../auth';
 import api from '../api';
 import toast from 'react-hot-toast';
 import Logo from '../components/Logo';
+import LanguageSwitcher from '../components/LanguageSwitcher';
 import southAfricanCities from '../constants/southAfricanCities';
 import { fmt, normalizePhoneInput, Modal } from '../components/ui';
 import { trackAnalyticsEvent } from '../analytics';
@@ -17,6 +20,7 @@ function isPayslipImage(file) {
 }
 
 export default function Signup() {
+  const { t } = useTranslation();
   const [form, setForm] = useState({
     full_name: '', email: '', phone: '', id_number: '', password: '',
     address: '', city: '', province: 'Gauteng', postal_code: '',
@@ -68,48 +72,48 @@ export default function Signup() {
     const issues = [];
 
     if (step === 1) {
-      if (!form.full_name.trim()) issues.push('Enter your full name.');
-      if (!form.email.trim()) issues.push('Enter your email address.');
-      else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) issues.push('Enter a valid email address.');
-      if (!form.phone.trim()) issues.push('Enter your phone or WhatsApp number.');
-      if (!form.id_number.trim()) issues.push('Enter your ID number, passport number, or asylum number.');
-      if (!form.password) issues.push('Create a password.');
-      else if (form.password.length < 6) issues.push('Your password must be at least 6 characters long.');
+      if (!form.full_name.trim()) issues.push(t('validation.enterFullName'));
+      if (!form.email.trim()) issues.push(t('validation.enterEmail'));
+      else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) issues.push(t('validation.validEmail'));
+      if (!form.phone.trim()) issues.push(t('validation.enterPhone'));
+      if (!form.id_number.trim()) issues.push(t('validation.enterIdNumber'));
+      if (!form.password) issues.push(t('validation.createPassword'));
+      else if (form.password.length < 6) issues.push(t('validation.passwordLength'));
     }
 
     if (step === 2) {
-      if (!form.address.trim()) issues.push('Enter your street address.');
-      if (!form.city.trim()) issues.push('Choose your city.');
-      if (!form.province.trim()) issues.push('Choose your province.');
+      if (!form.address.trim()) issues.push(t('validation.enterAddress'));
+      if (!form.city.trim()) issues.push(t('validation.chooseCity'));
+      if (!form.province.trim()) issues.push(t('validation.chooseProvince'));
     }
 
     if (step === 3) {
-      if (!form.preferred_bike_id) issues.push('Choose your preferred bike.');
-      if (!form.delivery_platforms.length) issues.push('Select at least one delivery platform.');
+      if (!form.preferred_bike_id) issues.push(t('validation.choosePreferredBike'));
+      if (!form.delivery_platforms.length) issues.push(t('validation.selectPlatform'));
       if (form.payout_preference === 'eft') {
-        if (!form.bank_name.trim()) issues.push('Enter your bank name.');
-        if (!form.account_holder.trim()) issues.push('Enter the bank account holder name.');
-        if (!form.account_number.trim()) issues.push('Enter the bank account number.');
-        if (!form.branch_code.trim()) issues.push('Enter the bank branch code.');
+        if (!form.bank_name.trim()) issues.push(t('validation.enterBankName'));
+        if (!form.account_holder.trim()) issues.push(t('validation.enterAccountHolder'));
+        if (!form.account_number.trim()) issues.push(t('validation.enterAccountNumber'));
+        if (!form.branch_code.trim()) issues.push(t('validation.enterBranchCode'));
       }
       if (form.payout_preference === 'ewallet' && !form.ewallet_number.trim()) {
-        issues.push('Enter your e-wallet cellphone number.');
+        issues.push(t('validation.enterEwalletNumber'));
       }
     }
 
     if (step === 4) {
-      if (!files.id_document) issues.push('Upload your ID document.');
-      if (!files.drivers_license) issues.push("Upload your driver's licence.");
-      if (!files.selfie) issues.push('Upload your selfie holding your ID.');
+      if (!files.id_document) issues.push(t('validation.uploadIdDocument'));
+      if (!files.drivers_license) issues.push(t('validation.uploadDriversLicense'));
+      if (!files.selfie) issues.push(t('validation.uploadSelfie'));
 
       PAYSLIP_FIELDS.forEach((field, index) => {
         const file = files[field];
         if (!file) {
-          issues.push(`Upload Payslip ${index + 1}.`);
+          issues.push(t('validation.uploadPayslip', { n: index + 1 }));
           return;
         }
         if (isPayslipImage(file) && !String(payslipAmounts[field] || '').trim()) {
-          issues.push(`Enter the Rand amount for Payslip ${index + 1} because JPEG payslips are captured manually.`);
+          issues.push(t('validation.enterPayslipAmount', { n: index + 1 }));
         }
       });
     }
@@ -124,7 +128,7 @@ export default function Signup() {
         signup_step: step,
         issue_count: issues.length
       });
-      toast.error('Please fix the highlighted requirements');
+      toast.error(t('signup.fixHighlighted'));
     }
   };
 
@@ -160,11 +164,11 @@ export default function Signup() {
         jpeg_payslip_count: PAYSLIP_FIELDS.filter((field) => isPayslipImage(files[field])).length
       });
       await signup(fd);
-      toast.success('Account created and full application submitted. We are reviewing your documents now.');
+      toast.success(t('signup.successToast'));
       nav('/dashboard');
     } catch (error) {
       const backendIssues = error.response?.data?.errors?.map((item) => item.msg)
-        || (error.response?.data?.error ? [error.response.data.error] : ['Sign up failed']);
+        || (error.response?.data?.error ? [error.response.data.error] : [t('signup.signupFailed')]);
       openValidationPopup(backendIssues);
     } finally {
       setBusy(false);
@@ -176,61 +180,64 @@ export default function Signup() {
       <div className="auth-hero">
         <Logo size="lg" />
         <div>
-          <div className="auth-tagline">Apply once,<br /><span>upload everything upfront.</span></div>
-          <p className="muted" style={{ maxWidth: 440 }}>Create your account, answer the rider application questions, and upload all KYC documents including 3 payslips before you enter the platform.</p>
+          <div className="auth-tagline">{t('signup.tagline1')}<br /><span>{t('signup.tagline2')}</span></div>
+          <p className="muted" style={{ maxWidth: 440 }}>{t('signup.heroDesc')}</p>
         </div>
-        <div className="muted text-sm">Step {step} of 4</div>
+        <div className="muted text-sm">{t('signup.stepOf', { step })}</div>
       </div>
 
       <div className="auth-form">
-        <h1>Create account & application</h1>
-        <div className="sub">No proof of address required. Upload ID, licence, selfie, and 3 latest payslips.</div>
+        <div className="flex-between" style={{ alignItems: 'flex-start' }}>
+          <h1>{t('signup.title')}</h1>
+          <LanguageSwitcher style={{ marginTop: 4 }} />
+        </div>
+        <div className="sub">{t('signup.subtitle')}</div>
 
         <form onSubmit={submit}>
           {step === 1 && (
             <>
               <div className="card mb-3" style={{ background: 'var(--surface-2)' }}>
-                <strong>What you need for this step</strong>
-                <div className="muted text-sm mt-1">Use your real name, a working email address, a WhatsApp number, your ID / passport / asylum number, and a password with at least 6 characters.</div>
+                <strong>{t('signup.step1HelpTitle')}</strong>
+                <div className="muted text-sm mt-1">{t('signup.step1Help')}</div>
               </div>
-              <div className="field"><label className="label">Full name *</label><input required value={form.full_name} onChange={f('full_name')} placeholder="Thabo Mokoena" /></div>
+              <div className="field"><label className="label">{t('fields.fullName')}</label><input required value={form.full_name} onChange={f('full_name')} placeholder={t('fields.fullNamePlaceholder')} /></div>
               <div className="grid grid-2">
-                <div className="field"><label className="label">Email *</label><input type="email" required value={form.email} onChange={f('email')} /></div>
-                <div className="field"><label className="label">Phone (WhatsApp) *</label><input type="tel" autoComplete="tel" inputMode="tel" required value={form.phone} onChange={setPhoneField('phone')} placeholder="+27 82 123 4567" /></div>
+                <div className="field"><label className="label">{t('fields.email')}</label><input type="email" required value={form.email} onChange={f('email')} /></div>
+                <div className="field"><label className="label">{t('fields.phone')}</label><input type="tel" autoComplete="tel" inputMode="tel" required value={form.phone} onChange={setPhoneField('phone')} placeholder={t('fields.phonePlaceholder')} /></div>
               </div>
               <div className="grid grid-2">
-                <div className="field"><label className="label">ID number / Passport / Asylum number *</label><input required value={form.id_number} onChange={f('id_number')} placeholder="Enter your ID, passport, or asylum number" /></div>
-                <div className="field"><label className="label">Date of birth</label><input type="date" value={form.date_of_birth} onChange={f('date_of_birth')} /></div>
+                <div className="field"><label className="label">{t('fields.idNumber')}</label><input required value={form.id_number} onChange={f('id_number')} placeholder={t('fields.idNumberPlaceholder')} /></div>
+                <div className="field"><label className="label">{t('fields.dob')}</label><input type="date" value={form.date_of_birth} onChange={f('date_of_birth')} /></div>
               </div>
-              <div className="field"><label className="label">Password *</label><input type="password" required minLength={6} value={form.password} onChange={f('password')} /></div>
+              <div className="field"><label className="label">{t('fields.password')}</label><input type="password" required minLength={6} value={form.password} onChange={f('password')} /></div>
             </>
           )}
 
           {step === 2 && (
             <>
               <div className="card mb-3" style={{ background: 'var(--surface-2)' }}>
-                <strong>Address help</strong>
-                <div className="muted text-sm mt-1">Add the address where you stay most of the time so support, verification, and recovery teams can reach the right area.</div>
+                <strong>{t('signup.step2HelpTitle')}</strong>
+                <div className="muted text-sm mt-1">{t('signup.step2Help')}</div>
               </div>
-              <div className="field"><label className="label">Street address *</label><input value={form.address} onChange={f('address')} placeholder="123 Main Road" /></div>
+              <div className="field"><label className="label">{t('fields.streetAddress')}</label><input value={form.address} onChange={f('address')} placeholder={t('fields.streetAddressPlaceholder')} /></div>
               <div className="grid grid-2">
-                <div className="field"><label className="label">City *</label>
+                <div className="field"><label className="label">{t('fields.city')}</label>
                   <select value={form.city} onChange={f('city')}>
-                    <option value="">Select city</option>
+                    <option value="">{t('common.selectCity')}</option>
                     {southAfricanCities.map((city) => <option key={city} value={city}>{city}</option>)}
                   </select>
                 </div>
-                <div className="field"><label className="label">Postal code</label><input value={form.postal_code} onChange={f('postal_code')} /></div>
+                <div className="field"><label className="label">{t('fields.postalCode')}</label><input value={form.postal_code} onChange={f('postal_code')} /></div>
               </div>
-              <div className="field"><label className="label">Province *</label>
+              <div className="field"><label className="label">{t('fields.province')}</label>
                 <select value={form.province} onChange={f('province')}>
                   {PROVINCES.map((province) => <option key={province}>{province}</option>)}
                 </select>
               </div>
-              <h3 className="mt-4 mb-2">Emergency contact</h3>
+              <h3 className="mt-4 mb-2">{t('fields.emergencyContact')}</h3>
               <div className="grid grid-2">
-                <div className="field"><label className="label">Name</label><input value={form.emergency_contact_name} onChange={f('emergency_contact_name')} /></div>
-                <div className="field"><label className="label">Phone</label><input type="tel" autoComplete="tel" inputMode="tel" value={form.emergency_contact_phone} onChange={setPhoneField('emergency_contact_phone')} placeholder="+27 81 234 5678" /></div>
+                <div className="field"><label className="label">{t('fields.emergencyName')}</label><input value={form.emergency_contact_name} onChange={f('emergency_contact_name')} /></div>
+                <div className="field"><label className="label">{t('fields.emergencyPhone')}</label><input type="tel" autoComplete="tel" inputMode="tel" value={form.emergency_contact_phone} onChange={setPhoneField('emergency_contact_phone')} placeholder={t('fields.emergencyPhonePlaceholder')} /></div>
               </div>
             </>
           )}
@@ -238,33 +245,33 @@ export default function Signup() {
           {step === 3 && (
             <>
               <div className="card mb-3" style={{ background: 'var(--surface-2)' }}>
-                <strong>Application help</strong>
-                <div className="muted text-sm mt-1">Choose a bike, tell us which delivery platforms you use, and add payout details. If you choose EFT, all banking fields are required.</div>
+                <strong>{t('signup.step3HelpTitle')}</strong>
+                <div className="muted text-sm mt-1">{t('signup.step3Help')}</div>
               </div>
               <div className="grid grid-2">
-                <div className="field"><label className="label">Preferred bike *</label>
+                <div className="field"><label className="label">{t('fields.preferredBike')}</label>
                   <select value={form.preferred_bike_id} onChange={f('preferred_bike_id')}>
-                    <option value="">— Select a bike —</option>
+                    <option value="">{t('common.selectBikePlaceholder')}</option>
                     {bikes.map((bike) => (
-                      <option key={bike.id} value={bike.id}>{bike.make} {bike.model} · {bike.registration || 'No reg'} · {fmt(bike.rental_weekly)}/week</option>
+                      <option key={bike.id} value={bike.id}>{bike.make} {bike.model} · {bike.registration || t('common.noReg')} · {fmt(bike.rental_weekly)}{t('common.perWeek')}</option>
                     ))}
                   </select>
                 </div>
                 <div className="card" style={{ background: 'var(--surface-2)', alignSelf: 'end' }}>
-                  <strong>Weekly fee</strong>
-                  <div className="muted text-sm mt-1">Ready-to-go bikes display their weekly rental amount and registration in the list.</div>
+                  <strong>{t('signup.weeklyFeeTitle')}</strong>
+                  <div className="muted text-sm mt-1">{t('signup.weeklyFeeDesc')}</div>
                 </div>
               </div>
 
               {selectedBike && (
                 <div className="card mb-3" style={{ background: 'var(--surface-2)' }}>
-                  <div className="flex-between"><span className="muted">Selected bike</span><strong>{selectedBike.make} {selectedBike.model}</strong></div>
-                  <div className="flex-between"><span className="muted">Registration</span><strong>{selectedBike.registration || 'Pending registration'}</strong></div>
-                  <div className="flex-between"><span className="muted">Weekly amount</span><strong>{fmt(selectedBike.rental_weekly)}</strong></div>
+                  <div className="flex-between"><span className="muted">{t('fields.selectedBike')}</span><strong>{selectedBike.make} {selectedBike.model}</strong></div>
+                  <div className="flex-between"><span className="muted">{t('fields.registration')}</span><strong>{selectedBike.registration || t('fields.pendingRegistration')}</strong></div>
+                  <div className="flex-between"><span className="muted">{t('fields.weeklyAmount')}</span><strong>{fmt(selectedBike.rental_weekly)}</strong></div>
                 </div>
               )}
 
-              <div className="field"><label className="label">Delivery platforms *</label>
+              <div className="field"><label className="label">{t('fields.deliveryPlatforms')}</label>
                 <div className="row" style={{ flexWrap: 'wrap' }}>
                   {PLATFORMS.map((platform) => (
                     <label key={platform} className="row" style={{ background: form.delivery_platforms.includes(platform) ? 'var(--primary)' : 'var(--surface-2)', padding: '8px 14px', borderRadius: 100, cursor: 'pointer', userSelect: 'none', color: form.delivery_platforms.includes(platform) ? 'white' : 'var(--text)' }}>
@@ -276,31 +283,31 @@ export default function Signup() {
               </div>
 
               <div className="grid grid-2">
-                <div className="field"><label className="label">Years of riding experience</label><input type="number" min="0" value={form.years_riding} onChange={f('years_riding')} /></div>
-                <div className="field"><label className="label">Valid driver's licence</label>
+                <div className="field"><label className="label">{t('fields.yearsRiding')}</label><input type="number" min="0" value={form.years_riding} onChange={f('years_riding')} /></div>
+                <div className="field"><label className="label">{t('fields.hasLicense')}</label>
                   <select value={form.has_drivers_license ? '1' : '0'} onChange={(e) => setForm({ ...form, has_drivers_license: e.target.value === '1' })}>
-                    <option value="1">Yes</option>
-                    <option value="0">No</option>
+                    <option value="1">{t('common.yes')}</option>
+                    <option value="0">{t('common.no')}</option>
                   </select>
                 </div>
               </div>
 
-              <div className="field"><label className="label">Payout preference</label>
+              <div className="field"><label className="label">{t('fields.payoutPreference')}</label>
                 <select value={form.payout_preference} onChange={f('payout_preference')}>
-                  <option value="eft">EFT banking details</option>
-                  <option value="ewallet">E-wallet number</option>
+                  <option value="eft">{t('fields.eftOption')}</option>
+                  <option value="ewallet">{t('fields.ewalletOption')}</option>
                 </select>
               </div>
 
               {form.payout_preference === 'eft' ? (
                 <div className="grid grid-2">
-                  <div className="field"><label className="label">Bank name *</label><input value={form.bank_name} onChange={f('bank_name')} /></div>
-                  <div className="field"><label className="label">Account holder *</label><input value={form.account_holder} onChange={f('account_holder')} /></div>
-                  <div className="field"><label className="label">Account number *</label><input value={form.account_number} onChange={f('account_number')} /></div>
-                  <div className="field"><label className="label">Branch code *</label><input value={form.branch_code} onChange={f('branch_code')} /></div>
+                  <div className="field"><label className="label">{t('fields.bankName')}</label><input value={form.bank_name} onChange={f('bank_name')} /></div>
+                  <div className="field"><label className="label">{t('fields.accountHolder')}</label><input value={form.account_holder} onChange={f('account_holder')} /></div>
+                  <div className="field"><label className="label">{t('fields.accountNumber')}</label><input value={form.account_number} onChange={f('account_number')} /></div>
+                  <div className="field"><label className="label">{t('fields.branchCode')}</label><input value={form.branch_code} onChange={f('branch_code')} /></div>
                 </div>
               ) : (
-                <div className="field"><label className="label">E-wallet number *</label><input type="tel" autoComplete="tel" inputMode="tel" value={form.ewallet_number} onChange={setPhoneField('ewallet_number')} placeholder="Cellphone number for wallet payouts" /></div>
+                <div className="field"><label className="label">{t('fields.ewalletNumber')}</label><input type="tel" autoComplete="tel" inputMode="tel" value={form.ewallet_number} onChange={setPhoneField('ewallet_number')} placeholder={t('fields.ewalletPlaceholder')} /></div>
               )}
             </>
           )}
@@ -308,47 +315,47 @@ export default function Signup() {
           {step === 4 && (
             <>
               <div className="card mb-3" style={{ background: 'var(--surface-2)' }}>
-                <strong>Required uploads</strong>
-                <div className="muted text-sm mt-1">Upload all KYC documents now. ID document, driver's licence, and selfie may be PDF or image files. Payslips may be uploaded as PDF or JPG / JPEG. If you upload a JPG / JPEG payslip, you must type the Rand amount for that image manually.</div>
+                <strong>{t('signup.step4HelpTitle')}</strong>
+                <div className="muted text-sm mt-1">{t('signup.step4Help')}</div>
               </div>
               <div className="grid grid-2">
-                <UploadField label="ID document *" file={files.id_document} onChange={(file) => setFile('id_document', file)} accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" helpText="PDF, JPG, PNG, or WEBP" />
-                <UploadField label="Driver's licence *" file={files.drivers_license} onChange={(file) => setFile('drivers_license', file)} accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" helpText="PDF, JPG, PNG, or WEBP" />
-                <UploadField label="Selfie holding ID *" file={files.selfie} onChange={(file) => setFile('selfie', file)} accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" helpText="PDF, JPG, PNG, or WEBP" />
+                <UploadField label={t('fields.idDocument')} file={files.id_document} onChange={(file) => setFile('id_document', file)} accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" helpText={t('fields.fileHelpText')} />
+                <UploadField label={t('fields.driversLicense')} file={files.drivers_license} onChange={(file) => setFile('drivers_license', file)} accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" helpText={t('fields.fileHelpText')} />
+                <UploadField label={t('fields.selfie')} file={files.selfie} onChange={(file) => setFile('selfie', file)} accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" helpText={t('fields.fileHelpText')} />
                 <div className="card" style={{ background: 'var(--surface-2)' }}>
-                  <strong>Auto-decision rule</strong>
-                  <div className="muted text-sm mt-2">OnFleet reads the 3 latest payslips, totals the paid amounts, and computes average weekly earnings. Below R1000/week = auto-decline with 2-week retry. R1000/week or more = auto-pre-approval.</div>
+                  <strong>{t('signup.autoDecisionTitle')}</strong>
+                  <div className="muted text-sm mt-2">{t('signup.autoDecisionDesc')}</div>
                 </div>
-                <PayslipUploadField label="Payslip 1 *" file={files.payslip_1} amount={payslipAmounts.payslip_1} onAmountChange={(value) => setPayslipAmounts((current) => ({ ...current, payslip_1: value }))} onChange={(file) => setPayslipFile('payslip_1', file)} />
-                <PayslipUploadField label="Payslip 2 *" file={files.payslip_2} amount={payslipAmounts.payslip_2} onAmountChange={(value) => setPayslipAmounts((current) => ({ ...current, payslip_2: value }))} onChange={(file) => setPayslipFile('payslip_2', file)} />
-                <PayslipUploadField label="Payslip 3 *" file={files.payslip_3} amount={payslipAmounts.payslip_3} onAmountChange={(value) => setPayslipAmounts((current) => ({ ...current, payslip_3: value }))} onChange={(file) => setPayslipFile('payslip_3', file)} />
+                <PayslipUploadField label={t('signup.payslipLabel', { n: 1 })} helpText={t('signup.payslipHelp')} randLabel={t('fields.randAmount')} randPlaceholder={t('fields.randAmountPlaceholder')} randHelp={t('signup.randAmountHelp')} file={files.payslip_1} amount={payslipAmounts.payslip_1} onAmountChange={(value) => setPayslipAmounts((current) => ({ ...current, payslip_1: value }))} onChange={(file) => setPayslipFile('payslip_1', file)} />
+                <PayslipUploadField label={t('signup.payslipLabel', { n: 2 })} helpText={t('signup.payslipHelp')} randLabel={t('fields.randAmount')} randPlaceholder={t('fields.randAmountPlaceholder')} randHelp={t('signup.randAmountHelp')} file={files.payslip_2} amount={payslipAmounts.payslip_2} onAmountChange={(value) => setPayslipAmounts((current) => ({ ...current, payslip_2: value }))} onChange={(file) => setPayslipFile('payslip_2', file)} />
+                <PayslipUploadField label={t('signup.payslipLabel', { n: 3 })} helpText={t('signup.payslipHelp')} randLabel={t('fields.randAmount')} randPlaceholder={t('fields.randAmountPlaceholder')} randHelp={t('signup.randAmountHelp')} file={files.payslip_3} amount={payslipAmounts.payslip_3} onAmountChange={(value) => setPayslipAmounts((current) => ({ ...current, payslip_3: value }))} onChange={(file) => setPayslipFile('payslip_3', file)} />
               </div>
             </>
           )}
 
           <div className="row" style={{ marginTop: 16 }}>
-            {step > 1 && <button type="button" className="btn btn-secondary" onClick={() => setStep(step - 1)}>Back</button>}
+            {step > 1 && <button type="button" className="btn btn-secondary" onClick={() => setStep(step - 1)}>{t('common.back')}</button>}
             {step < 4 ? (
-              <button type="button" className="btn btn-block" onClick={() => validateStep() && setStep(step + 1)}>Continue</button>
+              <button type="button" className="btn btn-block" onClick={() => validateStep() && setStep(step + 1)}>{t('common.continue')}</button>
             ) : (
-              <button className="btn btn-block" disabled={busy}>{busy ? 'Submitting…' : 'Create account & submit application'}</button>
+              <button className="btn btn-block" disabled={busy}>{busy ? t('signup.submitting') : t('signup.submitButton')}</button>
             )}
           </div>
         </form>
 
         <div className="mt-4 muted text-sm" style={{ textAlign: 'center' }}>
-          Already have an account? <Link to="/login">Sign in</Link>
+          {t('signup.alreadyHaveAccount')} <Link to="/login">{t('common.signIn')}</Link>
         </div>
       </div>
 
       {!!validationIssues.length && (
-        <Modal title="Please fix these items" onClose={() => setValidationIssues([])}>
-          <div className="muted text-sm mb-3">Your application cannot continue until the required information below is completed correctly.</div>
+        <Modal title={t('signup.modalTitle')} onClose={() => setValidationIssues([])}>
+          <div className="muted text-sm mb-3">{t('signup.modalDesc')}</div>
           <ul style={{ margin: 0, paddingLeft: 18 }}>
             {validationIssues.map((issue, index) => <li key={`${issue}-${index}`} style={{ marginBottom: 8 }}>{issue}</li>)}
           </ul>
           <div className="row mt-4">
-            <button type="button" className="btn" onClick={() => setValidationIssues([])}>Ok, I will fix it</button>
+            <button type="button" className="btn" onClick={() => setValidationIssues([])}>{t('signup.okFixIt')}</button>
           </div>
         </Modal>
       )}
@@ -357,35 +364,37 @@ export default function Signup() {
 }
 
 function UploadField({ label, file, onChange, accept, helpText }) {
+  const { t } = useTranslation();
   return (
     <label className="card" style={{ background: 'var(--surface-2)', cursor: 'pointer' }}>
       <strong>{label}</strong>
       {helpText && <div className="muted text-sm mt-1">{helpText}</div>}
-      <div className="muted text-sm mt-2">{file ? file.name : 'Choose file'}</div>
-      <div className="mt-3"><span className="btn btn-secondary btn-sm">Select file</span></div>
+      <div className="muted text-sm mt-2">{file ? file.name : t('common.chooseFile')}</div>
+      <div className="mt-3"><span className="btn btn-secondary btn-sm">{t('common.selectFile')}</span></div>
       <input hidden type="file" accept={accept} onChange={(e) => onChange(e.target.files?.[0] || null)} />
     </label>
   );
 }
 
-function PayslipUploadField({ label, file, amount, onAmountChange, onChange }) {
+function PayslipUploadField({ label, file, amount, onAmountChange, onChange, helpText, randLabel, randPlaceholder, randHelp }) {
+  const { t } = useTranslation();
   const imagePayslip = isPayslipImage(file);
   return (
     <div className="card" style={{ background: 'var(--surface-2)' }}>
       <strong>{label}</strong>
-      <div className="muted text-sm mt-1">Upload PDF for automatic reading, or JPG / JPEG and type the Rand amount manually.</div>
-      <div className="muted text-sm mt-2">{file ? file.name : 'Choose file'}</div>
+      <div className="muted text-sm mt-1">{helpText}</div>
+      <div className="muted text-sm mt-2">{file ? file.name : t('common.chooseFile')}</div>
       <div className="mt-3">
         <label className="btn btn-secondary btn-sm" style={{ cursor: 'pointer' }}>
-          Select file
+          {t('common.selectFile')}
           <input hidden type="file" accept="application/pdf,image/jpeg,image/jpg" onChange={(e) => onChange(e.target.files?.[0] || null)} />
         </label>
       </div>
       {imagePayslip && (
         <div className="field" style={{ marginTop: 12, marginBottom: 0 }}>
-          <label className="label">Rand amount *</label>
-          <input type="number" min="0" step="0.01" value={amount} onChange={(e) => onAmountChange(e.target.value)} placeholder="Example: 3200" />
-          <div className="muted text-sm mt-1">JPEG payslips are saved with the amount you type here.</div>
+          <label className="label">{randLabel}</label>
+          <input type="number" min="0" step="0.01" value={amount} onChange={(e) => onAmountChange(e.target.value)} placeholder={randPlaceholder} />
+          <div className="muted text-sm mt-1">{randHelp}</div>
         </div>
       )}
     </div>

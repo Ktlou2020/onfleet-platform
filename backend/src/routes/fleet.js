@@ -1064,6 +1064,25 @@ router.get('/riders', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.view), asy
   }
 });
 
+router.get('/riders/scorecards', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.view), async (req, res) => {
+  try {
+    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const { scoreRiders } = require('../services/riderScoring');
+    const { rows: riders } = await pgDb.query(`
+      SELECT DISTINCT ON (u.id) u.id AS user_id, u.full_name, u.phone, u.address_match_status,
+        a.id AS agreement_id, a.bike_id, b.registration AS bike_registration
+      FROM users u
+      JOIN agreements a ON a.user_id = u.id AND a.status = 'active'
+      JOIN bikes b ON b.id = a.bike_id AND b.organization_id = $1
+      WHERE u.role = 'rider' AND u.deleted_at IS NULL
+      ORDER BY u.id, a.created_at DESC
+    `, [organization.id]);
+    res.json({ riders: await scoreRiders(riders) });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not load rider scorecards' });
+  }
+});
+
 router.get('/riders/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.view), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req.user.organization_id);

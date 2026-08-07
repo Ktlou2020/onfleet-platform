@@ -93,16 +93,19 @@ export default function FleetOwnerRiders() {
   const [subscription, setSubscription] = useState(null);
   const [subBusy, setSubBusy] = useState(false);
   const [subPlanAmount, setSubPlanAmount] = useState('');
+  const [riskScores, setRiskScores] = useState({}); // user_id -> scorecard
 
   const load = async ({ silent = false } = {}) => {
     if (!silent) setLoading(true);
     try {
-      const [riderResponse, shareResponse] = await Promise.all([
+      const [riderResponse, shareResponse, scorecardsResponse] = await Promise.all([
         api.get('/fleet/riders'),
-        api.get('/fleet/riders/share-link')
+        api.get('/fleet/riders/share-link'),
+        api.get('/fleet/riders/scorecards').catch(() => ({ data: { riders: [] } }))
       ]);
       setRiders(riderResponse.data.riders || []);
       setSharePath(shareResponse.data.path || '');
+      setRiskScores(Object.fromEntries((scorecardsResponse.data.riders || []).map((r) => [r.user_id, r])));
       if (canManage) {
         try {
           const bikeResponse = await api.get('/fleet/bikes');
@@ -666,7 +669,7 @@ export default function FleetOwnerRiders() {
         </div>
         <div className="table-wrap">
           <table className="table">
-            <thead><tr><th>Rider</th><th className="col-mobile-hide">Bike</th><th>Status</th><th className="col-mobile-hide">Score</th><th className="col-mobile-hide">Avg weekly</th><th className="col-mobile-hide">Docs</th><th className="col-mobile-hide">Submitted</th><th></th></tr></thead>
+            <thead><tr><th>Rider</th><th className="col-mobile-hide">Bike</th><th>Status</th><th className="col-mobile-hide">Score</th><th className="col-mobile-hide">Risk score</th><th className="col-mobile-hide">Avg weekly</th><th className="col-mobile-hide">Docs</th><th className="col-mobile-hide">Submitted</th><th></th></tr></thead>
             <tbody>
               {pagination.items.map((item) => (
                 <tr key={item.id}>
@@ -683,6 +686,15 @@ export default function FleetOwnerRiders() {
                         {item.performance_label} · {item.performance_score}
                       </span>
                     ) : <span className="muted text-xs">—</span>}
+                  </td>
+                  <td className="col-mobile-hide">
+                    {(() => {
+                      const sc = riskScores[item.user_id];
+                      if (!sc) return <span className="muted text-xs">—</span>;
+                      const color = sc.score >= 70 ? '#22c55e' : sc.score >= 40 ? '#eab308' : '#ef4444';
+                      const title = `${sc.critical_alerts_90d} critical alert(s), ${sc.driving_alerts_90d} driving alert(s) in last 90d · ${sc.payment_late_or_overdue}/${sc.payment_reckoned} payments late or overdue · address ${sc.address_match_status}`;
+                      return <span title={title} style={{ fontWeight: 700, color }}>{sc.score}</span>;
+                    })()}
                   </td>
                   <td className="col-mobile-hide">{item.average_weekly_earnings ? fmt(item.average_weekly_earnings) : 'Pending'}</td>
                   <td className="col-mobile-hide">{item.document_count || 0}<div className="text-xs muted">Payslips: {item.payslip_count || 0}/3</div></td>

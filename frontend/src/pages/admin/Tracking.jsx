@@ -1757,7 +1757,7 @@ export default function Tracking({ readOnly = false }) {
 
       {/* ── Device detail panel ──────────────────────────────────────── */}
       {selectedDevice && (
-        <div style={{ width: 310, minWidth: 310, display: 'flex', flexDirection: 'column', borderLeft: '1px solid var(--border)', background: 'var(--surface-2)', overflowY: 'auto' }}>
+        <div style={{ width: 380, minWidth: 380, display: 'flex', flexDirection: 'column', borderLeft: '1px solid var(--border)', background: 'var(--surface-2)', overflowY: 'auto' }}>
 
           {/* Device header */}
           <div style={{ padding: 14, borderBottom: '1px solid var(--border)', background: 'var(--surface)', position: 'sticky', top: 0, zIndex: 2 }}>

@@ -8,6 +8,7 @@
     "dev": "nodemon src/server.js",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:pg": "TEST_DATABASE_URL=postgresql://localhost/onfleet_test vitest run",
     "seed": "node src/seed.js",
     "reset-admin": "node src/reset-admin.js",
     "campaign:password-reset-special": "node src/scripts/password-reset-special-audience.js",

@@ -7,6 +7,22 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: onfleet_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/onfleet_test
     steps:
       - uses: actions/checkout@v5
 
@@ -19,6 +35,15 @@ jobs:
       - name: Install dependencies
         working-directory: backend
         run: npm ci
+
+      # trackingPgSchema.js creates the tracking tables ad-hoc (not via
+      # node-pg-migrate) and must run first — migration 002 adds FKs onto
+      # them. See backend/tests/README.md for the same steps done locally.
+      - name: Set up test database schema
+        working-directory: backend
+        run: |
+          node -e "require('./src/migrations/trackingPgSchema').runTrackingSchema().then(() => process.exit(0))"
+          npx node-pg-migrate up
 
       - name: Run tests
         working-directory: backend

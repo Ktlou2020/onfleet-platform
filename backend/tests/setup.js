@@ -6,6 +6,14 @@ process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test-jwt-secret-do-not-use-in-production';
 process.env.JWT_EXPIRES_IN = '1h';
 process.env.DB_PATH = ':memory:';
-// Intentionally no DATABASE_URL — Postgres-backed tracking routes are out of
-// scope for this suite; pgDb.query() throws clearly if a test hits one unmocked.
-delete process.env.DATABASE_URL;
+// Postgres-backed tests (claims, riderScoring, dunningService, backupService)
+// need a real, throwaway DATABASE_URL — provided by CI's postgres service
+// container, or locally via TEST_DATABASE_URL pointed at a migrated test db
+// (see tests/README.md). If neither is present, leave it unset; those tests
+// skip themselves via describe.skipIf(!process.env.DATABASE_URL) rather than
+// failing, so `npm test` still runs clean with no Postgres available.
+if (process.env.TEST_DATABASE_URL) {
+  process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
+} else if (!process.env.DATABASE_URL) {
+  delete process.env.DATABASE_URL;
+}

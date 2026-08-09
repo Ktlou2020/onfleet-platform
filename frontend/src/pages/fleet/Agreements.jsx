@@ -5,7 +5,7 @@ import { Copy, Check, ExternalLink } from 'lucide-react';
 import { FleetHelpTip } from './helpSupport';
 import api from '../../api';
 import { useAuth } from '../../auth';
-import { Badge, ConfirmModal, EmptyState, Loading, Modal, Pagination, SearchInput, fmt, fmtDate, matchesSearch, paginateItems } from '../../components/ui';
+import { Badge, ConfirmModal, EmptyState, ListPageSkeleton, Modal, Pagination, SearchInput, fmt, fmtDate, matchesSearch, paginateItems } from '../../components/ui';
 import { canManageFleetSection } from './access';
 
 function CopyBtn({ text }) {
@@ -246,7 +246,7 @@ export default function FleetOwnerAgreements() {
     }
   };
 
-  if (loading) return <Loading />;
+  if (loading) return <ListPageSkeleton />;
 
   return (
     <>
@@ -288,13 +288,13 @@ export default function FleetOwnerAgreements() {
             <tr>
               <th>Agreement</th>
               <th>Rider</th>
-              <th>Bike</th>
-              <th>Bike status</th>
-              <th>Weekly</th>
+              <th className="col-mobile-hide">Bike</th>
+              <th className="col-mobile-hide">Bike status</th>
+              <th className="col-mobile-hide">Weekly</th>
               <th>Overdue</th>
-              <th title="Click the remaining balance on active/paused/defaulted agreements to edit it.">Remaining</th>
+              <th className="col-mobile-hide" title="Click the remaining balance on active/paused/defaulted agreements to edit it.">Remaining</th>
               <th>Status</th>
-              <th>Start</th>
+              <th className="col-mobile-hide">Start</th>
               {canManage && <th>Actions</th>}
             </tr>
           </thead>
@@ -319,19 +319,19 @@ export default function FleetOwnerAgreements() {
                     {agreement.rider_name}
                     <div className="text-xs muted">{agreement.rider_email}</div>
                   </td>
-                  <td>
+                  <td className="col-mobile-hide">
                     {agreement.bike_registration || 'Pending registration'}
                     <div className="text-xs muted">{[agreement.make, agreement.model].filter(Boolean).join(' ') || '—'}</div>
                   </td>
-                  <td><Badge status={agreement.bike_status}>{labelize(agreement.bike_status)}</Badge></td>
-                  <td>{fmt(agreement.weekly_amount)}</td>
+                  <td className="col-mobile-hide"><Badge status={agreement.bike_status}>{labelize(agreement.bike_status)}</Badge></td>
+                  <td className="col-mobile-hide">{fmt(agreement.weekly_amount)}</td>
                   <td>
                     {agreement.overdue_balance > 0 ? (
                       <span style={{ color: 'var(--danger)', fontWeight: 700 }}>{fmt(agreement.overdue_balance)}</span>
                     ) : fmt(agreement.overdue_balance)}
                     {overdueDays !== null && <div className="text-xs muted">{overdueDays}d overdue</div>}
                   </td>
-                  <td>
+                  <td className="col-mobile-hide">
                     {canEditRemaining ? (
                       <button className="btn btn-sm btn-secondary" onClick={() => openBalanceModal(agreement)} title="Click to edit remaining balance">
                         {fmt(agreement.remaining_balance)}
@@ -339,7 +339,7 @@ export default function FleetOwnerAgreements() {
                     ) : fmt(agreement.remaining_balance)}
                   </td>
                   <td><Badge status={agreement.status}>{labelize(agreement.status)}</Badge></td>
-                  <td style={{ whiteSpace: 'nowrap' }}>{fmtDate(agreement.start_date)}</td>
+                  <td className="col-mobile-hide" style={{ whiteSpace: 'nowrap' }}>{fmtDate(agreement.start_date)}</td>
                   {canManage && (
                     <td>
                       <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>

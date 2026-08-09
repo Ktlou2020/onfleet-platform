@@ -3,7 +3,7 @@ import toast from 'react-hot-toast';
 import { FleetHelpTip } from './helpSupport';
 import api from '../../api';
 import { useAuth } from '../../auth';
-import { Badge, ConfirmModal, EmptyState, Loading, Modal, Pagination, SearchInput, fmt, fmtDateTime } from '../../components/ui';
+import { Badge, ConfirmModal, EmptyState, ListPageSkeleton, Modal, Pagination, SearchInput, fmt, fmtDateTime } from '../../components/ui';
 import { canManageFleetSection } from './access';
 
 const METHOD_OPTIONS = ['eft', 'cash', 'card', 'other'];
@@ -204,7 +204,7 @@ export default function FleetOwnerPayments() {
     }
   };
 
-  if (!payments) return <Loading />;
+  if (!payments) return <ListPageSkeleton />;
 
   return (
     <>
@@ -265,14 +265,14 @@ export default function FleetOwnerPayments() {
               {canManage ? <th style={{ width: 44 }}><input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} aria-label="Select all visible payments" /></th> : null}
               <th>Date</th>
               <th>Rider</th>
-              <th>Agreement</th>
-              <th>Bike</th>
-              <th>Method</th>
-              <th>Reference</th>
+              <th className="col-mobile-hide">Agreement</th>
+              <th className="col-mobile-hide">Bike</th>
+              <th className="col-mobile-hide">Method</th>
+              <th className="col-mobile-hide">Reference</th>
               <th>Status</th>
               <th>Rental</th>
-              <th>Fee</th>
-              <th>Gross</th>
+              <th className="col-mobile-hide">Fee</th>
+              <th className="col-mobile-hide">Gross</th>
             </tr>
           </thead>
           <tbody>
@@ -281,14 +281,14 @@ export default function FleetOwnerPayments() {
                 {canManage ? <td><input type="checkbox" checked={selectedIds.includes(payment.id)} onChange={() => toggleSelected(payment.id)} aria-label={`Select payment ${payment.reference || payment.id}`} /></td> : null}
                 <td style={{ whiteSpace: 'nowrap' }}>{fmtDateTime(payment.paid_at || payment.created_at)}</td>
                 <td>{payment.full_name}<div className="text-xs muted">{payment.email}</div></td>
-                <td>{payment.agreement_no}<div className="text-xs muted">{payment.agreement_status}</div></td>
-                <td>{payment.bike_registration || '—'}</td>
-                <td><Badge>{payment.method}</Badge></td>
-                <td className="text-xs muted">{payment.reference || '—'}</td>
+                <td className="col-mobile-hide">{payment.agreement_no}<div className="text-xs muted">{payment.agreement_status}</div></td>
+                <td className="col-mobile-hide">{payment.bike_registration || '—'}</td>
+                <td className="col-mobile-hide"><Badge>{payment.method}</Badge></td>
+                <td className="col-mobile-hide text-xs muted">{payment.reference || '—'}</td>
                 <td><Badge status={payment.status}>{payment.status}</Badge></td>
                 <td><strong>{fmt(creditedAmount(payment))}</strong></td>
-                <td>{feeAmount(payment) > 0 ? fmt(feeAmount(payment)) : '—'}</td>
-                <td>{fmt(grossAmount(payment))}</td>
+                <td className="col-mobile-hide">{feeAmount(payment) > 0 ? fmt(feeAmount(payment)) : '—'}</td>
+                <td className="col-mobile-hide">{fmt(grossAmount(payment))}</td>
               </tr>
             ))}
           </tbody>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../api';
-import { Stat, Badge, Loading, SearchInput, fmt, fmtDate, EmptyState, matchesSearch } from '../../components/ui';
+import { Stat, Badge, DashboardSkeleton, SearchInput, fmt, fmtDate, EmptyState, matchesSearch } from '../../components/ui';
 import { Bike, TrendingUp, Calendar, AlertCircle, CreditCard, FileText, UserCircle, CheckCircle2 } from 'lucide-react';
 import TourModal from '../../components/TourModal';
 
@@ -58,7 +58,7 @@ export default function RiderDashboard() {
     }).finally(() => setLoading(false));
   }, []);
 
-  if (loading) return <Loading />;
+  if (loading) return <DashboardSkeleton statCount={4} gridClassName="grid grid-4" />;
 
   if (!data) {
     const pending = apps.find((application) => application.status === 'submitted' || application.status === 'under_review');

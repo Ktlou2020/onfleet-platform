@@ -402,7 +402,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   box-shadow: 0 24px 80px rgba(0,0,0,0.45);
 }
 .install-prompt-close {
-  position: absolute; top: 14px; right: 14px; width: 34px; height: 34px; border-radius: 999px;
+  position: absolute; top: 8px; right: 8px; width: 44px; height: 44px; border-radius: 999px;
   display: inline-flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.06); color: var(--text);
 }
 .install-prompt-icon-wrap { display: flex; align-items: center; gap: 10px; }
@@ -1092,6 +1092,11 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 .skeleton-line.medium { width: 76%; }
 .skeleton-stat { height: 80px; border-radius: 12px; }
 
+/* Icon-only buttons (close/clear affordances) — small on desktop,
+   grown to a real touch target on mobile via the media query below. */
+.icon-btn { background: transparent; border: none; color: var(--muted); cursor: pointer;
+  padding: 4px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; }
+
 /* Alert banners */
 .alert-banner {
   display: flex; align-items: flex-start; gap: 12px;
@@ -1347,6 +1352,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   .btn:not(.btn-sm) { min-height: 44px; }
   .btn-sm { min-height: 36px; }
   input, select, textarea { min-height: 44px; font-size: 16px !important; } /* 16px prevents iOS zoom */
+  .icon-btn { min-width: 44px; min-height: 44px; }
 
   /* ── Visibility helpers (mobile) ── */
   .mobile-only { display: flex !important; }

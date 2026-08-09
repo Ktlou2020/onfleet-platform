@@ -4,7 +4,7 @@ import { FleetHelpTip } from './helpSupport';
 import toast from 'react-hot-toast';
 import api from '../../api';
 import { useAuth } from '../../auth';
-import { Badge, EmptyState, Loading, Modal, Pagination, SearchInput, fmt, fmtDate, matchesSearch, paginateItems } from '../../components/ui';
+import { Badge, EmptyState, ListPageSkeleton, Loading, Modal, Pagination, SearchInput, fmt, fmtDate, matchesSearch, paginateItems } from '../../components/ui';
 import { canManageFleetSection } from './access';
 
 const bikeStatusOptions = [
@@ -293,7 +293,7 @@ export default function FleetOwnerBikes() {
     }
   };
 
-  if (!bikes) return <Loading />;
+  if (!bikes) return <ListPageSkeleton />;
 
   return (
     <>

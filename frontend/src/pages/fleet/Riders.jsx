@@ -4,7 +4,7 @@ import { FleetHelpTip } from './helpSupport';
 import api from '../../api';
 import { useAuth } from '../../auth';
 import southAfricanCities from '../../constants/southAfricanCities';
-import { Badge, ConfirmModal, EmptyState, Loading, Pagination, SearchInput, fmt, fmtDate, matchesSearch, normalizePhoneInput, paginateItems } from '../../components/ui';
+import { Badge, ConfirmModal, EmptyState, ListPageSkeleton, Pagination, SearchInput, fmt, fmtDate, matchesSearch, normalizePhoneInput, paginateItems } from '../../components/ui';
 import { canManageFleetSection } from './access';
 
 const PLATFORMS = ['Uber Eats', 'Mr D', 'Bolt Food', 'Takealot', 'Checkers Sixty60', 'Other'];
@@ -423,7 +423,7 @@ export default function FleetOwnerRiders() {
     }
   };
 
-  if (loading) return <Loading />;
+  if (loading) return <ListPageSkeleton />;
 
   return (
     <>

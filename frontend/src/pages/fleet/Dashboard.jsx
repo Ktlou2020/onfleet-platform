@@ -4,7 +4,7 @@ import { AlertTriangle, Bike, Building2, CheckCircle2, Clock3, CreditCard, FileT
 import toast from 'react-hot-toast';
 import api from '../../api';
 import { useAuth } from '../../auth';
-import { Badge, EmptyState, Loading, Modal, fmt, fmtDate, fmtDateTime } from '../../components/ui';
+import { Badge, DashboardSkeleton, EmptyState, Modal, fmt, fmtDate, fmtDateTime } from '../../components/ui';
 import { canAccessFleetRoute } from './access';
 import { FleetHelpTip } from './helpSupport';
 import TourModal from '../../components/TourModal';
@@ -200,7 +200,7 @@ export default function FleetDashboard() {
   const trialExpired = orgStatus === 'past_due' || (orgStatus === 'trialing' && trialEndsAt && trialEndsAt < todayDate);
   const trialExpiringSoon = orgStatus === 'trialing' && trialDaysLeft !== null && trialDaysLeft <= 5 && !trialExpired;
 
-  if (loading) return <Loading />;
+  if (loading) return <DashboardSkeleton statCount={5} gridClassName="grid kpi-grid" />;
 
   const hasAlerts = (summary.defaulted_agreements || 0) > 0 || overdueServiceBikes.length > 0 || expiredDiscBikes.length > 0 || trialExpired || trialExpiringSoon;
 

@@ -109,11 +109,7 @@ export function Modal({ children, onClose, title, isOpen = true, style: modalSty
         {title && (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
             <h2 style={{ margin: 0 }}>{title}</h2>
-            <button
-              onClick={onClose}
-              style={{ background: 'transparent', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center', borderRadius: 6 }}
-              title="Close"
-            >
+            <button className="icon-btn" onClick={onClose} title="Close">
               <X size={18} />
             </button>
           </div>
@@ -138,8 +134,9 @@ export function SearchInput({ value, onChange, placeholder = 'Search', style = {
       {value && (
         <button
           type="button"
+          className="icon-btn"
           onClick={() => onChange('')}
-          style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'transparent', color: 'var(--muted)', padding: 4, display: 'flex', alignItems: 'center' }}
+          style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)' }}
           title="Clear search"
         >
           <X size={16} />
@@ -229,6 +226,45 @@ export function Skeleton({ lines = 3, height, className = '' }) {
         <div key={i} className={`skeleton skeleton-line ${i === lines - 1 ? 'short' : i % 2 === 0 ? '' : 'medium'}`} />
       ))}
     </div>
+  );
+}
+
+// Full-page loading placeholder for stat-card dashboards (fleet/rider dashboards).
+// Mirrors the real page shape (title, stat grid, content cards) so the layout
+// doesn't jump once data arrives — a plain spinner leaves the screen blank.
+export function DashboardSkeleton({ statCount = 4, gridClassName = 'grid grid-4' }) {
+  return (
+    <>
+      <div className="skeleton skeleton-line" style={{ width: 180, height: 24, marginBottom: 8 }} />
+      <div className="skeleton skeleton-line medium" style={{ height: 14, marginBottom: 20 }} />
+      <div className={`${gridClassName} mb-4`}>
+        {Array.from({ length: statCount }).map((_, i) => <div key={i} className="skeleton skeleton-stat" />)}
+      </div>
+      <div className="grid grid-2">
+        {Array.from({ length: 2 }).map((_, i) => (
+          <div key={i} className="card"><Skeleton lines={4} /></div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+// Full-page loading placeholder for search/filter + table list pages
+// (Riders, Bikes, Agreements, Payments). Same rationale as DashboardSkeleton.
+export function ListPageSkeleton({ rows = 6 }) {
+  return (
+    <>
+      <div className="skeleton skeleton-line" style={{ width: 160, height: 24, marginBottom: 8 }} />
+      <div className="skeleton skeleton-line medium" style={{ height: 14, marginBottom: 20 }} />
+      <div className="skeleton" style={{ height: 44, borderRadius: 12, marginBottom: 16 }} />
+      <div className="card" style={{ padding: 0 }}>
+        {Array.from({ length: rows }).map((_, i) => (
+          <div key={i} style={{ padding: '14px 16px', borderBottom: i === rows - 1 ? 'none' : '1px solid var(--border)' }}>
+            <Skeleton lines={2} />
+          </div>
+        ))}
+      </div>
+    </>
   );
 }
 

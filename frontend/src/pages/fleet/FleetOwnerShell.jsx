@@ -299,7 +299,7 @@ export default function FleetOwnerShell() {
           <div className="mobile-more-sheet" onClick={(e) => e.stopPropagation()}>
             <div className="mobile-more-header">
               <span className="text-sm" style={{ fontWeight: 600 }}>Menu</span>
-              <button onClick={() => setMoreOpen(false)} style={{ background: 'transparent', border: 'none', color: 'var(--muted)', padding: 4, display: 'flex' }}>
+              <button className="icon-btn" onClick={() => setMoreOpen(false)}>
                 <X size={18} />
               </button>
             </div>

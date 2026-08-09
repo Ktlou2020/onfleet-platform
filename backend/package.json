@@ -34,7 +34,8 @@
     "pdf-parse": "^1.1.1",
     "pg": "^8.22.0",
     "tesseract.js": "^5.1.1",
-    "uuid": "^9.0.1"
+    "uuid": "^9.0.1",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "node-pg-migrate": "^9.0.0",

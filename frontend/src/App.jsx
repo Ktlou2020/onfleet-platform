@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth';
 import InstallPrompt from './components/InstallPrompt';
+import OfflineBanner from './components/OfflineBanner';
 import AnalyticsTracker from './analytics';
 import { canViewFleetSection, getDefaultFleetRoute, isAdminPortalRole } from './pages/fleet/access';
 
@@ -120,6 +121,7 @@ export default function App() {
   return (
     <AuthProvider>
       <AnalyticsTracker />
+      <OfflineBanner />
       <Suspense fallback={<RouteLoading />}>
         <Routes>
           <Route path="/" element={<HomeRoute />} />

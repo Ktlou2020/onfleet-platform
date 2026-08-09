@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import api from './api';
 import { trackAnalyticsEvent } from './analytics';
+import { clearCache } from './offlineCache';
 
 const AuthCtx = createContext();
 export const useAuth = () => useContext(AuthCtx);
@@ -113,6 +114,7 @@ export function AuthProvider({ children }) {
     sessionStorage.removeItem('of_imp_user');
     localStorage.removeItem('of_token');
     localStorage.removeItem('of_user');
+    clearCache();
     setUser(null);
   };
 

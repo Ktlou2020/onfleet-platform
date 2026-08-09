@@ -12,6 +12,7 @@
 
 const pgDb = require('../pgDb');
 const { sendEmail } = require('./notifier');
+const { sendPushToUser } = require('./webPush');
 
 async function sendSMS(to, body) {
   console.log(`[SMS→${to}] ${body}`);
@@ -21,10 +22,19 @@ async function sendWhatsApp(to, body) {
   console.log(`[WhatsApp→${to}] ${body}`);
 }
 
+// No dedicated notifications page exists for fleet-owner roles today —
+// send those clicks to the dashboard instead of a 404.
+function notificationsUrlForRole(role) {
+  if (role === 'rider') return '/notifications';
+  if (role === 'admin' || role === 'superadmin') return '/admin/notifications';
+  if (String(role || '').startsWith('fleet_owner_')) return '/fleet/app';
+  return '/';
+}
+
 async function sendNotification({ userId, channel, type, title, message, throwOnError = true }) {
   let user = null;
   if (userId) {
-    const { rows } = await pgDb.query('SELECT email, phone FROM users WHERE id = $1', [userId]);
+    const { rows } = await pgDb.query('SELECT email, phone, role FROM users WHERE id = $1', [userId]);
     user = rows[0] || null;
   }
   const { rows: inserted } = await pgDb.query(
@@ -32,6 +42,12 @@ async function sendNotification({ userId, channel, type, title, message, throwOn
     [userId || null, channel, type, title || null, message]
   );
   const notificationId = inserted[0].id;
+  // Every notification also tries push, regardless of its primary channel —
+  // riders/fleet owners who opted in get a phone alert for events that would
+  // otherwise only show up next time they open the app's Notifications tab.
+  // Fire-and-forget: push delivery never affects the primary channel's
+  // sent/failed status, since it's a bonus delivery path, not the record.
+  if (userId) sendPushToUser(userId, { title: title || type, body: message, url: notificationsUrlForRole(user?.role) }).catch(() => {});
   try {
     if (channel === 'email' && user?.email) await sendEmail(user.email, title || type, message);
     else if (channel === 'sms' && user?.phone) await sendSMS(user.phone, message);

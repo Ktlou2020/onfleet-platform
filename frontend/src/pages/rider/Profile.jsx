@@ -1,17 +1,40 @@
 import { useEffect, useState } from 'react';
 import api from '../../api';
 import toast from 'react-hot-toast';
+import { Bell, BellOff } from 'lucide-react';
 import { Loading } from '../../components/ui';
 import africanCountries from '../../constants/africanCountries';
+import { disablePush, enablePush, getPushSubscriptionState, isPushSupported } from '../../pushSubscribe';
 
 export default function RiderProfile() {
   const [u, setU] = useState(null);
   const [pwd, setPwd] = useState({ current_password: '', new_password: '' });
   const [uploadingSelfie, setUploadingSelfie] = useState(false);
+  const [pushState, setPushState] = useState({ supported: false, subscribed: false, permission: 'default' });
+  const [pushBusy, setPushBusy] = useState(false);
 
   useEffect(() => {
     api.get('/auth/me').then((r) => setU(r.data.user));
+    if (isPushSupported()) getPushSubscriptionState().then(setPushState).catch(() => {});
   }, []);
+
+  const togglePush = async () => {
+    setPushBusy(true);
+    try {
+      if (pushState.subscribed) {
+        await disablePush();
+        toast.success('Notifications turned off');
+      } else {
+        await enablePush();
+        toast.success('Notifications enabled — you\'ll get an alert for payment reminders and updates');
+      }
+      setPushState(await getPushSubscriptionState());
+    } catch (error) {
+      toast.error(error.message || 'Could not update notification settings');
+    } finally {
+      setPushBusy(false);
+    }
+  };
 
   if (!u) return <Loading />;
 
@@ -173,6 +196,23 @@ export default function RiderProfile() {
             <button className="btn profile-action-btn">Update password</button>
           </div>
         </form>
+      </div>
+
+      <div className="card mt-4">
+        <div className="card-title profile-card-title">
+          <div>
+            <h3>Notifications</h3>
+            <div className="muted text-sm mt-1">Get an alert on this device for payment reminders, application updates, and other important changes.</div>
+          </div>
+        </div>
+        {isPushSupported() ? (
+          <button className="btn btn-secondary" disabled={pushBusy} onClick={togglePush} style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            {pushState.subscribed ? <BellOff size={16} /> : <Bell size={16} />}
+            {pushBusy ? 'Working…' : pushState.subscribed ? 'Turn off notifications' : 'Enable notifications'}
+          </button>
+        ) : (
+          <div className="muted text-sm">Notifications aren't supported on this browser or device.</div>
+        )}
       </div>
     </div>
   );

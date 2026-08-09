@@ -1,16 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet';
-import L from 'leaflet';
-import { jsPDF } from 'jspdf';
 import api from '../../api';
 import toast from 'react-hot-toast';
 import { Loading, Badge, Stat, fmt, fmtDate, fmtDateTime } from '../../components/ui';
 
-const bikeIcon = new L.DivIcon({
-  html: `<div style="background:var(--primary);width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;border:3px solid white;box-shadow:0 4px 10px rgba(0,0,0,0.3)">🏍️</div>`,
-  className: '', iconSize: [30, 30], iconAnchor: [15, 15]
-});
+// Both lazy/dynamic: riders visit this page routinely, but the map only shows
+// when there's a current position and the PDF only generates on a click —
+// neither should cost every visit its ~150-400KB of leaflet/jspdf.
+const RiderBikeMap = lazy(() => import('../../components/RiderBikeMap'));
 
 const SERVICE_BOOKING_LINKS = [
   {
@@ -81,7 +78,8 @@ function buildStatement({ agreement, schedule, payments, month }) {
   };
 }
 
-function downloadStatementPdf(agreement, statement) {
+async function downloadStatementPdf(agreement, statement) {
+  const { jsPDF } = await import('jspdf');
   const doc = new jsPDF();
   let y = 18;
   const line = (text, gap = 8) => {
@@ -128,6 +126,7 @@ export default function RiderAgreementDetail() {
   const [data, setData] = useState(null);
   const [bike, setBike] = useState(null);
   const [signing, setSigning] = useState(false);
+  const [downloadingStatement, setDownloadingStatement] = useState(false);
   const [showSignModal, setShowSignModal] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState('');
   const canvasRef = useRef(null);
@@ -271,7 +270,17 @@ export default function RiderAgreementDetail() {
             <select value={activeMonth} onChange={(e) => setSelectedMonth(e.target.value)} style={{ minWidth: 180 }}>
               {monthOptions.map((option) => <option key={option} value={option}>{monthLabel(option)}</option>)}
             </select>
-            <button className="btn btn-secondary btn-sm" onClick={() => downloadStatementPdf(agreement, statement)}>Download PDF statement</button>
+            <button
+              className="btn btn-secondary btn-sm"
+              disabled={downloadingStatement}
+              onClick={async () => {
+                setDownloadingStatement(true);
+                try { await downloadStatementPdf(agreement, statement); }
+                finally { setDownloadingStatement(false); }
+              }}
+            >
+              {downloadingStatement ? 'Preparing…' : 'Download PDF statement'}
+            </button>
           </div>
         </div>
         <div className="grid grid-4 mb-4">
@@ -334,11 +343,9 @@ export default function RiderAgreementDetail() {
         <div className="card mb-4">
           <div className="card-title"><h3>Live bike location</h3><div className="muted text-xs">Last seen {fmtDateTime(bike.bike.last_location_at)}</div></div>
           <div style={{ height: 360, borderRadius: 12, overflow: 'hidden' }}>
-            <MapContainer center={currentPos} zoom={13} style={{ height: '100%' }}>
-              <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-              <Marker position={currentPos} icon={bikeIcon}><Popup>{agreement.make} {agreement.model}<br />{agreement.registration}</Popup></Marker>
-              {positions.length > 1 && <Polyline positions={positions} color="#1E88D1" weight={3} opacity={0.7} />}
-            </MapContainer>
+            <Suspense fallback={<div className="skeleton" style={{ height: '100%' }} />}>
+              <RiderBikeMap currentPos={currentPos} positions={positions} agreement={agreement} />
+            </Suspense>
           </div>
         </div>
       )}

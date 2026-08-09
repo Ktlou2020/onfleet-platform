@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { readCache, writeCache } from './offlineCache';
 
 const api = axios.create({ baseURL: '/api' });
 
@@ -9,8 +10,21 @@ api.interceptors.request.use((cfg) => {
 });
 
 api.interceptors.response.use(
-  (r) => r,
+  (r) => {
+    if (r.config.method === 'get') writeCache(r.config.url, r.data);
+    return r;
+  },
   (err) => {
+    // No err.response means the request never reached the server — offline
+    // or a dropped connection, not an API error. Fall back to the last
+    // successful response for this endpoint so the page shows stale data
+    // instead of erroring out.
+    if (!err.response && err.config?.method === 'get') {
+      const cached = readCache(err.config.url);
+      if (cached) {
+        return Promise.resolve({ data: cached.data, status: 200, statusText: 'OK (cached)', headers: {}, config: err.config, fromCache: true, cachedAt: cached.cachedAt });
+      }
+    }
     if (err.response?.status === 402 && err.response.data?.code === 'SUBSCRIPTION_REQUIRED') {
       if (!window.location.pathname.endsWith('/billing')) {
         window.location.href = '/fleet/app/billing';

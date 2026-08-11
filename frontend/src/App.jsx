@@ -1,7 +1,7 @@
 import { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth';
-import InstallPrompt from './components/InstallPrompt';
+import MobileOnboardingPrompt from './components/MobileOnboardingPrompt';
 import OfflineBanner from './components/OfflineBanner';
 import AnalyticsTracker from './analytics';
 import { canViewFleetSection, getDefaultFleetRoute, isAdminPortalRole } from './pages/fleet/access';
@@ -205,7 +205,7 @@ export default function App() {
           </Route>
         </Routes>
       </Suspense>
-      <InstallPrompt />
+      <MobileOnboardingPrompt />
     </AuthProvider>
   );
 }

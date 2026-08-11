@@ -32,6 +32,13 @@ const photoUpload = multer({
   }
 });
 
+async function notifyAdmins(type, title, message) {
+  const { rows: admins } = await pgDb.query(`SELECT id FROM users WHERE role IN ('admin','superadmin') AND status='active' AND deleted_at IS NULL`);
+  for (const admin of admins) {
+    sendNotification({ userId: admin.id, channel: 'in_app', type, title, message, throwOnError: false }).catch(() => {});
+  }
+}
+
 const WORKSHOP_ROLES = ['technician', 'admin', 'superadmin'];
 
 function workshopOnly(req, res, next) {
@@ -234,11 +241,9 @@ router.post('/job-cards', authRequired, workshopOnly, async (req, res) => {
     const newCard = await getJobCard(newId);
     res.json({ ok: true, id: newId, job_card: newCard });
     await logAudit(req.user.id, 'job_card.created', newId, { actor: req.user.full_name || req.user.email, job_type: job_type || 'service' });
-    const { rows: createAdmins } = await pgDb.query(`SELECT id FROM users WHERE role IN ('admin','superadmin') AND status='active' AND deleted_at IS NULL`);
     const createDisplayReg = newCard.bike_registration || newCard.registration || newCard.bike_make || newCard.make || 'Unknown bike';
-    for (const admin of createAdmins) {
-      sendNotification({ userId: admin.id, channel: 'in_app', type: 'job_card_created', title: `New job card: ${createDisplayReg}`, message: `Job #${newId} (${job_type || 'service'}) created by ${req.user.full_name || req.user.email}.`, throwOnError: false }).catch(() => {});
-    }
+    notifyAdmins('job_card_created', `New job card: ${createDisplayReg}`,
+      `Job #${newId} (${job_type || 'service'}) created by ${req.user.full_name || req.user.email}.`);
   } catch (error) {
     if (!res.headersSent) res.status(500).json({ error: error.message });
   }
@@ -292,8 +297,12 @@ router.post('/job-cards/:id/start', authRequired, workshopOnly, async (req, res)
     if (!['open', 'quoted'].includes(card.status)) return res.status(400).json({ error: 'Only open or quoted jobs can be started' });
 
     await pgDb.query(`UPDATE job_cards SET status = 'in_progress', started_at = NOW(), technician_id = COALESCE(technician_id, $1) WHERE id = $2`, [req.user.id, id]);
-    res.json({ ok: true, job_card: await getJobCard(id) });
+    const startedCard = await getJobCard(id);
+    res.json({ ok: true, job_card: startedCard });
     await logAudit(req.user.id, 'job_card.started', id, { actor: req.user.full_name || req.user.email });
+    const startedReg = startedCard.bike_registration || startedCard.registration || startedCard.bike_make || startedCard.make || `Job #${id}`;
+    notifyAdmins('job_card_started', `Job started: ${startedReg}`,
+      `Job #${id} (${startedCard.job_type}) was started by ${req.user.full_name || req.user.email}.`);
   } catch (error) {
     if (!res.headersSent) res.status(500).json({ error: error.message });
   }
@@ -356,11 +365,11 @@ router.post('/job-cards/:id/complete', authRequired, workshopOnly, async (req, r
     const completeCost = completeItems.reduce((s, i) => s + Number(i.quantity) * Number(i.unit_cost), 0);
     const completeReg = card.registration || card.vin || card.make || `Job #${id}`;
     const completeTech = req.user.full_name || req.user.email;
-    const { rows: completeAdmins } = await pgDb.query(`SELECT id FROM users WHERE role IN ('admin','superadmin') AND status='active' AND deleted_at IS NULL`);
     const completeTitle = `Job completed: ${completeReg}`;
     const completeMsg = `Job #${id} (${card.job_type}) for ${completeReg} was completed by ${completeTech}. Total: R${completeCost.toFixed(2)}.`;
+    notifyAdmins('job_card_completed', completeTitle, completeMsg);
+    const { rows: completeAdmins } = await pgDb.query(`SELECT id FROM users WHERE role IN ('admin','superadmin') AND status='active' AND deleted_at IS NULL`);
     for (const admin of completeAdmins) {
-      sendNotification({ userId: admin.id, channel: 'in_app', type: 'job_card_completed', title: completeTitle, message: completeMsg, throwOnError: false }).catch(() => {});
       sendNotification({ userId: admin.id, channel: 'email', type: 'job_card_completed', title: completeTitle, message: completeMsg, throwOnError: false }).catch(() => {});
     }
     // Email fleet org contact if job is linked to a bike with an org
@@ -382,14 +391,17 @@ router.post('/job-cards/:id/complete', authRequired, workshopOnly, async (req, r
 router.delete('/job-cards/:id', authRequired, workshopOnly, async (req, res) => {
   try {
     const id = toInt(req.params.id);
-    const { rows: cardRows } = await pgDb.query('SELECT status FROM job_cards WHERE id = $1', [id]);
+    const { rows: cardRows } = await pgDb.query('SELECT * FROM job_cards WHERE id = $1', [id]);
     const card = cardRows[0];
     if (!card) return res.status(404).json({ error: 'Job card not found' });
     if (card.status === 'completed') return res.status(400).json({ error: 'Cannot cancel a completed job' });
     await pgDb.query(`UPDATE job_cards SET status = 'cancelled' WHERE id = $1`, [id]);
     res.json({ ok: true });
+    const cancelledReg = card.registration || card.vin || card.make || `Job #${id}`;
+    notifyAdmins('job_card_cancelled', `Job cancelled: ${cancelledReg}`,
+      `Job #${id} (${card.job_type}) was cancelled by ${req.user.full_name || req.user.email}.`);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    if (!res.headersSent) res.status(500).json({ error: error.message });
   }
 });
 
@@ -846,17 +858,15 @@ router.put('/admin/jobs/:id', authRequired, async (req, res) => {
     for (const key of editable) {
       if (req.body[key] !== undefined) { sets.push(key); vals.push(req.body[key] || null); }
     }
-    if (req.body.status === 'cancelled' && !['completed', 'cancelled'].includes(card.status)) {
-      sets.push('status'); vals.push('cancelled');
-    }
-    if (req.body.status === 'quoted' && card.status === 'open') {
-      sets.push('status'); vals.push('quoted');
-    }
+    let newStatus = null;
+    if (req.body.status === 'cancelled' && !['completed', 'cancelled'].includes(card.status)) newStatus = 'cancelled';
+    if (req.body.status === 'quoted' && card.status === 'open') newStatus = 'quoted';
     let alsoSetStartedAt = false;
     if (req.body.status === 'in_progress' && ['open', 'quoted'].includes(card.status)) {
-      sets.push('status'); vals.push('in_progress');
+      newStatus = 'in_progress';
       if (!card.started_at) alsoSetStartedAt = true;
     }
+    if (newStatus) { sets.push('status'); vals.push(newStatus); }
     if (sets.length) {
       const setClause = sets.map((col, i) => `${col} = $${i + 1}`).join(', ') + (alsoSetStartedAt ? ', started_at = NOW()' : '');
       vals.push(id);
@@ -866,11 +876,16 @@ router.put('/admin/jobs/:id', authRequired, async (req, res) => {
     if (req.body.priority !== undefined && req.body.priority !== card.priority) changes.priority = { from: card.priority, to: req.body.priority };
     if (req.body.technician_id !== undefined && (req.body.technician_id || null) != card.technician_id) changes.technician_id = { from: card.technician_id, to: req.body.technician_id || null };
     if (req.body.description !== undefined && req.body.description !== card.description) changes.description = 'updated';
-    if (req.body.status === 'cancelled' && card.status !== 'cancelled') changes.status = { from: card.status, to: 'cancelled' };
+    if (newStatus) changes.status = { from: card.status, to: newStatus };
     if (Object.keys(changes).length) await logAudit(req.user.id, 'job_card.admin_edit', id, { changes, actor: req.user.full_name || req.user.email });
     res.json({ ok: true, job_card: await getJobCard(id) });
+    if (newStatus) {
+      const editReg = card.registration || card.vin || card.make || `Job #${id}`;
+      notifyAdmins('job_card_status_changed', `Job ${newStatus.replace('_', ' ')}: ${editReg}`,
+        `Job #${id} (${card.job_type}) status changed from ${card.status} to ${newStatus} by ${req.user.full_name || req.user.email}.`);
+    }
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    if (!res.headersSent) res.status(500).json({ error: error.message });
   }
 });
 

@@ -70,6 +70,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 .badge-info { background: rgba(30,136,209,0.15); color: var(--primary-light); }
 .badge-muted { background: var(--surface-2); color: var(--muted); }
 
+.notification-bell-root { position: relative; flex-shrink: 0; }
+
 .grid { display: grid; gap: 16px; }
 .grid-2 { grid-template-columns: repeat(2, 1fr); }
 .grid-3 { grid-template-columns: repeat(3, 1fr); }

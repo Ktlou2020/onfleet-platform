@@ -3,6 +3,7 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth';
 import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
+import NotificationBell from '../../components/NotificationBell';
 import { LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell, Briefcase, ShieldCheck, PiggyBank, MapPin, UserCheck, Wrench, ShieldAlert } from 'lucide-react';
 
 const navItems = [
@@ -92,7 +93,8 @@ export default function AdminShell() {
               </div>
             )}
           </div>
-          <div className="text-xs muted">Logged in as <strong>{user?.email}</strong></div>
+          <NotificationBell />
+          <div className="text-xs muted hide-mobile">Logged in as <strong>{user?.email}</strong></div>
         </div>
         <div className="content"><Outlet /></div>
       </div>

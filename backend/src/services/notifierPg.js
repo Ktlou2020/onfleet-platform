@@ -31,15 +31,15 @@ function notificationsUrlForRole(role) {
   return '/';
 }
 
-async function sendNotification({ userId, channel, type, title, message, throwOnError = true }) {
+async function sendNotification({ userId, channel, type, title, message, entityType = null, entityId = null, throwOnError = true }) {
   let user = null;
   if (userId) {
     const { rows } = await pgDb.query('SELECT email, phone, role FROM users WHERE id = $1', [userId]);
     user = rows[0] || null;
   }
   const { rows: inserted } = await pgDb.query(
-    `INSERT INTO notifications (user_id, channel, type, title, message, status) VALUES ($1,$2,$3,$4,$5, 'pending') RETURNING id`,
-    [userId || null, channel, type, title || null, message]
+    `INSERT INTO notifications (user_id, channel, type, title, message, entity_type, entity_id, status) VALUES ($1,$2,$3,$4,$5,$6,$7, 'pending') RETURNING id`,
+    [userId || null, channel, type, title || null, message, entityType, entityId]
   );
   const notificationId = inserted[0].id;
   // Every notification also tries push, regardless of its primary channel —

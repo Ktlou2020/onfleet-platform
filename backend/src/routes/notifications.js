@@ -26,32 +26,34 @@ router.get('/bell', authRequired, adminOnly, async (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 30, 100);
 
   const { rows: jobCardRows } = await pgDb.query(
-    `SELECT id, type, title, message, status, created_at FROM notifications
+    `SELECT id, type, title, message, status, entity_id, created_at FROM notifications
      WHERE user_id = $1 AND channel = 'in_app' ORDER BY created_at DESC LIMIT $2`,
     [req.user.id, limit]
   );
   const { rows: alertRows } = await pgDb.query(
-    `SELECT ta.id, ta.alert_type, ta.payload, ta.created_at, ta.acknowledged_at, b.registration, b.make, b.model
+    `SELECT ta.id, ta.bike_id, ta.alert_type, ta.payload, ta.created_at, ta.acknowledged_at, b.registration, b.make, b.model
      FROM tracking_alerts ta LEFT JOIN bikes b ON b.id = ta.bike_id
      WHERE ta.resolved_at IS NULL ORDER BY ta.created_at DESC LIMIT $1`,
     [limit]
   );
 
-  const items = [
-    ...jobCardRows.map((n) => ({
-      source: 'job_card', id: n.id, type: n.type, title: n.title, message: n.message,
-      created_at: n.created_at, read: n.status === 'read', link: '/admin/workshop'
-    })),
-    ...alertRows.map((a) => ({
-      source: 'tracking_alert', id: a.id, type: a.alert_type,
-      title: a.registration || a.make || 'Unregistered bike',
-      message: a.payload || null,
-      created_at: a.created_at, read: !!a.acknowledged_at, link: '/admin/tracking'
-    }))
-  ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, limit);
+  // Split into two columns (job cards vs tracking) instead of one merged
+  // list — each links to the specific record, not just its section's list page.
+  const workshop = jobCardRows.map((n) => ({
+    source: 'job_card', id: n.id, type: n.type, title: n.title, message: n.message,
+    created_at: n.created_at, read: n.status === 'read',
+    link: n.entity_id ? `/admin/workshop?job=${n.entity_id}` : '/admin/workshop'
+  })).slice(0, limit);
+  const tracking = alertRows.map((a) => ({
+    source: 'tracking_alert', id: a.id, type: a.alert_type,
+    title: a.registration || a.make || 'Unregistered bike',
+    message: a.payload || null,
+    created_at: a.created_at, read: !!a.acknowledged_at,
+    link: a.bike_id ? `/admin/tracking?bike=${a.bike_id}` : '/admin/tracking'
+  })).slice(0, limit);
 
-  // Counted independently of `items` (which is capped at `limit`) so the
-  // badge reflects the true unread total, not just what fits in the list.
+  // Counted independently of the (capped) lists above so the badge reflects
+  // the true unread total, not just what fits on screen.
   const { rows: unreadJobCards } = await pgDb.query(
     `SELECT COUNT(*)::int AS n FROM notifications WHERE user_id = $1 AND channel = 'in_app' AND status != 'read'`,
     [req.user.id]
@@ -59,8 +61,12 @@ router.get('/bell', authRequired, adminOnly, async (req, res) => {
   const { rows: unreadAlerts } = await pgDb.query(
     `SELECT COUNT(*)::int AS n FROM tracking_alerts WHERE resolved_at IS NULL AND acknowledged_at IS NULL`
   );
-  const unread_count = unreadJobCards[0].n + unreadAlerts[0].n;
-  res.json({ items, unread_count });
+  res.json({
+    workshop, tracking,
+    workshop_unread: unreadJobCards[0].n,
+    tracking_unread: unreadAlerts[0].n,
+    unread_count: unreadJobCards[0].n + unreadAlerts[0].n
+  });
 });
 
 router.get('/', authRequired, adminOnly, async (req, res) => {

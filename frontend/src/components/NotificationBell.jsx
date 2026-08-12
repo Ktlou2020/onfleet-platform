@@ -33,9 +33,45 @@ function itemMeta(item) {
   return { icon: Wrench, color: 'var(--primary-light)', title: item.title, body: item.message };
 }
 
+function NotificationColumn({ title, items, emptyText, onOpen }) {
+  return (
+    <div className="notification-bell-column">
+      <div className="notification-bell-column-header">{title}</div>
+      <div className="notification-bell-column-list">
+        {!items.length && <div className="muted text-sm" style={{ padding: 20, textAlign: 'center' }}>{emptyText}</div>}
+        {items.map((item) => {
+          const meta = itemMeta(item);
+          const Icon = meta.icon;
+          return (
+            <button
+              key={`${item.source}-${item.id}`}
+              onClick={() => onOpen(item)}
+              style={{
+                display: 'flex', gap: 10, width: '100%', textAlign: 'left', padding: '10px 14px',
+                background: item.read ? 'transparent' : 'var(--surface-2)', border: 'none', borderBottom: '1px solid var(--border)', cursor: 'pointer'
+              }}
+            >
+              <div style={{ width: 30, height: 30, borderRadius: 8, background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: meta.color, flexShrink: 0 }}>
+                <Icon size={15} />
+              </div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div className="text-sm" style={{ fontWeight: item.read ? 500 : 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{meta.title}</div>
+                {meta.body && <div className="text-xs muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{meta.body}</div>}
+                <div className="text-xs muted">{timeAgo(item.created_at)}</div>
+              </div>
+              {!item.read && <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--primary-light)', flexShrink: 0, marginTop: 6 }} />}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function NotificationBell() {
   const nav = useNavigate();
-  const [items, setItems] = useState([]);
+  const [workshop, setWorkshop] = useState([]);
+  const [tracking, setTracking] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [open, setOpen] = useState(false);
   const [markingAll, setMarkingAll] = useState(false);
@@ -44,7 +80,8 @@ export default function NotificationBell() {
   const load = useCallback(async () => {
     try {
       const { data } = await api.get('/notifications/bell');
-      setItems(data.items || []);
+      setWorkshop(data.workshop || []);
+      setTracking(data.tracking || []);
       setUnreadCount(data.unread_count || 0);
     } catch { /* silent — the bell shouldn't toast on every failed poll */ }
   }, []);
@@ -64,11 +101,13 @@ export default function NotificationBell() {
     return () => document.removeEventListener('mousedown', onClickOutside);
   }, [open]);
 
+  const setList = (source, updater) => (source === 'job_card' ? setWorkshop(updater) : setTracking(updater));
+
   const markItemRead = async (item) => {
     try {
       if (item.source === 'job_card') await api.post(`/notifications/${item.id}/read`);
       else await api.put(`/tracking/alerts/${item.id}/acknowledge`);
-      setItems((current) => current.map((i) => (i === item ? { ...i, read: true } : i)));
+      setList(item.source, (current) => current.map((i) => (i === item ? { ...i, read: true } : i)));
       setUnreadCount((count) => Math.max(0, count - 1));
     } catch { /* best-effort */ }
   };
@@ -83,7 +122,8 @@ export default function NotificationBell() {
     setMarkingAll(true);
     try {
       await Promise.all([api.post('/notifications/mine/read-all'), api.post('/tracking/alerts/acknowledge-all')]);
-      setItems((current) => current.map((i) => ({ ...i, read: true })));
+      setWorkshop((current) => current.map((i) => ({ ...i, read: true })));
+      setTracking((current) => current.map((i) => ({ ...i, read: true })));
       setUnreadCount(0);
     } catch {
       toast.error('Could not mark everything read');
@@ -113,7 +153,7 @@ export default function NotificationBell() {
       </button>
 
       {open && (
-        <div className="card" style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: 380, maxWidth: '90vw', zIndex: 30, padding: 0 }}>
+        <div className="card notification-bell-panel" style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', zIndex: 30, padding: 0 }}>
           <div className="flex-between" style={{ padding: '12px 14px', borderBottom: '1px solid var(--border)' }}>
             <strong className="text-sm">Notifications</strong>
             {unreadCount > 0 && (
@@ -122,32 +162,10 @@ export default function NotificationBell() {
               </button>
             )}
           </div>
-          <div style={{ maxHeight: 420, overflowY: 'auto' }}>
-            {!items.length && <div className="muted text-sm" style={{ padding: 20, textAlign: 'center' }}>Nothing to show right now.</div>}
-            {items.map((item) => {
-              const meta = itemMeta(item);
-              const Icon = meta.icon;
-              return (
-                <button
-                  key={`${item.source}-${item.id}`}
-                  onClick={() => openItem(item)}
-                  style={{
-                    display: 'flex', gap: 10, width: '100%', textAlign: 'left', padding: '10px 14px',
-                    background: item.read ? 'transparent' : 'var(--surface-2)', border: 'none', borderBottom: '1px solid var(--border)', cursor: 'pointer'
-                  }}
-                >
-                  <div style={{ width: 30, height: 30, borderRadius: 8, background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: meta.color, flexShrink: 0 }}>
-                    <Icon size={15} />
-                  </div>
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div className="text-sm" style={{ fontWeight: item.read ? 500 : 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{meta.title}</div>
-                    {meta.body && <div className="text-xs muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{meta.body}</div>}
-                    <div className="text-xs muted">{timeAgo(item.created_at)}</div>
-                  </div>
-                  {!item.read && <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--primary-light)', flexShrink: 0, marginTop: 6 }} />}
-                </button>
-              );
-            })}
+          <div className="notification-bell-columns">
+            <NotificationColumn title="Workshop" items={workshop} emptyText="No workshop updates" onOpen={openItem} />
+            <div className="notification-bell-divider" />
+            <NotificationColumn title="Tracking" items={tracking} emptyText="No tracking alerts" onOpen={openItem} />
           </div>
         </div>
       )}

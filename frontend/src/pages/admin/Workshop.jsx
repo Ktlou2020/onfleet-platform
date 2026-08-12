@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Trophy, Medal, Award, Copy, Check, Clock, FileText, Image, Trash2, Upload, ChevronUp, ChevronDown as ChevronDownIcon, ArrowUpDown } from 'lucide-react';
 import api from '../../api';
@@ -1132,6 +1133,14 @@ function StaffTab() {
 // --- Main component ---
 export default function AdminWorkshop() {
   const [tab, setTab] = useState('Overview');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const deepLinkJobId = searchParams.get('job');
+
+  const closeDeepLink = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('job');
+    setSearchParams(next, { replace: true });
+  };
 
   return (
     <>
@@ -1152,6 +1161,9 @@ export default function AdminWorkshop() {
       {tab === 'Fleet Health' && <FleetHealthTab />}
       {tab === 'Rates' && <RatesTab />}
       {tab === 'Staff' && <StaffTab />}
+
+      {/* Deep link from the notification bell — opens regardless of active tab */}
+      {deepLinkJobId && <JobDetailModal jobId={Number(deepLinkJobId)} onClose={closeDeepLink} />}
     </>
   );
 }

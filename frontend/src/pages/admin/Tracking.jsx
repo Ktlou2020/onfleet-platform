@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, Circle, Polygon, CircleMarker, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -437,6 +438,8 @@ function parseCommandResponse(command, raw) {
 }
 
 export default function Tracking({ readOnly = false }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+
   // ── device list & selection ──────────────────────────────────────
   const [devices,      setDevices]      = useState([]);
   const [mapDevices,   setMapDevices]   = useState([]);
@@ -972,6 +975,19 @@ export default function Tracking({ readOnly = false }) {
     } catch { /* silent */ }
     loadDayPings(device.id, todayStr);
   }, [loadTrail, loadDayPings, trailRange]);
+
+  // Deep link from the notification bell (?bike=<id>) — select that bike's
+  // device once the device list has loaded, then drop the param so a
+  // manual refresh doesn't keep re-selecting it.
+  useEffect(() => {
+    const bikeIdParam = searchParams.get('bike');
+    if (!bikeIdParam || !devices.length) return;
+    const device = devices.find((d) => String(d.bike_id) === bikeIdParam);
+    if (device) selectDevice(device);
+    const next = new URLSearchParams(searchParams);
+    next.delete('bike');
+    setSearchParams(next, { replace: true });
+  }, [devices, searchParams, setSearchParams, selectDevice]);
 
   useEffect(() => {
     if (selected) loadTrail(selected, trailRange);

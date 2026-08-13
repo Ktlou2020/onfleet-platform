@@ -6,6 +6,7 @@ const { authRequired, adminOnly, trackingReadOnly } = require('../middleware/aut
 const teltonikaServer = require('../tcp/teltonikaServer');
 const trackingEvents = require('../trackingEvents');
 const riskService = require('../services/riskService');
+const { reloadGeofences } = require('../services/geofenceService');
 const { logAudit } = require('../utils/helpersPg');
 const { cutCommandForModel, restoreCommandForModel } = require('../services/engineCommands');
 const asyncRouter = require('../utils/asyncRouter');
@@ -400,6 +401,7 @@ router.post('/geofences', authRequired, adminOnly, async (req, res) => {
     'INSERT INTO geofences (name, lat, lng, radius_m, bike_id, zone_type, color, polygon_coords, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id',
     [name, centerLat, centerLng, radius, bike_id || null, zone_type || 'standard', color || null, hasPolygon ? JSON.stringify(polygon_coords) : null, req.user.id]
   );
+  reloadGeofences();
   res.status(201).json({ id: rows[0].id });
 });
 
@@ -429,6 +431,7 @@ router.put('/geofences/:id', authRequired, adminOnly, async (req, res) => {
     hasPolygon, polygon_coords != null ? JSON.stringify(polygon_coords) : null,
     rows[0].id,
   ]);
+  reloadGeofences();
   res.json({ ok: true });
 });
 
@@ -436,6 +439,7 @@ router.delete('/geofences/:id', authRequired, adminOnly, async (req, res) => {
   const { rows } = await pgDb.query('SELECT id FROM geofences WHERE id=$1', [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Geofence not found' });
   await pgDb.query('DELETE FROM geofences WHERE id=$1', [rows[0].id]);
+  reloadGeofences();
   res.json({ ok: true });
 });
 

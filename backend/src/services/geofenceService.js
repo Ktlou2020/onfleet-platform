@@ -4,6 +4,30 @@ const pgDb = require('../pgDb');
 const trackingEvents = require('../trackingEvents');
 const { cutCommandForModel } = require('./engineCommands');
 
+// Active geofences change only via admin CRUD (routes/tracking.js), not per
+// ping — cached in memory and refreshed on demand instead of re-querying on
+// every single GPS ping across every bike. reloadGeofences() is called by
+// the geofence CRUD routes after any create/update/delete.
+let geofenceCache = null; // Array | null (null = not loaded yet; an empty array is a valid loaded state)
+
+async function loadGeofences() {
+  const { rows } = await pgDb.query('SELECT * FROM geofences WHERE active = TRUE');
+  geofenceCache = rows;
+  return rows;
+}
+
+async function getGeofences() {
+  if (geofenceCache) return geofenceCache;
+  return loadGeofences();
+}
+
+function reloadGeofences() {
+  loadGeofences().catch((e) => console.error('[GeofenceService] reload failed:', e.message));
+}
+
+// Warm the cache at boot so the first real ping doesn't pay the query cost inline.
+setTimeout(() => loadGeofences().catch(() => {}), 2000);
+
 async function autoEngineCut(deviceId, bikeId, geofence, reg) {
   try {
     const { rows } = await pgDb.query(
@@ -78,15 +102,29 @@ function haversineKm(lat1, lng1, lat2, lng2) {
 }
 
 async function checkGeofences(bikeId, deviceId, lat, lng, recordedAt) {
-  const { rows: fences } = await pgDb.query('SELECT * FROM geofences WHERE active = TRUE');
+  const allFences = await getGeofences();
+  const fences = allFences.filter((gf) => gf.bike_id === null || Number(gf.bike_id) === Number(bikeId));
   if (!fences.length) return;
 
-  const { rows: bikeRows } = await pgDb.query('SELECT registration FROM bikes WHERE id = $1', [bikeId]);
-  const reg = bikeRows[0]?.registration || null;
+  // One batched lookup for every relevant fence's state instead of one round-trip per fence.
+  const { rows: stateRows } = await pgDb.query(
+    'SELECT geofence_id, inside FROM geofence_states WHERE bike_id = $1 AND geofence_id = ANY($2)',
+    [bikeId, fences.map((gf) => gf.id)]
+  );
+  const stateByFence = new Map(stateRows.map((s) => [s.geofence_id, !!s.inside]));
+
+  // Only needed if a fence actually transitions this ping — most pings touch
+  // no boundary at all, so skip the round-trip unless it's actually required.
+  let reg; // undefined = not yet fetched (distinct from a bike with no registration, which resolves to null)
+  const getReg = async () => {
+    if (reg === undefined) {
+      const { rows: bikeRows } = await pgDb.query('SELECT registration FROM bikes WHERE id = $1', [bikeId]);
+      reg = bikeRows[0]?.registration || null;
+    }
+    return reg;
+  };
 
   for (const gf of fences) {
-    if (gf.bike_id !== null && Number(gf.bike_id) !== Number(bikeId)) continue;
-
     let inside;
     const coords = gf.polygon_coords;
     if (coords && Array.isArray(coords) && coords.length >= 3) {
@@ -96,12 +134,8 @@ async function checkGeofences(bikeId, deviceId, lat, lng, recordedAt) {
       inside = distKm * 1000 <= gf.radius_m;
     }
 
-    const { rows: stateRows } = await pgDb.query(
-      'SELECT inside FROM geofence_states WHERE bike_id = $1 AND geofence_id = $2',
-      [bikeId, gf.id]
-    );
-
-    if (!stateRows.length) {
+    const hasState = stateByFence.has(gf.id);
+    if (!hasState) {
       await pgDb.query(
         `INSERT INTO geofence_states (bike_id, geofence_id, inside, updated_at) VALUES ($1,$2,$3,$4)
          ON CONFLICT (bike_id, geofence_id) DO UPDATE SET inside=EXCLUDED.inside, updated_at=EXCLUDED.updated_at`,
@@ -110,7 +144,7 @@ async function checkGeofences(bikeId, deviceId, lat, lng, recordedAt) {
       continue;
     }
 
-    const wasInside = !!stateRows[0].inside;
+    const wasInside = stateByFence.get(gf.id);
     if (inside === wasInside) continue;
 
     const alertType = inside ? 'geofence_enter' : 'geofence_exit';
@@ -127,22 +161,23 @@ async function checkGeofences(bikeId, deviceId, lat, lng, recordedAt) {
       [bikeId, gf.id, inside, recordedAt]
     );
 
+    const regValue = await getReg();
     trackingEvents.emit('alert', {
       id: alertRows[0].id,
       bike_id: bikeId,
       device_id: deviceId,
       alert_type: alertType,
       payload,
-      bike_registration: reg,
+      bike_registration: regValue,
       created_at: recordedAt,
       acknowledged_at: null,
     });
 
     // Automatically cut the engine when a bike enters a no-go zone
     if (alertType === 'geofence_enter' && zoneType === 'danger' && deviceId != null) {
-      autoEngineCut(deviceId, bikeId, gf, reg);
+      autoEngineCut(deviceId, bikeId, gf, regValue);
     }
   }
 }
 
-module.exports = { checkGeofences, haversineKm };
+module.exports = { checkGeofences, haversineKm, reloadGeofences };

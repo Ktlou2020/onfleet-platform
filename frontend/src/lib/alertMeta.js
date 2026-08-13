@@ -18,6 +18,7 @@ export const ALERT_LABELS = {
   bike_dormant:     'Bike inactive for days',
   night_movement:   'Movement during high-theft hours (00:00–04:00)',
   towing:           'Possible towing (ignition off, sustained movement)',
+  battery_declining: 'Tracker battery declining',
 };
 
 export const ALERT_COLORS = {
@@ -40,13 +41,14 @@ export const ALERT_COLORS = {
   bike_dormant:     '#94a3b8',
   night_movement:   '#dc2626',
   towing:           '#dc2626',
+  battery_declining: '#f97316',
 };
 
 export const ALERT_SEVERITY = {
   panic: 'critical', tamper: 'critical', power_disconnect: 'critical', movement: 'critical', theft_risk: 'critical', night_movement: 'critical', towing: 'critical',
   speeding: 'high', harsh_brake: 'high', geofence_exit: 'high',
   harsh_accel: 'medium', harsh_cornering: 'medium', geofence_enter: 'medium', low_battery: 'medium', long_trip: 'medium',
-  idle: 'low', device_offline: 'low', engine_cut_auto: 'high', bike_dormant: 'low',
+  idle: 'low', device_offline: 'low', engine_cut_auto: 'high', bike_dormant: 'low', battery_declining: 'medium',
 };
 
 export const ALERT_FILTER_GROUPS = [
@@ -54,7 +56,7 @@ export const ALERT_FILTER_GROUPS = [
   { id: 'critical', label: 'Critical', types: ['panic','tamper','power_disconnect','movement','theft_risk','night_movement','towing'] },
   { id: 'driving',  label: 'Driving',  types: ['speeding','harsh_brake','harsh_accel','harsh_cornering','idle','long_trip'] },
   { id: 'location', label: 'Location', types: ['geofence_enter','geofence_exit','engine_cut_auto'] },
-  { id: 'vehicle',  label: 'Vehicle',  types: ['low_battery','device_offline','bike_dormant'] },
+  { id: 'vehicle',  label: 'Vehicle',  types: ['low_battery','device_offline','bike_dormant','battery_declining'] },
 ];
 
 export const CRITICAL_ALERT_TYPES = new Set(['panic','tamper','power_disconnect','movement','theft_risk','night_movement','towing']);

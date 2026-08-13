@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, Circle, Polygon, CircleMarker, useMap, useMapEvents } from 'react-leaflet';
+import MarkerClusterGroup from 'react-leaflet-cluster';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import 'leaflet.markercluster/dist/MarkerCluster.css';
+import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
 import {
   Wifi, WifiOff, Zap, ZapOff, Radio, Info, RefreshCw, Plus, Trash2,
   CheckCircle, Clock, XCircle, AlertCircle, X, Search, Layers,
@@ -14,7 +17,7 @@ import {
 } from 'lucide-react';
 import api from '../../api';
 import toast from 'react-hot-toast';
-import { Modal } from '../../components/ui';
+import { Modal, ConfirmModal } from '../../components/ui';
 import { ALERT_LABELS, ALERT_COLORS, ALERT_SEVERITY, ALERT_FILTER_GROUPS, CRITICAL_ALERT_TYPES } from '../../lib/alertMeta';
 
 delete L.Icon.Default.prototype._getIconUrl;
@@ -346,6 +349,8 @@ function DeviceSignalIcon({ gsm, size = 12 }) {
 }
 
 // ── Command label mapping ─────────────────────────────────────────────────────
+const SEVERITY_RANK = { high: 0, medium: 1, low: 2 };
+
 const CMD_LABEL_MAP = {
   'getgps':         'Request Position',
   'fota connect':   'FOTA Update',
@@ -450,6 +455,12 @@ export default function Tracking({ readOnly = false }) {
   const [devices,      setDevices]      = useState([]);
   const [mapDevices,   setMapDevices]   = useState([]);
   const [selected,     setSelected]     = useState(null);
+
+  // ── bulk device selection ──────────────────────────────────────────
+  const [bulkMode,       setBulkMode]       = useState(false);
+  const [bulkSelectedIds,setBulkSelectedIds]= useState(() => new Set());
+  const [bulkConfirm,    setBulkConfirm]    = useState(null); // 'cut_engine' | 'restore_engine' | null
+  const [bulkBusy,       setBulkBusy]       = useState(false);
   const [trail,        setTrail]        = useState([]);
   const [commands,     setCommands]     = useState([]);
   const [flyTo,        setFlyTo]        = useState(null);
@@ -1097,6 +1108,38 @@ export default function Tracking({ readOnly = false }) {
     }
   }, [selected, devices, loadDevices]);
 
+  // ── bulk device commands ─────────────────────────────────────────
+
+  const toggleBulkSelect = useCallback((id) => {
+    setBulkSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const exitBulkMode = useCallback(() => {
+    setBulkMode(false);
+    setBulkSelectedIds(new Set());
+  }, []);
+
+  const runBulkCommand = useCallback(async () => {
+    const preset = bulkConfirm;
+    if (!preset) return;
+    setBulkBusy(true);
+    try {
+      const { data } = await api.post('/tracking/devices/commands-bulk', { preset, ids: [...bulkSelectedIds] });
+      toast.success(`${preset === 'cut_engine' ? 'Engine cut' : 'Engine restore'} sent to ${data.sent_count} device(s)${data.skipped_count ? `, ${data.skipped_count} skipped` : ''}`);
+      exitBulkMode();
+      setBulkConfirm(null);
+      await loadDevices();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Bulk command failed');
+    } finally {
+      setBulkBusy(false);
+    }
+  }, [bulkConfirm, bulkSelectedIds, loadDevices, exitBulkMode]);
+
   // ── geofences ────────────────────────────────────────────────────
 
   const saveGeofence = useCallback(async () => {
@@ -1232,6 +1275,30 @@ export default function Tracking({ readOnly = false }) {
     ? devices.filter(d => [d.label, d.imei, d.registration, d.model].some(v => String(v || '').toLowerCase().includes(deviceSearch.toLowerCase())))
     : devices;
 
+  // Devices worth a second look, computed from data already on screen (no
+  // extra request) — surfaces exactly what you'd otherwise only notice by
+  // clicking into every device one at a time.
+  const deviceHealth = useMemo(() => {
+    return devices.map(d => {
+      const mapD = mapDevices.find(m => m.id === d.id);
+      const io = parseIo(mapD?.io_data);
+      const battMv = mapD?.battery_mv ?? io.battMv;
+      const gsm = mapD?.gsm_signal ?? io.gsm;
+      const sats = mapD?.satellites;
+      const pct = battMv != null ? battPct(battMv) : null;
+      const reasons = [];
+      if (d.device_status === 'offline') reasons.push({ text: `Offline${d.last_seen_at ? ` since ${fmtSASTshort(d.last_seen_at)}` : ''}`, severity: 'high' });
+      if (pct != null && pct <= 20) reasons.push({ text: `Internal battery ${pct}%`, severity: 'high' });
+      if (gsm != null && gsm <= 1) reasons.push({ text: 'Poor GSM signal', severity: 'medium' });
+      if (d.device_status === 'active' && sats != null && sats < 4) reasons.push({ text: `Weak GPS fix (${sats} sats)`, severity: 'medium' });
+      if (!d.bike_id) reasons.push({ text: 'No bike linked', severity: 'low' });
+      return { device: d, mapD, reasons };
+    }).filter(h => h.reasons.length > 0).sort((a, b) => {
+      const rankOf = (h) => Math.min(...h.reasons.map(r => SEVERITY_RANK[r.severity]));
+      return rankOf(a) - rankOf(b);
+    });
+  }, [devices, mapDevices]);
+
   if (loading) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 'calc(100vh - 64px)' }}>
       <div style={{ color: 'var(--muted)', fontSize: 14 }}>Loading tracking…</div>
@@ -1262,6 +1329,7 @@ export default function Tracking({ readOnly = false }) {
           <div style={{ display: 'flex', marginBottom: 0 }}>
             {[
               ['devices',   'Devices',    null],
+              ['health',    'Health',     deviceHealth.length || null],
               ['alerts',    'Alerts',     alertsUnread || null],
               ['geofences', 'Geofences',  null],
             ].map(([tab, label, badge]) => (
@@ -1291,8 +1359,8 @@ export default function Tracking({ readOnly = false }) {
 
         {/* ── Devices tab ─────────────────────────────────────────── */}
         {sideTab === 'devices' && <>
-          <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)' }}>
-            <div style={{ position: 'relative' }}>
+          <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)', display: 'flex', gap: 6 }}>
+            <div style={{ position: 'relative', flex: 1 }}>
               <Search size={12} style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: 'var(--muted)', pointerEvents: 'none' }} />
               <input
                 value={deviceSearch}
@@ -1301,7 +1369,44 @@ export default function Tracking({ readOnly = false }) {
                 style={{ width: '100%', paddingLeft: 26, paddingRight: 8, fontSize: 12, height: 30, boxSizing: 'border-box' }}
               />
             </div>
+            {!readOnly && (
+              <button
+                className="btn btn-sm btn-secondary"
+                style={{ fontSize: 11, flexShrink: 0 }}
+                onClick={() => (bulkMode ? exitBulkMode() : setBulkMode(true))}
+              >
+                {bulkMode ? 'Cancel' : 'Select'}
+              </button>
+            )}
           </div>
+
+          {bulkMode && (
+            <div style={{ padding: '7px 12px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 11, color: 'var(--muted)' }}>{bulkSelectedIds.size} selected</span>
+              <button
+                className="btn btn-sm btn-secondary"
+                style={{ fontSize: 10, padding: '2px 6px' }}
+                onClick={() => setBulkSelectedIds(new Set(filteredDevices.map(d => d.id)))}
+              >Select all</button>
+              {bulkSelectedIds.size > 0 && (
+                <button className="btn btn-sm btn-secondary" style={{ fontSize: 10, padding: '2px 6px' }} onClick={() => setBulkSelectedIds(new Set())}>Clear</button>
+              )}
+              <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
+                <button
+                  className="btn btn-sm btn-danger"
+                  style={{ fontSize: 11 }}
+                  disabled={bulkSelectedIds.size === 0}
+                  onClick={() => setBulkConfirm('cut_engine')}
+                ><ZapOff size={11} /> Cut engine</button>
+                <button
+                  className="btn btn-sm"
+                  style={{ fontSize: 11 }}
+                  disabled={bulkSelectedIds.size === 0}
+                  onClick={() => setBulkConfirm('restore_engine')}
+                ><Zap size={11} /> Restore</button>
+              </div>
+            </div>
+          )}
 
           <div style={{ flex: 1, overflowY: 'auto' }}>
             {filteredDevices.length === 0 ? (
@@ -1321,18 +1426,27 @@ export default function Tracking({ readOnly = false }) {
               const isSelected = d.id === selected;
               const mapD = mapDevices.find(m => m.id === d.id);
               const kmh = Number(mapD?.speed_kmh) || 0;
+              const isBulkSelected = bulkSelectedIds.has(d.id);
               return (
                 <div
                   key={d.id}
-                  onClick={() => selectDevice(mapD || d)}
+                  onClick={() => (bulkMode ? toggleBulkSelect(d.id) : selectDevice(mapD || d))}
                   style={{
                     padding: '10px 12px', cursor: 'pointer', borderBottom: '1px solid var(--border)',
-                    borderLeft: `3px solid ${isSelected ? 'var(--primary)' : 'transparent'}`,
-                    background: isSelected ? 'rgba(30,136,209,.08)' : 'transparent',
+                    borderLeft: `3px solid ${isBulkSelected ? '#f97316' : isSelected ? 'var(--primary)' : 'transparent'}`,
+                    background: isBulkSelected ? 'rgba(249,115,22,.08)' : isSelected ? 'rgba(30,136,209,.08)' : 'transparent',
                     transition: 'background 0.12s',
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    {bulkMode && (
+                      <input
+                        type="checkbox"
+                        checked={isBulkSelected}
+                        onChange={() => toggleBulkSelect(d.id)}
+                        onClick={e => e.stopPropagation()}
+                      />
+                    )}
                     <DeviceStatusIcon status={d.device_status} size={12} />
                     <span style={{ fontWeight: 600, fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {d.label || d.registration || d.imei}
@@ -1396,6 +1510,43 @@ export default function Tracking({ readOnly = false }) {
               <span><span style={{ color: '#6366f1', fontWeight: 700 }}>{devices.filter(d => d.device_status === 'sleeping').length}</span> sleeping</span>
             )}
             <span><span style={{ color: 'var(--text)', fontWeight: 600 }}>{devices.length}</span> total</span>
+          </div>
+        </>}
+
+        {/* ── Health tab ──────────────────────────────────────────── */}
+        {sideTab === 'health' && <>
+          <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)' }}>
+            <span style={{ fontSize: 11, color: 'var(--muted)' }}>Devices worth a look — battery, signal, GPS fix, connectivity</span>
+          </div>
+          <div style={{ flex: 1, overflowY: 'auto' }}>
+            {deviceHealth.length === 0 ? (
+              <div style={{ padding: '40px 20px', textAlign: 'center' }}>
+                <div style={{ fontSize: 36, marginBottom: 10 }}>✅</div>
+                <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>Fleet looks healthy</div>
+                <div style={{ fontSize: 12, color: 'var(--muted)' }}>No devices currently need attention</div>
+              </div>
+            ) : deviceHealth.map(({ device: d, mapD, reasons }) => {
+              const worst = reasons.reduce((w, r) => SEVERITY_RANK[r.severity] < SEVERITY_RANK[w.severity] ? r : w, reasons[0]);
+              const stripeColor = worst.severity === 'high' ? '#ef4444' : worst.severity === 'medium' ? '#f97316' : '#94a3b8';
+              return (
+                <div
+                  key={d.id}
+                  onClick={() => { selectDevice(mapD || d); setSideTab('devices'); }}
+                  style={{ padding: '10px 12px', cursor: 'pointer', borderBottom: '1px solid var(--border)', borderLeft: `3px solid ${stripeColor}` }}
+                >
+                  <div style={{ fontWeight: 600, fontSize: 12 }}>{d.label || d.registration || d.imei}</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+                    {reasons.map((r, i) => (
+                      <span key={i} style={{
+                        fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 8,
+                        color: r.severity === 'high' ? '#ef4444' : r.severity === 'medium' ? '#f97316' : 'var(--muted)',
+                        background: r.severity === 'high' ? 'rgba(239,68,68,0.1)' : r.severity === 'medium' ? 'rgba(249,115,22,0.1)' : 'rgba(148,163,184,0.1)',
+                      }}>{r.text}</span>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </>}
 
@@ -1607,7 +1758,10 @@ export default function Tracking({ readOnly = false }) {
             return <Circle key={gf.id} center={[gf.lat, gf.lng]} radius={gf.radius_m} pathOptions={opts}>{popup}</Circle>;
           })}
 
-          {/* Device markers */}
+          {/* Device markers — clustered once the fleet's dense enough that
+              individual markers start overlapping; clustering switches off
+              again past zoom 16, where seeing exact positions matters more. */}
+          <MarkerClusterGroup chunkedLoading maxClusterRadius={50} disableClusteringAtZoom={16}>
           {mapDevices.map(d => d.lat && d.lng ? (
             <Marker key={d.id} position={[d.lat, d.lng]} icon={deviceIcon(d)} eventHandlers={{ click: () => selectDevice(d) }}>
               <Popup>
@@ -1633,6 +1787,7 @@ export default function Tracking({ readOnly = false }) {
               </Popup>
             </Marker>
           ) : null)}
+          </MarkerClusterGroup>
 
           <SpeedTrail positions={trail} />
           {trail.length > 0 && (
@@ -2497,6 +2652,36 @@ export default function Tracking({ readOnly = false }) {
           )}
         </div>
       )}
+
+      {/* ── Bulk engine cut/restore confirm ─────────────────────────── */}
+      {bulkConfirm && (() => {
+        const targets = devices.filter(d => bulkSelectedIds.has(d.id));
+        const isCut = bulkConfirm === 'cut_engine';
+        return (
+          <ConfirmModal
+            title={isCut ? `Cut engine on ${targets.length} bike(s)?` : `Restore engine on ${targets.length} bike(s)?`}
+            body={
+              <>
+                <p style={{ marginBottom: 8 }}>
+                  {isCut
+                    ? 'Each rider below will immediately lose ignition power.'
+                    : 'Ignition power will be re-enabled on each bike below.'}
+                </p>
+                <div style={{ maxHeight: 160, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 10px' }}>
+                  {targets.map(d => (
+                    <div key={d.id} style={{ fontSize: 12, padding: '2px 0' }}>{d.label || d.registration || d.imei}</div>
+                  ))}
+                </div>
+              </>
+            }
+            confirmLabel={isCut ? 'Cut engines' : 'Restore engines'}
+            danger={isCut}
+            busy={bulkBusy}
+            onConfirm={runBulkCommand}
+            onClose={() => setBulkConfirm(null)}
+          />
+        );
+      })()}
 
       {/* ── Add device modal ──────────────────────────────────────── */}
       {showAdd && (

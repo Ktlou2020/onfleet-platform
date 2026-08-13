@@ -351,6 +351,10 @@ function start() {
   const { runAddressVerification } = require('./addressVerification');
   cron.schedule('20 6 * * *', () => runAddressVerification().catch(e => console.error('[address-verification]', e.message)));
 
+  // Battery-decline check — daily at 06:30, after the other overnight fleet checks
+  const { runBatteryHealthCheck } = require('./batteryHealthService');
+  cron.schedule('30 6 * * *', () => runBatteryHealthCheck().catch(e => console.error('[battery-health]', e.message)));
+
   // Postgres backup — daily at 03:00 (quiet hours, before the 06:00 daily-reminders wave)
   const { runScheduledBackup } = require('./backupService');
   cron.schedule('0 3 * * *', () => runScheduledBackup().catch(e => console.error('[backup]', e.message)));

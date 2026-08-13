@@ -50,7 +50,7 @@ function isOnline(imei, lastSeenAt, connectedImeis) {
 const ALL_ALERT_TYPES = [
   'geofence_enter','geofence_exit','harsh_brake','harsh_accel','harsh_cornering',
   'idle','speeding','panic','power_disconnect','low_battery','movement','tamper','device_offline',
-  'theft_risk','long_trip','bike_dormant','night_movement','towing',
+  'theft_risk','long_trip','bike_dormant','night_movement','towing','battery_declining',
 ];
 
 // Bike/org/rider map for a list of bike IDs — bikes/organizations/users all
@@ -276,6 +276,50 @@ router.post('/devices/:id/commands', authRequired, adminOnly, async (req, res) =
         ? 'Wake signal sent — device will respond shortly'
         : 'Device offline — command queued for next connection',
   });
+});
+
+// Bulk command dispatch — deliberately preset-only (no raw `command`), so a
+// bulk action is always one of the small set of things the UI actually
+// offers and reviews before sending, not an arbitrary string fanned out
+// across many real vehicles at once.
+router.post('/devices/commands-bulk', authRequired, adminOnly, async (req, res) => {
+  const preset = req.body.preset;
+  const fn = PRESET_COMMANDS[preset];
+  if (!fn) return res.status(400).json({ error: `Unknown preset. Available: ${Object.keys(PRESET_COMMANDS).join(', ')}` });
+  const ids = Array.isArray(req.body.ids) ? [...new Set(req.body.ids.map(Number).filter(Number.isFinite))] : [];
+  if (!ids.length) return res.status(400).json({ error: 'No devices selected' });
+  if (ids.length > 100) return res.status(400).json({ error: 'Too many devices selected (max 100)' });
+
+  const { rows: devices } = await pgDb.query('SELECT * FROM tracking_devices WHERE id = ANY($1)', [ids]);
+  const results = [];
+  for (const device of devices) {
+    const command = fn(device.model);
+    const { rows: cmdRows } = await pgDb.query(
+      `INSERT INTO tracking_commands (device_id, command, created_by) VALUES ($1,$2,$3) RETURNING id`,
+      [device.id, command, req.user.id]
+    );
+    const cmdId = cmdRows[0].id;
+    const sentNow = teltonikaServer.sendCommand(device.imei, cmdId, command);
+
+    if (preset === 'cut_engine') {
+      await pgDb.query(
+        `UPDATE tracking_devices SET engine_cut_active=TRUE, engine_cut_reason='Manual cut (bulk)', engine_cut_at=NOW(), engine_cut_by=$1 WHERE id=$2`,
+        [req.user.id, device.id]
+      );
+      await logAudit(req.user.id, 'tracking.engine_cut', 'tracking_devices', device.id, { bike_id: device.bike_id, imei: device.imei, bulk: true }, req.ip);
+    } else if (preset === 'restore_engine') {
+      await pgDb.query(
+        `UPDATE tracking_devices SET engine_cut_active=FALSE, engine_cut_reason=NULL, engine_cut_at=NULL, engine_cut_by=NULL WHERE id=$1`,
+        [device.id]
+      );
+      await logAudit(req.user.id, 'tracking.engine_restore', 'tracking_devices', device.id, { bike_id: device.bike_id, imei: device.imei, bulk: true }, req.ip);
+    }
+
+    results.push({ device_id: device.id, imei: device.imei, status: sentNow ? 'sent' : 'queued' });
+  }
+
+  const skipped = ids.length - devices.length;
+  res.json({ results, sent_count: results.length, skipped_count: skipped });
 });
 
 router.get('/devices/:id/commands', authRequired, trackingReadOnly, async (req, res) => {

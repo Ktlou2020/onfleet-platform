@@ -311,8 +311,9 @@ function parseIo(ioData) {
     const io = typeof ioData === 'string' ? JSON.parse(ioData) : (ioData || {});
     return {
       gsm:    io[21] != null ? Number(io[21]) : null,   // 0–5 signal level
-      battMv: io[66] != null ? Number(io[66]) : null,   // internal battery mV
-      extMv:  io[67] != null ? Number(io[67]) : null,   // external power mV
+      // Teltonika Permanent I/O elements: 66 = External Voltage, 67 = Battery Voltage (device's own cell)
+      battMv: io[67] != null ? Number(io[67]) : null,   // internal battery mV
+      extMv:  io[66] != null ? Number(io[66]) : null,   // external power mV
     };
   } catch { return { gsm: null, battMv: null, extMv: null }; }
 }

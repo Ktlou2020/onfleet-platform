@@ -214,7 +214,12 @@ async function processPing(bikeId, deviceId, lat, lng, speed, ignition, recorded
     if (io[252]) await fireAlert(bikeId, deviceId, 'tamper', { lat, lng, value: io[252] }, recordedAt, ts);
     if (io[240] && !ignition) await fireAlert(bikeId, deviceId, 'movement', { lat, lng }, recordedAt, ts);
 
-    const extMv = io[67] != null ? Number(io[67]) : null;
+    // Teltonika Permanent I/O elements: 66 = External Voltage (vehicle supply), 67 = Battery
+    // Voltage (device's own internal backup cell) — these were swapped here until now, which
+    // silently broke both alerts below (external voltage rarely dips under 1000mV so
+    // power_disconnect never fired; internal battery voltage rarely exceeds 3400mV so
+    // low_battery always fired unless mistakenly suppressed by a bogus "on external power" read).
+    const extMv = io[66] != null ? Number(io[66]) : null;
     if (extMv !== null) {
       const prev = prevExtVoltage.get(bikeId);
       if (prev != null && prev > 9000 && extMv < 1000) {
@@ -223,8 +228,8 @@ async function processPing(bikeId, deviceId, lat, lng, speed, ignition, recorded
       prevExtVoltage.set(bikeId, extMv);
     }
 
-    const battMv = io[66] != null ? Number(io[66]) : null;
-    const onExternalPower = io[67] != null && Number(io[67]) > 9000;
+    const battMv = io[67] != null ? Number(io[67]) : null;
+    const onExternalPower = io[66] != null && Number(io[66]) > 9000;
     if (battMv !== null && !onExternalPower && battMv < 3400) {
       await fireAlert(bikeId, deviceId, 'low_battery', { lat, lng, battery_mv: battMv }, recordedAt, ts);
     }

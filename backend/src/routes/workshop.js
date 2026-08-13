@@ -238,6 +238,11 @@ router.post('/job-cards', authRequired, workshopOnly, async (req, res) => {
     ]);
     const newId = insertedRows[0].id;
 
+    if ((job_type || 'service') === 'service') {
+      await pgDb.query(`INSERT INTO job_card_items (job_card_id, item_type, description, quantity, unit_cost) VALUES ($1,'labor','Standard service',1,275)`,
+        [newId]);
+    }
+
     const newCard = await getJobCard(newId);
     res.json({ ok: true, id: newId, job_card: newCard });
     await logAudit(req.user.id, 'job_card.created', newId, { actor: req.user.full_name || req.user.email, job_type: job_type || 'service' });

@@ -26,6 +26,13 @@ const ACTION_LABELS = {
 
 const TABS = ['Overview', 'All Jobs', 'Technicians', 'Fleet Health', 'Rates', 'Staff'];
 
+const JOB_TYPES = ['service', 'repair', 'inspection', 'tyres', 'brakes', 'electrical', 'bodywork', 'other'];
+const PRIORITIES = ['normal', 'high', 'urgent'];
+const EMPTY_CREATE_FORM = {
+  bike_id: '', vin: '', registration: '', make: '', model: '', year: '', color: '', engine_cc: '',
+  fleet_owner_name: '', job_type: 'service', description: '', priority: 'normal', technician_id: ''
+};
+
 function KPI({ label, value, sub, accent }) {
   return (
     <div className="stat" style={{ borderTop: `3px solid ${accent || 'var(--accent)'}` }}>
@@ -434,6 +441,142 @@ function JobDetailModal({ jobId, onClose, onChanged }) {
   );
 }
 
+function CreateJobCardModal({ onClose, onCreated }) {
+  const [form, setForm] = useState(EMPTY_CREATE_FORM);
+  const [technicians, setTechnicians] = useState([]);
+  const [bikeSearch, setBikeSearch] = useState('');
+  const [bikeResults, setBikeResults] = useState([]);
+  const [selectedBike, setSelectedBike] = useState(null);
+  const [useManual, setUseManual] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.get('/workshop/technicians').then((r) => setTechnicians(r.data.technicians)).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!bikeSearch || bikeSearch.length < 2) { setBikeResults([]); return; }
+    const t = setTimeout(() => {
+      api.get('/workshop/bikes/search', { params: { q: bikeSearch } })
+        .then((r) => setBikeResults(r.data.bikes))
+        .catch(() => {});
+    }, 300);
+    return () => clearTimeout(t);
+  }, [bikeSearch]);
+
+  const selectBike = (bike) => {
+    setSelectedBike(bike);
+    setBikeSearch('');
+    setBikeResults([]);
+    setForm((f) => ({ ...f, bike_id: String(bike.id), vin: '', registration: '', make: '', model: '', year: '', color: '', engine_cc: '' }));
+    setUseManual(false);
+  };
+
+  const clearBike = () => { setSelectedBike(null); setForm((f) => ({ ...f, bike_id: '' })); };
+
+  const canCreate = form.bike_id || (form.vin && form.make && form.model);
+
+  const createJob = async () => {
+    try {
+      setBusy(true);
+      const payload = { ...form };
+      if (form.bike_id) {
+        ['vin', 'registration', 'make', 'model', 'year', 'color', 'engine_cc'].forEach((k) => delete payload[k]);
+      }
+      const { data } = await api.post('/workshop/job-cards', payload);
+      toast.success('Job card created');
+      onCreated(data.id);
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not create job card');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title="New Job Card" onClose={onClose}>
+      <div className="field">
+        <label className="label">Bike</label>
+        {selectedBike ? (
+          <div className="card" style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div>
+              <div style={{ fontWeight: 600 }}>{selectedBike.registration || selectedBike.vin}</div>
+              <div className="text-xs muted">{selectedBike.make} {selectedBike.model}{selectedBike.year ? ` · ${selectedBike.year}` : ''}{selectedBike.org_name ? ` · ${selectedBike.org_name}` : ''}</div>
+            </div>
+            <button className="btn btn-sm btn-secondary" onClick={clearBike}>Change</button>
+          </div>
+        ) : !useManual ? (
+          <div style={{ position: 'relative' }}>
+            <input
+              value={bikeSearch}
+              onChange={(e) => setBikeSearch(e.target.value)}
+              placeholder="Search by registration, VIN, make…"
+            />
+            {bikeResults.length > 0 && (
+              <div className="card" style={{ position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 30, padding: 8, maxHeight: 220, overflowY: 'auto' }}>
+                {bikeResults.map((b) => (
+                  <button key={b.id} className="btn btn-secondary btn-sm" style={{ width: '100%', justifyContent: 'flex-start', marginBottom: 4 }} onClick={() => selectBike(b)}>
+                    <strong>{b.registration || b.vin}</strong>&nbsp;·&nbsp;{b.make} {b.model}{b.org_name ? ` · ${b.org_name}` : ''}
+                  </button>
+                ))}
+              </div>
+            )}
+            <button className="btn btn-sm btn-secondary" style={{ marginTop: 8 }} onClick={() => setUseManual(true)}>
+              Register new bike instead
+            </button>
+          </div>
+        ) : (
+          <div>
+            <div className="grid grid-2" style={{ gap: 12 }}>
+              <div className="field"><label className="label">VIN <span style={{ color: 'var(--danger)' }}>*</span></label><input value={form.vin} onChange={(e) => setForm((f) => ({ ...f, vin: e.target.value }))} placeholder="Required" /></div>
+              <div className="field"><label className="label">Registration</label><input value={form.registration} onChange={(e) => setForm((f) => ({ ...f, registration: e.target.value }))} /></div>
+              <div className="field"><label className="label">Make <span style={{ color: 'var(--danger)' }}>*</span></label><input value={form.make} onChange={(e) => setForm((f) => ({ ...f, make: e.target.value }))} /></div>
+              <div className="field"><label className="label">Model <span style={{ color: 'var(--danger)' }}>*</span></label><input value={form.model} onChange={(e) => setForm((f) => ({ ...f, model: e.target.value }))} /></div>
+              <div className="field"><label className="label">Year</label><input type="number" value={form.year} onChange={(e) => setForm((f) => ({ ...f, year: e.target.value }))} /></div>
+              <div className="field"><label className="label">Color</label><input value={form.color} onChange={(e) => setForm((f) => ({ ...f, color: e.target.value }))} /></div>
+              <div className="field"><label className="label">Engine cc</label><input type="number" value={form.engine_cc} onChange={(e) => setForm((f) => ({ ...f, engine_cc: e.target.value }))} /></div>
+              <div className="field"><label className="label">Fleet owner name</label><input value={form.fleet_owner_name} onChange={(e) => setForm((f) => ({ ...f, fleet_owner_name: e.target.value }))} placeholder="Optional" /></div>
+            </div>
+            <button className="btn btn-sm btn-secondary" style={{ marginTop: 4 }} onClick={() => { setUseManual(false); setForm((f) => ({ ...f, vin: '', registration: '', make: '', model: '', year: '', color: '', engine_cc: '' })); }}>
+              ← Search existing bike
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div className="grid grid-2" style={{ gap: 12 }}>
+        <div className="field">
+          <label className="label">Job type</label>
+          <select value={form.job_type} onChange={(e) => setForm((f) => ({ ...f, job_type: e.target.value }))}>
+            {JOB_TYPES.map((t) => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label className="label">Priority</label>
+          <select value={form.priority} onChange={(e) => setForm((f) => ({ ...f, priority: e.target.value }))}>
+            {PRIORITIES.map((p) => <option key={p} value={p}>{p.charAt(0).toUpperCase() + p.slice(1)}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="field">
+        <label className="label">Assign technician</label>
+        <select value={form.technician_id} onChange={(e) => setForm((f) => ({ ...f, technician_id: e.target.value }))}>
+          <option value="">Assign later</option>
+          {technicians.map((t) => <option key={t.id} value={t.id}>{t.full_name}</option>)}
+        </select>
+      </div>
+      <div className="field">
+        <label className="label">Description / fault report</label>
+        <textarea rows={3} value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} placeholder="Describe the work needed…" />
+      </div>
+      <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
+        <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+        <button className="btn" onClick={createJob} disabled={busy || !canCreate}>{busy ? 'Creating…' : 'Create job card'}</button>
+      </div>
+    </Modal>
+  );
+}
+
 // --- Tab: Overview ---
 function OverviewTab() {
   const [stats, setStats] = useState(null);
@@ -595,6 +738,7 @@ function AllJobsTab() {
   const [viewJobId, setViewJobId] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
 
   const handleSort = (col) => {
     if (sortBy === col) {
@@ -668,7 +812,8 @@ function AllJobsTab() {
         {(dateFrom || dateTo) && (
           <button className="btn btn-sm btn-secondary" onClick={() => { setDateFrom(''); setDateTo(''); }}>Clear dates</button>
         )}
-        <button className="btn btn-sm btn-secondary" style={{ marginLeft: 'auto' }} onClick={exportCsv}>Export CSV</button>
+        <button className="btn btn-sm" style={{ marginLeft: 'auto' }} onClick={() => setShowCreate(true)}>+ New job card</button>
+        <button className="btn btn-sm btn-secondary" onClick={exportCsv}>Export CSV</button>
       </div>
       <div className="filter-pills mb-3">
         {STATUS_OPTS.map((s) => (
@@ -723,6 +868,13 @@ function AllJobsTab() {
 
       {viewJobId && (
         <JobDetailModal jobId={viewJobId} onClose={() => setViewJobId(null)} onChanged={load} />
+      )}
+
+      {showCreate && (
+        <CreateJobCardModal
+          onClose={() => setShowCreate(false)}
+          onCreated={(newId) => { setShowCreate(false); load(); setViewJobId(newId); }}
+        />
       )}
 
       {confirmDelete && (

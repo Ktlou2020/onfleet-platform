@@ -1858,16 +1858,28 @@ export default function Tracking({ readOnly = false }) {
             // Recent-items list only (capped at 30 total) — totals come from activityStats, not this filter
             const todayTrips = trips.filter(t => todayInSAST() === new Date(t.started_at).toLocaleDateString('en-CA', SAST));
             const todayStr = todayInSAST();
+            // "External Battery" is really the live voltage on the bike's electrical
+            // line, not a charge level — it reads ~0 the instant the ignition goes
+            // off (nothing wrong, just unpowered) and jumps to 100% once the engine's
+            // running and the alternator kicks in. A raw percentage while parked reads
+            // exactly like "critically low battery" when it means nothing at all, so —
+            // matching the >9000mV "has real external power" convention already used
+            // elsewhere (DeviceBatteryIcon, the compact power card, tripService's
+            // onExternalPower) — only show a percentage when that power is actually
+            // present; otherwise show "Off" rather than an alarming false 0%.
+            const extPowered = extMv != null && extMv > 9000;
             const telemetryRows = [
               {
-                icon: extMv != null && extBattPct(extMv) <= 20
-                  ? <BatteryLow size={18} color="#ef4444" />
-                  : extMv != null && extBattPct(extMv) <= 50
-                    ? <BatteryMedium size={18} color="#f97316" />
-                    : extMv != null && extBattPct(extMv) <= 80
-                      ? <BatteryFull size={18} color="#eab308" />
-                      : <BatteryFull size={18} color="#22c55e" />,
-                value: extMv != null ? `${extBattPct(extMv)}%` : null,
+                icon: !extPowered
+                  ? <Battery size={18} color="var(--muted)" />
+                  : extBattPct(extMv) <= 20
+                    ? <BatteryLow size={18} color="#ef4444" />
+                    : extBattPct(extMv) <= 50
+                      ? <BatteryMedium size={18} color="#f97316" />
+                      : extBattPct(extMv) <= 80
+                        ? <BatteryFull size={18} color="#eab308" />
+                        : <BatteryFull size={18} color="#22c55e" />,
+                value: extMv == null ? null : (extPowered ? `${extBattPct(extMv)}%` : 'Off'),
                 label: 'External Battery',
                 show: extMv != null,
               },

@@ -863,13 +863,25 @@ router.put('/admin/jobs/:id', authRequired, async (req, res) => {
     for (const key of editable) {
       if (req.body[key] !== undefined) { sets.push(key); vals.push(req.body[key] || null); }
     }
+    // Free movement between the "not yet closed out" statuses in either direction
+    // (open/quoted/in_progress/cancelled — e.g. un-cancel a job, revert an accidental
+    // start). 'completed' is deliberately excluded on both ends here: reaching it
+    // requires the dedicated /job-cards/:id/complete flow (odometer + service-record
+    // side effects), and once a job is completed its status can't be changed from
+    // this route — reopening it would leave the odometer/next-service/service-record
+    // data it already wrote behind in an inconsistent state.
+    const NON_TERMINAL_STATUSES = ['open', 'quoted', 'in_progress', 'cancelled'];
     let newStatus = null;
-    if (req.body.status === 'cancelled' && !['completed', 'cancelled'].includes(card.status)) newStatus = 'cancelled';
-    if (req.body.status === 'quoted' && card.status === 'open') newStatus = 'quoted';
     let alsoSetStartedAt = false;
-    if (req.body.status === 'in_progress' && ['open', 'quoted'].includes(card.status)) {
-      newStatus = 'in_progress';
-      if (!card.started_at) alsoSetStartedAt = true;
+    if (req.body.status !== undefined && req.body.status !== card.status) {
+      if (card.status === 'completed') {
+        return res.status(400).json({ error: 'A completed job cannot be reopened here.' });
+      }
+      if (!NON_TERMINAL_STATUSES.includes(req.body.status)) {
+        return res.status(400).json({ error: 'Use the "Mark as completed" action to complete a job.' });
+      }
+      newStatus = req.body.status;
+      if (newStatus === 'in_progress' && !card.started_at) alsoSetStartedAt = true;
     }
     if (newStatus) { sets.push('status'); vals.push(newStatus); }
     if (sets.length) {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Trophy, Medal, Award, Copy, Check, Clock, FileText, Image, Trash2, Upload, ChevronUp, ChevronDown as ChevronDownIcon, ArrowUpDown } from 'lucide-react';
 import api from '../../api';
@@ -57,7 +57,10 @@ function CopyButton({ text }) {
   );
 }
 
+const NON_TERMINAL_STATUSES = ['open', 'quoted', 'in_progress', 'cancelled'];
+
 function JobDetailModal({ jobId, onClose, onChanged }) {
+  const nav = useNavigate();
   const [data, setData] = useState(null);
   const [technicians, setTechnicians] = useState([]);
   const [editForm, setEditForm] = useState({});
@@ -348,12 +351,30 @@ function JobDetailModal({ jobId, onClose, onChanged }) {
               <label className="label">Description</label>
               <textarea rows={2} value={editForm.description} onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))} />
             </div>
-            {['open', 'in_progress'].includes(jc.status) && (
+            {jc.status === 'completed' ? (
               <div className="field" style={{ marginBottom: 10 }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                  <input type="checkbox" checked={editForm.status === 'cancelled'} onChange={(e) => setEditForm((f) => ({ ...f, status: e.target.checked ? 'cancelled' : jc.status }))} />
-                  <span className="text-sm">Cancel this job</span>
-                </label>
+                <label className="label">Status</label>
+                <div className="text-sm muted">Completed jobs can't be reopened here.</div>
+              </div>
+            ) : (
+              <div className="field" style={{ marginBottom: 10 }}>
+                <label className="label">Status</label>
+                <select value={editForm.status} onChange={(e) => setEditForm((f) => ({ ...f, status: e.target.value }))}>
+                  {NON_TERMINAL_STATUSES.map((s) => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}
+                </select>
+                {['open', 'in_progress'].includes(jc.status) && (
+                  <div className="text-xs muted" style={{ marginTop: 6 }}>
+                    To mark this job completed (requires an odometer reading), open it in the{' '}
+                    <button
+                      type="button"
+                      className="link-btn"
+                      style={{ background: 'none', border: 'none', padding: 0, color: 'var(--primary-light)', cursor: 'pointer', textDecoration: 'underline', font: 'inherit' }}
+                      onClick={() => nav(`/workshop/app/job-cards/${jobId}`)}
+                    >
+                      workshop app
+                    </button>.
+                  </div>
+                )}
               </div>
             )}
             <div style={{ display: 'flex', justifyContent: 'flex-end' }}>

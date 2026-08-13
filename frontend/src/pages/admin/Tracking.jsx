@@ -317,11 +317,16 @@ function parseIo(ioData) {
   } catch { return { gsm: null, battMv: null, extMv: null }; }
 }
 
-// Battery % from mV (3200 mV = 0 %, 4200 mV = 100 %)
+// Battery % from mV (3200 mV = 0 %, 4200 mV = 100 %) — the tracker's own internal backup cell (Li-ion)
 function battPct(mv) { return Math.min(100, Math.max(0, Math.round((mv - 3200) / 10))); }
 
+// External battery % from mV — the bike's 12V lead-acid electrical system the tracker is wired
+// into (11.0 V = 0 %, 12.8 V = 100 %, clamped). A low/zero reading means the tracker has lost
+// that connection (dead battery or disconnected wiring), which is exactly what "0%" should show.
+function extBattPct(mv) { return Math.min(100, Math.max(0, Math.round((mv - 11000) / 18))); }
+
 function DeviceBatteryIcon({ battMv, extMv, size = 12 }) {
-  if (extMv != null && extMv > 9000) return <BatteryCharging size={size} color="#22c55e" title={`External power: ${(extMv / 1000).toFixed(1)} V`} />;
+  if (extMv != null && extMv > 9000) return <BatteryCharging size={size} color="#22c55e" title={`External power: ${(extMv / 1000).toFixed(1)} V (${extBattPct(extMv)}%)`} />;
   if (battMv == null) return <Battery size={size} color="var(--muted)" title="No battery data" />;
   const pct = battPct(battMv);
   if (pct <= 20) return <BatteryLow   size={size} color="#ef4444" title={`Battery: ${pct}%`} />;
@@ -1854,14 +1859,14 @@ export default function Tracking({ readOnly = false }) {
             const todayStr = todayInSAST();
             const telemetryRows = [
               {
-                icon: extMv != null && extMv > 9000
-                  ? <BatteryCharging size={18} color="#22c55e" />
-                  : battMv != null && battPct(battMv) <= 20
-                    ? <BatteryLow size={18} color="#ef4444" />
-                    : battMv != null && battPct(battMv) <= 50
-                      ? <BatteryMedium size={18} color="#f97316" />
+                icon: extMv != null && extBattPct(extMv) <= 20
+                  ? <BatteryLow size={18} color="#ef4444" />
+                  : extMv != null && extBattPct(extMv) <= 50
+                    ? <BatteryMedium size={18} color="#f97316" />
+                    : extMv != null && extBattPct(extMv) <= 80
+                      ? <BatteryFull size={18} color="#eab308" />
                       : <BatteryFull size={18} color="#22c55e" />,
-                value: extMv != null && extMv > 9000 ? `${(extMv / 1000).toFixed(0)}v` : null,
+                value: extMv != null ? `${extBattPct(extMv)}%` : null,
                 label: 'External Battery',
                 show: extMv != null,
               },
@@ -2278,7 +2283,7 @@ export default function Tracking({ readOnly = false }) {
                   const hasGsm  = gsm != null;
                   if (!hasBatt && !hasGsm) return null;
                   const battLabel = extMv != null && extMv > 9000
-                    ? `External power (${(extMv/1000).toFixed(1)} V)`
+                    ? `External power (${(extMv/1000).toFixed(1)} V, ${extBattPct(extMv)}%)`
                     : battMv != null ? `Battery ${battPct(battMv)}%` : null;
                   return (
                     <div style={{ display: 'grid', gridTemplateColumns: hasGsm && hasBatt ? '1fr 1fr' : '1fr', gap: 8, marginBottom: 8 }}>

@@ -17,6 +17,16 @@ const STATUS_TABS = [
   { id: 'all',      label: 'All' },
 ];
 
+// Must match ESCALATION_DELAY_MS in backend/src/services/alertEscalationService.js
+const ESCALATION_DELAY_MS = 15 * 60_000;
+
+// null = not escalation-eligible (not critical, already ack'd/resolved/escalated).
+// Otherwise ms remaining until escalation (negative once the cron is due to fire).
+function escalationCountdownMs(a, isCritical, now) {
+  if (!isCritical || a.acknowledged_at || a.resolved_at || a.escalated_at) return null;
+  return new Date(a.created_at).getTime() + ESCALATION_DELAY_MS - now;
+}
+
 function alertMeta(a) {
   let payload = {};
   try { payload = JSON.parse(a.payload || '{}'); } catch { /* skip */ }
@@ -47,6 +57,11 @@ export default function ControlRoomAlerts() {
   const mountedRef = useRef(true);
   const statusTabRef = useRef(statusTab);
   statusTabRef.current = statusTab;
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNowTick(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
 
   const loadAlerts = useCallback(async (status) => {
     setLoading(true);
@@ -277,6 +292,13 @@ export default function ControlRoomAlerts() {
                         {isCritical && <span style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: color, padding: '0 5px', borderRadius: 4 }}>CRITICAL</span>}
                         {isDangerZone && a.alert_type === 'geofence_enter' && <span style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: '#E53935', padding: '0 5px', borderRadius: 4 }}>NO-GO</span>}
                         {a.escalated_at && <span title={`Escalated ${fmtSASTtime(a.escalated_at)} — still unacknowledged`} style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: '#b45309', padding: '0 5px', borderRadius: 4 }}>ESCALATED</span>}
+                        {(() => {
+                          const msLeft = escalationCountdownMs(a, isCritical, nowTick);
+                          if (msLeft == null) return null;
+                          return msLeft > 0
+                            ? <span title="Re-notifies the assigned recipients if still unacknowledged" style={{ fontSize: 9, fontWeight: 700, color: '#b45309', border: '1px solid #b45309', padding: '0 5px', borderRadius: 4 }}>Escalates in {Math.max(1, Math.ceil(msLeft / 60_000))}m</span>
+                            : <span title="Past the escalation threshold — re-notification is due" style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: '#b45309', padding: '0 5px', borderRadius: 4, opacity: .75 }}>Escalating…</span>;
+                        })()}
                         {isResolved && <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--muted)', border: '1px solid var(--border)', padding: '0 5px', borderRadius: 4, display: 'flex', alignItems: 'center', gap: 3 }}><CheckCircle2 size={10} /> CLOSED</span>}
                       </div>
                       <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>

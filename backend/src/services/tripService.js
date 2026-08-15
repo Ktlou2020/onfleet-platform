@@ -172,14 +172,14 @@ async function emitAlert(id, bikeId, deviceId, alertType, payload, recordedAt) {
       'SELECT id FROM users WHERE id = ANY($1) AND deleted_at IS NULL', [customIds]
     );
     for (const u of recipients) {
-      sendNotification({ userId: u.id, channel: 'email', type: `gps_${alertType}`, title, message, throwOnError: false }).catch(() => {});
+      sendNotification({ userId: u.id, channel: 'email', type: `gps_${alertType}`, title, message, throwOnError: false, digest: true }).catch(() => {});
     }
   } else if (CRITICAL_TYPES.has(alertType)) {
     const { rows: admins } = await pgDb.query(
       "SELECT id FROM users WHERE role='superadmin' AND email IS NOT NULL AND deleted_at IS NULL"
     );
     for (const admin of admins) {
-      sendNotification({ userId: admin.id, channel: 'email', type: `gps_${alertType}`, title, message, throwOnError: false }).catch(() => {});
+      sendNotification({ userId: admin.id, channel: 'email', type: `gps_${alertType}`, title, message, throwOnError: false, digest: true }).catch(() => {});
     }
   }
 }

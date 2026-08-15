@@ -13,6 +13,7 @@
 const pgDb = require('../pgDb');
 const { sendEmail } = require('./notifier');
 const { sendPushToUser } = require('./webPush');
+const { queueDigestEmail } = require('./alertDigestService');
 
 async function sendSMS(to, body) {
   console.log(`[SMS→${to}] ${body}`);
@@ -31,7 +32,7 @@ function notificationsUrlForRole(role) {
   return '/';
 }
 
-async function sendNotification({ userId, channel, type, title, message, entityType = null, entityId = null, throwOnError = true }) {
+async function sendNotification({ userId, channel, type, title, message, entityType = null, entityId = null, throwOnError = true, digest = false }) {
   let user = null;
   if (userId) {
     const { rows } = await pgDb.query('SELECT email, phone, role FROM users WHERE id = $1', [userId]);
@@ -48,6 +49,19 @@ async function sendNotification({ userId, channel, type, title, message, entityT
   // Fire-and-forget: push delivery never affects the primary channel's
   // sent/failed status, since it's a bonus delivery path, not the record.
   if (userId) sendPushToUser(userId, { title: title || type, body: message, url: notificationsUrlForRole(user?.role) }).catch(() => {});
+
+  // Digest mode: hand the email off to be batched with any other alerts for
+  // the same recipient in the next short window, instead of sending it now.
+  // Only meaningful for email — push above already fired immediately.
+  if (digest && channel === 'email') {
+    if (user?.email) {
+      queueDigestEmail(notificationId, user.email, title || type, message);
+    } else {
+      await pgDb.query(`UPDATE notifications SET status = 'failed' WHERE id = $1`, [notificationId]);
+    }
+    return notificationId;
+  }
+
   try {
     if (channel === 'email' && user?.email) await sendEmail(user.email, title || type, message);
     else if (channel === 'sms' && user?.phone) await sendSMS(user.phone, message);

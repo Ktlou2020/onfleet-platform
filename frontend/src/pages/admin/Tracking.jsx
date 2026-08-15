@@ -300,6 +300,29 @@ const SAST = { timeZone: 'Africa/Johannesburg' };
 const fmtSASTtime = (d) => d ? new Date(d).toLocaleTimeString('en-ZA', { ...SAST, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '—';
 const fmtSAST     = (d) => d ? new Date(d).toLocaleString('en-ZA',     { ...SAST, day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '—';
 const fmtSASTshort = (d) => d ? new Date(d).toLocaleString('en-ZA',    { ...SAST, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }) : '—';
+
+// Must match ESCALATION_DELAY_MS/CRITICAL_TYPES in backend/src/services/alertEscalationService.js.
+// Computes eligibility from the alert itself rather than trusting a caller-supplied
+// isCritical, since theft_risk criticality is payload-based (level==='critical'),
+// not type-based, and not every call site parses payload the same way.
+const ESCALATION_DELAY_MS = 15 * 60_000;
+function escalationCountdownMs(a, now) {
+  if (a.acknowledged_at || a.resolved_at || a.escalated_at) return null;
+  if (!CRITICAL_ALERT_TYPES.has(a.alert_type)) return null;
+  if (a.alert_type === 'theft_risk') {
+    let payload = {};
+    try { payload = JSON.parse(a.payload || '{}'); } catch { /* skip */ }
+    if (payload.level !== 'critical') return null;
+  }
+  return new Date(a.created_at).getTime() + ESCALATION_DELAY_MS - now;
+}
+function EscalationCountdownBadge({ alert, now, size = 9 }) {
+  const msLeft = escalationCountdownMs(alert, now);
+  if (msLeft == null) return null;
+  return msLeft > 0
+    ? <span title="Re-notifies the assigned recipients if still unacknowledged" style={{ fontSize: size, fontWeight: 700, color: '#b45309', border: '1px solid #b45309', padding: '0 4px', borderRadius: 4 }}>Escalates in {Math.max(1, Math.ceil(msLeft / 60_000))}m</span>
+    : <span title="Past the escalation threshold — re-notification is due" style={{ fontSize: size, fontWeight: 700, color: '#fff', background: '#b45309', padding: '0 4px', borderRadius: 4, opacity: .75 }}>Escalating…</span>;
+}
 const todayInSAST = () => new Date().toLocaleDateString('en-CA', SAST); // en-CA → YYYY-MM-DD
 const fmtPingDate = (dateStr) => {
   const today = todayInSAST();
@@ -455,6 +478,13 @@ export default function Tracking({ readOnly = false }) {
   const [devices,      setDevices]      = useState([]);
   const [mapDevices,   setMapDevices]   = useState([]);
   const [selected,     setSelected]     = useState(null);
+
+  // Ticks the escalation countdown badges without a full data refresh
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNowTick(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
 
   // ── bulk device selection ──────────────────────────────────────────
   const [bulkMode,       setBulkMode]       = useState(false);
@@ -1644,6 +1674,7 @@ export default function Tracking({ readOnly = false }) {
                           {isCritical && <span style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: alertColor, padding: '0 4px', borderRadius: 4 }}>CRITICAL</span>}
                           {isDangerZone && a.alert_type === 'geofence_enter' && <span style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: '#E53935', padding: '0 4px', borderRadius: 4 }}>NO-GO</span>}
                           {a.escalated_at && <span title={`Escalated ${fmtSASTtime(a.escalated_at)} — still unacknowledged`} style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: '#b45309', padding: '0 4px', borderRadius: 4 }}>ESCALATED</span>}
+                          <EscalationCountdownBadge alert={a} now={nowTick} />
                         </div>
                         <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>
                           {a.bike_registration || `Bike #${a.bike_id}`} · {fmtSASTtime(a.created_at)}
@@ -2367,6 +2398,7 @@ export default function Tracking({ readOnly = false }) {
                       <span style={{ fontSize: 12, fontWeight: 700, flex: 1 }}>{label}</span>
                       {isCritical && <span style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: color, padding: '0 4px', borderRadius: 4 }}>CRITICAL</span>}
                       {a.escalated_at && <span style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: '#b45309', padding: '0 4px', borderRadius: 4 }}>ESCALATED</span>}
+                      <EscalationCountdownBadge alert={a} now={nowTick} />
                       {a.resolved_at
                         ? <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--muted)', border: '1px solid var(--border)', padding: '0 5px', borderRadius: 4 }}>CLOSED</span>
                         : <span style={{ fontSize: 9, fontWeight: 700, color: '#f97316', border: '1px solid #f97316', padding: '0 5px', borderRadius: 4 }}>OPEN</span>}

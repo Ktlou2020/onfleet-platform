@@ -192,7 +192,7 @@ async function fireRiskAlert(bikeId, deviceId, score, level, reasons, recordedAt
       ? await pgDb.query('SELECT id FROM users WHERE id = ANY($1) AND deleted_at IS NULL', [riskAlertSettings.recipientIds])
       : await pgDb.query("SELECT id FROM users WHERE role='superadmin' AND email IS NOT NULL AND deleted_at IS NULL");
     for (const admin of recipients) {
-      sendNotification({ userId: admin.id, channel: 'email', type: 'gps_theft_risk', title, message, throwOnError: false }).catch(() => {});
+      sendNotification({ userId: admin.id, channel: 'email', type: 'gps_theft_risk', title, message, throwOnError: false, digest: true }).catch(() => {});
     }
   }
 }

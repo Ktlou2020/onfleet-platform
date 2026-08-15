@@ -276,6 +276,7 @@ export default function ControlRoomAlerts() {
                         <span style={{ fontSize: 13, fontWeight: 700 }}>{label}</span>
                         {isCritical && <span style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: color, padding: '0 5px', borderRadius: 4 }}>CRITICAL</span>}
                         {isDangerZone && a.alert_type === 'geofence_enter' && <span style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: '#E53935', padding: '0 5px', borderRadius: 4 }}>NO-GO</span>}
+                        {a.escalated_at && <span title={`Escalated ${fmtSASTtime(a.escalated_at)} — still unacknowledged`} style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: '#b45309', padding: '0 5px', borderRadius: 4 }}>ESCALATED</span>}
                         {isResolved && <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--muted)', border: '1px solid var(--border)', padding: '0 5px', borderRadius: 4, display: 'flex', alignItems: 'center', gap: 3 }}><CheckCircle2 size={10} /> CLOSED</span>}
                       </div>
                       <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>

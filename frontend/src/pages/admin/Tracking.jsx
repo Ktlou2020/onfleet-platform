@@ -1643,6 +1643,7 @@ export default function Tracking({ readOnly = false }) {
                           <span style={{ fontSize: 12, fontWeight: isUnread ? 700 : 400 }}>{alertLabel}</span>
                           {isCritical && <span style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: alertColor, padding: '0 4px', borderRadius: 4 }}>CRITICAL</span>}
                           {isDangerZone && a.alert_type === 'geofence_enter' && <span style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: '#E53935', padding: '0 4px', borderRadius: 4 }}>NO-GO</span>}
+                          {a.escalated_at && <span title={`Escalated ${fmtSASTtime(a.escalated_at)} — still unacknowledged`} style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: '#b45309', padding: '0 4px', borderRadius: 4 }}>ESCALATED</span>}
                         </div>
                         <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>
                           {a.bike_registration || `Bike #${a.bike_id}`} · {fmtSASTtime(a.created_at)}
@@ -2365,6 +2366,7 @@ export default function Tracking({ readOnly = false }) {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <span style={{ fontSize: 12, fontWeight: 700, flex: 1 }}>{label}</span>
                       {isCritical && <span style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: color, padding: '0 4px', borderRadius: 4 }}>CRITICAL</span>}
+                      {a.escalated_at && <span style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: '#b45309', padding: '0 4px', borderRadius: 4 }}>ESCALATED</span>}
                       {a.resolved_at
                         ? <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--muted)', border: '1px solid var(--border)', padding: '0 5px', borderRadius: 4 }}>CLOSED</span>
                         : <span style={{ fontSize: 9, fontWeight: 700, color: '#f97316', border: '1px solid #f97316', padding: '0 5px', borderRadius: 4 }}>OPEN</span>}

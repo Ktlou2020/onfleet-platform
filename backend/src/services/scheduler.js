@@ -336,6 +336,14 @@ function start() {
   setInterval(runOfflineCheck, 5 * 60_000);
   setTimeout(runOfflineCheck, 15_000); // initial check shortly after boot
 
+  // Critical-alert escalation — re-notify on panic/tamper/theft-risk/etc.
+  // alerts nobody has acknowledged after 15 min. Runs every 5 minutes so an
+  // unacknowledged alert is caught within minutes of crossing the threshold.
+  const { checkUnacknowledgedCriticalAlerts } = require('./alertEscalationService');
+  const runEscalationCheck = () => checkUnacknowledgedCriticalAlerts().catch(e => console.error('[alert-escalation]', e.message));
+  setInterval(runEscalationCheck, 5 * 60_000);
+  setTimeout(runEscalationCheck, 20_000); // initial check shortly after boot
+
   // AI risk-profile baseline rebuild — nightly at 02:30, plus a warmup shortly after boot
   const { rebuildAllBaselines } = require('./riskService');
   const runBaselineRebuild = () => rebuildAllBaselines().catch(e => console.error('[risk-baseline]', e.message));

@@ -14,33 +14,27 @@ const { extractLicenseDiscInsights } = require('../services/documentInsights');
 const { requireValidMime } = require('../utils/validateUpload');
 const { writeContractSnapshot } = require('../services/contracts');
 const asyncRouter = require('../utils/asyncRouter');
+const { hybridStorage } = require('../utils/hybridStorage');
 
 const router = asyncRouter(express.Router());
 const { bikes: bikeUploadDir, serviceInvoices: invoiceUploadDir, bikeDocuments: bikeDocumentUploadDir } = require('../uploadPaths');
 
+const genFilename = (req, file) => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${path.extname(file.originalname).toLowerCase()}`;
+
 const bikeImageUpload = multer({
-  storage: multer.diskStorage({
-    destination: bikeUploadDir,
-    filename: (req, file, cb) => cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${path.extname(file.originalname).toLowerCase()}`)
-  }),
+  storage: hybridStorage(bikeUploadDir, 'bikes', genFilename),
   fileFilter: (req, file, cb) => cb(null, ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(file.mimetype)),
   limits: { fileSize: 8 * 1024 * 1024 }
 });
 
 const invoiceUpload = multer({
-  storage: multer.diskStorage({
-    destination: invoiceUploadDir,
-    filename: (req, file, cb) => cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${path.extname(file.originalname).toLowerCase()}`)
-  }),
+  storage: hybridStorage(invoiceUploadDir, 'service-invoices', genFilename),
   fileFilter: (req, file, cb) => cb(null, ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'].includes(file.mimetype)),
   limits: { fileSize: 10 * 1024 * 1024 }
 });
 
 const bikeDocumentUpload = multer({
-  storage: multer.diskStorage({
-    destination: bikeDocumentUploadDir,
-    filename: (req, file, cb) => cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${path.extname(file.originalname).toLowerCase()}`)
-  }),
+  storage: hybridStorage(bikeDocumentUploadDir, 'bike-documents', genFilename),
   fileFilter: (req, file, cb) => cb(null, ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(file.mimetype)),
   limits: { fileSize: 15 * 1024 * 1024 }
 });

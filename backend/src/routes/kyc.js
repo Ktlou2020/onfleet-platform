@@ -10,18 +10,17 @@ const { authRequired, adminOnly } = require('../middleware/auth');
 const { logAudit } = require('../utils/helpersPg');
 const { requireValidMime } = require('../utils/validateUpload');
 const asyncRouter = require('../utils/asyncRouter');
+const { hybridStorage } = require('../utils/hybridStorage');
+const storageService = require('../services/storageService');
 
 const router = asyncRouter(express.Router());
 const { kyc: uploadDir } = require('../uploadPaths');
 
-const storage = multer.diskStorage({
-  destination: uploadDir,
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `${req.user.id}-${Date.now()}-${Math.random().toString(36).slice(2,8)}${ext}`);
-  }
+const upload = multer({
+  storage: hybridStorage(uploadDir, 'kyc', (req, file) =>
+    `${req.user.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${path.extname(file.originalname)}`),
+  limits: { fileSize: 8 * 1024 * 1024 }
 });
-const upload = multer({ storage, limits: { fileSize: 8 * 1024 * 1024 } });
 
 router.post('/upload', authRequired, upload.single('file'), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file' });
@@ -61,8 +60,17 @@ router.get('/file/:id', authRequired, async (req, res) => {
   if (!absolute.startsWith(uploadDir + path.sep) && absolute !== uploadDir) {
     return res.status(400).end();
   }
-  if (!fs.existsSync(absolute)) return res.status(404).end();
-  res.sendFile(absolute);
+  if (fs.existsSync(absolute)) return res.sendFile(absolute);
+
+  if (storageService.isConfigured()) {
+    const obj = await storageService.getObjectStream(`kyc/${normalized}`);
+    if (obj) {
+      if (obj.contentType) res.type(obj.contentType);
+      if (obj.contentLength != null) res.setHeader('Content-Length', obj.contentLength);
+      return obj.stream.pipe(res);
+    }
+  }
+  return res.status(404).end();
 });
 
 // Admin

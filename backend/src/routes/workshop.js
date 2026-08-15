@@ -9,22 +9,39 @@ const { sendEmail } = require('../services/notifier');
 const { sendNotification } = require('../services/notifierPg');
 const UPLOAD_DIRS = require('../uploadPaths');
 const asyncRouter = require('../utils/asyncRouter');
+const { hybridStorage } = require('../utils/hybridStorage');
+const storageService = require('../services/storageService');
 const router = asyncRouter(express.Router());
 
+// job_card_photos.file_path holds an absolute disk path for photos uploaded
+// before this file moved to hybridStorage, and a bare filename (relative to
+// job-photos/) for everything uploaded after — resolvePhotoPath and
+// photoUrl both branch on path.isAbsolute so old rows keep working exactly
+// as before, on whichever backend (disk or R2) actually holds each file.
+function resolvePhotoPath(filePath) {
+  return path.isAbsolute(filePath) ? filePath : path.join(UPLOAD_DIRS.jobPhotos, filePath);
+}
 function photoUrl(filePath) {
-  const rel = path.relative(UPLOAD_DIRS.base, filePath);
-  return `/uploads/${rel.replace(/\\/g, '/')}`;
+  if (path.isAbsolute(filePath)) {
+    const rel = path.relative(UPLOAD_DIRS.base, filePath);
+    return `/uploads/${rel.replace(/\\/g, '/')}`;
+  }
+  return `/uploads/job-photos/${filePath.replace(/\\/g, '/')}`;
+}
+async function cleanupUploadedPhoto(file) {
+  if (!file) return;
+  if (file.storageBackend === 'r2') {
+    try { await storageService.deleteObject(`job-photos/${file.filename}`); } catch { /* best-effort */ }
+  } else if (file.path) {
+    try { fs.unlinkSync(file.path); } catch { /* best-effort */ }
+  }
 }
 
-const photoStorage = multer.diskStorage({
-  destination: UPLOAD_DIRS.jobPhotos,
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
-    cb(null, `job-${req.params.id || 'x'}-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
-  }
-});
 const photoUpload = multer({
-  storage: photoStorage,
+  storage: hybridStorage(UPLOAD_DIRS.jobPhotos, 'job-photos', (req, file) => {
+    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+    return `job-${req.params.id || 'x'}-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
+  }),
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('image/')) cb(null, true);
@@ -1097,16 +1114,16 @@ router.post('/job-cards/:id/photos', authRequired, workshopOnly, photoUpload.sin
   try {
     const id = toInt(req.params.id);
     const { rows: cardRows } = await pgDb.query('SELECT id FROM job_cards WHERE id = $1', [id]);
-    if (!cardRows[0]) { if (req.file) try { fs.unlinkSync(req.file.path); } catch {} return res.status(404).json({ error: 'Job card not found' }); }
+    if (!cardRows[0]) { await cleanupUploadedPhoto(req.file); return res.status(404).json({ error: 'Job card not found' }); }
     if (!req.file) return res.status(400).json({ error: 'No photo uploaded' });
     const caption = String(req.body.caption || '').trim();
     const { rows: insertedRows } = await pgDb.query(`INSERT INTO job_card_photos (job_card_id, file_path, original_name, caption, created_by) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-      [id, req.file.path, req.file.originalname, caption || null, req.user.id]);
+      [id, req.file.filename, req.file.originalname, caption || null, req.user.id]);
     const { rows: photoRows } = await pgDb.query('SELECT * FROM job_card_photos WHERE id = $1', [insertedRows[0].id]);
     const photo = photoRows[0];
     res.json({ ok: true, photo: { ...photo, url: photoUrl(photo.file_path) } });
   } catch (error) {
-    if (req.file) try { fs.unlinkSync(req.file.path); } catch {}
+    await cleanupUploadedPhoto(req.file);
     res.status(500).json({ error: error.message });
   }
 });
@@ -1129,8 +1146,18 @@ router.get('/job-cards/:id/photos/:photoId/image', authRequired, workshopOnly, a
   try {
     const { rows: photoRows } = await pgDb.query('SELECT * FROM job_card_photos WHERE id = $1 AND job_card_id = $2', [toInt(req.params.photoId), toInt(req.params.id)]);
     const photo = photoRows[0];
-    if (!photo || !fs.existsSync(photo.file_path)) return res.status(404).json({ error: 'Photo not found' });
-    res.sendFile(photo.file_path);
+    if (!photo) return res.status(404).json({ error: 'Photo not found' });
+    const absolute = resolvePhotoPath(photo.file_path);
+    if (fs.existsSync(absolute)) return res.sendFile(absolute);
+    if (storageService.isConfigured() && !path.isAbsolute(photo.file_path)) {
+      const obj = await storageService.getObjectStream(`job-photos/${photo.file_path}`);
+      if (obj) {
+        if (obj.contentType) res.type(obj.contentType);
+        if (obj.contentLength != null) res.setHeader('Content-Length', obj.contentLength);
+        return obj.stream.pipe(res);
+      }
+    }
+    return res.status(404).json({ error: 'Photo not found' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -1142,7 +1169,10 @@ router.delete('/job-cards/:id/photos/:photoId', authRequired, workshopOnly, asyn
     const { rows: photoRows } = await pgDb.query('SELECT * FROM job_card_photos WHERE id = $1 AND job_card_id = $2', [toInt(req.params.photoId), toInt(req.params.id)]);
     const photo = photoRows[0];
     if (!photo) return res.status(404).json({ error: 'Photo not found' });
-    try { fs.unlinkSync(photo.file_path); } catch {}
+    try { fs.unlinkSync(resolvePhotoPath(photo.file_path)); } catch { /* best-effort */ }
+    if (storageService.isConfigured() && !path.isAbsolute(photo.file_path)) {
+      try { await storageService.deleteObject(`job-photos/${photo.file_path}`); } catch { /* best-effort */ }
+    }
     await pgDb.query('DELETE FROM job_card_photos WHERE id = $1', [photo.id]);
     res.json({ ok: true });
   } catch (error) {

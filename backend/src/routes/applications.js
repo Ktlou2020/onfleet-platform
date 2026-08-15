@@ -13,20 +13,14 @@ const { extractPayslipInsights } = require('../services/documentInsights');
 const { writeContractSnapshot } = require('../services/contracts');
 const { requireValidMime } = require('../utils/validateUpload');
 const asyncRouter = require('../utils/asyncRouter');
+const { hybridStorage } = require('../utils/hybridStorage');
 
 const router = asyncRouter(express.Router());
 const { applications: uploadDir } = require('../uploadPaths');
 
-const storage = multer.diskStorage({
-  destination: uploadDir,
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 9)}${ext}`);
-  }
-});
-
 const upload = multer({
-  storage,
+  storage: hybridStorage(uploadDir, 'applications', (req, file) =>
+    `${Date.now()}-${Math.random().toString(36).slice(2, 9)}${path.extname(file.originalname).toLowerCase()}`),
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     // Allow PDF, images, and common document formats

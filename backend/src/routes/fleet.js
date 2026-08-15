@@ -92,12 +92,11 @@ function canManageFleetResource(role, resourceKey) {
 }
 
 const { applications: applicationUploadDir } = require('../uploadPaths');
+const { hybridStorage } = require('../utils/hybridStorage');
 
 const riderApplicationUpload = multer({
-  storage: multer.diskStorage({
-    destination: applicationUploadDir,
-    filename: (req, file, cb) => cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 9)}${path.extname(file.originalname).toLowerCase()}`)
-  }),
+  storage: hybridStorage(applicationUploadDir, 'applications', (req, file) =>
+    `${Date.now()}-${Math.random().toString(36).slice(2, 9)}${path.extname(file.originalname).toLowerCase()}`),
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const blocked = ['application/x-msdownload', 'application/x-sh', 'text/html'];

@@ -131,6 +131,28 @@ function buildApp() {
   // Webhook must receive the raw body for HMAC validation — register before express.json()
   app.use('/api/payments/paystack/webhook', express.raw({ type: 'application/json' }));
   app.use(express.json({ limit: '5mb' }));
+  // Files uploaded while R2 is configured live there, not on disk — proxied
+  // through here rather than redirected to a public R2 URL (see
+  // storageService.js's header comment for why). Only reached once local
+  // disk and contract-regeneration have both already missed.
+  async function tryServeFromR2(res, relativePath, isHead) {
+    const storageService = require('./services/storageService');
+    if (!storageService.isConfigured()) return false;
+    if (isHead) {
+      const meta = await storageService.headObject(relativePath);
+      if (!meta) return false;
+      if (meta.contentType) res.type(meta.contentType);
+      if (meta.contentLength != null) res.setHeader('Content-Length', meta.contentLength);
+      res.end();
+      return true;
+    }
+    const obj = await storageService.getObjectStream(relativePath);
+    if (!obj) return false;
+    if (obj.contentType) res.type(obj.contentType);
+    if (obj.contentLength != null) res.setHeader('Content-Length', obj.contentLength);
+    obj.stream.pipe(res);
+    return true;
+  }
   app.get(/^\/uploads\/(.+)$/, async (req, res) => {
     const relativePath = String(req.params[0] || '');
     let absolutePath = resolveUploadPath(relativePath);
@@ -142,8 +164,9 @@ function buildApp() {
         console.error('[uploads] contract regeneration failed:', err.message);
       }
     }
-    if (!absolutePath) return sendMissingUpload(res, relativePath);
-    return res.sendFile(absolutePath);
+    if (absolutePath) return res.sendFile(absolutePath);
+    if (await tryServeFromR2(res, relativePath, false)) return;
+    return sendMissingUpload(res, relativePath);
   });
   app.head(/^\/uploads\/(.+)$/, async (req, res) => {
     const relativePath = String(req.params[0] || '');
@@ -156,8 +179,9 @@ function buildApp() {
         console.error('[uploads] contract regeneration failed:', err.message);
       }
     }
-    if (!absolutePath) return sendMissingUpload(res, relativePath);
-    return res.sendFile(absolutePath);
+    if (absolutePath) return res.sendFile(absolutePath);
+    if (await tryServeFromR2(res, relativePath, true)) return;
+    return sendMissingUpload(res, relativePath);
   });
 
   // Defense-in-depth: a generous ceiling on top of the tighter per-route

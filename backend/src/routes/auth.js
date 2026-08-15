@@ -14,6 +14,7 @@ const { extractPayslipInsights } = require('../services/documentInsights');
 const { sendNotification } = require('../services/notifierPg');
 const { requireValidMime } = require('../utils/validateUpload');
 const asyncRouter = require('../utils/asyncRouter');
+const { hybridStorage } = require('../utils/hybridStorage');
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -50,16 +51,9 @@ const FLEET_PLAN_ENTITLEMENTS = {
   empire: { max_bikes: 9999, max_admin_users: 20 },
 };
 
-const storage = multer.diskStorage({
-  destination: uploadDir,
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 9)}${ext}`);
-  }
-});
-
 const signupUpload = multer({
-  storage,
+  storage: hybridStorage(uploadDir, 'applications', (req, file) =>
+    `${Date.now()}-${Math.random().toString(36).slice(2, 9)}${path.extname(file.originalname).toLowerCase()}`),
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const isPayslip = String(file.fieldname || '').startsWith('payslip_');
@@ -74,13 +68,8 @@ const signupUpload = multer({
 });
 
 const profileUpload = multer({
-  storage: multer.diskStorage({
-    destination: profileUploadDir,
-    filename: (req, file, cb) => {
-      const ext = path.extname(file.originalname).toLowerCase();
-      cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 9)}${ext}`);
-    }
-  }),
+  storage: hybridStorage(profileUploadDir, 'profiles', (req, file) =>
+    `${Date.now()}-${Math.random().toString(36).slice(2, 9)}${path.extname(file.originalname).toLowerCase()}`),
   limits: { fileSize: 8 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const ok = ['image/jpeg', 'image/jpg', 'image/pjpeg', 'image/png', 'image/webp'].includes(file.mimetype);

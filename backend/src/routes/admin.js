@@ -18,15 +18,14 @@ const asyncRouter = require('../utils/asyncRouter');
 
 const router = asyncRouter(express.Router());
 const { branding: brandingUploadDir } = require('../uploadPaths');
+const { hybridStorage } = require('../utils/hybridStorage');
 const FLEET_OWNER_ROLE_VALUES = ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'];
 function roleInPlaceholders(startIndex) {
   return FLEET_OWNER_ROLE_VALUES.map((_, i) => `$${startIndex + i}`).join(',');
 }
 const heroImageUpload = multer({
-  storage: multer.diskStorage({
-    destination: brandingUploadDir,
-    filename: (req, file, cb) => cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${path.extname(file.originalname).toLowerCase()}`)
-  }),
+  storage: hybridStorage(brandingUploadDir, 'branding', (req, file) =>
+    `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${path.extname(file.originalname).toLowerCase()}`),
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => cb(null, ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(file.mimetype))
 });

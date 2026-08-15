@@ -223,6 +223,21 @@ router.get('/paystack/verify/:reference', authRequired, async (req, res) => {
       const fee = calcPaystackFee(netAmount);
       await pgDb.query(`UPDATE payments SET status = 'success', paid_at = NOW(), amount = $1, fee_amount = $2, net_amount = $3 WHERE id = $4`, [grossAmount, fee, netAmount, payment.id]);
       await applyPaymentToSchedule(payment.agreement_id, netAmount);
+      // Credit the fleet wallet if this agreement belongs to a fleet organisation.
+      // The rider portal calls this endpoint immediately on Paystack redirect,
+      // which normally beats the webhook's charge.success delivery — and that
+      // handler only credits when payment.status !== 'success', so without this
+      // the wallet credit for the standard rider-payment flow never ran.
+      // creditFleetWalletFromWebhook's own reference-based idempotency means
+      // it's still safe if the webhook fires for the same payment afterward.
+      if (grossAmount > 0) {
+        const { rows: agScopeRows } = await pgDb.query(
+          `SELECT b.organization_id FROM agreements a JOIN bikes b ON b.id = a.bike_id WHERE a.id = $1`, [payment.agreement_id]
+        );
+        if (agScopeRows[0]?.organization_id) {
+          await creditFleetWalletFromWebhook(agScopeRows[0].organization_id, grossAmount, payment.user_id, req.params.reference);
+        }
+      }
       await logAudit(req.user.id, 'payment.success', 'payments', payment.id, { amount: grossAmount, fee, net_amount: netAmount });
       payment.status = 'success';
       payment.net_amount = netAmount;
@@ -544,15 +559,45 @@ async function creditFleetWalletFromWebhook(organizationId, grossAmountZAR, ride
   const net = +(grossAmountZAR - fee).toFixed(2);
   await ensureFleetWallet(organizationId);
   await pgDb.withTransaction(async (client) => {
-    if (reference) {
-      const { rows: dupRows } = await client.query(`SELECT id FROM fleet_wallet_transactions WHERE paystack_reference = $1 AND organization_id = $2`, [reference, organizationId]);
-      if (dupRows[0]) return;
-    }
+    // ON CONFLICT against idx_fleet_wallet_txns_credit_reference makes this
+    // safe against the verify endpoint and the webhook both trying to credit
+    // the same payment (whichever runs first wins, the other is a no-op),
+    // and against Paystack retrying webhook delivery for the same event.
+    const { rows: insertedRows } = await client.query(
+      `INSERT INTO fleet_wallet_transactions (organization_id, type, amount, fee_amount, net_amount, description, paystack_reference, rider_user_id, available_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8, NOW() + INTERVAL '48 hours')
+       ON CONFLICT (paystack_reference) WHERE type = 'credit' AND paystack_reference IS NOT NULL DO NOTHING
+       RETURNING id`,
+      [organizationId, 'credit', grossAmountZAR, fee, net, 'Weekly rider rental payment', reference || null, riderId || null]
+    );
+    if (!insertedRows[0]) return; // already credited for this reference
     await client.query(`UPDATE fleet_wallets SET balance = balance + $1, total_collected = total_collected + $2, updated_at = NOW() WHERE organization_id = $3`,
       [net, net, organizationId]);
-    await client.query(`INSERT INTO fleet_wallet_transactions (organization_id, type, amount, fee_amount, net_amount, description, paystack_reference, rider_user_id, available_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8, NOW() + INTERVAL '48 hours')`,
-      [organizationId, 'credit', grossAmountZAR, fee, net, 'Weekly rider rental payment', reference || null, riderId || null]);
+  });
+}
+
+// Unwinds a fleet wallet credit previously produced by creditFleetWalletFromWebhook,
+// for the given payment reference. No-op if that payment never credited a fleet
+// wallet (e.g. non-fleet bike, or payment never reached success). Records an
+// 'adjustment' row rather than deleting the original credit, so the ledger keeps
+// a full history of what happened and why.
+async function reverseFleetWalletCredit(reference, reason) {
+  if (!reference) return;
+  await pgDb.withTransaction(async (client) => {
+    const { rows } = await client.query(
+      `SELECT * FROM fleet_wallet_transactions WHERE paystack_reference = $1 AND type = 'credit'`, [reference]
+    );
+    const credit = rows[0];
+    if (!credit) return;
+    await client.query(
+      `UPDATE fleet_wallets SET balance = balance - $1, total_collected = total_collected - $2, updated_at = NOW() WHERE organization_id = $3`,
+      [credit.net_amount, credit.net_amount, credit.organization_id]
+    );
+    await client.query(
+      `INSERT INTO fleet_wallet_transactions (organization_id, type, amount, fee_amount, net_amount, description, paystack_reference, rider_user_id, available_at)
+       VALUES ($1,'adjustment',$2,0,$3,$4,$5,$6, NOW())`,
+      [credit.organization_id, -credit.amount, -credit.net_amount, reason || `Reversal of payment ${reference}`, reference, credit.rider_user_id]
+    );
   });
 }
 
@@ -681,6 +726,7 @@ router.post('/bulk-delete', authRequired, adminOnly, async (req, res) => {
   }
 
   for (const agreementId of agreementIds) await rebuildScheduleAllocations(agreementId);
+  for (const payment of deleted) await reverseFleetWalletCredit(payment.reference, `Payment ${payment.reference} deleted`);
 
   await logAudit(req.user.id, 'payment.bulk_delete', 'payments', null, {
     requested: paymentIds.length,
@@ -718,6 +764,7 @@ router.post('/:id/reverse', authRequired, adminOnly, async (req, res) => {
   if (payment.status === 'reversed') return res.status(400).json({ error: 'Payment is already reversed' });
   await pgDb.query(`UPDATE payments SET status = 'reversed' WHERE id = $1`, [payment.id]);
   await rebuildScheduleAllocations(payment.agreement_id);
+  await reverseFleetWalletCredit(payment.reference, `Reversal of payment ${payment.reference}`);
   await logAudit(req.user.id, 'payment.reversed', 'payments', payment.id, { original_status: payment.status, amount: payment.amount }, req.ip);
   res.json({ ok: true });
 });

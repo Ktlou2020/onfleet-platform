@@ -198,6 +198,22 @@ router.delete('/devices/:id', authRequired, adminOnly, async (req, res) => {
   res.json({ ok: true });
 });
 
+// Clear a device from the Health tab after reading it. Stores which issue
+// categories were acknowledged (not the display text — that includes
+// fluctuating numbers like a battery %) so the row reappears if the
+// situation changes rather than staying silently dismissed forever.
+router.put('/devices/:id/health-ack', authRequired, trackingReadOnly, async (req, res) => {
+  const signature = String(req.body.signature || '').trim();
+  if (!signature) return res.status(400).json({ error: 'signature is required' });
+  const { rows } = await pgDb.query('SELECT id FROM tracking_devices WHERE id=$1', [req.params.id]);
+  if (!rows[0]) return res.status(404).json({ error: 'Device not found' });
+  await pgDb.query(
+    'UPDATE tracking_devices SET health_ack_at=NOW(), health_ack_signature=$1 WHERE id=$2',
+    [signature, rows[0].id]
+  );
+  res.json({ ok: true });
+});
+
 // ---------- Positions ----------
 
 router.get('/devices/:id/positions', authRequired, trackingReadOnly, async (req, res) => {

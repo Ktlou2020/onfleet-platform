@@ -1287,17 +1287,32 @@ export default function Tracking({ readOnly = false }) {
       const sats = mapD?.satellites;
       const pct = battMv != null ? battPct(battMv) : null;
       const reasons = [];
-      if (d.device_status === 'offline') reasons.push({ text: `Offline${d.last_seen_at ? ` since ${fmtSASTshort(d.last_seen_at)}` : ''}`, severity: 'high' });
-      if (pct != null && pct <= 20) reasons.push({ text: `Internal battery ${pct}%`, severity: 'high' });
-      if (gsm != null && gsm <= 1) reasons.push({ text: 'Poor GSM signal', severity: 'medium' });
-      if (d.device_status === 'active' && sats != null && sats < 4) reasons.push({ text: `Weak GPS fix (${sats} sats)`, severity: 'medium' });
-      if (!d.bike_id) reasons.push({ text: 'No bike linked', severity: 'low' });
-      return { device: d, mapD, reasons };
-    }).filter(h => h.reasons.length > 0).sort((a, b) => {
-      const rankOf = (h) => Math.min(...h.reasons.map(r => SEVERITY_RANK[r.severity]));
-      return rankOf(a) - rankOf(b);
-    });
+      if (d.device_status === 'offline') reasons.push({ key: 'offline', text: `Offline${d.last_seen_at ? ` since ${fmtSASTshort(d.last_seen_at)}` : ''}`, severity: 'high' });
+      if (pct != null && pct <= 20) reasons.push({ key: 'battery_critical', text: `Internal battery ${pct}%`, severity: 'high' });
+      if (gsm != null && gsm <= 1) reasons.push({ key: 'poor_signal', text: 'Poor GSM signal', severity: 'medium' });
+      if (d.device_status === 'active' && sats != null && sats < 4) reasons.push({ key: 'weak_gps', text: `Weak GPS fix (${sats} sats)`, severity: 'medium' });
+      if (!d.bike_id) reasons.push({ key: 'no_bike', text: 'No bike linked', severity: 'low' });
+      // Stable per-issue-set signature (categories only, not the fluctuating
+      // display text) — a device stays cleared as long as it's still the same
+      // set of problems, and resurfaces the moment something new shows up.
+      const signature = reasons.map(r => r.key).sort().join(',');
+      return { device: d, mapD, reasons, signature };
+    }).filter(h => h.reasons.length > 0 && h.signature !== h.device.health_ack_signature)
+      .sort((a, b) => {
+        const rankOf = (h) => Math.min(...h.reasons.map(r => SEVERITY_RANK[r.severity]));
+        return rankOf(a) - rankOf(b);
+      });
   }, [devices, mapDevices]);
+
+  const clearDeviceHealth = useCallback(async (e, deviceId, signature) => {
+    e.stopPropagation();
+    try {
+      await api.put(`/tracking/devices/${deviceId}/health-ack`, { signature });
+      setDevices(prev => prev.map(d => d.id === deviceId ? { ...d, health_ack_signature: signature } : d));
+    } catch {
+      toast.error('Could not clear');
+    }
+  }, []);
 
   if (loading) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 'calc(100vh - 64px)' }}>
@@ -1525,7 +1540,7 @@ export default function Tracking({ readOnly = false }) {
                 <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>Fleet looks healthy</div>
                 <div style={{ fontSize: 12, color: 'var(--muted)' }}>No devices currently need attention</div>
               </div>
-            ) : deviceHealth.map(({ device: d, mapD, reasons }) => {
+            ) : deviceHealth.map(({ device: d, mapD, reasons, signature }) => {
               const worst = reasons.reduce((w, r) => SEVERITY_RANK[r.severity] < SEVERITY_RANK[w.severity] ? r : w, reasons[0]);
               const stripeColor = worst.severity === 'high' ? '#ef4444' : worst.severity === 'medium' ? '#f97316' : '#94a3b8';
               return (
@@ -1534,7 +1549,15 @@ export default function Tracking({ readOnly = false }) {
                   onClick={() => { selectDevice(mapD || d); setSideTab('devices'); }}
                   style={{ padding: '10px 12px', cursor: 'pointer', borderBottom: '1px solid var(--border)', borderLeft: `3px solid ${stripeColor}` }}
                 >
-                  <div style={{ fontWeight: 600, fontSize: 12 }}>{d.label || d.registration || d.imei}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontWeight: 600, fontSize: 12, flex: 1 }}>{d.label || d.registration || d.imei}</span>
+                    <button
+                      className="btn btn-sm btn-secondary"
+                      style={{ fontSize: 10, padding: '2px 7px', flexShrink: 0 }}
+                      title="Clear after reading — reappears if the issue changes"
+                      onClick={(e) => clearDeviceHealth(e, d.id, signature)}
+                    >Clear</button>
+                  </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
                     {reasons.map((r, i) => (
                       <span key={i} style={{

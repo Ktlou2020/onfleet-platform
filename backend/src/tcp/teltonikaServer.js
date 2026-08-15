@@ -444,59 +444,16 @@ function start(port) {
   return server;
 }
 
-// ── Offline alert checker (every 10 min) ──────────────────────────────────────
-const offlineAlertCooldowns = new Map();
-
-// Fleet devices are configured to check in only once every 3600s (60 min) while
-// stationary (Home Network Min/Send Period). A shorter threshold here fires a
-// false "offline" alert on every normal parked/idle period, before the device
-// was ever due to check in again. 75 min = the device's own 60-min cycle plus a
-// margin for network/reconnect jitter.
-const OFFLINE_ALERT_THRESHOLD_MS = 75 * 60_000;
-
-async function checkOfflineDevices() {
-  try {
-    const threshold = new Date(Date.now() - OFFLINE_ALERT_THRESHOLD_MS).toISOString();
-    const { rows: stale } = await pgDb.query(
-      `SELECT id, imei, bike_id FROM tracking_devices
-       WHERE bike_id IS NOT NULL AND last_seen_at IS NOT NULL AND last_seen_at < $1`,
-      [threshold]
-    );
-    const connectedSet = new Set(connections.keys());
-    const cooldownMs = 60 * 60_000;
-    const now = Date.now();
-    const at = new Date().toISOString();
-
-    for (const dev of stale) {
-      if (connectedSet.has(dev.imei)) continue;
-      const last = offlineAlertCooldowns.get(dev.id);
-      if (last && now - last < cooldownMs) continue;
-      offlineAlertCooldowns.set(dev.id, now);
-
-      const payload = JSON.stringify({ imei: dev.imei });
-      const { rows } = await pgDb.query(
-        `INSERT INTO tracking_alerts (bike_id, device_id, alert_type, payload, created_at) VALUES ($1,$2,'device_offline',$3,$4) RETURNING id`,
-        [dev.bike_id, dev.id, payload, at]
-      );
-      const { rows: bikeRows } = await pgDb.query('SELECT registration FROM bikes WHERE id = $1', [dev.bike_id]);
-      const bike = bikeRows[0];
-      trackingEvents.emit('alert', {
-        id: rows[0].id,
-        bike_id: dev.bike_id,
-        device_id: dev.id,
-        alert_type: 'device_offline',
-        payload,
-        bike_registration: bike?.registration || null,
-        created_at: at,
-        acknowledged_at: null,
-      });
-      console.warn(`[Teltonika] Offline alert: ${dev.imei}`);
-    }
-  } catch (e) {
-    console.error('[Teltonika] offline check error:', e.message);
-  }
-}
-
-setInterval(checkOfflineDevices, 10 * 60_000);
+// Device-offline alerting lives solely in tripService.js's checkOfflineDevices()
+// (wired into the scheduler every 5 min). This file used to run a second,
+// independent offline checker on a 10-min/75-min-threshold poll, cooldown-gated
+// by an in-memory Map — that Map reset to empty on every deploy, so any device
+// that had been offline for a while got a fresh duplicate alert on every
+// restart instead of once per hour as intended, and it bypassed the
+// alert_settings enabled/disabled toggle entirely since it wrote tracking_alerts
+// directly rather than going through fireAlert(). tripService.js's version only
+// fires on an actual connected→disconnected transition (a persisted DB column,
+// not memory), which is both deploy-safe and naturally exactly-once per
+// disconnect — no duplicate needed here.
 
 module.exports = { start, sendCommand, getConnectedIMEIs, sendWakePacket, trackingEvents };

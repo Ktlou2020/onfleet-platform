@@ -63,7 +63,10 @@ async function gatherClaimContext(claimId) {
       `, [ag.user_id, claimId]);
       rider = {
         name: ag.full_name,
-        risk_score: scored?.score ?? null,
+        // riderScoring.js: 0-100 scale where 100 = lowest risk / most reliable, 0 = highest risk.
+        // Named explicitly (not "risk_score") since that name alone reads as "higher = more risk",
+        // which is the exact opposite of this platform's convention.
+        reliability_score_100_is_best: scored?.score ?? null,
         prior_insurance_claims: Number(priorRows[0].count),
       };
     }
@@ -137,7 +140,9 @@ async function generateCaseSummary(claimId) {
       + 'medium/high risk when there is concrete, specific evidence (e.g. the tracker went silent unusually long '
       + 'before the incident with no corresponding alert, or the rider has multiple prior claims). Never state '
       + 'something as fact if it is only a possibility — use hedged language ("could indicate", "worth checking") '
-      + 'for anything not directly evidenced by the data.',
+      + 'for anything not directly evidenced by the data. If a rider reliability score is present, remember a '
+      + 'HIGHER number means LOWER risk (100 = most reliable, 0 = least) — do not describe a high score as a '
+      + 'concern.',
     messages: [{ role: 'user', content: `Claim data:\n${JSON.stringify(context, null, 2)}` }],
     tools: [CASE_ANALYSIS_TOOL],
     tool_choice: { type: 'tool', name: 'submit_case_analysis' },

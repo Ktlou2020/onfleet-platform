@@ -1,17 +1,57 @@
 'use strict';
 
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
 const pgDb = require('../pgDb');
 const { authRequired, adminOnly } = require('../middleware/auth');
 const { logAudit } = require('../utils/helpersPg');
 const asyncRouter = require('../utils/asyncRouter');
 const aiClaimsService = require('../services/aiClaimsService');
 const aiAnalyticsService = require('../services/aiAnalyticsService');
+const UPLOAD_DIRS = require('../uploadPaths');
+const { hybridStorage } = require('../utils/hybridStorage');
+const storageService = require('../services/storageService');
 
 const router = asyncRouter(express.Router());
 
 const CLAIM_TYPES = ['theft', 'damage', 'accident', 'fire', 'other'];
 const CLAIM_STATUSES = ['filed', 'investigating', 'approved', 'rejected', 'paid', 'closed'];
+
+// Same pattern as workshop.js's job_card_photos: file_path is a bare
+// filename relative to claim-photos/, resolved against whichever storage
+// backend (disk or R2) is actually holding it.
+function resolvePhotoPath(filePath) {
+  return path.isAbsolute(filePath) ? filePath : path.join(UPLOAD_DIRS.claimPhotos, filePath);
+}
+function photoUrl(filePath) {
+  if (path.isAbsolute(filePath)) {
+    const rel = path.relative(UPLOAD_DIRS.base, filePath);
+    return `/uploads/${rel.replace(/\\/g, '/')}`;
+  }
+  return `/uploads/claim-photos/${filePath.replace(/\\/g, '/')}`;
+}
+async function cleanupUploadedPhoto(file) {
+  if (!file) return;
+  if (file.storageBackend === 'r2') {
+    try { await storageService.deleteObject(`claim-photos/${file.filename}`); } catch { /* best-effort */ }
+  } else if (file.path) {
+    try { fs.unlinkSync(file.path); } catch { /* best-effort */ }
+  }
+}
+
+const photoUpload = multer({
+  storage: hybridStorage(UPLOAD_DIRS.claimPhotos, 'claim-photos', (req, file) => {
+    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+    return `claim-${req.params.id || 'x'}-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) cb(null, true);
+    else cb(new Error('Only image files are allowed'));
+  }
+});
 
 async function hydrateClaim(claim) {
   const { rows: bikeRows } = await pgDb.query(
@@ -26,7 +66,9 @@ async function hydrateClaim(claim) {
     );
     alerts = rows;
   }
-  return { ...claim, bike: bikeRows[0] || null, filed_by_name: filerRows[0]?.full_name || null, alerts };
+  const { rows: photoRows } = await pgDb.query('SELECT * FROM claim_photos WHERE claim_id = $1 ORDER BY created_at ASC', [claim.id]);
+  const photos = photoRows.map((p) => ({ ...p, url: photoUrl(p.file_path) }));
+  return { ...claim, bike: bikeRows[0] || null, filed_by_name: filerRows[0]?.full_name || null, alerts, photos };
 }
 
 router.get('/', authRequired, adminOnly, async (req, res) => {
@@ -36,7 +78,11 @@ router.get('/', authRequired, adminOnly, async (req, res) => {
   if (status) { params.push(status); sql += ` AND c.status = $${params.length}`; }
   sql += ' ORDER BY c.filed_at DESC';
   const { rows } = await pgDb.query(sql, params);
-  res.json({ claims: rows });
+  // hydrateClaim also re-fetches bike info the list query already joined —
+  // redundant, but this list is low-volume (admin-only, per-org claims) so
+  // correctness (photos/alerts actually present) wins over micro-optimizing.
+  const claims = await Promise.all(rows.map((row) => hydrateClaim(row)));
+  res.json({ claims });
 });
 
 router.get('/:id', authRequired, adminOnly, async (req, res) => {
@@ -149,6 +195,52 @@ router.post('/analytics/ask', authRequired, adminOnly, async (req, res) => {
   } catch (e) {
     res.status(502).json({ error: `AI analytics failed: ${e.message}` });
   }
+});
+
+router.post('/:id/photos', authRequired, adminOnly, photoUpload.single('photo'), async (req, res) => {
+  const id = Number(req.params.id);
+  const { rows: claimRows } = await pgDb.query('SELECT id FROM insurance_claims WHERE id = $1', [id]);
+  if (!claimRows[0]) { await cleanupUploadedPhoto(req.file); return res.status(404).json({ error: 'Claim not found' }); }
+  if (!req.file) return res.status(400).json({ error: 'No photo uploaded' });
+
+  const caption = String(req.body.caption || '').trim();
+  const { rows: insertedRows } = await pgDb.query(
+    `INSERT INTO claim_photos (claim_id, file_path, original_name, caption, created_by) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+    [id, req.file.filename, req.file.originalname, caption || null, req.user.id]
+  );
+  await logAudit(req.user.id, 'claim.photo_upload', 'insurance_claims', id, {}, req.ip);
+  const { rows: photoRows } = await pgDb.query('SELECT * FROM claim_photos WHERE id = $1', [insertedRows[0].id]);
+  res.json({ photo: { ...photoRows[0], url: photoUrl(photoRows[0].file_path) } });
+});
+
+router.get('/:id/photos/:photoId/image', authRequired, adminOnly, async (req, res) => {
+  const { rows: photoRows } = await pgDb.query('SELECT * FROM claim_photos WHERE id = $1 AND claim_id = $2', [Number(req.params.photoId), Number(req.params.id)]);
+  const photo = photoRows[0];
+  if (!photo) return res.status(404).json({ error: 'Photo not found' });
+  const absolute = resolvePhotoPath(photo.file_path);
+  if (fs.existsSync(absolute)) return res.sendFile(absolute);
+  if (storageService.isConfigured() && !path.isAbsolute(photo.file_path)) {
+    const obj = await storageService.getObjectStream(`claim-photos/${photo.file_path}`);
+    if (obj) {
+      if (obj.contentType) res.type(obj.contentType);
+      if (obj.contentLength != null) res.setHeader('Content-Length', obj.contentLength);
+      return obj.stream.pipe(res);
+    }
+  }
+  return res.status(404).json({ error: 'Photo not found' });
+});
+
+router.delete('/:id/photos/:photoId', authRequired, adminOnly, async (req, res) => {
+  const { rows: photoRows } = await pgDb.query('SELECT * FROM claim_photos WHERE id = $1 AND claim_id = $2', [Number(req.params.photoId), Number(req.params.id)]);
+  const photo = photoRows[0];
+  if (!photo) return res.status(404).json({ error: 'Photo not found' });
+  try { fs.unlinkSync(resolvePhotoPath(photo.file_path)); } catch { /* best-effort */ }
+  if (storageService.isConfigured() && !path.isAbsolute(photo.file_path)) {
+    try { await storageService.deleteObject(`claim-photos/${photo.file_path}`); } catch { /* best-effort */ }
+  }
+  await pgDb.query('DELETE FROM claim_photos WHERE id = $1', [photo.id]);
+  await logAudit(req.user.id, 'claim.photo_delete', 'insurance_claims', req.params.id, { photo_id: photo.id }, req.ip);
+  res.json({ ok: true });
 });
 
 module.exports = router;

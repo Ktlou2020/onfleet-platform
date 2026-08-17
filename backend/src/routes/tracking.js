@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const multer = require('multer');
 const pgDb = require('../pgDb');
 const { authRequired, adminOnly, trackingReadOnly } = require('../middleware/auth');
 const teltonikaServer = require('../tcp/teltonikaServer');
@@ -9,9 +10,11 @@ const riskService = require('../services/riskService');
 const { reloadGeofences } = require('../services/geofenceService');
 const { logAudit } = require('../utils/helpersPg');
 const { cutCommandForModel, restoreCommandForModel } = require('../services/engineCommands');
+const gpsImportService = require('../services/gpsImportService');
 const asyncRouter = require('../utils/asyncRouter');
 
 const router = asyncRouter(express.Router());
+const gpsImportUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 const PRESET_COMMANDS = {
   cut_engine:     (model) => cutCommandForModel(model),
@@ -796,6 +799,28 @@ router.get('/notification-users', authRequired, trackingReadOnly, async (req, re
     `SELECT id, full_name, email, role FROM users WHERE role IN ('superadmin','admin') AND deleted_at IS NULL ORDER BY full_name`
   );
   res.json(users);
+});
+
+// Import historical GPS data from another tracking platform's CSV export —
+// e.g. to fill a gap where our own tracker has no data for an incident.
+router.post('/gps-import/preview', authRequired, adminOnly, gpsImportUpload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'CSV file is required' });
+  try {
+    res.json(gpsImportService.preview(req.file.buffer.toString('utf8')));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.post('/gps-import', authRequired, adminOnly, gpsImportUpload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'CSV file is required' });
+  try {
+    const summary = await gpsImportService.importCsv(req.file.buffer.toString('utf8'));
+    await logAudit(req.user.id, 'gps.csv_import', null, null, summary, req.ip);
+    res.json(summary);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 module.exports = router;

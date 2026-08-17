@@ -5,7 +5,7 @@ import { Loading, SearchInput, fmtDateTime, matchesSearch } from '../../componen
 import { Modal } from '../../components/ui';
 import { sortNewestFirst } from '../../utils/sortNewestFirst';
 import { ALERT_LABELS } from '../../lib/alertMeta';
-import { Plus, ShieldAlert, ChevronDown, ChevronUp, Search, Sparkles } from 'lucide-react';
+import { Plus, ShieldAlert, ChevronDown, ChevronUp, Search, Sparkles, Camera, X, MapPin } from 'lucide-react';
 
 const CLAIM_TYPES = ['theft', 'damage', 'accident', 'fire', 'other'];
 const CLAIM_STATUSES = ['filed', 'investigating', 'approved', 'rejected', 'paid', 'closed'];
@@ -226,6 +226,77 @@ function ClaimRow({ claim, onUpdated }) {
   const [sapsPoliceStation, setSapsPoliceStation] = useState(claim.saps_police_station || '');
   const [saving, setSaving] = useState(false);
   const [generatingAi, setGeneratingAi] = useState(false);
+  const [photoFile, setPhotoFile] = useState(null);
+  const [photoCaption, setPhotoCaption] = useState('');
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [gpsFile, setGpsFile] = useState(null);
+  const [gpsPreview, setGpsPreview] = useState(null);
+  const [gpsPreviewing, setGpsPreviewing] = useState(false);
+  const [gpsImporting, setGpsImporting] = useState(false);
+  const [gpsResult, setGpsResult] = useState(null);
+
+  const uploadPhoto = async () => {
+    if (!photoFile) return;
+    setUploadingPhoto(true);
+    try {
+      const form = new FormData();
+      form.append('photo', photoFile);
+      if (photoCaption.trim()) form.append('caption', photoCaption.trim());
+      const { data } = await api.post(`/claims/${claim.id}/photos`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+      onUpdated({ ...claim, photos: [...(claim.photos || []), data.photo] });
+      setPhotoFile(null);
+      setPhotoCaption('');
+      toast.success('Photo uploaded');
+    } catch (err) {
+      toast.error(err?.response?.data?.error || 'Failed to upload photo');
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
+  const deletePhoto = async (photoId) => {
+    try {
+      await api.delete(`/claims/${claim.id}/photos/${photoId}`);
+      onUpdated({ ...claim, photos: (claim.photos || []).filter((p) => p.id !== photoId) });
+    } catch (err) {
+      toast.error(err?.response?.data?.error || 'Failed to delete photo');
+    }
+  };
+
+  const previewGps = async () => {
+    if (!gpsFile) return;
+    setGpsPreviewing(true);
+    setGpsPreview(null);
+    setGpsResult(null);
+    try {
+      const form = new FormData();
+      form.append('file', gpsFile);
+      const { data } = await api.post('/tracking/gps-import/preview', form, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setGpsPreview(data);
+    } catch (err) {
+      toast.error(err?.response?.data?.error || 'Failed to read CSV');
+    } finally {
+      setGpsPreviewing(false);
+    }
+  };
+
+  const importGps = async () => {
+    if (!gpsFile) return;
+    setGpsImporting(true);
+    try {
+      const form = new FormData();
+      form.append('file', gpsFile);
+      const { data } = await api.post('/tracking/gps-import', form, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setGpsResult(data);
+      setGpsPreview(null);
+      setGpsFile(null);
+      toast.success(`Imported ${data.imported} GPS point${data.imported === 1 ? '' : 's'}`);
+    } catch (err) {
+      toast.error(err?.response?.data?.error || 'Failed to import GPS data');
+    } finally {
+      setGpsImporting(false);
+    }
+  };
 
   const generateAiSummary = async () => {
     setGeneratingAi(true);
@@ -302,6 +373,64 @@ function ClaimRow({ claim, onUpdated }) {
               ))}
             </div>
           )}
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 6 }}>Photo evidence</div>
+            {claim.photos?.length > 0 && (
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+                {claim.photos.map((p) => (
+                  <div key={p.id} style={{ position: 'relative', width: 84, height: 84 }}>
+                    <a href={p.url} target="_blank" rel="noreferrer">
+                      <img src={p.url} alt={p.caption || 'Evidence'} title={p.caption || ''} style={{ width: 84, height: 84, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--border)' }} />
+                    </a>
+                    <button
+                      onClick={() => deletePhoto(p.id)}
+                      title="Delete photo"
+                      style={{ position: 'absolute', top: -6, right: -6, width: 18, height: 18, borderRadius: '50%', background: '#ef4444', color: '#fff', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}
+                    >
+                      <X size={11} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input type="file" accept="image/*" onChange={(e) => setPhotoFile(e.target.files?.[0] || null)} style={{ fontSize: 11 }} />
+              <input className="input" style={{ fontSize: 12, width: 160 }} placeholder="Caption (optional)" value={photoCaption} onChange={(e) => setPhotoCaption(e.target.value)} />
+              <button className="btn btn-sm btn-secondary" style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }} disabled={!photoFile || uploadingPhoto} onClick={uploadPhoto}>
+                <Camera size={12} /> {uploadingPhoto ? 'Uploading…' : 'Upload'}
+              </button>
+            </div>
+          </div>
+          <div style={{ padding: '10px 12px', background: 'var(--surface-2)', borderRadius: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <MapPin size={13} style={{ color: '#1E88D1', flexShrink: 0 }} />
+              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase' }}>Import GPS data from another platform</span>
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input type="file" accept=".csv" onChange={(e) => { setGpsFile(e.target.files?.[0] || null); setGpsPreview(null); setGpsResult(null); }} style={{ fontSize: 11 }} />
+              <button className="btn btn-sm btn-secondary" style={{ fontSize: 11 }} disabled={!gpsFile || gpsPreviewing} onClick={previewGps}>
+                {gpsPreviewing ? 'Reading…' : 'Preview'}
+              </button>
+            </div>
+            {gpsPreview && (
+              <div style={{ marginTop: 8, fontSize: 12 }}>
+                <div>{gpsPreview.usable_rows} usable point{gpsPreview.usable_rows === 1 ? '' : 's'} found ({gpsPreview.skipped_rows} row{gpsPreview.skipped_rows === 1 ? '' : 's'} skipped) out of {gpsPreview.total_rows}.</div>
+                {gpsPreview.usable_rows > 0 && (
+                  <button className="btn btn-sm btn-primary" style={{ marginTop: 6, fontSize: 11 }} disabled={gpsImporting} onClick={importGps}>
+                    {gpsImporting ? 'Importing…' : `Import ${gpsPreview.usable_rows} point${gpsPreview.usable_rows === 1 ? '' : 's'}`}
+                  </button>
+                )}
+              </div>
+            )}
+            {gpsResult && (
+              <div style={{ marginTop: 8, fontSize: 11, color: 'var(--muted)' }}>
+                Imported {gpsResult.imported}, {gpsResult.duplicate} already present, {gpsResult.unresolved_bike} had no matching bike registration.
+                {gpsResult.unresolved_bike > 0 && gpsResult.errors.slice(0, 3).map((e, i) => (
+                  <div key={i} style={{ color: '#ef4444', marginTop: 2 }}>Row {e.row}: {e.error}</div>
+                ))}
+              </div>
+            )}
+          </div>
           <div style={{ padding: '10px 12px', background: 'var(--surface-2)', borderRadius: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: claim.ai_summary ? 8 : 0 }}>
               <Sparkles size={13} style={{ color: '#7c3aed', flexShrink: 0 }} />

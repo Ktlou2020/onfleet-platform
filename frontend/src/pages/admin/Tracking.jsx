@@ -797,9 +797,17 @@ export default function Tracking({ readOnly = false }) {
                   const idx = prev.findIndex(d => d.id === p.device_id);
                   if (idx === -1) return prev;
                   const next = [...prev];
-                  next[idx] = { ...next[idx], lat: p.lat, lng: p.lng, speed_kmh: p.speed, heading: p.heading, altitude: p.altitude, satellites: p.satellites, ignition: p.ignition, last_location_at: new Date(p.ts).toISOString(), connected: 1, device_status: 'active', gsm_signal: p.gsm_signal, battery_mv: p.battery_mv, ext_voltage_mv: p.ext_voltage_mv };
+                  next[idx] = { ...next[idx], lat: p.lat, lng: p.lng, speed_kmh: p.speed, heading: p.heading, altitude: p.altitude, satellites: p.satellites, ignition: p.ignition, last_location_at: new Date(p.ts).toISOString(), last_seen_at: new Date(p.ts).toISOString(), connected: 1, device_status: 'active', gsm_signal: p.gsm_signal, battery_mv: p.battery_mv, ext_voltage_mv: p.ext_voltage_mv };
                   return next;
                 });
+                // The sidebar device list/panel reads from `devices`, a separate state
+                // array from `mapDevices` (used for map pins) — without this, a device
+                // that first comes online purely via live SSE pings (no page reload)
+                // stays stuck showing stale offline/never-seen info in the list even
+                // though the map itself updates correctly.
+                setDevices(prev => prev.map(d =>
+                  d.id === p.device_id ? { ...d, connected: 1, device_status: 'active', last_seen_at: new Date(p.ts).toISOString() } : d
+                ));
                 if (selectedRef.current === p.device_id) {
                   setTrail(t => {
                     const pt = { lat: p.lat, lng: p.lng, speed_kmh: p.speed };

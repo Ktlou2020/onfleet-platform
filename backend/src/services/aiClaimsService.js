@@ -50,7 +50,7 @@ async function gatherClaimContext(claimId) {
   let rider = null;
   if (agreementId) {
     const { rows: agRows } = await pgDb.query(`
-      SELECT a.id AS agreement_id, u.id AS user_id, u.full_name, u.phone, a.address_match_status
+      SELECT a.id AS agreement_id, u.id AS user_id, u.full_name, u.phone, u.address_match_status
       FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.id = $1
     `, [agreementId]);
     const ag = agRows[0];

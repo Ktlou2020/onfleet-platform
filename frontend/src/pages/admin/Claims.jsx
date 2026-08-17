@@ -5,7 +5,7 @@ import { Loading, SearchInput, fmtDateTime, matchesSearch } from '../../componen
 import { Modal } from '../../components/ui';
 import { sortNewestFirst } from '../../utils/sortNewestFirst';
 import { ALERT_LABELS } from '../../lib/alertMeta';
-import { Plus, ShieldAlert, ChevronDown, ChevronUp } from 'lucide-react';
+import { Plus, ShieldAlert, ChevronDown, ChevronUp, Search } from 'lucide-react';
 
 const CLAIM_TYPES = ['theft', 'damage', 'accident', 'fire', 'other'];
 const CLAIM_STATUSES = ['filed', 'investigating', 'approved', 'rejected', 'paid', 'closed'];
@@ -23,12 +23,62 @@ function StatusBadge({ status }) {
   );
 }
 
+function bikeLabel(b) {
+  return `${b.registration || b.vin} — ${b.make} ${b.model}`;
+}
+
+function BikeSearchSelect({ bikes, value, onChange }) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const selected = bikes.find((b) => String(b.id) === String(value));
+
+  const results = query.trim()
+    ? bikes.filter((b) => matchesSearch(query, b.registration, b.vin, b.make, b.model))
+    : bikes;
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <div style={{ position: 'relative' }}>
+        <Search size={13} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--muted)', pointerEvents: 'none' }} />
+        <input
+          className="input"
+          style={{ paddingLeft: 30 }}
+          placeholder="Search by plate, VIN, make or model…"
+          value={open ? query : (selected ? bikeLabel(selected) : '')}
+          onFocus={() => { setQuery(''); setOpen(true); }}
+          onChange={(e) => setQuery(e.target.value)}
+          onBlur={() => setTimeout(() => setOpen(false), 150)}
+        />
+      </div>
+      {open && (
+        <div style={{ position: 'absolute', zIndex: 20, top: '100%', left: 0, right: 0, marginTop: 2, maxHeight: 220, overflowY: 'auto', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, boxShadow: '0 4px 12px rgba(0,0,0,.3)' }}>
+          {results.length === 0 ? (
+            <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--muted)' }}>No bikes match "{query}"</div>
+          ) : results.map((b) => (
+            <div
+              key={b.id}
+              onMouseDown={() => { onChange(String(b.id)); setOpen(false); }}
+              style={{ padding: '8px 12px', fontSize: 13, cursor: 'pointer', background: String(b.id) === String(value) ? 'var(--surface-2)' : undefined }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-2)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = String(b.id) === String(value) ? 'var(--surface-2)' : 'transparent'; }}
+            >
+              {bikeLabel(b)}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FileClaimModal({ isOpen, onClose, onFiled }) {
   const [bikes, setBikes] = useState([]);
   const [bikeId, setBikeId] = useState('');
   const [claimType, setClaimType] = useState('theft');
   const [description, setDescription] = useState('');
   const [incidentDate, setIncidentDate] = useState('');
+  const [sapsCaseNumber, setSapsCaseNumber] = useState('');
+  const [sapsPoliceStation, setSapsPoliceStation] = useState('');
   const [bikeAlerts, setBikeAlerts] = useState([]);
   const [selectedAlertIds, setSelectedAlertIds] = useState(new Set());
   const [loadingAlerts, setLoadingAlerts] = useState(false);
@@ -38,17 +88,30 @@ function FileClaimModal({ isOpen, onClose, onFiled }) {
     if (!isOpen) return;
     api.get('/bikes').then((r) => setBikes(r.data.bikes || [])).catch(() => {});
     setBikeId(''); setClaimType('theft'); setDescription(''); setIncidentDate('');
+    setSapsCaseNumber(''); setSapsPoliceStation('');
     setBikeAlerts([]); setSelectedAlertIds(new Set());
   }, [isOpen]);
 
   useEffect(() => {
     if (!bikeId) { setBikeAlerts([]); return; }
     setLoadingAlerts(true);
-    api.get(`/tracking/alerts?bike_id=${bikeId}&limit=30`)
+    const params = { bike_id: bikeId, limit: 100 };
+    // Scoped to the day before/of/after the incident date, so evidence
+    // linking isn't limited to whatever the most recent 30 alerts happen to
+    // be — a bike with lots of unrelated recent alerts could otherwise push
+    // the actual incident-day alerts off the list entirely.
+    if (incidentDate) {
+      const day = new Date(`${incidentDate}T00:00:00`);
+      const from = new Date(day); from.setDate(from.getDate() - 1);
+      const to = new Date(day); to.setDate(to.getDate() + 2); // exclusive upper bound
+      params.from = from.toISOString();
+      params.to = to.toISOString();
+    }
+    api.get('/tracking/alerts', { params })
       .then((r) => setBikeAlerts(r.data || []))
       .catch(() => setBikeAlerts([]))
       .finally(() => setLoadingAlerts(false));
-  }, [bikeId]);
+  }, [bikeId, incidentDate]);
 
   const toggleAlert = (id) => setSelectedAlertIds((prev) => {
     const next = new Set(prev);
@@ -66,6 +129,8 @@ function FileClaimModal({ isOpen, onClose, onFiled }) {
         description: description.trim(),
         incident_date: incidentDate || null,
         linked_alert_ids: [...selectedAlertIds],
+        saps_case_number: sapsCaseNumber.trim() || null,
+        saps_police_station: sapsPoliceStation.trim() || null,
       });
       toast.success('Claim filed');
       onFiled(data.claim);
@@ -82,12 +147,7 @@ function FileClaimModal({ isOpen, onClose, onFiled }) {
       <div style={{ minWidth: 420, display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div>
           <label className="label" style={{ fontSize: 12 }}>Bike</label>
-          <select className="input" value={bikeId} onChange={(e) => setBikeId(e.target.value)}>
-            <option value="">Select a bike…</option>
-            {bikes.map((b) => (
-              <option key={b.id} value={b.id}>{b.registration || b.vin} — {b.make} {b.model}</option>
-            ))}
-          </select>
+          <BikeSearchSelect bikes={bikes} value={bikeId} onChange={setBikeId} />
         </div>
         <div>
           <label className="label" style={{ fontSize: 12 }}>Claim type</label>
@@ -103,13 +163,28 @@ function FileClaimModal({ isOpen, onClose, onFiled }) {
           <label className="label" style={{ fontSize: 12 }}>Description</label>
           <textarea className="input" rows={3} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What happened…" />
         </div>
+        {claimType === 'theft' && (
+          <div style={{ display: 'flex', gap: 10 }}>
+            <div style={{ flex: 1 }}>
+              <label className="label" style={{ fontSize: 12 }}>SAPS case number</label>
+              <input className="input" value={sapsCaseNumber} onChange={(e) => setSapsCaseNumber(e.target.value)} placeholder="e.g. CAS 123/08/2026" />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label className="label" style={{ fontSize: 12 }}>Police station</label>
+              <input className="input" value={sapsPoliceStation} onChange={(e) => setSapsPoliceStation(e.target.value)} placeholder="e.g. Sandton SAPS" />
+            </div>
+          </div>
+        )}
         {bikeId && (
           <div>
-            <label className="label" style={{ fontSize: 12 }}>Link supporting alerts (optional evidence)</label>
+            <label className="label" style={{ fontSize: 12 }}>
+              Link supporting alerts (optional evidence)
+              {incidentDate && <span style={{ fontWeight: 400, color: 'var(--muted)' }}> — day before/of/after the incident date</span>}
+            </label>
             {loadingAlerts ? (
               <div style={{ fontSize: 12, color: 'var(--muted)' }}>Loading alerts…</div>
             ) : bikeAlerts.length === 0 ? (
-              <div style={{ fontSize: 12, color: 'var(--muted)' }}>No alerts recorded for this bike.</div>
+              <div style={{ fontSize: 12, color: 'var(--muted)' }}>{incidentDate ? 'No alerts around the incident date.' : 'No alerts recorded for this bike.'}</div>
             ) : (
               <div style={{ maxHeight: 160, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6, padding: 6 }}>
                 {bikeAlerts.map((a) => (
@@ -136,6 +211,8 @@ function ClaimRow({ claim, onUpdated }) {
   const [status, setStatus] = useState(claim.status);
   const [payout, setPayout] = useState(claim.payout_amount || '');
   const [notes, setNotes] = useState(claim.notes || '');
+  const [sapsCaseNumber, setSapsCaseNumber] = useState(claim.saps_case_number || '');
+  const [sapsPoliceStation, setSapsPoliceStation] = useState(claim.saps_police_station || '');
   const [saving, setSaving] = useState(false);
 
   const save = async () => {
@@ -143,6 +220,8 @@ function ClaimRow({ claim, onUpdated }) {
     try {
       const { data } = await api.put(`/claims/${claim.id}`, {
         status, payout_amount: payout === '' ? null : Number(payout), notes,
+        saps_case_number: sapsCaseNumber.trim() || null,
+        saps_police_station: sapsPoliceStation.trim() || null,
       });
       onUpdated(data.claim);
       toast.success('Claim updated');
@@ -164,6 +243,9 @@ function ClaimRow({ claim, onUpdated }) {
             <StatusBadge status={claim.status} />
           </div>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>{claim.description}</div>
+          {claim.claim_type === 'theft' && claim.saps_case_number && (
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>SAPS case {claim.saps_case_number}{claim.saps_police_station ? ` · ${claim.saps_police_station}` : ''}</div>
+          )}
         </div>
         <div style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0 }}>{fmtDateTime(claim.filed_at)}</div>
         {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
@@ -172,6 +254,18 @@ function ClaimRow({ claim, onUpdated }) {
         <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 10 }}>
           {claim.incident_date && <div style={{ fontSize: 12 }}><strong>Incident date:</strong> {claim.incident_date}</div>}
           {claim.filed_by_name && <div style={{ fontSize: 12 }}><strong>Filed by:</strong> {claim.filed_by_name}</div>}
+          {claim.claim_type === 'theft' && (
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <div>
+                <label className="label" style={{ fontSize: 11 }}>SAPS case number</label>
+                <input className="input" style={{ fontSize: 12, width: 180 }} value={sapsCaseNumber} onChange={(e) => setSapsCaseNumber(e.target.value)} placeholder="e.g. CAS 123/08/2026" />
+              </div>
+              <div>
+                <label className="label" style={{ fontSize: 11 }}>Police station</label>
+                <input className="input" style={{ fontSize: 12, width: 180 }} value={sapsPoliceStation} onChange={(e) => setSapsPoliceStation(e.target.value)} placeholder="e.g. Sandton SAPS" />
+              </div>
+            </div>
+          )}
           {claim.alerts?.length > 0 && (
             <div>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 4 }}>Linked alert evidence</div>

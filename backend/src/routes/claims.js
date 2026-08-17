@@ -52,6 +52,8 @@ router.post('/', authRequired, adminOnly, async (req, res) => {
   const linkedAlertIds = Array.isArray(req.body.linked_alert_ids)
     ? req.body.linked_alert_ids.map(Number).filter(Number.isFinite)
     : [];
+  const sapsCaseNumber = req.body.saps_case_number ? String(req.body.saps_case_number).trim() : null;
+  const sapsPoliceStation = req.body.saps_police_station ? String(req.body.saps_police_station).trim() : null;
 
   if (!Number.isFinite(bikeId)) return res.status(400).json({ error: 'bike_id is required' });
   if (!CLAIM_TYPES.includes(claimType)) return res.status(400).json({ error: `claim_type must be one of: ${CLAIM_TYPES.join(', ')}` });
@@ -61,9 +63,9 @@ router.post('/', authRequired, adminOnly, async (req, res) => {
   if (!bikeRows[0]) return res.status(404).json({ error: 'Bike not found' });
 
   const { rows } = await pgDb.query(
-    `INSERT INTO insurance_claims (bike_id, agreement_id, claim_type, description, incident_date, linked_alert_ids, filed_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-    [bikeId, agreementId, claimType, description, incidentDate, linkedAlertIds, req.user.id]
+    `INSERT INTO insurance_claims (bike_id, agreement_id, claim_type, description, incident_date, linked_alert_ids, filed_by, saps_case_number, saps_police_station)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+    [bikeId, agreementId, claimType, description, incidentDate, linkedAlertIds, req.user.id, sapsCaseNumber, sapsPoliceStation]
   );
   const claim = rows[0];
   await logAudit(req.user.id, 'claim.file', 'insurance_claims', claim.id, { bike_id: bikeId, claim_type: claimType }, req.ip);
@@ -92,6 +94,14 @@ router.put('/:id', authRequired, adminOnly, async (req, res) => {
   if (req.body.notes !== undefined) {
     values.push(String(req.body.notes || ''));
     updates.push(`notes = $${values.length}`);
+  }
+  if (req.body.saps_case_number !== undefined) {
+    values.push(req.body.saps_case_number ? String(req.body.saps_case_number).trim() : null);
+    updates.push(`saps_case_number = $${values.length}`);
+  }
+  if (req.body.saps_police_station !== undefined) {
+    values.push(req.body.saps_police_station ? String(req.body.saps_police_station).trim() : null);
+    updates.push(`saps_police_station = $${values.length}`);
   }
   if (!updates.length) return res.status(400).json({ error: 'No changes provided' });
   updates.push('updated_at = NOW()');

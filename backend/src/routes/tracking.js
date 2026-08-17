@@ -563,12 +563,16 @@ router.get('/alerts', authRequired, trackingReadOnly, async (req, res) => {
   const bikeId     = req.query.bike_id ? Number(req.query.bike_id) : null;
   const unackedOnly = req.query.unacked === '1';
   const status = String(req.query.status || '').trim(); // 'open' | 'resolved'
+  const from = req.query.from ? new Date(req.query.from) : null;
+  const to   = req.query.to   ? new Date(req.query.to)   : null;
   const params = [];
   let sql = 'SELECT * FROM tracking_alerts WHERE 1=1';
   if (bikeId)     { params.push(bikeId); sql += ` AND bike_id=$${params.length}`; }
   if (unackedOnly) sql += ' AND acknowledged_at IS NULL';
   if (status === 'open')     sql += ' AND resolved_at IS NULL';
   if (status === 'resolved') sql += ' AND resolved_at IS NOT NULL';
+  if (from && !Number.isNaN(from.getTime())) { params.push(from.toISOString()); sql += ` AND created_at >= $${params.length}`; }
+  if (to && !Number.isNaN(to.getTime()))     { params.push(to.toISOString());   sql += ` AND created_at <= $${params.length}`; }
   params.push(limit);
   sql += ` ORDER BY created_at DESC LIMIT $${params.length}`;
   const { rows } = await pgDb.query(sql, params);

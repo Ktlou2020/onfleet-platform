@@ -5,6 +5,8 @@ const pgDb = require('../pgDb');
 const { authRequired, adminOnly } = require('../middleware/auth');
 const { logAudit } = require('../utils/helpersPg');
 const asyncRouter = require('../utils/asyncRouter');
+const aiClaimsService = require('../services/aiClaimsService');
+const aiAnalyticsService = require('../services/aiAnalyticsService');
 
 const router = asyncRouter(express.Router());
 
@@ -114,6 +116,39 @@ router.put('/:id', authRequired, adminOnly, async (req, res) => {
   const claim = rows[0];
   await logAudit(req.user.id, 'claim.update', 'insurance_claims', claim.id, { changes: req.body }, req.ip);
   res.json({ claim: await hydrateClaim(claim) });
+});
+
+router.post('/:id/ai-summary', authRequired, adminOnly, async (req, res) => {
+  if (!aiClaimsService.isConfigured()) {
+    return res.status(400).json({ error: 'AI is not configured. Set ANTHROPIC_API_KEY to enable this.' });
+  }
+  const { rows } = await pgDb.query('SELECT id FROM insurance_claims WHERE id = $1', [req.params.id]);
+  if (!rows[0]) return res.status(404).json({ error: 'Claim not found' });
+
+  try {
+    const result = await aiClaimsService.generateCaseSummary(Number(req.params.id));
+    await logAudit(req.user.id, 'claim.ai_summary', 'insurance_claims', req.params.id, { risk_level: result.risk_level }, req.ip);
+    const { rows: claimRows } = await pgDb.query('SELECT * FROM insurance_claims WHERE id = $1', [req.params.id]);
+    res.json({ claim: await hydrateClaim(claimRows[0]) });
+  } catch (e) {
+    res.status(502).json({ error: `AI summary generation failed: ${e.message}` });
+  }
+});
+
+router.post('/analytics/ask', authRequired, adminOnly, async (req, res) => {
+  if (!aiAnalyticsService.isConfigured()) {
+    return res.status(400).json({ error: 'AI is not configured. Set ANTHROPIC_API_KEY to enable this.' });
+  }
+  const question = String(req.body.question || '').trim();
+  if (!question) return res.status(400).json({ error: 'question is required' });
+
+  try {
+    const result = await aiAnalyticsService.askQuestion(question);
+    await logAudit(req.user.id, 'claims.ai_analytics_query', null, null, { question }, req.ip);
+    res.json(result);
+  } catch (e) {
+    res.status(502).json({ error: `AI analytics failed: ${e.message}` });
+  }
 });
 
 module.exports = router;

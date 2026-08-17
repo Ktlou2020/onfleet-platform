@@ -5,7 +5,7 @@ import { Loading, SearchInput, fmtDateTime, matchesSearch } from '../../componen
 import { Modal } from '../../components/ui';
 import { sortNewestFirst } from '../../utils/sortNewestFirst';
 import { ALERT_LABELS } from '../../lib/alertMeta';
-import { Plus, ShieldAlert, ChevronDown, ChevronUp, Search } from 'lucide-react';
+import { Plus, ShieldAlert, ChevronDown, ChevronUp, Search, Sparkles } from 'lucide-react';
 
 const CLAIM_TYPES = ['theft', 'damage', 'accident', 'fire', 'other'];
 const CLAIM_STATUSES = ['filed', 'investigating', 'approved', 'rejected', 'paid', 'closed'];
@@ -13,12 +13,23 @@ const STATUS_COLORS = {
   filed: '#94a3b8', investigating: '#eab308', approved: '#22c55e',
   rejected: '#ef4444', paid: '#1E88D1', closed: 'var(--muted)',
 };
+const RISK_COLORS = { low: '#22c55e', medium: '#eab308', high: '#ef4444' };
 
 function StatusBadge({ status }) {
   const color = STATUS_COLORS[status] || '#94a3b8';
   return (
     <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: color, padding: '2px 7px', borderRadius: 5, textTransform: 'uppercase', letterSpacing: '.3px' }}>
       {status}
+    </span>
+  );
+}
+
+function RiskBadge({ level }) {
+  if (!level) return null;
+  const color = RISK_COLORS[level] || '#94a3b8';
+  return (
+    <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: color, padding: '2px 7px', borderRadius: 5, textTransform: 'uppercase', letterSpacing: '.3px' }}>
+      {level} risk
     </span>
   );
 }
@@ -214,6 +225,20 @@ function ClaimRow({ claim, onUpdated }) {
   const [sapsCaseNumber, setSapsCaseNumber] = useState(claim.saps_case_number || '');
   const [sapsPoliceStation, setSapsPoliceStation] = useState(claim.saps_police_station || '');
   const [saving, setSaving] = useState(false);
+  const [generatingAi, setGeneratingAi] = useState(false);
+
+  const generateAiSummary = async () => {
+    setGeneratingAi(true);
+    try {
+      const { data } = await api.post(`/claims/${claim.id}/ai-summary`);
+      onUpdated(data.claim);
+      toast.success('AI summary generated');
+    } catch (err) {
+      toast.error(err?.response?.data?.error || 'Failed to generate AI summary');
+    } finally {
+      setGeneratingAi(false);
+    }
+  };
 
   const save = async () => {
     setSaving(true);
@@ -241,6 +266,7 @@ function ClaimRow({ claim, onUpdated }) {
             <span style={{ fontWeight: 700, fontSize: 13 }}>{claim.bike_registration || `Bike #${claim.bike_id}`}</span>
             <span style={{ fontSize: 12, color: 'var(--muted)', textTransform: 'capitalize' }}>{claim.claim_type}</span>
             <StatusBadge status={claim.status} />
+            <RiskBadge level={claim.ai_risk_level} />
           </div>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>{claim.description}</div>
           {claim.claim_type === 'theft' && claim.saps_case_number && (
@@ -276,6 +302,27 @@ function ClaimRow({ claim, onUpdated }) {
               ))}
             </div>
           )}
+          <div style={{ padding: '10px 12px', background: 'var(--surface-2)', borderRadius: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: claim.ai_summary ? 8 : 0 }}>
+              <Sparkles size={13} style={{ color: '#7c3aed', flexShrink: 0 }} />
+              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase' }}>AI case analysis</span>
+              <RiskBadge level={claim.ai_risk_level} />
+              <button className="btn btn-sm btn-secondary" style={{ marginLeft: 'auto', fontSize: 11 }} disabled={generatingAi} onClick={generateAiSummary}>
+                {generatingAi ? 'Analyzing…' : claim.ai_summary ? 'Regenerate' : 'Generate summary'}
+              </button>
+            </div>
+            {claim.ai_summary && (
+              <>
+                <div style={{ fontSize: 12, lineHeight: 1.5 }}>{claim.ai_summary}</div>
+                {claim.ai_risk_reasons?.length > 0 && (
+                  <ul style={{ margin: '6px 0 0', paddingLeft: 16, fontSize: 11, color: 'var(--muted)' }}>
+                    {claim.ai_risk_reasons.map((r, i) => <li key={i}>{r}</li>)}
+                  </ul>
+                )}
+                <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 6 }}>Generated {fmtDateTime(claim.ai_summary_generated_at)} — AI-assisted, not a substitute for human review</div>
+              </>
+            )}
+          </div>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
             <div>
               <label className="label" style={{ fontSize: 11 }}>Status</label>
@@ -293,6 +340,63 @@ function ClaimRow({ claim, onUpdated }) {
             <label className="label" style={{ fontSize: 11 }}>Notes</label>
             <textarea className="input" style={{ fontSize: 12 }} rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AskAiPanel() {
+  const [open, setOpen] = useState(false);
+  const [question, setQuestion] = useState('');
+  const [asking, setAsking] = useState(false);
+  const [answer, setAnswer] = useState(null);
+  const [notConfigured, setNotConfigured] = useState(false);
+
+  const ask = async () => {
+    if (!question.trim() || asking) return;
+    setAsking(true);
+    setAnswer(null);
+    try {
+      const { data } = await api.post('/claims/analytics/ask', { question: question.trim() });
+      setAnswer(data.answer);
+    } catch (err) {
+      if (err?.response?.status === 400) setNotConfigured(true);
+      else toast.error(err?.response?.data?.error || 'Failed to get an answer');
+    } finally {
+      setAsking(false);
+    }
+  };
+
+  return (
+    <div className="card" style={{ marginBottom: 14, padding: '12px 14px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }} onClick={() => setOpen((o) => !o)}>
+        <Sparkles size={15} style={{ color: '#7c3aed', flexShrink: 0 }} />
+        <span style={{ fontWeight: 700, fontSize: 13 }}>Ask AI about claims</span>
+        {open ? <ChevronUp size={14} style={{ marginLeft: 'auto' }} /> : <ChevronDown size={14} style={{ marginLeft: 'auto' }} />}
+      </div>
+      {open && (
+        <div style={{ marginTop: 10 }}>
+          {notConfigured ? (
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>AI isn't configured yet — set ANTHROPIC_API_KEY to enable this.</div>
+          ) : (
+            <>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  className="input" style={{ flex: 1 }}
+                  placeholder="e.g. how many theft claims had the tracker go offline before the incident?"
+                  value={question} onChange={(e) => setQuestion(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && ask()}
+                />
+                <button className="btn btn-primary" disabled={asking || !question.trim()} onClick={ask}>{asking ? 'Thinking…' : 'Ask'}</button>
+              </div>
+              {answer && (
+                <div style={{ marginTop: 10, padding: '10px 12px', background: 'var(--surface-2)', borderRadius: 8, fontSize: 12, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+                  {answer}
+                </div>
+              )}
+            </>
+          )}
         </div>
       )}
     </div>
@@ -322,6 +426,7 @@ export default function AdminClaims() {
           <Plus size={14} /> File claim
         </button>
       </div>
+      <AskAiPanel />
       <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
         <SearchInput value={search} onChange={setSearch} placeholder="Search claims…" />
         <select className="input" style={{ width: 160 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>

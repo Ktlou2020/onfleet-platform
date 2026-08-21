@@ -545,8 +545,8 @@ async function getOrganization(organizationId) {
   return rows[0];
 }
 
-async function getOrganizationOrThrow(organizationId, { allowExpired = false } = {}) {
-  const organization = await getOrganization(organizationId);
+async function getOrganizationOrThrow(req, { allowExpired = false } = {}) {
+  const organization = await getOrganization(req.user.organization_id);
   if (!organization) {
     const error = new Error('Organization not found');
     error.status = 404;
@@ -559,7 +559,9 @@ async function getOrganizationOrThrow(organizationId, { allowExpired = false } =
       organization.status = 'past_due';
     }
   }
-  if (!allowExpired && ['past_due', 'suspended', 'cancelled'].includes(organization.status)) {
+  // A superadmin viewing the account via impersonation should see it as it
+  // really is, not hit the same paywall a locked-out real owner would.
+  if (!allowExpired && !req.user.is_impersonated && ['past_due', 'suspended', 'cancelled'].includes(organization.status)) {
     const error = new Error('Your subscription has ended. Go to Billing to upgrade your plan.');
     error.status = 402;
     error.code = 'SUBSCRIPTION_REQUIRED';
@@ -1009,7 +1011,7 @@ router.patch('/account/org', companyRoleAllowed(FLEET_RESOURCE_ACCESS.dashboard.
 
 router.get('/portal-data', companyRoleAllowed(FLEET_RESOURCE_ACCESS.dashboard.view), async (req, res) => {
   try {
-    const organization = await getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
+    const organization = await getOrganizationOrThrow(req, { allowExpired: true });
     res.json(await getPortalData(organization, req.user.role));
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Could not load fleet portal data' });
@@ -1051,7 +1053,7 @@ function performanceLabel(score) {
 
 router.get('/riders', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.view), async (req, res) => {
   try {
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const riderApplications = await listFleetRiderApplications(organization);
     const riders = await Promise.all(riderApplications.map(async (rider) => {
       const score = rider.status === 'approved' ? await computePerformanceScore(rider.user_id) : null;
@@ -1065,7 +1067,7 @@ router.get('/riders', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.view), asy
 
 router.get('/riders/scorecards', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.view), async (req, res) => {
   try {
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const { scoreRiders } = require('../services/riderScoring');
     const { rows: riders } = await pgDb.query(`
       SELECT DISTINCT ON (u.id) u.id AS user_id, u.full_name, u.phone, u.address_match_status,
@@ -1084,7 +1086,7 @@ router.get('/riders/scorecards', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders
 
 router.get('/riders/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.view), async (req, res) => {
   try {
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const application = await getScopedFleetApplication(organization, Number(req.params.id));
     if (!application) return res.status(404).json({ error: 'Rider application not found' });
     res.json({ application, documents: await getFleetApplicationDocuments(application.id), agreement: await getFleetApplicationAgreement(application.id) });
@@ -1102,7 +1104,7 @@ router.post('/riders', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), 
   { name: 'payslip_3', maxCount: 1 }
 ]), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
   try {
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const email = String(req.body.email || '').trim().toLowerCase();
     const full_name = String(req.body.full_name || '').trim();
     const phone = String(req.body.phone || '').trim();
@@ -1157,7 +1159,7 @@ router.post('/riders', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), 
 
 router.patch('/riders/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), async (req, res) => {
   try {
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const applicationId = Number(req.params.id);
     const current = await getScopedFleetApplication(organization, applicationId);
     if (!current) return res.status(404).json({ error: 'Rider application not found' });
@@ -1247,7 +1249,7 @@ router.patch('/riders/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.mana
 router.post('/riders/:id/documents', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), riderApplicationUpload.single('file'), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const applicationId = Number(req.params.id);
     const application = await getScopedFleetApplication(organization, applicationId);
     if (!application) return res.status(404).json({ error: 'Rider application not found' });
@@ -1266,7 +1268,7 @@ router.post('/riders/:id/documents', companyRoleAllowed(FLEET_RESOURCE_ACCESS.ri
 
 router.post('/riders/:id/approve', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), async (req, res) => {
   try {
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const result = await approveFleetApplication({
       organization,
       applicationId: req.params.id,
@@ -1284,7 +1286,7 @@ router.post('/riders/:id/approve', companyRoleAllowed(FLEET_RESOURCE_ACCESS.ride
 
 router.post('/riders/:id/reject', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), async (req, res) => {
   try {
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const result = await rejectFleetApplication({
       organization,
       applicationId: req.params.id,
@@ -1392,7 +1394,7 @@ router.delete('/team-members/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.team
 
 router.post('/allocations', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.manage), async (req, res) => {
   try {
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const bikeId = toInt(req.body.bike_id);
     const riderId = toInt(req.body.rider_id);
     const startDate = String(req.body.start_date || todayIso()).slice(0, 10);
@@ -1474,7 +1476,7 @@ router.post('/allocations', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.
 
 router.post('/reassignments', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.manage), async (req, res) => {
   try {
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const agreementId = toInt(req.body.agreement_id);
     const targetBikeId = toInt(req.body.target_bike_id);
     const note = String(req.body.note || '').trim();
@@ -1530,7 +1532,7 @@ router.post('/reassignments', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreement
 
 router.post('/maintenance/schedule', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.manage), async (req, res) => {
   try {
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const bikeId = toInt(req.body.bike_id);
     const nextServiceDate = String(req.body.next_service_date || '').trim() || null;
     const nextServiceKm = req.body.next_service_km === '' || req.body.next_service_km === undefined ? null : Number(req.body.next_service_km);
@@ -1566,7 +1568,7 @@ router.post('/maintenance/schedule', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bi
 
 router.post('/maintenance/log', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.manage), async (req, res) => {
   try {
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const bikeId = toInt(req.body.bike_id);
     const serviceDate = String(req.body.service_date || '').trim();
     const serviceType = String(req.body.service_type || '').trim();
@@ -1657,7 +1659,7 @@ router.post('/maintenance/log', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.m
 
 router.get('/bikes', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.view), async (req, res) => {
   try {
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const status = String(req.query.status || '').trim();
     const fleet = String(req.query.fleet || '').trim();
     let bikes = await getFleetBikes(organization);
@@ -1671,7 +1673,7 @@ router.get('/bikes', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.view), async
 
 router.get('/bikes/:id/service', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.view), async (req, res) => {
   try {
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const bikeId = toInt(req.params.id);
     const bike = await getScopedBike(organization, bikeId);
     if (!bike) return res.status(404).json({ error: 'Bike not found in your fleet' });
@@ -1690,7 +1692,7 @@ router.get('/bikes/:id/service', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.
 
 router.post('/bikes', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.manage), async (req, res) => {
   try {
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const vin = String(req.body.vin || '').trim();
     const make = String(req.body.make || '').trim();
     const model = String(req.body.model || '').trim();
@@ -1741,7 +1743,7 @@ router.post('/bikes', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.manage), as
 
 router.put('/bikes/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.manage), async (req, res) => {
   try {
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const bikeId = toInt(req.params.id);
     if (!bikeId) return res.status(400).json({ error: 'Invalid bike id' });
     const bike = await getScopedBike(organization, bikeId);
@@ -1784,7 +1786,7 @@ router.put('/bikes/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.manage),
 
 router.get('/agreements', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.view), async (req, res) => {
   try {
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const status = String(req.query.status || '').trim();
     const bikeStatus = String(req.query.bike_status || '').trim();
     const excludedBikeStatuses = String(req.query.exclude_bike_statuses || '').split(',').map((value) => value.trim()).filter(Boolean);
@@ -1800,7 +1802,7 @@ router.get('/agreements', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.vi
 
 router.get('/agreements/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.view), async (req, res) => {
   try {
-    const org = await getOrganizationOrThrow(req.user.organization_id);
+    const org = await getOrganizationOrThrow(req);
     const agreementId = toInt(req.params.id);
     if (!agreementId) return res.status(400).json({ error: 'Invalid agreement id' });
     const agreement = await getScopedAgreement(org, agreementId);
@@ -1843,7 +1845,7 @@ router.get('/agreements/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreement
 
 router.get('/agreements/:id/fleet-contract', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.view), async (req, res) => {
   try {
-    const org = await getOrganizationOrThrow(req.user.organization_id);
+    const org = await getOrganizationOrThrow(req);
     const agreementId = toInt(req.params.id);
     if (!agreementId) return res.status(400).json({ error: 'Invalid agreement id' });
     const agreement = await getScopedAgreement(org, agreementId);
@@ -1858,7 +1860,7 @@ router.get('/agreements/:id/fleet-contract', companyRoleAllowed(FLEET_RESOURCE_A
 
 router.post('/agreements', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.manage), async (req, res) => {
   try {
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const bikeId = toInt(req.body.bike_id);
     const riderId = toInt(req.body.rider_id);
     const startDate = String(req.body.start_date || todayIso()).slice(0, 10);
@@ -1940,7 +1942,7 @@ router.post('/agreements', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.m
 
 router.patch('/agreements/:id/remaining-balance', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.manage), async (req, res) => {
   try {
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const agreementId = toInt(req.params.id);
     if (!agreementId) return res.status(400).json({ error: 'Invalid agreement id' });
 
@@ -1961,7 +1963,7 @@ router.patch('/agreements/:id/remaining-balance', companyRoleAllowed(FLEET_RESOU
 
 router.post('/agreements/:id/status', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.manage), async (req, res) => {
   try {
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const agreementId = toInt(req.params.id);
     const nextStatus = String(req.body.status || '').trim();
     if (!agreementId || !nextStatus) return res.status(400).json({ error: 'Agreement and status are required' });
@@ -2011,7 +2013,7 @@ router.post('/agreements/:id/status', companyRoleAllowed(FLEET_RESOURCE_ACCESS.a
 
 router.post('/agreements/:id/reinstate', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.manage), async (req, res) => {
   try {
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const agreementId = toInt(req.params.id);
     if (!agreementId) return res.status(400).json({ error: 'Invalid agreement id' });
     const agreement = await getScopedAgreement(organization, agreementId);
@@ -2026,7 +2028,7 @@ router.post('/agreements/:id/reinstate', companyRoleAllowed(FLEET_RESOURCE_ACCES
 // POST /fleet/agreements/:id/payment-link — generate Paystack checkout link and email it to the rider
 router.post('/agreements/:id/payment-link', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.manage), async (req, res) => {
   try {
-    const org = await getOrganizationOrThrow(req.user.organization_id);
+    const org = await getOrganizationOrThrow(req);
     const agreementId = toInt(req.params.id);
     if (!agreementId) return res.status(400).json({ error: 'Invalid agreement id' });
 
@@ -2118,7 +2120,7 @@ If you have any questions, contact ${orgName} directly.`;
 
 router.get('/agreements/:id/rider-portal-token', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.view), async (req, res) => {
   try {
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const agreementId = toInt(req.params.id);
     if (!agreementId) return res.status(400).json({ error: 'Invalid agreement ID' });
     const agreement = await getScopedAgreement(organization, agreementId);
@@ -2137,7 +2139,7 @@ router.get('/agreements/:id/rider-portal-token', companyRoleAllowed(FLEET_RESOUR
 
 router.get('/payments', companyRoleAllowed(FLEET_RESOURCE_ACCESS.payments.view), async (req, res) => {
   try {
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const search = String(req.query.search || '').trim();
     const method = String(req.query.method || '').trim();
     const days = toInt(req.query.days);
@@ -2152,7 +2154,7 @@ router.get('/payments', companyRoleAllowed(FLEET_RESOURCE_ACCESS.payments.view),
 
 router.post('/payments/manual', companyRoleAllowed(FLEET_RESOURCE_ACCESS.payments.manage), async (req, res) => {
   try {
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const agreementId = toInt(req.body.agreement_id);
     const amount = toPositiveNumber(req.body.amount);
     if (!agreementId || !amount) return res.status(400).json({ error: 'Agreement and amount are required' });
@@ -2168,7 +2170,7 @@ router.post('/payments/manual', companyRoleAllowed(FLEET_RESOURCE_ACCESS.payment
 
 router.post('/payments/bulk-delete', companyRoleAllowed(FLEET_RESOURCE_ACCESS.payments.manage), async (req, res) => {
   try {
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const paymentIds = Array.from(new Set((Array.isArray(req.body.payment_ids) ? req.body.payment_ids : [])
       .map((value) => Number(value))
       .filter((value) => Number.isInteger(value) && value > 0)));
@@ -2207,7 +2209,7 @@ router.post('/payments/bulk-delete', companyRoleAllowed(FLEET_RESOURCE_ACCESS.pa
 
 router.get('/reports', companyRoleAllowed(FLEET_RESOURCE_ACCESS.reporting.view), async (req, res) => {
   try {
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const scope = getBikeScope(organization, 'b');
     const sp = scope.params;
 
@@ -2331,7 +2333,7 @@ router.post('/payments/import/preview', companyRoleAllowed(FLEET_RESOURCE_ACCESS
       const ext = (req.file.originalname || '').toLowerCase();
       if (!ext.endsWith('.csv')) return res.status(400).json({ error: 'Please upload a CSV file' });
     }
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
     const text = req.file.buffer.toString('utf8').replace(/^﻿/, '');
     const lines = text.split(/\r?\n/).filter((l) => l.trim());
     if (lines.length < 2) return res.status(400).json({ error: 'CSV must have a header row and at least one data row' });
@@ -2363,7 +2365,7 @@ router.post('/payments/import/preview', companyRoleAllowed(FLEET_RESOURCE_ACCESS
 router.post('/payments/import', companyRoleAllowed(FLEET_RESOURCE_ACCESS.payments.manage), csvUpload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-    const organization = await getOrganizationOrThrow(req.user.organization_id);
+    const organization = await getOrganizationOrThrow(req);
 
     let mapping = {};
     try { mapping = req.body.mapping ? JSON.parse(req.body.mapping) : {}; } catch (_) {}
@@ -2499,7 +2501,7 @@ router.get('/billing/diagnose', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing
 // GET /fleet/billing/status
 router.get('/billing/status', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.view), async (req, res) => {
   try {
-    const org = await getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
+    const org = await getOrganizationOrThrow(req, { allowExpired: true });
     const trialDaysLeft = (org.status === 'trialing' && org.trial_ends_at)
       ? Math.max(0, Math.round((new Date(org.trial_ends_at) - new Date()) / 86400000))
       : null;
@@ -2529,7 +2531,7 @@ router.get('/billing/status', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.v
 // POST /fleet/billing/subscribe — initialise Paystack subscription checkout
 router.post('/billing/subscribe', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
   try {
-    const org = await getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
+    const org = await getOrganizationOrThrow(req, { allowExpired: true });
     const { plan_key } = req.body;
     if (!FLEET_BILLING_PLANS[plan_key]) return res.status(400).json({ error: 'Invalid plan key.', valid_keys: Object.keys(FLEET_BILLING_PLANS) });
 
@@ -2583,7 +2585,7 @@ router.get('/billing/verify', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.m
   try {
     const { reference } = req.query;
     if (!reference) return res.status(400).json({ error: 'Reference is required' });
-    const org = await getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
+    const org = await getOrganizationOrThrow(req, { allowExpired: true });
 
     const verifyResp = await axios.get(
       `${PAYSTACK_API}/transaction/verify/${encodeURIComponent(reference)}`,
@@ -2669,7 +2671,7 @@ async function computeWalletAvailability(organizationId, wallet) {
 // GET /fleet/wallet — wallet balance and recent transactions
 router.get('/wallet', companyRoleAllowed(FLEET_RESOURCE_ACCESS.wallet.view), async (req, res) => {
   try {
-    const org = await getOrganizationOrThrow(req.user.organization_id);
+    const org = await getOrganizationOrThrow(req);
     await ensureFleetWallet(org.id);
     const { rows: walletRows } = await pgDb.query('SELECT * FROM fleet_wallets WHERE organization_id = $1', [org.id]);
     const wallet = walletRows[0];
@@ -2697,7 +2699,7 @@ router.get('/wallet', companyRoleAllowed(FLEET_RESOURCE_ACCESS.wallet.view), asy
 // POST /fleet/wallet/payout — request payout from wallet
 router.post('/wallet/payout', companyRoleAllowed(FLEET_RESOURCE_ACCESS.wallet.manage), async (req, res) => {
   try {
-    const org = await getOrganizationOrThrow(req.user.organization_id);
+    const org = await getOrganizationOrThrow(req);
     await ensureFleetWallet(org.id);
     const { rows: walletRows } = await pgDb.query('SELECT * FROM fleet_wallets WHERE organization_id = $1', [org.id]);
     const wallet = walletRows[0];
@@ -2753,7 +2755,7 @@ router.post('/wallet/payout', companyRoleAllowed(FLEET_RESOURCE_ACCESS.wallet.ma
 // GET /fleet/bank-details — get org bank account details
 router.get('/bank-details', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.view), async (req, res) => {
   try {
-    const org = await getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
+    const org = await getOrganizationOrThrow(req, { allowExpired: true });
     res.json({
       bank_account_name: org.bank_account_name || '',
       bank_name: org.bank_name || '',
@@ -2768,7 +2770,7 @@ router.get('/bank-details', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.vie
 // PUT /fleet/bank-details — save org bank account details
 router.put('/bank-details', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
   try {
-    const org = await getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
+    const org = await getOrganizationOrThrow(req, { allowExpired: true });
     const { bank_account_name, bank_name, bank_account_number, bank_branch_code } = req.body;
     await pgDb.query(`UPDATE organizations SET bank_account_name = $1, bank_name = $2, bank_account_number = $3, bank_branch_code = $4, updated_at = NOW() WHERE id = $5`,
       [bank_account_name || null, bank_name || null, bank_account_number || null, bank_branch_code || null, org.id]);
@@ -2782,7 +2784,7 @@ router.put('/bank-details', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.man
 // GET /fleet/riders/:id/subscription — get a rider's current subscription status
 router.get('/riders/:id/subscription', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.view), async (req, res) => {
   try {
-    const org = await getOrganizationOrThrow(req.user.organization_id);
+    const org = await getOrganizationOrThrow(req);
     const { rows: subRows } = await pgDb.query(`SELECT * FROM rider_subscriptions WHERE rider_user_id = $1 AND organization_id = $2 ORDER BY created_at DESC LIMIT 1`,
       [toInt(req.params.id), org.id]);
     res.json({ subscription: subRows[0] || null });
@@ -2794,7 +2796,7 @@ router.get('/riders/:id/subscription', companyRoleAllowed(FLEET_RESOURCE_ACCESS.
 // POST /fleet/riders/:id/subscription/init — create Paystack subscription checkout for a rider
 router.post('/riders/:id/subscription/init', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), async (req, res) => {
   try {
-    const org = await getOrganizationOrThrow(req.user.organization_id);
+    const org = await getOrganizationOrThrow(req);
     const rider = await getScopedRider(org, toInt(req.params.id));
     if (!rider) return res.status(404).json({ error: 'Rider not found' });
 
@@ -2861,7 +2863,7 @@ router.post('/riders/:id/subscription/init', companyRoleAllowed(FLEET_RESOURCE_A
 // POST /fleet/billing/cancel — cancel active subscription
 router.post('/billing/cancel', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
   try {
-    const org = await getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
+    const org = await getOrganizationOrThrow(req, { allowExpired: true });
     if (org.status !== 'active') return res.status(400).json({ error: 'No active subscription to cancel' });
 
     if (org.paystack_subscription_code) {
@@ -2885,7 +2887,7 @@ router.post('/billing/cancel', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.
 
 router.get('/hubs', companyRoleAllowed(FLEET_RESOURCE_ACCESS.hubs.view), async (req, res) => {
   try {
-    const org = await getOrganizationOrThrow(req.user.organization_id);
+    const org = await getOrganizationOrThrow(req);
     const { rows: hubs } = await pgDb.query(`SELECT * FROM hubs WHERE organization_id = $1 ORDER BY name ASC`, [org.id]);
     res.json({ hubs });
   } catch (error) {
@@ -2895,7 +2897,7 @@ router.get('/hubs', companyRoleAllowed(FLEET_RESOURCE_ACCESS.hubs.view), async (
 
 router.post('/hubs', companyRoleAllowed(FLEET_RESOURCE_ACCESS.hubs.manage), async (req, res) => {
   try {
-    const org = await getOrganizationOrThrow(req.user.organization_id);
+    const org = await getOrganizationOrThrow(req);
     const name = String(req.body.name || '').trim();
     if (!name) return res.status(400).json({ error: 'Hub name is required' });
     const { rows: insertedRows } = await pgDb.query(`INSERT INTO hubs (organization_id, name, address, city, contact_name, contact_phone, notes) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
@@ -2911,7 +2913,7 @@ router.post('/hubs', companyRoleAllowed(FLEET_RESOURCE_ACCESS.hubs.manage), asyn
 
 router.put('/hubs/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.hubs.manage), async (req, res) => {
   try {
-    const org = await getOrganizationOrThrow(req.user.organization_id);
+    const org = await getOrganizationOrThrow(req);
     const hubId = toInt(req.params.id);
     if (!hubId) return res.status(400).json({ error: 'Invalid hub id' });
     const { rows: hubRows } = await pgDb.query(`SELECT * FROM hubs WHERE id = $1 AND organization_id = $2`, [hubId, org.id]);
@@ -2930,7 +2932,7 @@ router.put('/hubs/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.hubs.manage), a
 
 router.delete('/hubs/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.hubs.manage), async (req, res) => {
   try {
-    const org = await getOrganizationOrThrow(req.user.organization_id);
+    const org = await getOrganizationOrThrow(req);
     const hubId = toInt(req.params.id);
     if (!hubId) return res.status(400).json({ error: 'Invalid hub id' });
     const { rows: hubRows } = await pgDb.query(`SELECT * FROM hubs WHERE id = $1 AND organization_id = $2`, [hubId, org.id]);
@@ -2949,7 +2951,7 @@ router.delete('/hubs/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.hubs.manage)
 
 router.get('/collections', companyRoleAllowed(FLEET_RESOURCE_ACCESS.collections.view), async (req, res) => {
   try {
-    const org = await getOrganizationOrThrow(req.user.organization_id);
+    const org = await getOrganizationOrThrow(req);
     const scope = getBikeScope(org, 'b', 2);
     const { rows: items } = await pgDb.query(`SELECT a.id, a.agreement_no, a.status, a.weekly_amount, a.start_date,
         u.full_name AS rider_name, u.email AS rider_email, u.phone AS rider_phone,
@@ -2993,7 +2995,7 @@ router.get('/collections', companyRoleAllowed(FLEET_RESOURCE_ACCESS.collections.
 
 router.post('/collections/:agreementId/action', companyRoleAllowed(FLEET_RESOURCE_ACCESS.collections.manage), async (req, res) => {
   try {
-    const org = await getOrganizationOrThrow(req.user.organization_id);
+    const org = await getOrganizationOrThrow(req);
     const agreementId = toInt(req.params.agreementId);
     if (!agreementId) return res.status(400).json({ error: 'Invalid agreement id' });
 
@@ -3029,7 +3031,7 @@ router.post('/collections/:agreementId/action', companyRoleAllowed(FLEET_RESOURC
 
 router.get('/collections/:agreementId/actions', companyRoleAllowed(FLEET_RESOURCE_ACCESS.collections.view), async (req, res) => {
   try {
-    const org = await getOrganizationOrThrow(req.user.organization_id);
+    const org = await getOrganizationOrThrow(req);
     const agreementId = toInt(req.params.agreementId);
     if (!agreementId) return res.status(400).json({ error: 'Invalid agreement id' });
     const agreement = await getScopedAgreement(org, agreementId);
@@ -3045,7 +3047,7 @@ router.get('/collections/:agreementId/actions', companyRoleAllowed(FLEET_RESOURC
 
 router.get('/api-keys', companyRoleAllowed(FLEET_RESOURCE_ACCESS.api_keys.view), async (req, res) => {
   try {
-    const org = await getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
+    const org = await getOrganizationOrThrow(req, { allowExpired: true });
     const { rows: keys } = await pgDb.query(`SELECT ak.id, ak.name, ak.key_prefix, ak.last_used_at, ak.revoked_at, ak.created_at, u.full_name AS created_by_name
       FROM api_keys ak LEFT JOIN users u ON u.id = ak.created_by
       WHERE ak.organization_id = $1 ORDER BY ak.created_at DESC`, [org.id]);
@@ -3057,7 +3059,7 @@ router.get('/api-keys', companyRoleAllowed(FLEET_RESOURCE_ACCESS.api_keys.view),
 
 router.post('/api-keys', companyRoleAllowed(FLEET_RESOURCE_ACCESS.api_keys.manage), async (req, res) => {
   try {
-    const org = await getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
+    const org = await getOrganizationOrThrow(req, { allowExpired: true });
     const name = String(req.body.name || '').trim();
     if (!name) return res.status(400).json({ error: 'Key name is required' });
     const rawKey = `onfleet_${crypto.randomBytes(32).toString('hex')}`;
@@ -3075,7 +3077,7 @@ router.post('/api-keys', companyRoleAllowed(FLEET_RESOURCE_ACCESS.api_keys.manag
 
 router.delete('/api-keys/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.api_keys.manage), async (req, res) => {
   try {
-    const org = await getOrganizationOrThrow(req.user.organization_id, { allowExpired: true });
+    const org = await getOrganizationOrThrow(req, { allowExpired: true });
     const keyId = toInt(req.params.id);
     if (!keyId) return res.status(400).json({ error: 'Invalid key id' });
     const { rows: keyRows } = await pgDb.query(`SELECT * FROM api_keys WHERE id = $1 AND organization_id = $2 AND revoked_at IS NULL`, [keyId, org.id]);

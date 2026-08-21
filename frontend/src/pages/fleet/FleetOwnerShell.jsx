@@ -220,7 +220,7 @@ export default function FleetOwnerShell() {
     }
   };
 
-  const isBlocked = statusLoaded && BLOCKED_STATUSES.includes(orgStatus) && !onBillingPage;
+  const isBlocked = statusLoaded && BLOCKED_STATUSES.includes(orgStatus) && !onBillingPage && !isImpersonating;
 
   if (isBlocked) {
     return <SubscriptionGate billingData={billingData} onSubscribed={loadBilling} />;

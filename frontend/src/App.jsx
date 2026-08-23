@@ -53,6 +53,7 @@ const AdminBikeDetail = lazy(() => import('./pages/admin/BikeDetail'));
 const AdminPayments = lazy(() => import('./pages/admin/Payments'));
 const AdminNotifications = lazy(() => import('./pages/admin/Notifications'));
 const AdminUsers = lazy(() => import('./pages/admin/Users'));
+const AdminRiders = lazy(() => import('./pages/admin/Riders'));
 const AdminAuditLogs = lazy(() => import('./pages/admin/AuditLogs'));
 const AdminClaims = lazy(() => import('./pages/admin/Claims'));
 const AdminStrategyReport = lazy(() => import('./pages/admin/StrategyReport'));
@@ -189,6 +190,7 @@ export default function App() {
             <Route path="tracking" element={<AdminTracking />} />
             <Route path="tracking/dashboard" element={<AdminTrackingDashboard />} />
             <Route path="claims" element={<AdminClaims />} />
+            <Route path="riders" element={<AdminRiders />} />
             <Route path="workshop" element={<AdminWorkshop />} />
             <Route path="users" element={<AdminUsers />} />
             <Route path="audit" element={<AdminAuditLogs />} />

@@ -4,14 +4,15 @@ import { useAuth } from '../../auth';
 import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
 import NotificationBell from '../../components/NotificationBell';
-import { LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell, Briefcase, ShieldCheck, PiggyBank, MapPin, UserCheck, Wrench, ShieldAlert } from 'lucide-react';
+import { LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell, Briefcase, ShieldCheck, PiggyBank, MapPin, UserCheck, Wrench, ShieldAlert, Gauge } from 'lucide-react';
 
 const navItems = [
   { to: '/admin', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/admin/applications', label: 'Applications', icon: FileCheck },
   { to: '/admin/agreements', label: 'Agreements', icon: FileText },
   { to: '/admin/bikes', label: 'Bikes Fleet', icon: Bike },
-  { to: '/admin/tracking', label: 'GPS Tracking', icon: MapPin },
+  { to: '/admin/tracking', label: 'GPS Tracking', icon: MapPin, end: true },
+  { to: '/admin/tracking/dashboard', label: 'Tracking Dashboard', icon: Gauge },
   { to: '/admin/claims', label: 'Insurance Claims', icon: ShieldAlert },
   { to: '/admin/payments', label: 'Payments', icon: CreditCard },
   { to: '/admin/notifications', label: 'Notifications', icon: Bell },
@@ -56,7 +57,7 @@ export default function AdminShell() {
           {allowedNav.map((item, i) => {
             if (item.section) return <div key={`sec-${i}`} className="nav-section-label">{item.section}</div>;
             const Icon = item.icon;
-            return <NavLink key={item.to} to={item.to} end={item.to === '/admin'}><Icon size={16} /> {item.label}</NavLink>;
+            return <NavLink key={item.to} to={item.to} end={item.to === '/admin' || item.end}><Icon size={16} /> {item.label}</NavLink>;
           })}
         </nav>
         <div className="user-mini">
@@ -72,7 +73,7 @@ export default function AdminShell() {
         {allowedNav.filter((item) => !item.section).slice(0, 5).map((item) => {
           const Icon = item.icon;
           return (
-            <NavLink key={item.to} to={item.to} end={item.to === '/admin'}>
+            <NavLink key={item.to} to={item.to} end={item.to === '/admin' || item.end}>
               <Icon size={20} />
               <span>{item.label}</span>
             </NavLink>

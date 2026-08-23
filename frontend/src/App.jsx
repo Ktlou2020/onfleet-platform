@@ -61,6 +61,7 @@ const AdminFleetDashboard = lazy(() => import('./pages/admin/FleetDashboard'));
 const AdminFleetOwners = lazy(() => import('./pages/admin/FleetOwners'));
 const AdminFleetPayouts = lazy(() => import('./pages/admin/FleetPayouts'));
 const AdminTracking = lazy(() => import('./pages/admin/Tracking'));
+const AdminTrackingDashboard = lazy(() => import('./pages/admin/TrackingDashboard'));
 const AdminLeads = lazy(() => import('./pages/admin/Leads'));
 const AdminWorkshop = lazy(() => import('./pages/admin/Workshop'));
 const WorkshopLogin = lazy(() => import('./pages/workshop/Login'));
@@ -186,6 +187,7 @@ export default function App() {
             <Route path="pilot" element={<Navigate to="/admin/leads" replace />} />
             <Route path="leads" element={<AdminLeads />} />
             <Route path="tracking" element={<AdminTracking />} />
+            <Route path="tracking/dashboard" element={<AdminTrackingDashboard />} />
             <Route path="claims" element={<AdminClaims />} />
             <Route path="workshop" element={<AdminWorkshop />} />
             <Route path="users" element={<AdminUsers />} />

@@ -413,6 +413,109 @@ router.get('/risk', authRequired, trackingReadOnly, async (req, res) => {
   res.json(result);
 });
 
+// ---------- Dashboard ----------
+
+// Must match CRITICAL_ALERT_TYPES in frontend/src/lib/alertMeta.js.
+const CRITICAL_ALERT_TYPES_SQL = ['panic', 'tamper', 'power_disconnect', 'movement', 'theft_risk', 'night_movement', 'towing'];
+
+router.get('/dashboard', authRequired, trackingReadOnly, async (req, res) => {
+  const { todayStart, weekStart } = sastDayAndWeekStart();
+  const connected = teltonikaServer.getConnectedIMEIs();
+
+  const [
+    { rows: deviceRows },
+    { rows: coverageRows },
+    { rows: alertsByType },
+    { rows: alertCounterRows },
+    { rows: tripRows },
+    { rows: stolenRows },
+  ] = await Promise.all([
+    pgDb.query('SELECT imei, last_seen_at, engine_cut_active FROM tracking_devices'),
+    pgDb.query(`
+      SELECT COUNT(*) AS total_in_service,
+             COUNT(*) FILTER (WHERE id IN (SELECT bike_id FROM tracking_devices WHERE bike_id IS NOT NULL)) AS with_device
+      FROM bikes WHERE status NOT IN ('sold', 'written_off')
+    `),
+    pgDb.query(
+      `SELECT alert_type, COUNT(*) AS count FROM tracking_alerts WHERE created_at >= $1 GROUP BY alert_type ORDER BY count DESC`,
+      [todayStart.toISOString()]
+    ),
+    pgDb.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE resolved_at IS NULL)                                  AS open_total,
+         COUNT(*) FILTER (WHERE resolved_at IS NULL AND acknowledged_at IS NULL)       AS unacknowledged,
+         COUNT(*) FILTER (WHERE resolved_at IS NULL AND alert_type = ANY($1))          AS critical_open,
+         COUNT(*) FILTER (WHERE created_at >= $2)                                      AS today_total,
+         COUNT(*) FILTER (WHERE resolved_at >= $2)                                     AS resolved_today
+       FROM tracking_alerts`,
+      [CRITICAL_ALERT_TYPES_SQL, todayStart.toISOString()]
+    ),
+    pgDb.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE started_at >= $1)                      AS today_trips,
+         COALESCE(SUM(distance_km) FILTER (WHERE started_at >= $1), 0) AS today_km,
+         COUNT(*) FILTER (WHERE started_at >= $2)                      AS week_trips,
+         COALESCE(SUM(distance_km) FILTER (WHERE started_at >= $2), 0) AS week_km
+       FROM trips`,
+      [todayStart.toISOString(), weekStart.toISOString()]
+    ),
+    pgDb.query(`SELECT COUNT(*) AS count FROM bikes WHERE status = 'stolen'`),
+  ]);
+
+  const devices = { active: 0, sleeping: 0, offline: 0 };
+  let neverConnected = 0;
+  for (const d of deviceRows) {
+    if (!d.last_seen_at) neverConnected += 1;
+    const status = deviceStatus(d.imei, d.last_seen_at, connected);
+    devices[status] = (devices[status] || 0) + 1;
+  }
+  const engineCutsActive = deviceRows.filter((d) => d.engine_cut_active).length;
+
+  const riskMap = riskService.getCurrentScores();
+  const riskBikeIds = Object.keys(riskMap).map(Number);
+  const riskBikeMap = await getBikeMap(riskBikeIds);
+  const topRiskBikes = riskBikeIds
+    .map((bikeId) => ({ bike_id: bikeId, registration: riskBikeMap[bikeId]?.registration || null, ...riskMap[bikeId] }))
+    .filter((r) => r.level !== 'normal')
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5);
+
+  const c = alertCounterRows[0];
+  const t = tripRows[0];
+  const coverage = coverageRows[0];
+
+  res.json({
+    devices: {
+      total: deviceRows.length,
+      active: devices.active || 0,
+      sleeping: devices.sleeping || 0,
+      offline: devices.offline || 0,
+      never_connected: neverConnected,
+    },
+    fleet_coverage: {
+      total_in_service: Number(coverage.total_in_service),
+      with_device: Number(coverage.with_device),
+    },
+    engine_cuts_active: engineCutsActive,
+    stolen_bikes: Number(stolenRows[0].count),
+    alerts: {
+      open_total: Number(c.open_total),
+      unacknowledged: Number(c.unacknowledged),
+      critical_open: Number(c.critical_open),
+      today_total: Number(c.today_total),
+      resolved_today: Number(c.resolved_today),
+      today_by_type: alertsByType.map((r) => ({ alert_type: r.alert_type, count: Number(r.count) })),
+    },
+    trips: {
+      today_trips: Number(t.today_trips),
+      today_km: Number(t.today_km),
+      week_trips: Number(t.week_trips),
+      week_km: Number(t.week_km),
+    },
+    top_risk_bikes: topRiskBikes,
+  });
+});
+
 // ---------- SSE live stream ----------
 
 router.get('/live', authRequired, trackingReadOnly, (req, res) => {

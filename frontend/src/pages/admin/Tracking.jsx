@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, Link } from 'react-router-dom';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, Circle, Polygon, CircleMarker, useMap, useMapEvents } from 'react-leaflet';
 import MarkerClusterGroup from 'react-leaflet-cluster';
 import L from 'leaflet';
@@ -13,12 +13,16 @@ import {
   Shield, Bell, Route, BellOff, Pencil, Settings, Mail, Users, Moon,
   Battery, BatteryLow, BatteryMedium, BatteryFull, BatteryCharging,
   Signal, SignalZero, SignalLow, SignalMedium, SignalHigh, Satellite,
-  Play, Pause, SkipBack, ChevronsRight,
+  Play, Pause, SkipBack, ChevronsRight, LayoutDashboard,
 } from 'lucide-react';
 import api from '../../api';
 import toast from 'react-hot-toast';
 import { Modal, ConfirmModal } from '../../components/ui';
 import { ALERT_LABELS, ALERT_COLORS, ALERT_SEVERITY, ALERT_FILTER_GROUPS, CRITICAL_ALERT_TYPES } from '../../lib/alertMeta';
+import {
+  SAST, fmtSASTtime, fmtSAST, fmtSASTshort, todayInSAST,
+  parseIo, battPct, extBattPct, DeviceBatteryIcon, DeviceSignalIcon, SEVERITY_RANK, computeDeviceHealth,
+} from '../../lib/trackingHelpers';
 
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -295,12 +299,6 @@ function fmtDuration(sec) {
   return `${m} min`;
 }
 
-// ── SAST time formatting (Africa/Johannesburg = UTC+2, no DST) ───────────────
-const SAST = { timeZone: 'Africa/Johannesburg' };
-const fmtSASTtime = (d) => d ? new Date(d).toLocaleTimeString('en-ZA', { ...SAST, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '—';
-const fmtSAST     = (d) => d ? new Date(d).toLocaleString('en-ZA',     { ...SAST, day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '—';
-const fmtSASTshort = (d) => d ? new Date(d).toLocaleString('en-ZA',    { ...SAST, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }) : '—';
-
 // Must match ESCALATION_DELAY_MS/CRITICAL_TYPES in backend/src/services/alertEscalationService.js.
 // Computes eligibility from the alert itself rather than trusting a caller-supplied
 // isCritical, since theft_risk criticality is payload-based (level==='critical'),
@@ -323,7 +321,6 @@ function EscalationCountdownBadge({ alert, now, size = 9 }) {
     ? <span title="Re-notifies the assigned recipients if still unacknowledged" style={{ fontSize: size, fontWeight: 700, color: '#b45309', border: '1px solid #b45309', padding: '0 4px', borderRadius: 4 }}>Escalates in {Math.max(1, Math.ceil(msLeft / 60_000))}m</span>
     : <span title="Past the escalation threshold — re-notification is due" style={{ fontSize: size, fontWeight: 700, color: '#fff', background: '#b45309', padding: '0 4px', borderRadius: 4, opacity: .75 }}>Escalating…</span>;
 }
-const todayInSAST = () => new Date().toLocaleDateString('en-CA', SAST); // en-CA → YYYY-MM-DD
 const fmtPingDate = (dateStr) => {
   const today = todayInSAST();
   if (dateStr === today) return 'Today';
@@ -331,49 +328,7 @@ const fmtPingDate = (dateStr) => {
   return d.toLocaleDateString('en-ZA', { ...SAST, weekday: 'short', day: 'numeric', month: 'short' });
 };
 
-// ── Parse Teltonika IO data JSON to useful values ─────────────────────────────
-function parseIo(ioData) {
-  try {
-    const io = typeof ioData === 'string' ? JSON.parse(ioData) : (ioData || {});
-    return {
-      gsm:    io[21] != null ? Number(io[21]) : null,   // 0–5 signal level
-      // Teltonika Permanent I/O elements: 66 = External Voltage, 67 = Battery Voltage (device's own cell)
-      battMv: io[67] != null ? Number(io[67]) : null,   // internal battery mV
-      extMv:  io[66] != null ? Number(io[66]) : null,   // external power mV
-    };
-  } catch { return { gsm: null, battMv: null, extMv: null }; }
-}
-
-// Battery % from mV (3200 mV = 0 %, 4200 mV = 100 %) — the tracker's own internal backup cell (Li-ion)
-function battPct(mv) { return Math.min(100, Math.max(0, Math.round((mv - 3200) / 10))); }
-
-// External battery % from mV — the bike's 12V lead-acid electrical system the tracker is wired
-// into (11.0 V = 0 %, 12.8 V = 100 %, clamped). A low/zero reading means the tracker has lost
-// that connection (dead battery or disconnected wiring), which is exactly what "0%" should show.
-function extBattPct(mv) { return Math.min(100, Math.max(0, Math.round((mv - 11000) / 18))); }
-
-function DeviceBatteryIcon({ battMv, extMv, size = 12 }) {
-  if (extMv != null && extMv > 9000) return <BatteryCharging size={size} color="#22c55e" title={`External power: ${(extMv / 1000).toFixed(1)} V (${extBattPct(extMv)}%)`} />;
-  if (battMv == null) return <Battery size={size} color="var(--muted)" title="No battery data" />;
-  const pct = battPct(battMv);
-  if (pct <= 20) return <BatteryLow   size={size} color="#ef4444" title={`Battery: ${pct}%`} />;
-  if (pct <= 50) return <BatteryMedium size={size} color="#f97316" title={`Battery: ${pct}%`} />;
-  if (pct <= 80) return <BatteryFull   size={size} color="#eab308" title={`Battery: ${pct}%`} />;
-  return <BatteryCharging size={size} color="#22c55e" title={`Battery: ${pct}%`} />;
-}
-
-function DeviceSignalIcon({ gsm, size = 12 }) {
-  if (gsm == null) return <SignalZero size={size} color="var(--muted)" title="No signal data" />;
-  if (gsm === 0)   return <SignalZero size={size} color="#ef4444"      title="No signal" />;
-  if (gsm <= 1)    return <SignalLow    size={size} color="#ef4444"    title={`Signal: ${gsm}/5`} />;
-  if (gsm <= 2)    return <SignalMedium size={size} color="#f97316"    title={`Signal: ${gsm}/5`} />;
-  if (gsm <= 3)    return <SignalMedium size={size} color="#eab308"    title={`Signal: ${gsm}/5`} />;
-  return <SignalHigh size={size} color="#22c55e" title={`Signal: ${gsm}/5`} />;
-}
-
 // ── Command label mapping ─────────────────────────────────────────────────────
-const SEVERITY_RANK = { high: 0, medium: 1, low: 2 };
-
 const CMD_LABEL_MAP = {
   'getgps':         'Request Position',
   'fota connect':   'FOTA Update',
@@ -1316,31 +1271,7 @@ export default function Tracking({ readOnly = false }) {
   // Devices worth a second look, computed from data already on screen (no
   // extra request) — surfaces exactly what you'd otherwise only notice by
   // clicking into every device one at a time.
-  const deviceHealth = useMemo(() => {
-    return devices.map(d => {
-      const mapD = mapDevices.find(m => m.id === d.id);
-      const io = parseIo(mapD?.io_data);
-      const battMv = mapD?.battery_mv ?? io.battMv;
-      const gsm = mapD?.gsm_signal ?? io.gsm;
-      const sats = mapD?.satellites;
-      const pct = battMv != null ? battPct(battMv) : null;
-      const reasons = [];
-      if (d.device_status === 'offline') reasons.push({ key: 'offline', text: `Offline${d.last_seen_at ? ` since ${fmtSASTshort(d.last_seen_at)}` : ''}`, severity: 'high' });
-      if (pct != null && pct <= 20) reasons.push({ key: 'battery_critical', text: `Internal battery ${pct}%`, severity: 'high' });
-      if (gsm != null && gsm <= 1) reasons.push({ key: 'poor_signal', text: 'Poor GSM signal', severity: 'medium' });
-      if (d.device_status === 'active' && sats != null && sats < 4) reasons.push({ key: 'weak_gps', text: `Weak GPS fix (${sats} sats)`, severity: 'medium' });
-      if (!d.bike_id) reasons.push({ key: 'no_bike', text: 'No bike linked', severity: 'low' });
-      // Stable per-issue-set signature (categories only, not the fluctuating
-      // display text) — a device stays cleared as long as it's still the same
-      // set of problems, and resurfaces the moment something new shows up.
-      const signature = reasons.map(r => r.key).sort().join(',');
-      return { device: d, mapD, reasons, signature };
-    }).filter(h => h.reasons.length > 0 && h.signature !== h.device.health_ack_signature)
-      .sort((a, b) => {
-        const rankOf = (h) => Math.min(...h.reasons.map(r => SEVERITY_RANK[r.severity]));
-        return rankOf(a) - rankOf(b);
-      });
-  }, [devices, mapDevices]);
+  const deviceHealth = useMemo(() => computeDeviceHealth(devices, mapDevices), [devices, mapDevices]);
 
   const clearDeviceHealth = useCallback(async (e, deviceId, signature) => {
     e.stopPropagation();
@@ -1374,6 +1305,7 @@ export default function Tracking({ readOnly = false }) {
               <div style={{ width: 7, height: 7, borderRadius: '50%', background: sseOnline ? '#22c55e' : '#94a3b8' }} title={sseOnline ? 'Live feed active' : 'Reconnecting…'} />
               <span style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 600 }}>{sseOnline ? 'LIVE' : 'offline'}</span>
             </div>
+            <Link to="/admin/tracking/dashboard" className="btn btn-sm btn-secondary" title="Dashboard"><LayoutDashboard size={12} /></Link>
             <button className="btn btn-sm btn-secondary" title="Refresh" onClick={loadDevices}><RefreshCw size={12} /></button>
             {!readOnly && <button className="btn btn-sm btn-primary" onClick={() => setShowAdd(true)}><Plus size={12} /> Add</button>}
           </div>

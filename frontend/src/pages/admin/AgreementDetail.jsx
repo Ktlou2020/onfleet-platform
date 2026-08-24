@@ -4,7 +4,7 @@ import api from '../../api';
 import toast from 'react-hot-toast';
 import { Loading, Badge, Stat, Modal, fmt, fmtDate, fmtDateTime } from '../../components/ui';
 
-const creditedAmount = (payment) => Number(payment?.net_amount || payment?.amount || 0);
+const creditedAmount = (payment) => Number(payment?.net_amount) || Number(payment?.amount) || 0;
 const feeAmount = (payment) => Number(payment?.fee_amount || 0);
 const grossAmount = (payment) => Number(payment?.amount || 0);
 

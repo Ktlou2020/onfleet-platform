@@ -5,7 +5,7 @@ import toast from 'react-hot-toast';
 import { Loading, Badge, SearchInput, Pagination, Modal, fmt, fmtDateTime, matchesSearch, paginateItems } from '../../components/ui';
 import { sortNewestFirst } from '../../utils/sortNewestFirst';
 
-const creditedAmount = (payment) => Number(payment?.net_amount || payment?.amount || 0);
+const creditedAmount = (payment) => Number(payment?.net_amount) || Number(payment?.amount) || 0;
 const feeAmount = (payment) => Number(payment?.fee_amount || 0);
 const grossAmount = (payment) => Number(payment?.amount || 0);
 

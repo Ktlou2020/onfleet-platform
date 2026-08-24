@@ -33,7 +33,7 @@ const CARE_TIPS = [
   { title: 'Reduce theft risk', text: 'Vary parking spots, use busy pickup points, switch off quickly when stopping, and share suspicious activity with OnFleet immediately.' }
 ];
 
-const creditedAmount = (payment) => Number(payment?.net_amount || payment?.amount || 0);
+const creditedAmount = (payment) => Number(payment?.net_amount) || Number(payment?.amount) || 0;
 const feeAmount = (payment) => Number(payment?.fee_amount || 0);
 const grossAmount = (payment) => Number(payment?.amount || 0);
 const monthKey = (date) => String(date || '').slice(0, 7);

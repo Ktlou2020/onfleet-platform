@@ -27,7 +27,7 @@ function FleetContractBtn({ agreementId }) {
   );
 }
 
-const creditedAmount = (payment) => Number(payment?.net_amount || payment?.amount || 0);
+const creditedAmount = (payment) => Number(payment?.net_amount) || Number(payment?.amount) || 0;
 const feeAmount = (payment) => Number(payment?.fee_amount || 0);
 const grossAmount = (payment) => Number(payment?.amount || 0);
 

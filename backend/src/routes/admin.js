@@ -415,6 +415,108 @@ router.get('/dashboard', async (req, res) => {
   res.json({ stats, weekly_revenue: weekly });
 });
 
+// ---------- Rider signup activity ----------
+// Scoped to organization_id IS NULL — the direct platform self-signup flow
+// (frontend/src/pages/Signup.jsx + /application). Fleet-owner-recruited
+// riders (organization_id set, via the public rider-application link) are a
+// separate acquisition channel and tracked on that org's own dashboard.
+
+router.get('/signup-stats', async (req, res) => {
+  const q = (sql, params = []) => pgDb.query(sql, params).then((r) => r.rows[0]);
+  const RIDER_SCOPE = `role = 'rider' AND deleted_at IS NULL AND organization_id IS NULL`;
+
+  const [signupCounts, funnel, dailySignups, recentRows] = await Promise.all([
+    q(`SELECT
+        COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE) AS today,
+        COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '7 days') AS last7,
+        COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '30 days') AS last30,
+        COUNT(*) AS total
+      FROM users WHERE ${RIDER_SCOPE}`),
+    q(`WITH rider_apps AS (
+        SELECT u.id AS user_id, u.created_at AS signed_up_at,
+          a.id AS application_id, a.status, a.reviewed_at, a.retry_after_date,
+          (SELECT COUNT(*) FROM application_documents d WHERE d.application_id = a.id AND d.doc_type = 'payslip') AS payslip_count
+        FROM users u
+        LEFT JOIN LATERAL (
+          SELECT * FROM applications WHERE user_id = u.id ORDER BY submitted_at DESC LIMIT 1
+        ) a ON true
+        WHERE u.${RIDER_SCOPE}
+      )
+      SELECT
+        COUNT(*) FILTER (WHERE application_id IS NULL) AS no_application,
+        COUNT(*) FILTER (WHERE application_id IS NOT NULL AND status NOT IN ('approved','rejected','withdrawn') AND payslip_count < 3) AS in_progress,
+        COUNT(*) FILTER (WHERE status IN ('submitted','under_review') AND payslip_count >= 3) AS awaiting_review,
+        COUNT(*) FILTER (WHERE status = 'approved') AS approved,
+        COUNT(*) FILTER (WHERE status = 'rejected') AS rejected,
+        COUNT(*) FILTER (WHERE status = 'rejected' AND retry_after_date > CURRENT_DATE) AS in_retry_lockout,
+        AVG(EXTRACT(EPOCH FROM (reviewed_at - signed_up_at)) / 86400) FILTER (WHERE status = 'approved') AS avg_days_to_approval
+      FROM rider_apps`),
+    pgDb.query(`SELECT TO_CHAR(created_at, 'YYYY-MM-DD') AS day, COUNT(*) AS count
+      FROM users
+      WHERE ${RIDER_SCOPE} AND created_at >= NOW() - INTERVAL '30 days'
+      GROUP BY day ORDER BY day`),
+    pgDb.query(`
+      SELECT u.id, u.full_name, u.email, u.created_at,
+        a.id AS application_id, a.status AS application_status,
+        (SELECT COUNT(*) FROM application_documents d WHERE d.application_id = a.id AND d.doc_type = 'payslip') AS payslip_count
+      FROM users u
+      LEFT JOIN LATERAL (
+        SELECT * FROM applications WHERE user_id = u.id ORDER BY submitted_at DESC LIMIT 1
+      ) a ON true
+      WHERE u.${RIDER_SCOPE}
+      ORDER BY u.created_at DESC LIMIT 10
+    `)
+  ]);
+
+  const approvedCount = Number(funnel.approved);
+  const rejectedCount = Number(funnel.rejected);
+  const decided = approvedCount + rejectedCount;
+
+  // Zero-fill the 30-day series so the chart has no silent gaps on quiet days.
+  const byDay = new Map(dailySignups.rows.map((r) => [r.day, Number(r.count)]));
+  const series = [];
+  for (let i = 29; i >= 0; i--) {
+    const day = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+    series.push({ day, count: byDay.get(day) || 0 });
+  }
+
+  const stageOf = (row) => {
+    if (!row.application_id) return 'no_application';
+    if (row.application_status === 'approved') return 'approved';
+    if (row.application_status === 'rejected') return 'rejected';
+    if (['submitted', 'under_review'].includes(row.application_status) && Number(row.payslip_count) >= 3) return 'awaiting_review';
+    return 'in_progress';
+  };
+
+  res.json({
+    signups: {
+      today: Number(signupCounts.today),
+      last7: Number(signupCounts.last7),
+      last30: Number(signupCounts.last30),
+      total: Number(signupCounts.total),
+    },
+    funnel: {
+      no_application: Number(funnel.no_application),
+      in_progress: Number(funnel.in_progress),
+      awaiting_review: Number(funnel.awaiting_review),
+      approved: approvedCount,
+      rejected: rejectedCount,
+      in_retry_lockout: Number(funnel.in_retry_lockout),
+    },
+    approval_rate: decided ? +(approvedCount / decided * 100).toFixed(1) : null,
+    avg_days_to_approval: funnel.avg_days_to_approval != null ? +Number(funnel.avg_days_to_approval).toFixed(1) : null,
+    signups_by_day: series,
+    recent: recentRows.rows.map((r) => ({
+      id: r.id,
+      full_name: r.full_name,
+      email: r.email,
+      created_at: r.created_at,
+      application_id: r.application_id,
+      stage: stageOf(r),
+    })),
+  });
+});
+
 router.get('/fleet-owners/dashboard', async (req, res) => {
   const organizations = await listFleetOwnerOrganizations();
   const summary = {

@@ -65,22 +65,19 @@ export function AuthProvider({ children }) {
   };
 
   const signup = async (payload) => {
-    const isFormData = typeof FormData !== 'undefined' && payload instanceof FormData;
     try {
-      const { data } = await api.post(isFormData ? '/auth/signup-complete' : '/auth/signup', payload, isFormData
-        ? { headers: { 'Content-Type': 'multipart/form-data' } }
-        : undefined);
+      const { data } = await api.post('/auth/signup', payload);
       localStorage.setItem('of_token', data.token);
       localStorage.setItem('of_user', JSON.stringify(data.user));
       setUser(data.user);
       trackAnalyticsEvent('sign_up', {
-        signup_type: isFormData ? 'rider_full_application' : 'rider_basic',
+        signup_type: 'rider_basic',
         user_role: data.user?.role || 'rider'
       });
       return data.user;
     } catch (error) {
       trackAnalyticsEvent('sign_up_failed', {
-        signup_type: isFormData ? 'rider_full_application' : 'rider_basic',
+        signup_type: 'rider_basic',
         error_message: error.response?.data?.error || 'Sign up failed'
       });
       throw error;

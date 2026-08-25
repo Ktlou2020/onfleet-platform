@@ -3,6 +3,7 @@
 const pgDb = require('../pgDb');
 const trackingEvents = require('../trackingEvents');
 const { sendNotification } = require('./notifierPg');
+const { ALERT_SEVERITY } = require('../constants/alertTypes');
 
 // In-memory trip state per bike
 const openTrips = new Map();
@@ -102,7 +103,7 @@ const DORMANT_BIKE_DAYS = 3;
 // Alert types that are OFF by default (no panic button wired on standard installs)
 const ALERT_DISABLED_BY_DEFAULT = new Set(['panic']);
 
-const CRITICAL_TYPES = new Set(['panic', 'tamper', 'power_disconnect', 'movement', 'night_movement', 'towing']);
+const CRITICAL_TYPES = new Set(['panic', 'tamper', 'power_disconnect', 'movement', 'night_movement', 'towing', 'engine_cut_auto']);
 
 const ALERT_LABELS = {
   geofence_enter:   'Entered geofence',
@@ -122,6 +123,7 @@ const ALERT_LABELS = {
   bike_dormant:     'Bike inactive for days',
   night_movement:   'Movement during high-theft hours (00:00–04:00)',
   towing:           'Possible towing (ignition off, sustained movement)',
+  engine_cut_auto:  'Engine cut automatically — entered a no-go zone',
 };
 
 function haversineKm(lat1, lng1, lat2, lng2) {
@@ -151,6 +153,7 @@ async function emitAlert(id, bikeId, deviceId, alertType, payload, recordedAt) {
     bike_id: bikeId,
     device_id: deviceId,
     alert_type: alertType,
+    severity: ALERT_SEVERITY[alertType] || 'medium',
     payload: JSON.stringify(payload),
     bike_registration: reg,
     created_at: recordedAt,
@@ -191,8 +194,8 @@ async function fireAlert(bikeId, deviceId, alertType, payload, recordedAt, nowMs
   if (setting ? setting.enabled === false : !enabledDefault) return;
   if (!canFire(bikeId, alertType, nowMs)) return;
   const { rows } = await pgDb.query(
-    'INSERT INTO tracking_alerts (bike_id, device_id, alert_type, payload, created_at) VALUES ($1,$2,$3,$4,$5) RETURNING id',
-    [bikeId, deviceId, alertType, JSON.stringify(payload), recordedAt]
+    'INSERT INTO tracking_alerts (bike_id, device_id, alert_type, severity, payload, created_at) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',
+    [bikeId, deviceId, alertType, ALERT_SEVERITY[alertType] || 'medium', JSON.stringify(payload), recordedAt]
   );
   await emitAlert(rows[0].id, bikeId, deviceId, alertType, payload, recordedAt);
 }
@@ -450,4 +453,4 @@ async function checkDormantBikes() {
   }
 }
 
-module.exports = { processPing, hydrateOpenTrips, reloadAlertSettings, checkOfflineDevices, checkDormantBikes };
+module.exports = { processPing, hydrateOpenTrips, reloadAlertSettings, checkOfflineDevices, checkDormantBikes, emitAlert };

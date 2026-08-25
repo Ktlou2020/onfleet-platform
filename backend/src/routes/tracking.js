@@ -12,6 +12,7 @@ const { logAudit } = require('../utils/helpersPg');
 const { cutCommandForModel, restoreCommandForModel } = require('../services/engineCommands');
 const gpsImportService = require('../services/gpsImportService');
 const asyncRouter = require('../utils/asyncRouter');
+const { ALL_ALERT_TYPES } = require('../constants/alertTypes');
 
 const router = asyncRouter(express.Router());
 const gpsImportUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -50,12 +51,6 @@ function isOnline(imei, lastSeenAt, connectedImeis) {
 }
 
 // All known alert types with defaults
-const ALL_ALERT_TYPES = [
-  'geofence_enter','geofence_exit','harsh_brake','harsh_accel','harsh_cornering',
-  'idle','speeding','panic','power_disconnect','low_battery','movement','tamper','device_offline',
-  'theft_risk','long_trip','bike_dormant','night_movement','towing','battery_declining',
-];
-
 // Bike/org/rider map for a list of bike IDs — bikes/organizations/users all
 // live in the same Postgres database now, so this is a single real query
 // instead of a per-row SQLite lookup loop.

@@ -15,6 +15,7 @@
 const pgDb = require('../pgDb');
 const trackingEvents = require('../trackingEvents');
 const { sendNotification } = require('./notifierPg');
+const { ALERT_SEVERITY } = require('../constants/alertTypes');
 
 const BASELINE_WINDOW_DAYS = 30;
 const MIN_SAMPLES_FOR_BASELINE = 50;
@@ -169,9 +170,9 @@ async function fireRiskAlert(bikeId, deviceId, score, level, reasons, recordedAt
   const payload = JSON.stringify({ score, level, reasons });
 
   const { rows } = await pgDb.query(
-    `INSERT INTO tracking_alerts (bike_id, device_id, alert_type, payload, created_at)
-     VALUES ($1,$2,'theft_risk',$3,$4) RETURNING id`,
-    [bikeId, deviceId, payload, recordedAt]
+    `INSERT INTO tracking_alerts (bike_id, device_id, alert_type, severity, payload, created_at)
+     VALUES ($1,$2,'theft_risk',$3,$4,$5) RETURNING id`,
+    [bikeId, deviceId, ALERT_SEVERITY.theft_risk, payload, recordedAt]
   );
 
   trackingEvents.emit('alert', {
@@ -179,6 +180,7 @@ async function fireRiskAlert(bikeId, deviceId, score, level, reasons, recordedAt
     bike_id: bikeId,
     device_id: deviceId,
     alert_type: 'theft_risk',
+    severity: ALERT_SEVERITY.theft_risk,
     payload,
     bike_registration: reg,
     created_at: recordedAt,

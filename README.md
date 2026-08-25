@@ -45,7 +45,7 @@ A complete, production-ready rent-to-own platform for delivery bikes. Built for 
 | Backend | Node.js + Express + better-sqlite3 (SQLite — easily swap to PostgreSQL) |
 | Auth | JWT + bcrypt |
 | Payments | Paystack (cards, EFT, mobile money) |
-| Notifications | Pluggable: SMTP (email), Twilio (SMS / WhatsApp) |
+| Notifications | Email (SMTP) is live; SMS/WhatsApp is a stub — see Notification providers below |
 | Scheduling | node-cron |
 | File uploads | multer (KYC docs, signatures) |
 
@@ -101,9 +101,8 @@ npm run dev                # http://localhost:5173
 - DB: Neon / Supabase / RDS
 
 ### Notification providers
-Edit `backend/src/services/notifier.js` to wire in:
-- **WhatsApp / SMS** → Twilio (env vars already scaffolded)
-- **Email** → SendGrid / Mailgun / SMTP
+- **Email** → live today via SMTP (`backend/src/services/notifierPg.js`)
+- **WhatsApp / SMS** → not wired up. `sendSMS`/`sendWhatsApp` in `notifierPg.js` are `console.log` stubs — no alert (including panic/theft) reaches anyone by phone today. Needs a real Twilio (or equivalent) integration before relying on it.
 
 ## 📁 Project layout
 
@@ -140,7 +139,7 @@ onfleet/
 - [ ] In-app rider chat with admin (Socket.IO)
 - [ ] Mobile app (React Native — same API)
 - [ ] Insurance auto-renewal workflow
-- [ ] Bike geofencing alerts (after-hours movement)
+- [ ] Real SMS/WhatsApp alert delivery (Twilio) — currently a stub, see Notification providers below
 - [ ] Rider score / credit rating
 - [ ] Multi-tenant (other African countries)
 

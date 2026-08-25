@@ -3,6 +3,7 @@
 const pgDb = require('../pgDb');
 const trackingEvents = require('../trackingEvents');
 const { cutCommandForModel } = require('./engineCommands');
+const { ALERT_SEVERITY } = require('../constants/alertTypes');
 
 // Active geofences change only via admin CRUD (routes/tracking.js), not per
 // ping — cached in memory and refreshed on demand instead of re-querying on
@@ -58,22 +59,19 @@ async function autoEngineCut(deviceId, bikeId, geofence, reg) {
     const sent = sendCommand(device.imei, cmdId, cutCmd);
     console.log(`[GeofenceService] Auto engine cut ${sent ? 'sent' : 'queued'} for ${device.imei} — entered: ${geofence.name}`);
 
-    const cutPayload = JSON.stringify({ geofence_name: geofence.name, cmd: cutCmd, queued: !sent });
+    const cutPayloadObj = { geofence_name: geofence.name, cmd: cutCmd, queued: !sent };
     const { rows: alertRows } = await pgDb.query(
-      `INSERT INTO tracking_alerts (bike_id, device_id, alert_type, payload, created_at)
-       VALUES ($1,$2,'engine_cut_auto',$3,NOW()) RETURNING id`,
-      [bikeId, deviceId, cutPayload]
+      `INSERT INTO tracking_alerts (bike_id, device_id, alert_type, severity, payload, created_at)
+       VALUES ($1,$2,'engine_cut_auto',$3,$4,NOW()) RETURNING id`,
+      [bikeId, deviceId, ALERT_SEVERITY.engine_cut_auto, JSON.stringify(cutPayloadObj)]
     );
-    trackingEvents.emit('alert', {
-      id: alertRows[0].id,
-      bike_id: bikeId,
-      device_id: deviceId,
-      alert_type: 'engine_cut_auto',
-      payload: cutPayload,
-      bike_registration: reg,
-      created_at: new Date().toISOString(),
-      acknowledged_at: null,
-    });
+    // Routed through tripService's emitAlert (not a plain trackingEvents.emit)
+    // so this — arguably the most urgent alert type there is, a bike's
+    // engine was just physically cut — actually reaches a human by email,
+    // same as the other critical alert types. Previously it only ever
+    // showed up live in an open tracking tab.
+    const { emitAlert } = require('./tripService');
+    await emitAlert(alertRows[0].id, bikeId, deviceId, 'engine_cut_auto', cutPayloadObj, new Date().toISOString());
   } catch (e) {
     console.error('[GeofenceService] Auto engine cut failed:', e.message);
   }
@@ -152,8 +150,8 @@ async function checkGeofences(bikeId, deviceId, lat, lng, recordedAt) {
     const payload = JSON.stringify({ geofence_id: gf.id, geofence_name: gf.name, zone_type: zoneType, lat, lng });
 
     const { rows: alertRows } = await pgDb.query(
-      'INSERT INTO tracking_alerts (bike_id, device_id, alert_type, payload, created_at) VALUES ($1,$2,$3,$4,$5) RETURNING id',
-      [bikeId, deviceId, alertType, payload, recordedAt]
+      'INSERT INTO tracking_alerts (bike_id, device_id, alert_type, severity, payload, created_at) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',
+      [bikeId, deviceId, alertType, ALERT_SEVERITY[alertType], payload, recordedAt]
     );
     await pgDb.query(
       `INSERT INTO geofence_states (bike_id, geofence_id, inside, updated_at) VALUES ($1,$2,$3,$4)
@@ -167,6 +165,7 @@ async function checkGeofences(bikeId, deviceId, lat, lng, recordedAt) {
       bike_id: bikeId,
       device_id: deviceId,
       alert_type: alertType,
+      severity: ALERT_SEVERITY[alertType],
       payload,
       bike_registration: regValue,
       created_at: recordedAt,

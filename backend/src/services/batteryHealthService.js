@@ -10,6 +10,7 @@
 
 const pgDb = require('../pgDb');
 const trackingEvents = require('../trackingEvents');
+const { ALERT_SEVERITY } = require('../constants/alertTypes');
 
 // Mirrors battPct() in frontend/src/pages/admin/Tracking.jsx — the tracker's
 // own backup cell, roughly 3.2V (0%) to 4.2V (100%) for a single-cell Li-ion.
@@ -89,9 +90,9 @@ async function checkDeclines() {
 
     const payload = JSON.stringify({ from_pct: from, to_pct: to, days: DECLINE_WINDOW_DAYS });
     const { rows: alertRows } = await pgDb.query(
-      `INSERT INTO tracking_alerts (bike_id, device_id, alert_type, payload, created_at)
-       VALUES ($1,$2,'battery_declining',$3,NOW()) RETURNING id`,
-      [bikeId, device_id, payload]
+      `INSERT INTO tracking_alerts (bike_id, device_id, alert_type, severity, payload, created_at)
+       VALUES ($1,$2,'battery_declining',$3,$4,NOW()) RETURNING id`,
+      [bikeId, device_id, ALERT_SEVERITY.battery_declining, payload]
     );
 
     trackingEvents.emit('alert', {
@@ -99,6 +100,7 @@ async function checkDeclines() {
       bike_id: bikeId,
       device_id,
       alert_type: 'battery_declining',
+      severity: ALERT_SEVERITY.battery_declining,
       payload,
       bike_registration: reg,
       created_at: new Date().toISOString(),

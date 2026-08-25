@@ -1,10 +1,30 @@
 'use strict';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { RefreshCw, BellOff, CheckCircle2, Wifi, WifiOff, X, User, Phone } from 'lucide-react';
+import { RefreshCw, BellOff, CheckCircle2, Eye, Wifi, WifiOff, X, User, Phone } from 'lucide-react';
 import api from '../api';
 import toast from 'react-hot-toast';
 import { Modal } from '../components/ui';
-import { ALERT_LABELS, ALERT_COLORS, ALERT_SEVERITY, ALERT_FILTER_GROUPS } from '../lib/alertMeta';
+import { ALERT_LABELS, ALERT_COLORS, ALERT_SEVERITY, ALERT_FILTER_GROUPS, CRITICAL_ALERT_TYPES } from '../lib/alertMeta';
+
+// Same cue as admin/Tracking.jsx — this screen is the control_room role's
+// entire job, so a new critical alert needs a sound, not just a silent list
+// update they might not be looking at.
+function playAlertBeep() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [0, 0.18, 0.36].forEach(t => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(880, ctx.currentTime + t);
+      gain.gain.setValueAtTime(0.22, ctx.currentTime + t);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + t + 0.14);
+      osc.start(ctx.currentTime + t);
+      osc.stop(ctx.currentTime + t + 0.14);
+    });
+  } catch { /* AudioContext may be blocked before user gesture */ }
+}
 
 const SAST = { timeZone: 'Africa/Johannesburg' };
 const fmtSASTtime = (d) => d
@@ -47,6 +67,7 @@ export default function ControlRoomAlerts() {
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [resolving, setResolving] = useState(null); // alert being resolved
+  const [acking, setAcking] = useState(() => new Set());
   const [comment, setComment] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [sseOnline, setSseOnline] = useState(false);
@@ -74,6 +95,9 @@ export default function ControlRoomAlerts() {
   }, []);
 
   useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
+  useEffect(() => {
+    if (Notification.permission === 'default') Notification.requestPermission().catch(() => {});
+  }, []);
   useEffect(() => { setSelected(new Set()); loadAlerts(statusTab); }, [statusTab, loadAlerts]);
   useEffect(() => { setSelected(new Set()); }, [typeFilter]);
 
@@ -118,6 +142,15 @@ export default function ControlRoomAlerts() {
                 if (statusTabRef.current !== 'resolved') {
                   setAlerts(prev => [p, ...prev].slice(0, 200));
                 }
+                const riskLevel = p.alert_type === 'theft_risk' ? (() => { try { return JSON.parse(p.payload)?.level; } catch { return null; } })() : null;
+                if (CRITICAL_ALERT_TYPES.has(p.alert_type) && (p.alert_type !== 'theft_risk' || riskLevel === 'critical')) {
+                  playAlertBeep();
+                  const label = ALERT_LABELS[p.alert_type] || p.alert_type;
+                  const reg   = p.bike_registration || `Bike #${p.bike_id}`;
+                  if (Notification.permission === 'granted') {
+                    new Notification(`🚨 ${label}`, { body: reg, tag: `gps-${p.alert_type}`, silent: true });
+                  }
+                }
               } else if (evtType === 'alert_resolved') {
                 setSelected(prev => { if (!prev.has(p.id)) return prev; const next = new Set(prev); next.delete(p.id); return next; });
                 setAlerts(prev => {
@@ -143,6 +176,22 @@ export default function ControlRoomAlerts() {
     function scheduleRetry() { retryTimer = setTimeout(connect, 5_000); }
     connect();
     return () => { abort.abort(); clearTimeout(retryTimer); setSseOnline(false); };
+  }, []);
+
+  // Lightweight "seen it, handling it" — distinct from Close, which requires
+  // a resolution comment. Also stops the escalation countdown (both key off
+  // acknowledged_at), so this is the quick way to silence re-notification
+  // during a burst of alerts without writing up a resolution for each yet.
+  const acknowledgeAlert = useCallback(async (id) => {
+    setAcking(prev => new Set(prev).add(id));
+    try {
+      await api.put(`/tracking/alerts/${id}/acknowledge`);
+      setAlerts(prev => prev.map(a => a.id === id ? { ...a, acknowledged_at: new Date().toISOString() } : a));
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to acknowledge alert');
+    } finally {
+      setAcking(prev => { const next = new Set(prev); next.delete(id); return next; });
+    }
   }, []);
 
   const openResolve = (alert) => { setResolving(alert); setComment(''); };
@@ -299,6 +348,7 @@ export default function ControlRoomAlerts() {
                             ? <span title="Re-notifies the assigned recipients if still unacknowledged" style={{ fontSize: 9, fontWeight: 700, color: '#b45309', border: '1px solid #b45309', padding: '0 5px', borderRadius: 4 }}>Escalates in {Math.max(1, Math.ceil(msLeft / 60_000))}m</span>
                             : <span title="Past the escalation threshold — re-notification is due" style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: '#b45309', padding: '0 5px', borderRadius: 4, opacity: .75 }}>Escalating…</span>;
                         })()}
+                        {!isResolved && a.acknowledged_at && <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--muted)', border: '1px solid var(--border)', padding: '0 5px', borderRadius: 4, display: 'flex', alignItems: 'center', gap: 3 }}><Eye size={10} /> ACKNOWLEDGED</span>}
                         {isResolved && <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--muted)', border: '1px solid var(--border)', padding: '0 5px', borderRadius: 4, display: 'flex', alignItems: 'center', gap: 3 }}><CheckCircle2 size={10} /> CLOSED</span>}
                       </div>
                       <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
@@ -307,7 +357,13 @@ export default function ControlRoomAlerts() {
                       {a.rider_name && (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 11, color: 'var(--text)', marginTop: 3 }}>
                           <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}><User size={11} />{a.rider_name}</span>
-                          {a.rider_phone && <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}><Phone size={11} />{a.rider_phone}</span>}
+                          {a.rider_phone && (
+                            <a
+                              href={`tel:${a.rider_phone}`}
+                              onClick={(e) => e.stopPropagation()}
+                              style={{ display: 'flex', alignItems: 'center', gap: 3, color: 'var(--primary)', textDecoration: 'none' }}
+                            ><Phone size={11} />{a.rider_phone}</a>
+                          )}
                         </div>
                       )}
                       {payload.speed_kmh && <div style={{ fontSize: 11, color, marginTop: 2 }}>{Math.round(payload.speed_kmh)} km/h{payload.limit_kmh ? ` (limit ${payload.limit_kmh})` : ''}</div>}
@@ -335,7 +391,17 @@ export default function ControlRoomAlerts() {
                       )}
                     </div>
                     {!isResolved && (
-                      <button className="btn btn-sm btn-primary" style={{ flexShrink: 0, fontSize: 11 }} onClick={() => openResolve(a)}>Close alert</button>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0 }}>
+                        <button className="btn btn-sm btn-primary" style={{ fontSize: 11 }} onClick={() => openResolve(a)}>Close alert</button>
+                        {!a.acknowledged_at && (
+                          <button
+                            className="btn btn-sm btn-secondary"
+                            style={{ fontSize: 11 }}
+                            disabled={acking.has(a.id)}
+                            onClick={() => acknowledgeAlert(a.id)}
+                          >{acking.has(a.id) ? 'Ack…' : 'Ack'}</button>
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>

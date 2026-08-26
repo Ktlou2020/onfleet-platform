@@ -4,7 +4,7 @@ import { useAuth } from '../../auth';
 import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
 import NotificationBell from '../../components/NotificationBell';
-import { LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell, Briefcase, ShieldCheck, PiggyBank, MapPin, UserCheck, Wrench, ShieldAlert, Gauge, Star, TrendingUp } from 'lucide-react';
+import { LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell, Briefcase, ShieldCheck, PiggyBank, MapPin, UserCheck, Wrench, ShieldAlert, Gauge, Star, TrendingUp, Plug } from 'lucide-react';
 
 const navItems = [
   { to: '/admin', label: 'Dashboard', icon: LayoutDashboard },
@@ -29,6 +29,7 @@ const navItems = [
   { to: '/admin/workshop', label: 'Workshop', icon: Wrench },
   { section: 'System' },
   { to: '/admin/users', label: 'Users', icon: Users },
+  { to: '/admin/integrations', label: 'Integrations', icon: Plug, superadminOnly: true },
   { to: '/admin/audit', label: 'Audit Logs', icon: ClipboardList }
 ];
 

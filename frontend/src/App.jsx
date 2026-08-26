@@ -55,6 +55,7 @@ const AdminNotifications = lazy(() => import('./pages/admin/Notifications'));
 const AdminUsers = lazy(() => import('./pages/admin/Users'));
 const AdminRiders = lazy(() => import('./pages/admin/Riders'));
 const AdminSignupStats = lazy(() => import('./pages/admin/SignupStats'));
+const AdminIntegrations = lazy(() => import('./pages/admin/Integrations'));
 const AdminAuditLogs = lazy(() => import('./pages/admin/AuditLogs'));
 const AdminClaims = lazy(() => import('./pages/admin/Claims'));
 const AdminStrategyReport = lazy(() => import('./pages/admin/StrategyReport'));
@@ -193,6 +194,7 @@ export default function App() {
             <Route path="claims" element={<AdminClaims />} />
             <Route path="riders" element={<AdminRiders />} />
             <Route path="signup-stats" element={<AdminSignupStats />} />
+            <Route path="integrations" element={<AdminIntegrations />} />
             <Route path="workshop" element={<AdminWorkshop />} />
             <Route path="users" element={<AdminUsers />} />
             <Route path="audit" element={<AdminAuditLogs />} />

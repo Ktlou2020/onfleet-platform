@@ -1920,4 +1920,127 @@ router.post('/record-paystack-payment', superadminOnly, async (req, res) => {
   res.json({ success: true, payment_id: paymentId, amount: grossAmountZAR, reference: ref, net_to_wallet: grossAmountZAR });
 });
 
+// ---------- Platform integrations: API keys + outbound webhooks ----------
+// Superadmin-only. These grant visibility across every organisation and every
+// platform-owned vehicle, so they deliberately sit outside the fleet-owner
+// self-service key management in fleet.js.
+
+router.get('/integrations/api-keys', superadminOnly, async (req, res) => {
+  const { rows } = await pgDb.query(
+    `SELECT ak.id, ak.name, ak.key_prefix, ak.scope, ak.organization_id,
+            o.name AS organization_name, ak.last_used_at, ak.revoked_at, ak.created_at
+       FROM api_keys ak LEFT JOIN organizations o ON o.id = ak.organization_id
+      ORDER BY ak.revoked_at NULLS FIRST, ak.created_at DESC`);
+  res.json({ keys: rows });
+});
+
+router.post('/integrations/api-keys', superadminOnly, async (req, res) => {
+  const name = String(req.body.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Key name is required' });
+  const rawKey = `onfleet_plat_${crypto.randomBytes(32).toString('hex')}`;
+  const prefix = rawKey.slice(0, 21);
+  const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
+  const { rows } = await pgDb.query(
+    `INSERT INTO api_keys (organization_id, created_by, name, key_hash, key_prefix, scope)
+     VALUES (NULL, $1, $2, $3, $4, 'platform') RETURNING id`,
+    [req.user.id, name, keyHash, prefix]);
+  await logAudit(req.user.id, 'admin.platform_api_key_create', 'api_keys', rows[0].id, { name }, req.ip);
+  // The raw key is returned exactly once — only its hash is stored.
+  res.status(201).json({ ok: true, key: rawKey, key_id: rows[0].id, prefix, name, scope: 'platform' });
+});
+
+router.delete('/integrations/api-keys/:id', superadminOnly, async (req, res) => {
+  const { rows } = await pgDb.query(
+    `UPDATE api_keys SET revoked_at = NOW() WHERE id = $1 AND revoked_at IS NULL RETURNING id, name`,
+    [req.params.id]);
+  if (!rows[0]) return res.status(404).json({ error: 'Key not found or already revoked' });
+  await logAudit(req.user.id, 'admin.platform_api_key_revoke', 'api_keys', rows[0].id, { name: rows[0].name }, req.ip);
+  res.json({ ok: true });
+});
+
+router.get('/integrations/webhooks', superadminOnly, async (req, res) => {
+  const { rows } = await pgDb.query(
+    `SELECT e.id, e.name, e.url, e.scope, e.event_types, e.active,
+            e.last_success_at, e.last_failure_at, e.last_error, e.created_at,
+            (SELECT COUNT(*) FROM webhook_deliveries d WHERE d.endpoint_id = e.id AND d.status = 'pending') AS pending,
+            (SELECT COUNT(*) FROM webhook_deliveries d WHERE d.endpoint_id = e.id AND d.status = 'failed')  AS failed,
+            (SELECT COUNT(*) FROM webhook_deliveries d WHERE d.endpoint_id = e.id AND d.status = 'delivered') AS delivered
+       FROM webhook_endpoints e ORDER BY e.created_at DESC`);
+  res.json({
+    webhooks: rows.map((r) => ({
+      ...r,
+      pending: Number(r.pending), failed: Number(r.failed), delivered: Number(r.delivered),
+    })),
+  });
+});
+
+router.post('/integrations/webhooks', superadminOnly, async (req, res) => {
+  const name = String(req.body.name || '').trim();
+  const url = String(req.body.url || '').trim();
+  if (!name) return res.status(400).json({ error: 'Name is required' });
+  let parsed;
+  try { parsed = new URL(url); } catch { return res.status(400).json({ error: 'Enter a valid URL' }); }
+  if (parsed.protocol !== 'https:') {
+    return res.status(400).json({ error: 'Webhook URL must use HTTPS — event payloads carry rider names and phone numbers' });
+  }
+  // Caller may pin specific events; omitting the list means "send everything",
+  // which is what a control room normally wants.
+  const eventTypes = Array.isArray(req.body.event_types) && req.body.event_types.length
+    ? req.body.event_types.join(',')
+    : null;
+  const secret = `whsec_${crypto.randomBytes(24).toString('hex')}`;
+  const { rows } = await pgDb.query(
+    `INSERT INTO webhook_endpoints (name, url, secret, scope, event_types, created_by)
+     VALUES ($1,$2,$3,'platform',$4,$5) RETURNING id`,
+    [name, url, secret, eventTypes, req.user.id]);
+  await logAudit(req.user.id, 'admin.webhook_create', 'webhook_endpoints', rows[0].id, { name, url }, req.ip);
+  res.status(201).json({ ok: true, id: rows[0].id, name, url, secret, event_types: eventTypes });
+});
+
+router.put('/integrations/webhooks/:id', superadminOnly, async (req, res) => {
+  const active = req.body.active === undefined ? null : !!req.body.active;
+  if (active === null) return res.status(400).json({ error: 'Nothing to update' });
+  const { rows } = await pgDb.query(
+    `UPDATE webhook_endpoints SET active = $1 WHERE id = $2 RETURNING id, name, active`,
+    [active, req.params.id]);
+  if (!rows[0]) return res.status(404).json({ error: 'Webhook not found' });
+  await logAudit(req.user.id, 'admin.webhook_update', 'webhook_endpoints', rows[0].id, { active }, req.ip);
+  res.json({ ok: true, webhook: rows[0] });
+});
+
+router.delete('/integrations/webhooks/:id', superadminOnly, async (req, res) => {
+  const { rows } = await pgDb.query(`DELETE FROM webhook_endpoints WHERE id = $1 RETURNING id, name`, [req.params.id]);
+  if (!rows[0]) return res.status(404).json({ error: 'Webhook not found' });
+  await logAudit(req.user.id, 'admin.webhook_delete', 'webhook_endpoints', rows[0].id, { name: rows[0].name }, req.ip);
+  res.json({ ok: true });
+});
+
+// Fires a signed specimen event so an integrator can validate their endpoint
+// and signature check before waiting on a real alarm.
+router.post('/integrations/webhooks/:id/test', superadminOnly, async (req, res) => {
+  const { rows } = await pgDb.query(`SELECT * FROM webhook_endpoints WHERE id = $1`, [req.params.id]);
+  const endpoint = rows[0];
+  if (!endpoint) return res.status(404).json({ error: 'Webhook not found' });
+
+  const body = JSON.stringify({
+    event_id: `test-${Date.now()}`,
+    event_type: 'test',
+    severity: 'low',
+    occurred_at: new Date().toISOString(),
+    sent_at: new Date().toISOString(),
+    vehicle: { id: null, registration: 'TEST-123', make: 'Test', model: 'Vehicle', group: null, last_known_position: null },
+    driver: { id: null, name: 'Test Rider', phone: '+27000000000', agreement_no: 'TEST' },
+    detail: { note: 'Specimen event from OnFleet — your endpoint is reachable.' },
+  });
+  const { rows: inserted } = await pgDb.query(
+    `INSERT INTO webhook_deliveries (endpoint_id, event_type, event_id, payload)
+     VALUES ($1,'test',$2,$3) RETURNING *`,
+    [endpoint.id, `test-${Date.now()}`, body]);
+
+  const dispatcher = require('../services/webhookDispatcher');
+  await dispatcher.flush(5);
+  const { rows: after } = await pgDb.query(`SELECT status, attempts, response_code, last_error FROM webhook_deliveries WHERE id = $1`, [inserted[0].id]);
+  res.json({ ok: after[0]?.status === 'delivered', result: after[0] });
+});
+
 module.exports = router;

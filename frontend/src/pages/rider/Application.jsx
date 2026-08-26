@@ -206,6 +206,7 @@ export default function RiderApplication() {
             <h3 style={{ marginBottom: 0 }}>Application history</h3>
             <SearchInput value={historySearch} onChange={setHistorySearch} placeholder="Search bike, registration, status, application ID" style={{ width: 320 }} />
           </div>
+          <div className="table-wrap">
           <table className="table">
             <thead><tr><th>Submitted</th><th>Bike</th><th>Status</th><th>Avg weekly</th><th>Docs</th></tr></thead>
             <tbody>
@@ -222,6 +223,7 @@ export default function RiderApplication() {
               ))}
             </tbody>
           </table>
+          </div>
           {!historyPagination.items.length && <div className="muted text-sm" style={{ paddingTop: 16 }}>{historySearch ? 'No applications match your search.' : 'No application history yet.'}</div>}
           <Pagination page={historyPagination.currentPage} pageSize={historyPagination.pageSize} totalItems={historyPagination.totalItems} onPageChange={setHistoryPage} onPageSizeChange={setHistoryPageSize} label="applications" />
         </div>
@@ -330,6 +332,7 @@ export default function RiderApplication() {
               <h3 style={{ marginBottom: 0 }}>Uploaded documents</h3>
               <SearchInput value={docSearch} onChange={setDocSearch} placeholder="Search document type or filename" style={{ width: 320 }} />
             </div>
+            <div className="table-wrap">
             <table className="table">
               <thead><tr><th>Type</th><th>File</th><th>Uploaded</th><th>Extracted amount</th><th></th></tr></thead>
               <tbody>
@@ -344,6 +347,7 @@ export default function RiderApplication() {
                 ))}
               </tbody>
             </table>
+            </div>
             {!docPagination.items.length && <div className="muted text-sm">{docSearch ? 'No documents match your search.' : 'No documents uploaded yet.'}</div>}
             <Pagination page={docPagination.currentPage} pageSize={docPagination.pageSize} totalItems={docPagination.totalItems} onPageChange={setDocPage} onPageSizeChange={setDocPageSize} label="documents" />
           </div>

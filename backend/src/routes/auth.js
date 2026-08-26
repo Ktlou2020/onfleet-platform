@@ -329,6 +329,38 @@ router.get('/me', authRequired, async (req, res) => {
   res.json({ user: rows[0] });
 });
 
+// Who a rider should contact when something goes wrong. A rider recruited by
+// a fleet owner belongs to that owner, so their first line of support is that
+// fleet's own contact details (captured at fleet signup) — not us. Riders on
+// the direct platform fall back to the OnFleet support env vars.
+//
+// Everything is optional: an unconfigured platform simply returns null fields
+// and the UI hides the card rather than showing a dead phone number.
+router.get('/support-contact', authRequired, async (req, res) => {
+  const { rows } = await pgDb.query(
+    `SELECT o.name, o.contact_phone, o.contact_email
+       FROM users u LEFT JOIN organizations o ON o.id = u.organization_id
+      WHERE u.id = $1 AND u.deleted_at IS NULL`, [req.user.id]);
+  const org = rows[0];
+
+  const fromOrg = org?.contact_phone || org?.contact_email;
+  const phone = fromOrg ? org.contact_phone : readEnv('SUPPORT_PHONE', '') || null;
+  const email = fromOrg ? org.contact_email : readEnv('SUPPORT_EMAIL', '') || null;
+  // WhatsApp defaults to the voice number — one number is the common case, and
+  // wa.me just needs the digits.
+  const whatsapp = fromOrg
+    ? org.contact_phone
+    : (readEnv('SUPPORT_WHATSAPP', '') || readEnv('SUPPORT_PHONE', '') || null);
+
+  res.json({
+    name: fromOrg ? org.name : (readEnv('SUPPORT_NAME', '') || 'OnFleet support'),
+    phone: phone || null,
+    email: email || null,
+    whatsapp: whatsapp || null,
+    source: fromOrg ? 'fleet_owner' : 'platform',
+  });
+});
+
 router.put('/me', authRequired, async (req, res) => {
   const fields = ['full_name','phone','id_number','date_of_birth','address','city','province',
                   'postal_code','emergency_contact_name','emergency_contact_phone','avatar_url','country_of_origin'];

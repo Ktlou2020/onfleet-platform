@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import api from '../../api';
 import toast from 'react-hot-toast';
 import { Loading, Badge, Stat, fmt, fmtDate, fmtDateTime } from '../../components/ui';
+import SupportContact from '../../components/SupportContact';
 
 // Both lazy/dynamic: riders visit this page routinely, but the map only shows
 // when there's a current position and the PDF only generates on a click —
@@ -310,6 +311,7 @@ export default function RiderAgreementDetail() {
         </div>
         <div className="mt-4">
           <h4 className="mb-2">Payments in {statement.monthLabel}</h4>
+          <div className="table-wrap">
           <table className="table">
             <thead><tr><th>Date</th><th>Method</th><th>Reference</th><th>Rental</th><th>Fee</th><th>Gross</th></tr></thead>
             <tbody>
@@ -325,6 +327,7 @@ export default function RiderAgreementDetail() {
               ))}
             </tbody>
           </table>
+          </div>
           {!statement.statementPayments.length && <div className="muted text-sm">No successful payments were recorded for this month.</div>}
         </div>
       </div>
@@ -354,6 +357,7 @@ export default function RiderAgreementDetail() {
         <div className="card">
           <div className="card-title"><h3>Payment schedule</h3>{!discontinued && <Link to="/payments" className="btn btn-sm">Pay now</Link>}</div>
           <div style={{ maxHeight: 400, overflowY: 'auto' }}>
+            <div className="table-wrap">
             <table className="table">
               <thead><tr><th>#</th><th>Due</th><th>Amount</th><th>Paid</th><th>Status</th></tr></thead>
               <tbody>
@@ -362,11 +366,13 @@ export default function RiderAgreementDetail() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         </div>
         <div className="card">
           <h3 className="mb-3">Payment history</h3>
           {!payments.length && <div className="muted text-sm">No payments yet.</div>}
+          <div className="table-wrap">
           <table className="table">
             <thead><tr><th>Date</th><th>Method</th><th>Reference</th><th>Rental</th><th>Fee</th><th>Gross</th></tr></thead>
             <tbody>
@@ -382,6 +388,7 @@ export default function RiderAgreementDetail() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       </div>
 
@@ -437,7 +444,10 @@ export default function RiderAgreementDetail() {
               </div>
             </div>
           ))}
-          <div className="muted text-sm">Use the Google booking link for the workshop closest to you. If the bike feels unsafe to ride, contact OnFleet before travelling to the workshop.</div>
+          <div className="muted text-sm">Use the Google booking link for the workshop closest to you. If the bike feels unsafe to ride, get in touch before travelling to the workshop.</div>
+          <div className="mt-3">
+            <SupportContact title="Bike unsafe to ride?" sub="Don't ride it to the workshop — contact your fleet manager first and they'll arrange collection." />
+          </div>
         </div>
       </div>
     </>

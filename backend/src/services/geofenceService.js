@@ -4,6 +4,7 @@ const pgDb = require('../pgDb');
 const trackingEvents = require('../trackingEvents');
 const { cutCommandForModel } = require('./engineCommands');
 const { ALERT_SEVERITY } = require('../constants/alertTypes');
+const { notifyRiderEngineState } = require('./engineCutNotifier');
 
 // Active geofences change only via admin CRUD (routes/tracking.js), not per
 // ping — cached in memory and refreshed on demand instead of re-querying on
@@ -72,6 +73,11 @@ async function autoEngineCut(deviceId, bikeId, geofence, reg) {
     // showed up live in an open tracking tab.
     const { emitAlert } = require('./tripService');
     await emitAlert(alertRows[0].id, bikeId, deviceId, 'engine_cut_auto', cutPayloadObj, new Date().toISOString());
+
+    // The rider is the one standing next to a bike that just stopped working —
+    // tell them what happened and who to call, not only the control room.
+    notifyRiderEngineState(bikeId, 'cut', { reason: `entered a no-go zone (${geofence.name})`, automatic: true })
+      .catch((e) => console.error('[GeofenceService] rider engine-cut notify failed:', e.message));
   } catch (e) {
     console.error('[GeofenceService] Auto engine cut failed:', e.message);
   }

@@ -132,6 +132,7 @@ export default function RiderPayments() {
               <h3 style={{ marginBottom: 0 }}>Recent transactions</h3>
               <SearchInput value={search} onChange={setSearch} placeholder="Search date, method, status, reference" style={{ width: 320 }} />
             </div>
+            <div className="table-wrap">
             <table className="table">
               <thead><tr><th>Date</th><th>Method</th><th>Status</th><th>Rental</th><th>Fee</th><th>Gross</th></tr></thead>
               <tbody>
@@ -147,6 +148,7 @@ export default function RiderPayments() {
                 )) : <tr><td colSpan="6" className="muted">{search ? 'No transactions match your search.' : 'No payments yet.'}</td></tr>}
               </tbody>
             </table>
+            </div>
             <Pagination page={pagination.currentPage} pageSize={pagination.pageSize} totalItems={pagination.totalItems} onPageChange={setPage} onPageSizeChange={setPageSize} label="transactions" />
           </div>
         )}

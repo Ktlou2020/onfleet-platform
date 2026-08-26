@@ -82,6 +82,11 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 .notification-bell-divider { width: 1px; flex-shrink: 0; background: var(--border); }
 
 .grid { display: grid; gap: 16px; }
+/* Grid items default to min-width:auto, so a wide child (a 6-column table, a
+   long unbroken reference string) pushes the item past its track and the card
+   overflows its column instead of shrinking. On a 375px phone that clipped the
+   amounts and the Pay button on the rider payment screen. */
+.grid > * { min-width: 0; }
 .grid-2 { grid-template-columns: repeat(2, 1fr); }
 .grid-3 { grid-template-columns: repeat(3, 1fr); }
 .grid-4 { grid-template-columns: repeat(4, 1fr); }

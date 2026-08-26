@@ -43,6 +43,7 @@ export default function RiderKyc() {
               <Link to="/application" className="btn btn-secondary">Manage documents</Link>
             </div>
           </div>
+          <div className="table-wrap">
           <table className="table">
             <thead><tr><th>Type</th><th>File</th><th>Uploaded</th><th>Extracted amount</th><th></th></tr></thead>
             <tbody>
@@ -57,6 +58,7 @@ export default function RiderKyc() {
               ))}
             </tbody>
           </table>
+          </div>
           {!filteredDocs.length && <div className="muted text-sm" style={{ paddingTop: 16 }}>{search ? 'No documents match your search.' : 'No documents uploaded yet.'}</div>}
         </div>
       )}

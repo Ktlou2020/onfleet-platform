@@ -13,6 +13,7 @@ const { cutCommandForModel, restoreCommandForModel } = require('../services/engi
 const gpsImportService = require('../services/gpsImportService');
 const asyncRouter = require('../utils/asyncRouter');
 const { ALL_ALERT_TYPES } = require('../constants/alertTypes');
+const { notifyRiderEngineState } = require('../services/engineCutNotifier');
 
 const router = asyncRouter(express.Router());
 const gpsImportUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -272,12 +273,16 @@ router.post('/devices/:id/commands', authRequired, adminOnly, async (req, res) =
       [req.user.id, device.id]
     );
     await logAudit(req.user.id, 'tracking.engine_cut', 'tracking_devices', device.id, { bike_id: device.bike_id, imei: device.imei }, req.ip);
+    notifyRiderEngineState(device.bike_id, 'cut', { reason: req.body.reason || null })
+      .catch((e) => console.error('[EngineCut] rider notify failed:', e.message));
   } else if (req.body.preset === 'restore_engine') {
     await pgDb.query(
       `UPDATE tracking_devices SET engine_cut_active=FALSE, engine_cut_reason=NULL, engine_cut_at=NULL, engine_cut_by=NULL WHERE id=$1`,
       [device.id]
     );
     await logAudit(req.user.id, 'tracking.engine_restore', 'tracking_devices', device.id, { bike_id: device.bike_id, imei: device.imei }, req.ip);
+    notifyRiderEngineState(device.bike_id, 'restored')
+      .catch((e) => console.error('[EngineCut] rider notify failed:', e.message));
   }
 
   res.json({
@@ -321,12 +326,16 @@ router.post('/devices/commands-bulk', authRequired, adminOnly, async (req, res) 
         [req.user.id, device.id]
       );
       await logAudit(req.user.id, 'tracking.engine_cut', 'tracking_devices', device.id, { bike_id: device.bike_id, imei: device.imei, bulk: true }, req.ip);
+      notifyRiderEngineState(device.bike_id, 'cut', { reason: req.body.reason || null })
+        .catch((e) => console.error('[EngineCut] rider notify failed:', e.message));
     } else if (preset === 'restore_engine') {
       await pgDb.query(
         `UPDATE tracking_devices SET engine_cut_active=FALSE, engine_cut_reason=NULL, engine_cut_at=NULL, engine_cut_by=NULL WHERE id=$1`,
         [device.id]
       );
       await logAudit(req.user.id, 'tracking.engine_restore', 'tracking_devices', device.id, { bike_id: device.bike_id, imei: device.imei, bulk: true }, req.ip);
+      notifyRiderEngineState(device.bike_id, 'restored')
+        .catch((e) => console.error('[EngineCut] rider notify failed:', e.message));
     }
 
     results.push({ device_id: device.id, imei: device.imei, status: sentNow ? 'sent' : 'queued' });

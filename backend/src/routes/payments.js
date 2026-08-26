@@ -165,7 +165,35 @@ router.post('/paystack/init', authRequired, async (req, res) => {
   if (!ag) return res.status(404).json({ error: 'Agreement not found' });
   if (ag.status === 'discontinued') return res.status(400).json({ error: 'This agreement has been discontinued because the bike was stolen' });
 
+  // The amount arrives straight from the rider's browser and was previously
+  // passed to Paystack unchecked — NaN, zero, negative, and fat-fingered
+  // extra-zero amounts all relied on the gateway to reject them. Validate here
+  // so bad input fails as a clear 400 rather than a 500 from Paystack.
   const netAmount = Number(amount);       // what credits the rider's agreement
+  if (!Number.isFinite(netAmount) || netAmount <= 0) {
+    return res.status(400).json({ error: 'Enter a valid payment amount.' });
+  }
+
+  // Nobody should be able to pay more than they still owe. Outstanding is
+  // derived from successful payments (the same source of truth the agreement
+  // summary uses), not from payment_schedules, which can lag.
+  const { rows: paidRows } = await pgDb.query(
+    `SELECT COALESCE(SUM(COALESCE(NULLIF(net_amount, 0), amount)), 0) AS paid
+       FROM payments WHERE agreement_id = $1 AND status = 'success'`, [agreement_id]);
+  const outstanding = +(Number(ag.total_amount || 0) - Number(paidRows[0].paid)).toFixed(2);
+  if (outstanding <= 0) {
+    return res.status(400).json({ error: 'This agreement is fully paid up — no payment is due.' });
+  }
+  // 1c of slack so a legitimate "pay off the balance" can't be blocked by
+  // floating-point drift between what the UI shows and what we recompute here.
+  if (netAmount > outstanding + 0.01) {
+    const shown = outstanding.toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return res.status(400).json({
+      error: `That is more than you owe. Your outstanding balance is R${shown}.`,
+      outstanding,
+    });
+  }
+
   const fee = calcPaystackFee(netAmount); // fee added on top
   const grossAmount = calcGrossAmount(netAmount); // total rider pays
   const reference = `OF-${uuid().slice(0, 12)}`;
@@ -219,7 +247,25 @@ router.get('/paystack/verify/:reference', authRequired, async (req, res) => {
 
     if (data.status === 'success' && payment.status !== 'success') {
       const grossAmount = data.amount / 100;
-      const netAmount = Number(payment.net_amount) || grossAmount; // use stored net, fallback to gross if old record
+      let netAmount = Number(payment.net_amount) || grossAmount; // use stored net, fallback to gross if old record
+
+      // Credit what was actually collected, not what we intended to collect.
+      // These agree for a normal Paystack charge (the amount is fixed at
+      // initialize and the payer can't alter it), but crediting the stored
+      // intent unconditionally means any short collection — a partial debit, a
+      // gateway quirk — would silently over-credit the agreement. Scale the
+      // credit down to what arrived and log the discrepancy rather than
+      // quietly writing money that was never received.
+      const expectedGross = calcGrossAmount(netAmount);
+      if (grossAmount + 0.01 < expectedGross) {
+        const collectedNet = Math.max(0, +(grossAmount - calcPaystackFee(netAmount)).toFixed(2));
+        console.error('[payments] Paystack collected less than expected', {
+          reference: req.params.reference, expectedGross, grossAmount,
+          storedNet: netAmount, creditingNet: collectedNet,
+        });
+        netAmount = collectedNet;
+      }
+
       const fee = calcPaystackFee(netAmount);
       await pgDb.query(`UPDATE payments SET status = 'success', paid_at = NOW(), amount = $1, fee_amount = $2, net_amount = $3 WHERE id = $4`, [grossAmount, fee, netAmount, payment.id]);
       await applyPaymentToSchedule(payment.agreement_id, netAmount);

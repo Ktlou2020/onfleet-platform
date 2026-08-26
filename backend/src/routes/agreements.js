@@ -184,7 +184,10 @@ router.get('/:id', authRequired, async (req, res) => {
   const amountDueByToday = +(weeksDueByToday * weeklyAmount).toFixed(2);
   const overdueRaw = Math.max(0, +(amountDueByToday - totalPaid).toFixed(2));
   const nextDueRaw = nonWaivedSchedule[weeksPaid] || null;
-  const progressPct = totalAmount ? +((totalPaid / totalAmount) * 100).toFixed(1) : 0;
+  // Clamped: an overpayment (or a credit adjustment) would otherwise surface to
+  // the rider as a negative outstanding balance and a progress bar running past
+  // the end of its track. Owing nothing is R0 and 100%, not less than nothing.
+  const progressPct = totalAmount ? Math.min(100, +((totalPaid / totalAmount) * 100).toFixed(1)) : 0;
   const isDiscontinued = ag.status === 'discontinued';
 
   res.json({
@@ -195,8 +198,8 @@ router.get('/:id', authRequired, async (req, res) => {
     payments,
     summary: {
       total_paid: +totalPaid.toFixed(2),
-      remaining: isDiscontinued ? 0 : remainingRaw,
-      weeks_paid: weeksPaid,
+      remaining: isDiscontinued ? 0 : Math.max(0, remainingRaw),
+      weeks_paid: Math.min(weeksPaid, Number(ag.total_weeks) || weeksPaid),
       weeks_total: ag.total_weeks,
       overdue: isDiscontinued ? 0 : +overdueRaw.toFixed(2),
       next_due: isDiscontinued ? null : nextDueRaw,

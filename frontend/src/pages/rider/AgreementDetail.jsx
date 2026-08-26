@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, useLocation, Link } from 'react-router-dom';
 import api from '../../api';
 import toast from 'react-hot-toast';
 import { Loading, Badge, Stat, fmt, fmtDate, fmtDateTime } from '../../components/ui';
@@ -124,6 +124,7 @@ async function downloadStatementPdf(agreement, statement) {
 
 export default function RiderAgreementDetail() {
   const { id } = useParams();
+  const { hash } = useLocation();
   const [data, setData] = useState(null);
   const [bike, setBike] = useState(null);
   const [signing, setSigning] = useState(false);
@@ -154,6 +155,23 @@ export default function RiderAgreementDetail() {
   useEffect(() => {
     if (!selectedMonth && monthOptions[0]) setSelectedMonth(monthOptions[0]);
   }, [selectedMonth, monthOptions]);
+
+  // Deep links from the dashboard (#statement, #book-service) land on a page
+  // whose sections don't exist until the agreement has loaded, so the browser's
+  // own hash scroll fires too early and does nothing.
+  //
+  // Scrolls as soon as the target exists, then once more after `bike` resolves
+  // — that inserts the location map above these sections, so the first pass
+  // would otherwise be left pointing at the wrong offset. The ref stops it
+  // there, so later re-renders never yank a scrolling rider back.
+  const hashScrollDoneRef = useRef(false);
+  useEffect(() => {
+    if (!data || !hash || hashScrollDoneRef.current) return;
+    const target = document.getElementById(hash.slice(1));
+    if (!target) return;
+    target.scrollIntoView({ block: 'start' });
+    if (bike) hashScrollDoneRef.current = true;
+  }, [data, bike, hash]);
 
   if (!data) return <Loading />;
 
@@ -261,7 +279,7 @@ export default function RiderAgreementDetail() {
         {agreement.signed_at && <div className="mt-2 text-sm">Signed on {fmtDateTime(agreement.signed_at)}</div>}
       </div>
 
-      <div className="card mb-4">
+      <div className="card mb-4" id="statement">
         <div className="flex-between mb-3" style={{ gap: 16, alignItems: 'flex-start' }}>
           <div>
             <h3>Monthly statement</h3>
@@ -431,7 +449,7 @@ export default function RiderAgreementDetail() {
             ))}
           </div>
         </div>
-        <div className="card">
+        <div className="card" id="book-service">
           <h3 className="mb-3">Book a service</h3>
           {SERVICE_BOOKING_LINKS.map((booking) => (
             <div key={booking.name} className="card mb-3" style={{ background: 'var(--surface-2)' }}>

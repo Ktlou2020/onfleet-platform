@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../api';
-import { Stat, Badge, DashboardSkeleton, SearchInput, fmt, fmtDate, EmptyState, matchesSearch } from '../../components/ui';
+import { Stat, Badge, DashboardSkeleton, fmt, fmtDate, EmptyState } from '../../components/ui';
 import { Bike, TrendingUp, Calendar, AlertCircle, CreditCard, FileText, UserCircle, CheckCircle2 } from 'lucide-react';
 import TourModal from '../../components/TourModal';
 import SupportContact from '../../components/SupportContact';
@@ -46,7 +46,6 @@ export default function RiderDashboard() {
   const [data, setData] = useState(null);
   const [apps, setApps] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
 
   useEffect(() => {
     Promise.all([
@@ -88,26 +87,24 @@ export default function RiderDashboard() {
   }
 
   const { agreement, summary, schedule, payments = [] } = data;
-  const upcoming = schedule.filter((item) => item.status !== 'paid' && item.status !== 'waived').slice(0, 5).filter((item) => matchesSearch(search, item.week_number, item.due_date, item.amount_due, item.amount_paid, item.status));
+  const upcoming = schedule.filter((item) => item.status !== 'paid' && item.status !== 'waived').slice(0, 5);
   const currentMonth = new Date().toISOString().slice(0, 7);
   const monthlyPaid = payments.filter((payment) => payment.status === 'success' && String(payment.paid_at || payment.created_at || '').slice(0, 7) === currentMonth).reduce((sum, payment) => sum + creditedAmount(payment), 0);
+  // Both agreement links deep-link to the section they name — landing at the
+  // top of a long agreement page and leaving the rider to scroll for the
+  // booking links made "Book service" read as a dead button.
   const quickActions = [
     { label: "💳 Pay this week's fee", link: '/payments', primary: true },
-    { label: '🧾 Monthly statement', link: `/agreements/${agreement.id}` },
-    { label: '🛠️ Book service / bike care', link: `/agreements/${agreement.id}` },
+    { label: '🧾 Monthly statement', link: `/agreements/${agreement.id}#statement` },
+    { label: '🛠️ Book service / bike care', link: `/agreements/${agreement.id}#book-service` },
     { label: '⚙️ Update profile', link: '/profile' }
-  ].filter((item) => matchesSearch(search, item.label));
+  ];
 
   return (
     <>
       <TourModal steps={RIDER_TOUR_STEPS} storageKey="onfleet_tour_rider_v1" />
       <h1 className="page-title">Dashboard</h1>
       <p className="page-sub">Track your rent-to-own progress</p>
-
-      <div className="row mb-4" style={{ justifyContent: 'space-between', flexWrap: 'wrap' }}>
-        <SearchInput value={search} onChange={setSearch} placeholder="Search due dates, statements, and quick actions" style={{ flex: '1 1 320px', maxWidth: 420 }} />
-        <div className="muted text-sm">Showing {upcoming.length + quickActions.length} dashboard matches</div>
-      </div>
 
       <div className="mb-4"><SupportContact /></div>
 
@@ -188,14 +185,13 @@ export default function RiderDashboard() {
             </tbody>
           </table>
           </div>
-          {!upcoming.length && <div className="muted text-sm">No upcoming payments match your search.</div>}
+          {!upcoming.length && <div className="muted text-sm">No upcoming payments — you're all paid up.</div>}
         </div>
         <div className="card">
           <h3 className="mb-3">Quick actions</h3>
           {quickActions.map((item) => (
             <Link key={item.link + item.label} to={item.link} className={`btn ${item.primary ? 'btn-block' : 'btn-secondary btn-block'} mb-2`}>{item.label}</Link>
           ))}
-          {!quickActions.length && <div className="muted text-sm">No quick actions match your search.</div>}
         </div>
       </div>
     </>

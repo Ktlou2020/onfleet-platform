@@ -41,16 +41,30 @@ ensureSuperadminFromEnv().then((superadminBootstrap) => {
 });
 
 if (process.env.NODE_ENV !== 'test') {
-  require('./migrations/trackingPgSchema').runTrackingSchema().then(() => {
+  const startBackgroundServices = () => {
     require('./services/scheduler').start();
     require('./services/webhookDispatcher').start();
     const TCP_PORT = Number(process.env.TELTONIKA_TCP_PORT || 5000);
     require('./tcp/teltonikaServer').start(TCP_PORT);
-  }).catch((err) => {
-    console.error('[startup] Postgres schema failed, starting anyway:', err.message);
-    require('./services/scheduler').start();
-    require('./services/webhookDispatcher').start();
-    const TCP_PORT = Number(process.env.TELTONIKA_TCP_PORT || 5000);
-    require('./tcp/teltonikaServer').start(TCP_PORT);
-  });
+  };
+
+  require('./migrations/trackingPgSchema').runTrackingSchema()
+    .catch((err) => {
+      // Pre-existing behaviour: the tracking schema is idempotent DDL, so a
+      // transient failure here shouldn't stop a deploy that is otherwise fine.
+      console.error('[startup] Postgres schema failed, continuing:', err.message);
+    })
+    // Migrations run only after the tracking schema exists — several of them
+    // reference its tables, so the order matters on a fresh database.
+    .then(() => require('./services/runMigrations').runMigrations())
+    .then(startBackgroundServices)
+    .catch((err) => {
+      // Unlike the schema step, a failed migration means the code and the
+      // database disagree. Serving anyway is what left production silently
+      // half-broken before; exiting non-zero makes Railway retry and then fail
+      // the deploy, leaving the previous healthy version serving.
+      console.error('[startup] Migrations failed — refusing to start on a mismatched schema.');
+      console.error(err.message);
+      process.exit(1);
+    });
 }

@@ -96,6 +96,17 @@ function sastHour(ts) {
 // ignition/movement signal that never ends the trip).
 const LONG_TRIP_THRESHOLD_MS = 4 * 60 * 60 * 1000;
 
+// Every trip-ending path is driven by an incoming ping, so a tracker that
+// stops reporting mid-trip — flat battery, out of coverage, powered off, or
+// simply unplugged from the bike — leaves its trip open forever, and the bike
+// reads as still driving indefinitely. hydrateOpenTrips() restores those on
+// boot, so a restart perpetuates it rather than clearing it.
+//
+// A trip whose bike has sent nothing for this long is treated as abandoned and
+// closed at its last known ping. Comfortably longer than the 15-minute offline
+// threshold so an ordinary coverage gap mid-ride doesn't truncate a live trip.
+const STALE_TRIP_TIMEOUT_MS = 3 * 60 * 60 * 1000;
+
 // A bike with an online tracker that hasn't recorded a single trip in this
 // many days is dormant — worth a look (parked/hidden, or simply idle stock).
 const DORMANT_BIKE_DAYS = 3;
@@ -405,6 +416,101 @@ async function hydrateOpenTrips() {
   }
 }
 
+/**
+ * Closes trips whose bike has stopped reporting, so a tracker that goes silent
+ * mid-ride doesn't leave the bike reading as "driving" indefinitely.
+ *
+ * Two things this deliberately does NOT do:
+ *
+ *  - It never closes a trip at NOW(). A trip silent since last year would
+ *    otherwise be recorded as a year long. It closes at the last ping the bike
+ *    actually sent, which is the last moment we have evidence it was moving.
+ *  - It never trusts the in-memory accumulator for distance. That state is lost
+ *    on restart and hydrateOpenTrips() can only restore what was already
+ *    persisted, so distance is recomputed from the pings themselves.
+ */
+async function closeStaleTrips() {
+  try {
+    const { rows: stale } = await pgDb.query(`
+      SELECT t.id, t.bike_id, t.started_at,
+             gp.lat AS last_lat, gp.lng AS last_lng, gp.recorded_at AS last_ping_at
+        FROM trips t
+        LEFT JOIN LATERAL (
+          SELECT lat, lng, recorded_at FROM gps_pings
+           WHERE bike_id = t.bike_id ORDER BY recorded_at DESC LIMIT 1
+        ) gp ON TRUE
+       WHERE t.ended_at IS NULL
+         AND COALESCE(gp.recorded_at, t.started_at) < NOW() - ($1 || ' milliseconds')::interval
+    `, [String(STALE_TRIP_TIMEOUT_MS)]);
+
+    let closed = 0;
+    for (const trip of stale) {
+      // Both bounds resolved inside Postgres rather than passed back from JS.
+      // timestamptz carries microseconds and node-postgres truncates to
+      // milliseconds building a Date, so a round-tripped upper bound lands
+      // just before the final ping and silently drops it — which zeroed the
+      // distance and made avg speed equal max on a trip that plainly moved.
+      const { rows: pings } = await pgDb.query(
+        `SELECT p.lat, p.lng, p.speed_kmh
+           FROM gps_pings p
+           JOIN trips t ON t.id = $1
+          WHERE p.bike_id = t.bike_id
+            AND p.recorded_at >= t.started_at
+            AND p.recorded_at <= (SELECT MAX(recorded_at) FROM gps_pings WHERE bike_id = t.bike_id)
+          ORDER BY p.recorded_at ASC`,
+        [trip.id]);
+
+      let distanceKm = 0;
+      let maxSpeed = 0;
+      let totalSpeed = 0;
+      for (let i = 0; i < pings.length; i++) {
+        if (i > 0) {
+          distanceKm += haversineKm(pings[i - 1].lat, pings[i - 1].lng, pings[i].lat, pings[i].lng);
+        }
+        const s = Number(pings[i].speed_kmh) || 0;
+        if (s > maxSpeed) maxSpeed = s;
+        totalSpeed += s;
+      }
+      const distRounded = Math.round(distanceKm * 100) / 100;
+      const avgSpeed = pings.length ? Math.round(totalSpeed / pings.length) : 0;
+
+      // ended_at and duration are derived in SQL for the same precision reason,
+      // and fall back to started_at for a trip that never received a ping at all
+      // (duration 0 rather than "however long ago that was").
+      //
+      // `ended_at IS NULL` guard: if a late ping closed this trip through the
+      // normal path between the SELECT and here, that close wins and we skip —
+      // so the odometer can never be credited twice for the same trip.
+      const { rows: updated } = await pgDb.query(
+        `UPDATE trips t
+            SET ended_at = COALESCE(lp.max_at, t.started_at),
+                end_lat = $2, end_lng = $3, distance_km = $4,
+                max_speed_kmh = $5, avg_speed_kmh = $6,
+                duration_sec = GREATEST(0, EXTRACT(EPOCH FROM (COALESCE(lp.max_at, t.started_at) - t.started_at))::int)
+           FROM (SELECT MAX(recorded_at) AS max_at FROM gps_pings WHERE bike_id =
+                   (SELECT bike_id FROM trips WHERE id = $1)) lp
+          WHERE t.id = $1 AND t.ended_at IS NULL
+          RETURNING t.id, t.ended_at, t.duration_sec`,
+        [trip.id, trip.last_lat, trip.last_lng, distRounded,
+         Math.round(maxSpeed), avgSpeed]);
+      if (!updated[0]) continue;
+      const endAt = updated[0].ended_at;
+
+      if (distRounded > 0) {
+        await pgDb.query('UPDATE bikes SET odometer_km = COALESCE(odometer_km, 0) + $1 WHERE id = $2',
+          [distRounded, trip.bike_id]);
+      }
+      openTrips.delete(trip.bike_id);
+      closed += 1;
+      console.log(`[StaleTrip] Closed trip ${trip.id} (bike ${trip.bike_id}) at last ping ${endAt} — ${distRounded} km`);
+    }
+    return closed;
+  } catch (e) {
+    console.error('[StaleTrip] Sweep failed:', e.message);
+    return 0;
+  }
+}
+
 async function checkOfflineDevices() {
   try {
     const { rows } = await pgDb.query(`
@@ -453,4 +559,4 @@ async function checkDormantBikes() {
   }
 }
 
-module.exports = { processPing, hydrateOpenTrips, reloadAlertSettings, checkOfflineDevices, checkDormantBikes, emitAlert };
+module.exports = { processPing, hydrateOpenTrips, reloadAlertSettings, checkOfflineDevices, checkDormantBikes, closeStaleTrips, emitAlert };

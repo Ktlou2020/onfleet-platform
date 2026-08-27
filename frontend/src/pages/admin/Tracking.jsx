@@ -82,11 +82,27 @@ function speedColor(kmh) {
   return '#ef4444';
 }
 
+// A device counts as "active" the moment its IMEI holds a TCP connection,
+// however old its last position fix is — so a tracker that stays connected but
+// stops sending fixes would otherwise keep rendering whatever speed and
+// ignition it last reported, and a bike parked months ago still reads as
+// driving. Motion is only shown when the fix behind it is recent enough to
+// still describe the present.
+const POSITION_FRESH_MS = 15 * 60 * 1000;
+
+export function positionIsFresh(d) {
+  const at = d?.last_location_at;
+  if (!at) return false;
+  const age = Date.now() - new Date(at).getTime();
+  return Number.isFinite(age) && age >= 0 && age < POSITION_FRESH_MS;
+}
+
 function deviceIcon(d) {
   const status = d.device_status || (d.connected ? 'active' : 'offline');
   const riskLevel = (d.risk_level === 'critical' || d.risk_level === 'elevated') ? d.risk_level : null;
   if (status === 'offline') return makeIcon('#94a3b8', false, riskLevel);
   if (status === 'sleeping') return makeIcon('#6366f1', false, riskLevel); // indigo — sleeping
+  if (!positionIsFresh(d)) return makeIcon('#f97316', false, riskLevel); // connected, but no current fix
   const moving = (Number(d.speed_kmh) || 0) > 5;
   return d.ignition ? makeIcon('#22c55e', moving, riskLevel) : makeIcon('#f97316', false, riskLevel);
 }
@@ -1448,10 +1464,14 @@ export default function Tracking({ readOnly = false }) {
                     {d.device_status === 'sleeping' && (
                       <span style={{ fontSize: 10, color: '#6366f1', fontWeight: 600, flexShrink: 0 }}>Sleep</span>
                     )}
-                    {d.device_status === 'active' && kmh > 5 && (
+                    {d.device_status === 'active' && !positionIsFresh(mapD || d) && (
+                      <span title="Connected, but no position fix in the last 15 minutes — speed and ignition below are the last values reported, not current"
+                        style={{ fontSize: 10, color: 'var(--muted)', flexShrink: 0 }}>no fix</span>
+                    )}
+                    {d.device_status === 'active' && positionIsFresh(mapD || d) && kmh > 5 && (
                       <span style={{ fontSize: 10, color: speedColor(kmh), fontWeight: 700, flexShrink: 0 }}>{Math.round(kmh)} km/h</span>
                     )}
-                    {d.device_status === 'active' && kmh <= 5 && mapD?.ignition !== null && (
+                    {d.device_status === 'active' && positionIsFresh(mapD || d) && kmh <= 5 && mapD?.ignition !== null && (
                       <span style={{ fontSize: 10, color: mapD?.ignition ? '#22c55e' : 'var(--muted)', flexShrink: 0 }}>{mapD?.ignition ? 'IGN' : 'idle'}</span>
                     )}
                     <button className="btn btn-sm" style={{ padding: '2px 4px', opacity: requestingPos.has(d.id) ? 1 : 0.45, background: 'transparent', minWidth: 0, color: requestingPos.has(d.id) ? '#1E88D1' : undefined }}

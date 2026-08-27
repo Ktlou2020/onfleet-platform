@@ -331,10 +331,19 @@ function start() {
   cron.schedule('30 6 1 * *', () => runMonthlyStatements().catch((error) => console.error('monthly statements failed', error)));
 
   // Device offline detection — runs every 5 minutes
-  const { checkOfflineDevices } = require('./tripService');
+  const { checkOfflineDevices, closeStaleTrips } = require('./tripService');
   const runOfflineCheck = () => checkOfflineDevices().catch(e => console.error('[offline-check]', e.message));
   setInterval(runOfflineCheck, 5 * 60_000);
   setTimeout(runOfflineCheck, 15_000); // initial check shortly after boot
+
+  // Close trips whose tracker went silent mid-ride, so a bike doesn't read as
+  // "driving" indefinitely. Runs on a slower cadence than the offline check —
+  // nothing here is urgent, and the timeout it enforces is measured in hours.
+  const runStaleTripSweep = () => closeStaleTrips().catch(e => console.error('[stale-trips]', e.message));
+  setInterval(runStaleTripSweep, 15 * 60_000);
+  // Runs after hydrateOpenTrips() has restored in-memory state, so a trip
+  // closed here is also evicted from that map rather than lingering in it.
+  setTimeout(runStaleTripSweep, 30_000);
 
   // Critical-alert escalation — re-notify on panic/tamper/theft-risk/etc.
   // alerts nobody has acknowledged after 15 min. Runs every 5 minutes so an

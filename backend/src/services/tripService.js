@@ -107,6 +107,12 @@ const LONG_TRIP_THRESHOLD_MS = 4 * 60 * 60 * 1000;
 // threshold so an ordinary coverage gap mid-ride doesn't truncate a live trip.
 const STALE_TRIP_TIMEOUT_MS = 3 * 60 * 60 * 1000;
 
+// Longest span a reaped trip may cover and still have its distance credited to
+// the odometer. Beyond a day it isn't one journey — it's every journey the bike
+// made while the trip sat open, summed together with the GPS noise between
+// them, and those journeys have their own trip rows that already credited it.
+const MAX_CREDITABLE_TRIP_SEC = 24 * 60 * 60;
+
 // A bike with an online tracker that hasn't recorded a single trip in this
 // many days is dormant — worth a look (parked/hidden, or simply idle stock).
 const DORMANT_BIKE_DAYS = 3;
@@ -496,13 +502,27 @@ async function closeStaleTrips() {
       if (!updated[0]) continue;
       const endAt = updated[0].ended_at;
 
-      if (distRounded > 0) {
+      // Only credit the odometer when the reaped trip could plausibly BE a
+      // trip. A trip left open for weeks spans many separate journeys plus
+      // months of GPS jitter, and other trips for the same bike will have
+      // closed and credited their own distance inside that window — so
+      // crediting the summed total both invents mileage and double-counts.
+      // Close it either way (the point is that it stops reading as driving),
+      // but leave the odometer alone and say so loudly.
+      const durationSec = Number(updated[0].duration_sec) || 0;
+      const plausible = durationSec <= MAX_CREDITABLE_TRIP_SEC;
+      if (distRounded > 0 && plausible) {
         await pgDb.query('UPDATE bikes SET odometer_km = COALESCE(odometer_km, 0) + $1 WHERE id = $2',
           [distRounded, trip.bike_id]);
       }
       openTrips.delete(trip.bike_id);
       closed += 1;
-      console.log(`[StaleTrip] Closed trip ${trip.id} (bike ${trip.bike_id}) at last ping ${endAt} — ${distRounded} km`);
+      if (plausible) {
+        console.log(`[StaleTrip] Closed trip ${trip.id} (bike ${trip.bike_id}) at last ping ${endAt} — ${distRounded} km`);
+      } else {
+        console.warn(`[StaleTrip] Closed trip ${trip.id} (bike ${trip.bike_id}) spanning ${Math.round(durationSec / 86400)} days — ` +
+          `odometer NOT credited with its ${distRounded} km; that span is not a single trip and needs manual review`);
+      }
     }
     return closed;
   } catch (e) {

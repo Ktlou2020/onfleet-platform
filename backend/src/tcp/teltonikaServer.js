@@ -9,6 +9,21 @@ const tripService = require('../services/tripService');
 const riskService = require('../services/riskService');
 const { cutCommandForModel } = require('../services/engineCommands');
 
+// How far back a record may be timestamped and still be treated as describing
+// the present. Generous on purpose: a tracker that loses coverage buffers its
+// records and replays them on reconnect, and those are legitimately live-ish.
+const LIVE_WINDOW_PAST_MS = 24 * 60 * 60 * 1000;
+// Ahead of now, tolerance is tight — a future timestamp is always a clock
+// fault, and letting one through would park the bike's "last seen" in the
+// future where nothing later ever supersedes it.
+const LIVE_WINDOW_FUTURE_MS = 15 * 60 * 1000;
+
+function isCurrent(ts) {
+  const age = Date.now() - new Date(ts).getTime();
+  if (!Number.isFinite(age)) return false;
+  return age <= LIVE_WINDOW_PAST_MS && age >= -LIVE_WINDOW_FUTURE_MS;
+}
+
 // Active TCP connections keyed by IMEI
 const connections = new Map();
 // Last remote IP from each device's most recent TCP connection
@@ -162,6 +177,7 @@ async function storeRecords(imei, device, records) {
   if (!device?.bike_id || !records.length) return;
 
   let latestRec = null;
+  let staleCount = 0;
   for (const rec of records) {
     const recAt = new Date(rec.ts).toISOString();
     const ignition = rec.io[239] !== undefined ? rec.io[239] : null;
@@ -171,6 +187,19 @@ async function storeRecords(imei, device, records) {
       [device.bike_id, rec.lat, rec.lng, rec.speed, rec.angle, recAt,
        rec.satellites, rec.altitude, ignition, JSON.stringify(rec.io)]
     );
+
+    // A record far outside the present is either a device replaying its stored
+    // buffer or one whose clock is wrong — a tracker sitting on a desk has been
+    // seen streaming records timestamped over a year earlier, at road speed
+    // with ignition on. Keep them as history (the ride they describe did
+    // happen) but don't let them drive anything that speaks about NOW: they
+    // would open trips dated to the past, raise alerts for journeys long since
+    // over, and move the bike's last known position to where it was last year.
+    if (!isCurrent(rec.ts)) {
+      staleCount += 1;
+      continue;
+    }
+
     await tripService.processPing(device.bike_id, device.id, rec.lat, rec.lng, rec.speed,
       ignition, recAt, rec.io, device.speed_limit_kmh || 120);
     await geofenceService.checkGeofences(device.bike_id, device.id, rec.lat, rec.lng, recAt);
@@ -179,6 +208,10 @@ async function storeRecords(imei, device, records) {
         !!ignition, recAt, rec.io);
     } catch (e) { console.error('[Risk] evaluatePing failed:', e.message); }
     if (!latestRec || rec.ts > latestRec.ts) latestRec = rec;
+  }
+
+  if (staleCount) {
+    console.warn(`[Teltonika] ${imei}: ${staleCount}/${records.length} record(s) outside the live window — stored as history only. Check the device clock if this persists.`);
   }
 
   if (latestRec) {

@@ -14,7 +14,8 @@ const { hybridStorage } = require('../utils/hybridStorage');
 const storageService = require('../services/storageService');
 
 const router = asyncRouter(express.Router());
-const { kyc: uploadDir } = require('../uploadPaths');
+const UPLOAD_DIRS = require('../uploadPaths');
+const { kyc: uploadDir } = UPLOAD_DIRS;
 
 const upload = multer({
   storage: hybridStorage(uploadDir, 'kyc', (req, file) =>
@@ -92,19 +93,30 @@ router.get('/file/:id', authRequired, async (req, res) => {
     await logAudit(req.user.id, 'kyc.view', 'kyc_documents', doc.id, { subject_user_id: doc.user_id, doc_type: doc.doc_type }, req.ip);
   }
 
-  // Resolve to an absolute path and verify it stays within uploadDir
-  const normalized = path.normalize(doc.file_path || '');
-  if (!normalized || normalized.includes('..') || path.isAbsolute(normalized)) {
+  // file_path comes in two shapes. Documents uploaded through this route store
+  // a bare filename that lives under uploads/kyc. Everything created by the old
+  // signup flow — which is all 8,639 existing rows — stored a full web path like
+  // /uploads/applications/x.jpg, with the file physically in that other folder.
+  // Treating the second shape as a filename made path.isAbsolute reject it, so
+  // no existing KYC document could be viewed at all. Resolve both, and confine
+  // each to its own root so a crafted path still can't escape.
+  const raw = String(doc.file_path || '');
+  if (!raw || raw.includes('..')) return res.status(400).end();
+
+  const webPath = raw.startsWith('/uploads/');
+  const root = webPath ? UPLOAD_DIRS.base : uploadDir;
+  const relative = path.normalize(webPath ? raw.slice('/uploads/'.length) : raw);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
     return res.status(400).end();
   }
-  const absolute = path.join(uploadDir, normalized);
-  if (!absolute.startsWith(uploadDir + path.sep) && absolute !== uploadDir) {
+  const absolute = path.join(root, relative);
+  if (!absolute.startsWith(root + path.sep)) {
     return res.status(400).end();
   }
   if (fs.existsSync(absolute)) return res.sendFile(absolute);
 
   if (storageService.isConfigured()) {
-    const obj = await storageService.getObjectStream(`kyc/${normalized}`);
+    const obj = await storageService.getObjectStream(webPath ? relative : `kyc/${relative}`);
     if (obj) {
       if (obj.contentType) res.type(obj.contentType);
       if (obj.contentLength != null) res.setHeader('Content-Length', obj.contentLength);

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../api';
 import { Loading, Badge, SearchInput, Pagination, EmptyState, fmtDate, matchesSearch, paginateItems } from '../../components/ui';
+import { FolderOpen } from 'lucide-react';
+import RiderDocumentsModal from '../../components/RiderDocumentsModal';
 
 // Same thresholds as fleet/Riders.jsx and admin/Users.jsx so a score reads
 // the same color everywhere it appears across the platform.
@@ -31,6 +33,7 @@ export default function AdminRiders() {
   const [ratingFilter, setRatingFilter] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const [docsRider, setDocsRider] = useState(null);
 
   const load = async () => {
     const [usersRes, scorecardsRes] = await Promise.all([
@@ -99,6 +102,7 @@ export default function AdminRiders() {
                 <th className="col-mobile-hide">Payments</th>
                 <th className="col-mobile-hide">Address</th>
                 <th className="col-mobile-hide">Joined</th>
+                <th>Documents</th>
               </tr>
             </thead>
             <tbody>
@@ -133,6 +137,11 @@ export default function AdminRiders() {
                     <td className="col-mobile-hide">{sc ? `${sc.payment_late_or_overdue}/${sc.payment_reckoned} late or overdue` : '—'}</td>
                     <td className="col-mobile-hide">{sc?.address_match_status || '—'}</td>
                     <td className="col-mobile-hide">{fmtDate(r.created_at)}</td>
+                    <td>
+                      <button className="btn btn-sm btn-secondary" onClick={() => setDocsRider(r)} title={`Upload or review documents for ${r.full_name}`}>
+                        <FolderOpen size={13} /> Documents
+                      </button>
+                    </td>
                   </tr>
                 );
               })}
@@ -141,6 +150,7 @@ export default function AdminRiders() {
         </div>
         {!pagination.items.length && <EmptyState title="No riders match your filters" sub="Try clearing the search or rating filter." />}
       </div>
+      {docsRider && <RiderDocumentsModal rider={docsRider} onClose={() => setDocsRider(null)} />}
       <Pagination page={pagination.currentPage} pageSize={pagination.pageSize} totalItems={pagination.totalItems} onPageChange={setPage} onPageSizeChange={setPageSize} label="riders" />
     </>
   );

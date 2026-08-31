@@ -28,17 +28,58 @@ router.post('/upload', authRequired, upload.single('file'), requireValidMime(['a
   if (!['id_document','proof_of_address','drivers_license','bank_statement','selfie','other'].includes(doc_type))
     return res.status(400).json({ error: 'Invalid doc_type' });
 
+  // Admins can file a document on a rider's behalf — riders regularly bring
+  // paperwork to a hub or email it in, and before this the only way to get it
+  // onto their record was to ask them to upload it themselves. Everyone else is
+  // strictly self-only: an ordinary user passing user_id is ignored, not obeyed.
+  const isAdmin = ['admin', 'superadmin'].includes(req.user.role);
+  const requestedUserId = Number(req.body.user_id);
+  let ownerId = req.user.id;
+
+  if (isAdmin && Number.isFinite(requestedUserId) && requestedUserId !== req.user.id) {
+    const { rows: target } = await pgDb.query(
+      `SELECT id, role FROM users WHERE id = $1 AND deleted_at IS NULL`, [requestedUserId]);
+    if (!target[0]) {
+      fs.unlink(req.file.path, () => {});
+      return res.status(404).json({ error: 'Rider not found' });
+    }
+    if (target[0].role !== 'rider') {
+      fs.unlink(req.file.path, () => {});
+      return res.status(400).json({ error: 'Documents can only be filed against a rider account' });
+    }
+    ownerId = target[0].id;
+  }
+
   const { rows } = await pgDb.query(`INSERT INTO kyc_documents (user_id, doc_type, file_path, original_name)
-                           VALUES ($1,$2,$3,$4) RETURNING id`, [req.user.id, doc_type, req.file.filename, req.file.originalname]);
+                           VALUES ($1,$2,$3,$4) RETURNING id`, [ownerId, doc_type, req.file.filename, req.file.originalname]);
   const id = rows[0].id;
-  await logAudit(req.user.id, 'kyc.upload', 'kyc_documents', id, { doc_type });
-  res.json({ id });
+  // on_behalf_of records that this wasn't the rider's own upload — the row
+  // itself only carries the owner, so without this the distinction is lost.
+  await logAudit(req.user.id, 'kyc.upload', 'kyc_documents', id,
+    { doc_type, ...(ownerId !== req.user.id ? { on_behalf_of: ownerId } : {}) });
+  res.json({ id, user_id: ownerId });
 });
 
 router.get('/mine', authRequired, async (req, res) => {
   const { rows: docs } = await pgDb.query(`SELECT id, doc_type, original_name, status, rejection_reason, uploaded_at
                            FROM kyc_documents WHERE user_id = $1 ORDER BY uploaded_at DESC`, [req.user.id]);
   res.json({ documents: docs });
+});
+
+// Everything on file for one rider, for the admin filing documents on their
+// behalf — otherwise there's no way to see what's already there and duplicates
+// get uploaded. Reuses the same access rule as /file/:id and is audited the
+// same way, since this is an admin reading a rider's personal paperwork.
+router.get('/user/:userId', authRequired, adminOnly, async (req, res) => {
+  const { rows: user } = await pgDb.query(
+    `SELECT id, full_name, email FROM users WHERE id = $1 AND deleted_at IS NULL`, [req.params.userId]);
+  if (!user[0]) return res.status(404).json({ error: 'Rider not found' });
+
+  const { rows: docs } = await pgDb.query(
+    `SELECT id, doc_type, original_name, status, rejection_reason, uploaded_at
+       FROM kyc_documents WHERE user_id = $1 ORDER BY uploaded_at DESC`, [req.params.userId]);
+  await logAudit(req.user.id, 'kyc.list_for_user', 'users', user[0].id, { count: docs.length }, req.ip);
+  res.json({ rider: user[0], documents: docs });
 });
 
 router.get('/file/:id', authRequired, async (req, res) => {

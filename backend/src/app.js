@@ -229,7 +229,25 @@ function buildApp() {
     });
   }
 
+  // Multer rejections are the caller's fault, not ours, but nothing handled
+  // them — so an oversized upload fell through to the generic branch below and
+  // came back as a 500 reading "File too large", with no size named and no
+  // indication the upload could succeed if the file were smaller. To whoever
+  // was uploading it just looked broken. Every upload route shares this
+  // handler, so riders and admins both get an answer they can act on.
+  const MULTER_MESSAGES = {
+    LIMIT_FILE_SIZE: 'That file is too large to upload. Please compress it, or take a lower-resolution photo, and try again.',
+    LIMIT_FILE_COUNT: 'Too many files at once. Please upload them one at a time.',
+    LIMIT_UNEXPECTED_FILE: 'That file was sent in an unexpected field. Please reselect it and try again.',
+    LIMIT_PART_COUNT: 'That upload had too many parts. Please try again with a single file.',
+  };
+
   app.use((err, req, res, next) => {
+    if (err && MULTER_MESSAGES[err.code]) {
+      // Logged at warn: expected user error, not a fault worth alerting on.
+      console.warn(`[upload] ${err.code} on ${req.method} ${req.path}`);
+      return res.status(400).json({ error: MULTER_MESSAGES[err.code], code: err.code });
+    }
     if (process.env.NODE_ENV !== 'test') console.error(err);
     res.status(err.status || 500).json({ error: err.message || 'Server error' });
   });

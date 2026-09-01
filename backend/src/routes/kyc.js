@@ -20,7 +20,10 @@ const { kyc: uploadDir } = UPLOAD_DIRS;
 const upload = multer({
   storage: hybridStorage(uploadDir, 'kyc', (req, file) =>
     `${req.user.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${path.extname(file.originalname)}`),
-  limits: { fileSize: 8 * 1024 * 1024 }
+  // 15 MB, matching the most generous limit already used elsewhere in the
+  // codebase. These are photographs of ID documents taken on phones, which
+  // routinely exceed the previous 8 MB — production already holds a 5 MB one.
+  limits: { fileSize: 15 * 1024 * 1024 }
 });
 
 router.post('/upload', authRequired, upload.single('file'), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {

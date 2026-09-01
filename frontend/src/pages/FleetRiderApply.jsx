@@ -306,9 +306,9 @@ export default function FleetRiderApply() {
                 <div className="muted text-sm mt-1">{t('fleetApply.step4Help')}</div>
               </div>
               <div className="grid grid-2">
-                <UploadField label={t('fields.idDocument')} file={files.id_document} onChange={(file) => setFile('id_document', file)} accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" />
-                <UploadField label={t('fields.driversLicense')} file={files.drivers_license} onChange={(file) => setFile('drivers_license', file)} accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" />
-                <UploadField label={t('fields.selfie')} file={files.selfie} onChange={(file) => setFile('selfie', file)} accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" />
+                <UploadField label={t('fields.idDocument')} file={files.id_document} onChange={(file) => setFile('id_document', file)} accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp,image/heic,image/heif,.heic,.heif" />
+                <UploadField label={t('fields.driversLicense')} file={files.drivers_license} onChange={(file) => setFile('drivers_license', file)} accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp,image/heic,image/heif,.heic,.heif" />
+                <UploadField label={t('fields.selfie')} file={files.selfie} onChange={(file) => setFile('selfie', file)} accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp,image/heic,image/heif,.heic,.heif" />
                 <div className="card" style={{ background: 'var(--surface-2)' }}>
                   <strong>{t('fleetApply.autoDecisionTitle')}</strong>
                   <div className="muted text-sm mt-2">{t('fleetApply.autoDecisionDesc')}</div>

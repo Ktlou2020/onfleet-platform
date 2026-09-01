@@ -11,6 +11,7 @@ const axios = require('axios');
 const { logAudit, recalcScheduleStatuses } = require('../utils/helpersPg');
 const { generateStrategicReport } = require('../services/strategicReport');
 const { requireValidMime } = require('../utils/validateUpload');
+const { convertHeicUploads } = require('../utils/heicToJpeg');
 const { sendHtmlEmail, detectEmailProvider } = require('../services/notifier');
 const { sendNotification } = require('../services/notifierPg');
 const { getTemplate, listTemplates, previewTemplate } = require('../services/emailTemplates');
@@ -27,7 +28,7 @@ const heroImageUpload = multer({
   storage: hybridStorage(brandingUploadDir, 'branding', (req, file) =>
     `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${path.extname(file.originalname).toLowerCase()}`),
   limits: { fileSize: 10 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => cb(null, ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(file.mimetype))
+  fileFilter: (req, file, cb) => cb(null, ['image/heic', 'image/heif', 'image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(file.mimetype))
 });
 router.use(authRequired, adminOnly);
 
@@ -313,7 +314,7 @@ router.get('/branding', superadminOnly, async (req, res) => {
   res.json({ hero_image_url: await getSetting('landing_hero_image_url') });
 });
 
-router.post('/branding/hero-image', superadminOnly, heroImageUpload.single('image'), requireValidMime(['image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
+router.post('/branding/hero-image', superadminOnly, heroImageUpload.single('image'), convertHeicUploads(), requireValidMime(['image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Hero image file is required' });
   const publicPath = `/uploads/branding/${req.file.filename}`;
   await setSetting('landing_hero_image_url', publicPath);

@@ -8,6 +8,7 @@ const fs = require('fs');
 const pgDb = require('../pgDb');
 const { authRequired, fleetOwnerOnly, companyRoleAllowed } = require('../middleware/auth');
 const { requireValidMime } = require('../utils/validateUpload');
+const { convertHeicUploads } = require('../utils/heicToJpeg');
 // Postgres versions — fleet.js is fully migrated off SQLite. See each *Pg
 // module's header comment for why it's a separate file from the SQLite
 // original (other, not-yet-migrated routes still depend on those).
@@ -462,7 +463,7 @@ router.post('/public/:slug/rider-application', riderApplicationUpload.fields([
   { name: 'payslip_1', maxCount: 1 },
   { name: 'payslip_2', maxCount: 1 },
   { name: 'payslip_3', maxCount: 1 }
-]), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
+]), convertHeicUploads(), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
   try {
     const slug = String(req.params.slug || '').trim().toLowerCase();
     const { rows: orgRows } = await pgDb.query(`SELECT * FROM organizations WHERE LOWER(slug) = $1`, [slug]);
@@ -1102,7 +1103,7 @@ router.post('/riders', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), 
   { name: 'payslip_1', maxCount: 1 },
   { name: 'payslip_2', maxCount: 1 },
   { name: 'payslip_3', maxCount: 1 }
-]), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
+]), convertHeicUploads(), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req);
     const email = String(req.body.email || '').trim().toLowerCase();
@@ -1246,7 +1247,7 @@ router.patch('/riders/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.mana
   }
 });
 
-router.post('/riders/:id/documents', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), riderApplicationUpload.single('file'), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
+router.post('/riders/:id/documents', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), riderApplicationUpload.single('file'), convertHeicUploads(), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const organization = await getOrganizationOrThrow(req);

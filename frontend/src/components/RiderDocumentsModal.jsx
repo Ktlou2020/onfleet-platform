@@ -15,7 +15,7 @@ const DOC_TYPES = [
   { value: 'other',            label: 'Other' },
 ];
 
-const ACCEPT = 'application/pdf,image/jpeg,image/jpg,image/png,image/webp';
+const ACCEPT = 'application/pdf,image/jpeg,image/jpg,image/png,image/webp,image/heic,image/heif,.heic,.heif';
 
 /**
  * Lets an admin file a rider's paperwork for them — riders routinely hand
@@ -85,7 +85,7 @@ export default function RiderDocumentsModal({ rider, onClose }) {
               <input type="file" accept={ACCEPT} onChange={(e) => setFile(e.target.files?.[0] || null)} />
             </div>
           </div>
-          <div className="muted text-xs mt-2">PDF, JPG, PNG or WEBP.</div>
+          <div className="muted text-xs mt-2">PDF, JPG, PNG, WEBP or HEIC (iPhone photos are converted automatically).</div>
           <div className="row mt-3">
             <button className="btn" onClick={upload} disabled={uploading || !file}>
               <Upload size={14} /> {uploading ? 'Uploading…' : 'Upload for this rider'}

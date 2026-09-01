@@ -519,12 +519,12 @@ export default function AdminBikes() {
               <div className="grid grid-2">
                 <div className="field">
                   <label className="label">RC1 document</label>
-                  <input type="file" accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" onChange={(e) => handleDocumentSelection('rc1', e.target.files?.[0] || null)} />
+                  <input type="file" accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp,image/heic,image/heif,.heic,.heif" onChange={(e) => handleDocumentSelection('rc1', e.target.files?.[0] || null)} />
                   <div className="text-xs muted mt-1">{docFiles.rc1 ? docFiles.rc1.name : 'Optional'}</div>
                 </div>
                 <div className="field">
                   <label className="label">License disc document</label>
-                  <input type="file" accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" onChange={(e) => handleDocumentSelection('license_disc', e.target.files?.[0] || null)} />
+                  <input type="file" accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp,image/heic,image/heif,.heic,.heif" onChange={(e) => handleDocumentSelection('license_disc', e.target.files?.[0] || null)} />
                   <div className="text-xs muted mt-1">
                     {readingLicenseDisc ? 'Reading license disc…' : docFiles.license_disc ? docFiles.license_disc.name : 'Upload to auto-read the expiry date when possible'}
                   </div>

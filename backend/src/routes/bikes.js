@@ -12,6 +12,7 @@ const { setBikeStatus } = require('../utils/bikeStatusPg');
 const { discontinueAgreementForStolenBike, discontinueAgreement } = require('../services/agreementLifecyclePg');
 const { extractLicenseDiscInsights } = require('../services/documentInsights');
 const { requireValidMime } = require('../utils/validateUpload');
+const { convertHeicUploads } = require('../utils/heicToJpeg');
 const { writeContractSnapshot } = require('../services/contracts');
 const asyncRouter = require('../utils/asyncRouter');
 const { hybridStorage } = require('../utils/hybridStorage');
@@ -23,19 +24,19 @@ const genFilename = (req, file) => `${Date.now()}-${Math.random().toString(36).s
 
 const bikeImageUpload = multer({
   storage: hybridStorage(bikeUploadDir, 'bikes', genFilename),
-  fileFilter: (req, file, cb) => cb(null, ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(file.mimetype)),
+  fileFilter: (req, file, cb) => cb(null, ['image/heic', 'image/heif', 'image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(file.mimetype)),
   limits: { fileSize: 8 * 1024 * 1024 }
 });
 
 const invoiceUpload = multer({
   storage: hybridStorage(invoiceUploadDir, 'service-invoices', genFilename),
-  fileFilter: (req, file, cb) => cb(null, ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'].includes(file.mimetype)),
+  fileFilter: (req, file, cb) => cb(null, ['application/pdf', 'image/heic', 'image/heif', 'image/jpeg', 'image/jpg', 'image/png'].includes(file.mimetype)),
   limits: { fileSize: 10 * 1024 * 1024 }
 });
 
 const bikeDocumentUpload = multer({
   storage: hybridStorage(bikeDocumentUploadDir, 'bike-documents', genFilename),
-  fileFilter: (req, file, cb) => cb(null, ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(file.mimetype)),
+  fileFilter: (req, file, cb) => cb(null, ['application/pdf', 'image/heic', 'image/heif', 'image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(file.mimetype)),
   limits: { fileSize: 15 * 1024 * 1024 }
 });
 
@@ -310,7 +311,7 @@ router.get('/', authRequired, adminOnly, async (req, res) => {
   res.json({ bikes });
 });
 
-router.post('/document-insights/license-disc', authRequired, adminOnly, bikeDocumentUpload.single('file'), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
+router.post('/document-insights/license-disc', authRequired, adminOnly, bikeDocumentUpload.single('file'), convertHeicUploads(), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'A document file is required' });
   try {
     const extracted = await extractLicenseDiscInsights(req.file.path, req.file.mimetype);
@@ -645,7 +646,7 @@ router.delete('/:id', authRequired, adminOnly, async (req, res) => {
   res.json({ ok: true });
 });
 
-router.post('/:id/image', authRequired, adminOnly, bikeImageUpload.single('image'), requireValidMime(['image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
+router.post('/:id/image', authRequired, adminOnly, bikeImageUpload.single('image'), convertHeicUploads(), requireValidMime(['image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Image file is required' });
   const publicPath = `/uploads/bikes/${req.file.filename}`;
   await pgDb.query('UPDATE bikes SET image_url = $1 WHERE id = $2', [publicPath, req.params.id]);
@@ -653,7 +654,7 @@ router.post('/:id/image', authRequired, adminOnly, bikeImageUpload.single('image
   res.json({ image_url: publicPath });
 });
 
-router.post('/:id/documents/:documentType', authRequired, adminOnly, bikeDocumentUpload.single('file'), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
+router.post('/:id/documents/:documentType', authRequired, adminOnly, bikeDocumentUpload.single('file'), convertHeicUploads(), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'A document file is required' });
   const { rows: bikeRows } = await pgDb.query('SELECT id FROM bikes WHERE id = $1', [req.params.id]);
   if (!bikeRows[0]) return res.status(404).json({ error: 'Bike not found' });

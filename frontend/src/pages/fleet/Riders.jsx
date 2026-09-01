@@ -596,9 +596,9 @@ export default function FleetOwnerRiders() {
                 <FleetHelpTip section="riders" tooltip="ID, licence, selfie, and three payslips are required so the application can be reviewed properly and assessed against the auto-decision rules." label="Upload guide" compact />
               </div>
               <div className="grid grid-2">
-                <UploadField label="ID document *" file={files.id_document} onChange={(file) => setFile('id_document', file)} accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" />
-                <UploadField label="Driver's licence *" file={files.drivers_license} onChange={(file) => setFile('drivers_license', file)} accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" />
-                <UploadField label="Selfie *" file={files.selfie} onChange={(file) => setFile('selfie', file)} accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" />
+                <UploadField label="ID document *" file={files.id_document} onChange={(file) => setFile('id_document', file)} accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp,image/heic,image/heif,.heic,.heif" />
+                <UploadField label="Driver's licence *" file={files.drivers_license} onChange={(file) => setFile('drivers_license', file)} accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp,image/heic,image/heif,.heic,.heif" />
+                <UploadField label="Selfie *" file={files.selfie} onChange={(file) => setFile('selfie', file)} accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp,image/heic,image/heif,.heic,.heif" />
                 <div className="card" style={{ background: 'var(--surface-2)' }}>
                   <strong>Auto-decision rule</strong>
                   <div className="muted text-sm mt-2">Three payslips are required so the platform can calculate average weekly earnings. Below R1000/week auto-declines. R1000/week or above pre-approves for review.</div>
@@ -617,7 +617,7 @@ export default function FleetOwnerRiders() {
               <div className="card mb-3" style={{ background: 'var(--surface-2)' }}>
                 <div className="grid grid-3" style={{ alignItems: 'end' }}>
                   <div className="field"><label className="label">Document type</label><select value={uploadForm.doc_type} onChange={(event) => setUploadForm((current) => ({ ...current, doc_type: event.target.value, file: null }))}>{DOC_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
-                  <div className="field"><label className="label">File</label><input type="file" accept={uploadForm.doc_type === 'payslip' ? 'application/pdf,image/*,.doc,.docx,.heic' : 'application/pdf,image/jpeg,image/jpg,image/png,image/webp'} onChange={(event) => setUploadForm((current) => ({ ...current, file: event.target.files?.[0] || null, manual_amount: '' }))} /></div>
+                  <div className="field"><label className="label">File</label><input type="file" accept={uploadForm.doc_type === 'payslip' ? 'application/pdf,image/*,.doc,.docx,.heic' : 'application/pdf,image/jpeg,image/jpg,image/png,image/webp,image/heic,image/heif,.heic,.heif'} onChange={(event) => setUploadForm((current) => ({ ...current, file: event.target.files?.[0] || null, manual_amount: '' }))} /></div>
                   <div><button className="btn" onClick={uploadDocument} disabled={uploading || !uploadForm.file || (fleetPayslipNeedsAmount && !String(uploadForm.manual_amount || '').trim())}>{uploading ? 'Uploading…' : 'Upload document'}</button></div>
                 </div>
                 {fleetPayslipNeedsAmount && (

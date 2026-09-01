@@ -12,6 +12,7 @@ const { sendNotification } = require('../services/notifierPg');
 const { extractPayslipInsights } = require('../services/documentInsights');
 const { writeContractSnapshot } = require('../services/contracts');
 const { requireValidMime } = require('../utils/validateUpload');
+const { convertHeicUploads } = require('../utils/heicToJpeg');
 const asyncRouter = require('../utils/asyncRouter');
 const { hybridStorage } = require('../utils/hybridStorage');
 
@@ -38,7 +39,7 @@ function parseMoneyAmount(value) {
 }
 
 function isPayslipImageMime(mimeType) {
-  return ['image/jpeg', 'image/jpg'].includes(String(mimeType || '').toLowerCase());
+  return ['image/heic', 'image/heif', 'image/jpeg', 'image/jpg'].includes(String(mimeType || '').toLowerCase());
 }
 
 async function createApplication(payload, actor, userId) {
@@ -277,7 +278,7 @@ router.post('/admin-create', authRequired, adminOnly, async (req, res) => {
   res.json({ id });
 });
 
-router.post('/:id/documents', authRequired, upload.single('file'), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
+router.post('/:id/documents', authRequired, upload.single('file'), convertHeicUploads(), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const { doc_type } = req.body;
   if (!['id_document', 'drivers_license', 'payslip', 'other'].includes(doc_type)) {

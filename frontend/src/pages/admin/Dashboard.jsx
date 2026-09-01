@@ -111,7 +111,7 @@ export default function AdminDashboard() {
             <div>
               <div className="field">
                 <label className="label">Upload hero image</label>
-                <input type="file" accept="image/jpeg,image/jpg,image/png,image/webp" onChange={(e) => setHeroImageFile(e.target.files?.[0] || null)} />
+                <input type="file" accept="image/jpeg,image/jpg,image/png,image/webp,image/heic,image/heif,.heic,.heif" onChange={(e) => setHeroImageFile(e.target.files?.[0] || null)} />
                 <div className="muted text-sm mt-2">Recommended: wide landscape image in JPG, PNG, or WEBP format.</div>
               </div>
               <div className="row" style={{ flexWrap: 'wrap' }}>

@@ -9,6 +9,7 @@ const { authRequired, adminOnly } = require('../middleware/auth');
 // still depend on that).
 const { logAudit } = require('../utils/helpersPg');
 const { requireValidMime } = require('../utils/validateUpload');
+const { convertHeicUploads } = require('../utils/heicToJpeg');
 const asyncRouter = require('../utils/asyncRouter');
 const { hybridStorage } = require('../utils/hybridStorage');
 const storageService = require('../services/storageService');
@@ -26,7 +27,7 @@ const upload = multer({
   limits: { fileSize: 15 * 1024 * 1024 }
 });
 
-router.post('/upload', authRequired, upload.single('file'), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
+router.post('/upload', authRequired, upload.single('file'), convertHeicUploads(), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file' });
   const { doc_type } = req.body;
   if (!['id_document','proof_of_address','drivers_license','bank_statement','selfie','other'].includes(doc_type))

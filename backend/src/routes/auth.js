@@ -12,6 +12,7 @@ const { authRequired } = require('../middleware/auth');
 const { logAudit } = require('../utils/helpersPg');
 const { sendNotification } = require('../services/notifierPg');
 const { requireValidMime } = require('../utils/validateUpload');
+const { convertHeicUploads } = require('../utils/heicToJpeg');
 const asyncRouter = require('../utils/asyncRouter');
 const { hybridStorage } = require('../utils/hybridStorage');
 
@@ -55,7 +56,7 @@ const profileUpload = multer({
     `${Date.now()}-${Math.random().toString(36).slice(2, 9)}${path.extname(file.originalname).toLowerCase()}`),
   limits: { fileSize: 8 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const ok = ['image/jpeg', 'image/jpg', 'image/pjpeg', 'image/png', 'image/webp'].includes(file.mimetype);
+    const ok = ['image/heic', 'image/heif', 'image/jpeg', 'image/jpg', 'image/pjpeg', 'image/png', 'image/webp'].includes(file.mimetype);
     cb(ok ? null : new Error('Only JPG, JPEG, PNG, and WEBP images are allowed'), ok);
   }
 });
@@ -376,7 +377,7 @@ router.put('/me', authRequired, async (req, res) => {
   res.json({ ok: true });
 });
 
-router.post('/me/selfie', authRequired, profileUpload.single('selfie'), requireValidMime(['image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
+router.post('/me/selfie', authRequired, profileUpload.single('selfie'), convertHeicUploads(), requireValidMime(['image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Selfie image is required' });
   const avatarUrl = `/uploads/profiles/${req.file.filename}`;
   await pgDb.query(`UPDATE users SET avatar_url = $1, updated_at = NOW() WHERE id = $2`, [avatarUrl, req.user.id]);

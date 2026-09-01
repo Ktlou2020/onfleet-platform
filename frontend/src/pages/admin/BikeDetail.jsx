@@ -349,7 +349,7 @@ export default function AdminBikeDetail() {
               </div>
             )}
           </div>
-          <div className="row mt-3"><input type="file" accept="image/jpeg,image/jpg,image/png,image/webp" onChange={(e) => setImageFile(e.target.files?.[0] || null)} /><button className="btn btn-secondary" onClick={uploadImage}>Upload image</button></div>
+          <div className="row mt-3"><input type="file" accept="image/jpeg,image/jpg,image/png,image/webp,image/heic,image/heif,.heic,.heif" onChange={(e) => setImageFile(e.target.files?.[0] || null)} /><button className="btn btn-secondary" onClick={uploadImage}>Upload image</button></div>
         </div>
         <div className="card">
           <h3 className="mb-3">Details</h3>
@@ -429,7 +429,7 @@ export default function AdminBikeDetail() {
                 {bike.rc1_file_path && <a href={bike.rc1_file_path} target="_blank" rel="noreferrer">{bike.rc1_original_name || 'Open RC1 document'}</a>}
                 {canManageDocuments && (
                   <>
-                    <div className="field mt-3"><label className="label">Replace / upload RC1 document</label><input type="file" accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" onChange={(e) => setRc1File(e.target.files?.[0] || null)} /></div>
+                    <div className="field mt-3"><label className="label">Replace / upload RC1 document</label><input type="file" accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp,image/heic,image/heif,.heic,.heif" onChange={(e) => setRc1File(e.target.files?.[0] || null)} /></div>
                     <button className="btn btn-secondary btn-sm" onClick={() => handleDocumentUpload('rc1')} disabled={uploadingDoc === 'rc1'}>{uploadingDoc === 'rc1' ? 'Uploading…' : 'Upload RC1'}</button>
                   </>
                 )}
@@ -442,7 +442,7 @@ export default function AdminBikeDetail() {
                 {bike.license_disc_expiry && <div className="text-xs" style={{ marginTop: 8, color: 'var(--primary-light)' }}>Current expiry: {fmtDate(bike.license_disc_expiry)}</div>}
                 {canManageDocuments && (
                   <>
-                    <div className="field mt-3"><label className="label">Replace / upload license disc document</label><input type="file" accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp" onChange={(e) => setLicenseDiscFile(e.target.files?.[0] || null)} /></div>
+                    <div className="field mt-3"><label className="label">Replace / upload license disc document</label><input type="file" accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp,image/heic,image/heif,.heic,.heif" onChange={(e) => setLicenseDiscFile(e.target.files?.[0] || null)} /></div>
                     <button className="btn btn-secondary btn-sm" onClick={() => handleDocumentUpload('license_disc')} disabled={uploadingDoc === 'license_disc'}>{uploadingDoc === 'license_disc' ? 'Uploading…' : 'Upload license disc'}</button>
                     <div className="text-xs muted mt-2">The system will read the document and update the stored disc expiry automatically when it can detect one.</div>
                   </>

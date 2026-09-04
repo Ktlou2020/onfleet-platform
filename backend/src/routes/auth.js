@@ -13,6 +13,7 @@ const { logAudit } = require('../utils/helpersPg');
 const { sendNotification } = require('../services/notifierPg');
 const { requireValidMime } = require('../utils/validateUpload');
 const { convertHeicUploads } = require('../utils/heicToJpeg');
+const { parseUserAgent } = require('../utils/userAgent');
 const asyncRouter = require('../utils/asyncRouter');
 const { hybridStorage } = require('../utils/hybridStorage');
 
@@ -60,6 +61,21 @@ const profileUpload = multer({
     cb(ok ? null : new Error('Only JPG, JPEG, PNG, and WEBP images are allowed'), ok);
   }
 });
+
+// Never throws and never blocks the login it is describing: a logging failure
+// must not stop a rider signing in, nor turn a wrong password into a 500.
+async function recordLoginAttempt(req, { email, userId = null, success, reason = null }) {
+  try {
+    const ua = req.get('user-agent') || null;
+    const { browser, os, deviceType } = parseUserAgent(ua);
+    await pgDb.query(
+      `INSERT INTO login_attempts (user_id, email, success, failure_reason, ip, user_agent, browser, os, device_type)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [userId, email, success, reason, req.ip || null, ua, browser, os, deviceType]);
+  } catch (e) {
+    console.error('[login-attempt] could not record:', e.message);
+  }
+}
 
 function signToken(user) {
   return jwt.sign({ uid: user.id, role: user.role }, process.env.JWT_SECRET, {
@@ -237,10 +253,26 @@ router.post('/login',
     const { password } = req.body;
     const { rows: userRows } = await pgDb.query('SELECT * FROM users WHERE email = $1 AND deleted_at IS NULL', [email]);
     const user = userRows[0];
-    if (!user) return res.status(401).json({ error: 'Invalid credentials' });
-    if (user.status !== 'active') return res.status(403).json({ error: 'Account suspended' });
-    if (!user.password_hash || !await bcrypt.compare(password, user.password_hash)) return res.status(401).json({ error: 'Invalid credentials' });
 
+    // Each failure path is recorded with its own reason. Support previously had
+    // no way to tell "typed the wrong address", "wrong password" and "never
+    // tried" apart — all three looked identical, which is nothing at all.
+    // The response to the caller is deliberately unchanged: it still says only
+    // "Invalid credentials", so this reveals nothing about which accounts exist.
+    if (!user) {
+      await recordLoginAttempt(req, { email, success: false, reason: 'no_such_account' });
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    if (user.status !== 'active') {
+      await recordLoginAttempt(req, { email, userId: user.id, success: false, reason: 'account_suspended' });
+      return res.status(403).json({ error: 'Account suspended' });
+    }
+    if (!user.password_hash || !await bcrypt.compare(password, user.password_hash)) {
+      await recordLoginAttempt(req, { email, userId: user.id, success: false, reason: 'wrong_password' });
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    await recordLoginAttempt(req, { email, userId: user.id, success: true });
     await logAudit(user.id, 'user.login', 'users', user.id, {}, req.ip);
     const safe = await getSafeUser(user.id) || { id: user.id, email: user.email, full_name: user.full_name, role: user.role, organization_id: user.organization_id || null };
     res.json({ token: signToken(safe), user: safe });

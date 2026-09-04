@@ -1921,6 +1921,68 @@ router.post('/record-paystack-payment', superadminOnly, async (req, res) => {
   res.json({ success: true, payment_id: paymentId, amount: grossAmountZAR, reference: ref, net_to_wallet: grossAmountZAR });
 });
 
+// Sign-in history for one person, for support answering "I can't log in".
+//
+// Matches on user_id, and on the address itself so attempts made before the
+// account existed still attach. It cannot show an attempt where the rider
+// mistyped their address: that row has no user_id and an email belonging to
+// nobody, so nothing links it here. Those are found through the search below
+// instead, which is why that endpoint exists.
+router.get('/users/:id/login-attempts', async (req, res) => {
+  const { rows: userRows } = await pgDb.query(
+    `SELECT id, full_name, email FROM users WHERE id = $1 AND deleted_at IS NULL`, [req.params.id]);
+  const user = userRows[0];
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  const limit = Math.min(Number(req.query.limit) || 50, 200);
+  const { rows } = await pgDb.query(
+    `SELECT id, email, success, failure_reason, ip, browser, os, device_type, user_agent, created_at
+       FROM login_attempts
+      WHERE user_id = $1 OR LOWER(email) = LOWER($2)
+      ORDER BY created_at DESC
+      LIMIT $3`, [user.id, user.email, limit]);
+
+  const successes = rows.filter((r) => r.success).length;
+  res.json({
+    user,
+    summary: {
+      total: rows.length,
+      successful: successes,
+      failed: rows.length - successes,
+      last_attempt_at: rows[0]?.created_at || null,
+      last_success_at: rows.find((r) => r.success)?.created_at || null,
+    },
+    attempts: rows,
+  });
+});
+
+// Search attempts across everyone, matched on the address as typed. This is
+// how a mistyped login is found: searching the rider's real address turns up
+// near misses only if they typed it, so support searches a fragment — the name
+// before the @, say — and sees "lg@locl.dev" sitting next to "lg@local.dev".
+router.get('/login-attempts', async (req, res) => {
+  const q = String(req.query.email || '').trim();
+  const limit = Math.min(Number(req.query.limit) || 50, 200);
+  const failedOnly = req.query.failed_only === 'true';
+
+  const where = [];
+  const params = [];
+  if (q) { params.push(`%${q}%`); where.push(`a.email ILIKE $${params.length}`); }
+  if (failedOnly) where.push('a.success = FALSE');
+  params.push(limit);
+
+  const { rows } = await pgDb.query(
+    `SELECT a.id, a.email, a.success, a.failure_reason, a.ip, a.browser, a.os,
+            a.device_type, a.user_agent, a.created_at,
+            u.id AS matched_user_id, u.full_name AS matched_user_name
+       FROM login_attempts a
+       LEFT JOIN users u ON u.id = a.user_id
+      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      ORDER BY a.created_at DESC
+      LIMIT $${params.length}`, params);
+  res.json({ count: rows.length, attempts: rows });
+});
+
 // ---------- Platform integrations: API keys + outbound webhooks ----------
 // Superadmin-only. These grant visibility across every organisation and every
 // platform-owned vehicle, so they deliberately sit outside the fleet-owner

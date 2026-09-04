@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../api';
 import { Loading, Badge, SearchInput, Pagination, EmptyState, fmtDate, matchesSearch, paginateItems } from '../../components/ui';
-import { FolderOpen } from 'lucide-react';
+import { FolderOpen, LogIn } from 'lucide-react';
 import RiderDocumentsModal from '../../components/RiderDocumentsModal';
+import RiderLoginHistoryModal from '../../components/RiderLoginHistoryModal';
 
 // Same thresholds as fleet/Riders.jsx and admin/Users.jsx so a score reads
 // the same color everywhere it appears across the platform.
@@ -34,6 +35,7 @@ export default function AdminRiders() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [docsRider, setDocsRider] = useState(null);
+  const [loginRider, setLoginRider] = useState(null);
 
   const load = async () => {
     const [usersRes, scorecardsRes] = await Promise.all([
@@ -103,6 +105,7 @@ export default function AdminRiders() {
                 <th className="col-mobile-hide">Address</th>
                 <th className="col-mobile-hide">Joined</th>
                 <th>Documents</th>
+                <th>Sign-ins</th>
               </tr>
             </thead>
             <tbody>
@@ -142,6 +145,11 @@ export default function AdminRiders() {
                         <FolderOpen size={13} /> Documents
                       </button>
                     </td>
+                    <td>
+                      <button className="btn btn-sm btn-secondary" onClick={() => setLoginRider(r)} title={`See sign-in attempts and browsers for ${r.full_name}`}>
+                        <LogIn size={13} /> Sign-ins
+                      </button>
+                    </td>
                   </tr>
                 );
               })}
@@ -151,6 +159,7 @@ export default function AdminRiders() {
         {!pagination.items.length && <EmptyState title="No riders match your filters" sub="Try clearing the search or rating filter." />}
       </div>
       {docsRider && <RiderDocumentsModal rider={docsRider} onClose={() => setDocsRider(null)} />}
+      {loginRider && <RiderLoginHistoryModal rider={loginRider} onClose={() => setLoginRider(null)} />}
       <Pagination page={pagination.currentPage} pageSize={pagination.pageSize} totalItems={pagination.totalItems} onPageChange={setPage} onPageSizeChange={setPageSize} label="riders" />
     </>
   );

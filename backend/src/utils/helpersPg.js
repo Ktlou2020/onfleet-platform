@@ -127,11 +127,28 @@ async function updateAgreementBalance(agreementId, remainingBalance) {
   const targetRemaining = Number(remainingBalance);
   if (!Number.isFinite(targetRemaining) || targetRemaining < 0) throw new Error('Remaining balance must be zero or greater');
 
-  const { rows: agreementRows } = await pgDb.query('SELECT id, status, total_amount FROM agreements WHERE id = $1', [agreementId]);
+  const { rows: agreementRows } = await pgDb.query(
+    'SELECT id, status, total_amount, weekly_amount, total_weeks FROM agreements WHERE id = $1', [agreementId]
+  );
   const agreement = agreementRows[0];
   if (!agreement) throw new Error('Agreement not found');
   if (!['active', 'paused', 'defaulted'].includes(agreement.status)) {
     throw new Error('Only active, paused, or defaulted agreements can be updated');
+  }
+
+  // A slipped digit here is silent and expensive. This figure gets re-spread
+  // across every open week, so R477,726.47 entered for R47,726.47 turned one
+  // agreement's instalment into R8,426.82/week and left the rider showing ten
+  // weeks overdue. The contract's own face value is the reference point: 1.5x
+  // leaves room for arrears and fees, while an extra digit is always 10x.
+  const contractValue = +(Number(agreement.weekly_amount || 0) * Number(agreement.total_weeks || 0)).toFixed(2);
+  if (contractValue > 0 && targetRemaining > contractValue * 1.5) {
+    throw new Error(
+      `Remaining balance of R${targetRemaining.toFixed(2)} is more than 1.5x this agreement's ` +
+      `contract value of R${contractValue.toFixed(2)} (${Number(agreement.total_weeks)} weeks x ` +
+      `R${Number(agreement.weekly_amount).toFixed(2)}). Check for a mistyped digit. If the amount ` +
+      `is genuinely correct, change the instalment count or weekly amount first.`
+    );
   }
 
   const { rows: paidRows } = await pgDb.query(

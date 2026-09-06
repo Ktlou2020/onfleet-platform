@@ -8,6 +8,43 @@ const creditedAmount = (payment) => Number(payment?.net_amount) || Number(paymen
 const feeAmount = (payment) => Number(payment?.fee_amount || 0);
 const grossAmount = (payment) => Number(payment?.amount || 0);
 
+// A schedule can be re-priced mid-term: an admin sets a remaining balance and it
+// re-spreads across the open weeks, which leaves the agreement's headline weekly
+// amount describing the debit order rather than the instalment now being billed.
+// Without this, a rider paying R850 every week against re-priced R809.52 weeks
+// reads as "regular payments, yet OVERDUE" with nothing on screen to explain it.
+function ScheduleSummary({ schedule, agreement }) {
+  const open = schedule.filter((r) => r.status !== 'waived' && Number(r.amount_due) > Number(r.amount_paid));
+  if (!open.length) return null;
+
+  const instalment = Number(open[0].amount_due);
+  const headline = Number(agreement.weekly_amount || 0);
+  // 'overdue' is the backend's own past-due flag, so this total always agrees
+  // with the badges in the rows below rather than re-deriving the cutoff date.
+  const arrears = schedule
+    .filter((r) => r.status === 'overdue')
+    .reduce((sum, r) => sum + Math.max(Number(r.amount_due) - Number(r.amount_paid), 0), 0);
+  const repriced = Math.abs(instalment - headline) > 0.01;
+
+  return (
+    <div className="mb-3" style={{ fontSize: 13 }}>
+      <div className="flex-between">
+        <span className="muted">Current instalment</span><strong>{fmt(instalment)}</strong>
+      </div>
+      <div className="flex-between">
+        <span className="muted">Arrears to date</span>
+        <strong style={{ color: arrears > 0.01 ? 'var(--danger)' : 'var(--success)' }}>{fmt(arrears)}</strong>
+      </div>
+      {repriced && (
+        <div className="muted" style={{ marginTop: 8, lineHeight: 1.45 }}>
+          This schedule was re-priced after a balance adjustment, so each week bills {fmt(instalment)}
+          {' '}while the agreement&rsquo;s weekly amount &mdash; what the debit order collects &mdash; is still {fmt(headline)}.
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AdminAgreementDetail() {
   const { id } = useParams();
   const [data, setData] = useState(null);
@@ -259,6 +296,7 @@ export default function AdminAgreementDetail() {
       <div className="grid grid-2 mb-4">
         <div className="card">
           <h3 className="mb-3">Payment schedule</h3>
+          <ScheduleSummary schedule={schedule} agreement={agreement} />
           <div style={{ maxHeight: 420, overflowY: 'auto' }}>
             <table className="table">
               <thead><tr><th>#</th><th>Due</th><th>Paid</th><th>Status</th></tr></thead>

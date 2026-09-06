@@ -1120,17 +1120,30 @@ router.post('/fleet-payouts/:id/process', superadminOnly, async (req, res) => {
 
   const newStatus = action === 'approve' ? 'approved' : action === 'paid' ? 'paid' : 'rejected';
 
-  if (newStatus === 'rejected' && request.status !== 'paid') {
-    // Refund the wallet balance
-    await pgDb.withTransaction(async (client) => {
+  // Rejecting refunds the wallet, and the status was read outside the
+  // transaction that acts on it. The guard above only stops 'paid', so
+  // rejecting an already-rejected payout refunded a second time — no race
+  // needed, just two clicks — and two concurrent rejections both refunded.
+  // Lock the request, re-read its status, and let only a genuine transition
+  // into 'rejected' move money.
+  const blocked = await pgDb.withTransaction(async (client) => {
+    const { rows } = await client.query(
+      'SELECT status FROM fleet_payout_requests WHERE id = $1 FOR UPDATE', [id]);
+    const current = rows[0];
+    if (!current) return 'Payout request not found';
+    if (current.status === 'paid') return 'Payout already marked as paid';
+    if (current.status === newStatus) return `Payout request is already ${newStatus}`;
+
+    if (newStatus === 'rejected') {
       await client.query(`UPDATE fleet_wallets SET balance = balance + $1, total_withdrawn = total_withdrawn - $2, updated_at = NOW() WHERE organization_id = $3`,
         [request.amount_requested, request.amount_requested, request.organization_id]);
       await client.query(`DELETE FROM fleet_wallet_transactions WHERE payout_request_id = $1`, [id]);
-    });
-  }
-
-  await pgDb.query(`UPDATE fleet_payout_requests SET status = $1, admin_notes = $2, processed_by = $3, processed_at = NOW() WHERE id = $4`,
-    [newStatus, admin_notes || null, req.user.id, id]);
+    }
+    await client.query(`UPDATE fleet_payout_requests SET status = $1, admin_notes = $2, processed_by = $3, processed_at = NOW() WHERE id = $4`,
+      [newStatus, admin_notes || null, req.user.id, id]);
+    return null;
+  });
+  if (blocked) return res.status(400).json({ error: blocked });
 
   await logAudit(req.user.id, `fleet.payout.${newStatus}`, 'fleet_payout_requests', id, { action, admin_notes }, req.ip);
 

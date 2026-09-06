@@ -2657,8 +2657,11 @@ async function creditFleetWallet(organizationId, grossAmountZAR, riderId, refere
   return { gross: grossAmountZAR, fee, net };
 }
 
-async function computeWalletAvailability(organizationId, wallet) {
-  const { rows: pendingRows } = await pgDb.query(
+// `db` lets the payout path run this inside its transaction, against the
+// wallet row it has locked, rather than on a separate pooled connection where
+// the answer could already be stale.
+async function computeWalletAvailability(organizationId, wallet, db = pgDb) {
+  const { rows: pendingRows } = await db.query(
     `SELECT COALESCE(SUM(net_amount), 0) AS pending_balance
      FROM fleet_wallet_transactions
      WHERE organization_id = $1 AND type = 'credit' AND available_at IS NOT NULL AND available_at > NOW()`,
@@ -2707,12 +2710,17 @@ router.post('/wallet/payout', companyRoleAllowed(FLEET_RESOURCE_ACCESS.wallet.ma
 
     const amount = Number(req.body.amount);
     if (!amount || amount <= 0) return res.status(400).json({ error: 'Invalid withdrawal amount' });
-    const { available_balance } = await computeWalletAvailability(org.id, wallet);
-    if (!wallet || available_balance < amount) {
+    if (!wallet) return res.status(400).json({ error: 'Insufficient available balance', available_balance: 0, pending_balance: 0 });
+
+    // Cheap pre-check so an obviously-too-large request fails before we bother
+    // taking a lock. It is NOT the guard — the authoritative check happens
+    // inside the transaction below, against the locked row.
+    const preview = await computeWalletAvailability(org.id, wallet);
+    if (preview.available_balance < amount) {
       return res.status(400).json({
         error: 'Insufficient available balance',
-        available_balance,
-        pending_balance: (Number(wallet?.balance) || 0) - available_balance
+        available_balance: preview.available_balance,
+        pending_balance: preview.pending_balance
       });
     }
 
@@ -2728,24 +2736,67 @@ router.post('/wallet/payout', companyRoleAllowed(FLEET_RESOURCE_ACCESS.wallet.ma
     const withdrawalFee = +(amount * 0.005).toFixed(2);
     const netPayout = +(amount - withdrawalFee).toFixed(2);
 
-    const requestId = await pgDb.withTransaction(async (client) => {
-      await client.query(`UPDATE fleet_wallets SET balance = balance - $1, total_withdrawn = total_withdrawn + $2, updated_at = NOW() WHERE organization_id = $3`,
-        [amount, amount, org.id]);
+    // The balance was previously read, checked, and only then deducted in a
+    // separate transaction — with no lock and no guard on the UPDATE. Two
+    // requests could each read the full balance, each pass the check, and each
+    // deduct, paying out more than the wallet held. Verified directly against
+    // Postgres: two connections reading R1000 and both deducting R1000 leave
+    // the wallet at -R1000, with nothing to stop it.
+    //
+    // The row is now locked for the duration and the balance re-checked
+    // against the locked row, so a second request waits and then sees the
+    // truth. INSUFFICIENT is thrown to roll the whole thing back.
+    const INSUFFICIENT = Symbol('insufficient');
+    const insufficient = (fresh) => {
+      const err = new Error('insufficient available balance');
+      err[INSUFFICIENT] = fresh;
+      return err;
+    };
 
-      const { rows: insertedRows } = await client.query(`INSERT INTO fleet_payout_requests
-        (organization_id, requested_by, amount_requested, withdrawal_fee, net_payout, status, bank_account_name, bank_name, bank_account_number, bank_branch_code)
-        VALUES ($1,$2,$3,$4,$5, 'pending',$6,$7,$8,$9) RETURNING id`,
-        [org.id, req.user.id, amount, withdrawalFee, netPayout, bankAccountName, bankName, bankAccountNumber, bankBranchCode || null]);
+    let requestId;
+    try {
+      requestId = await pgDb.withTransaction(async (client) => {
+        const { rows: lockedRows } = await client.query(
+          `SELECT * FROM fleet_wallets WHERE organization_id = $1 FOR UPDATE`, [org.id]);
+        const locked = lockedRows[0];
+        const fresh = await computeWalletAvailability(org.id, locked, client);
+        if (!locked || fresh.available_balance < amount) throw insufficient(fresh);
 
-      const reqId = insertedRows[0].id;
-      await client.query(`INSERT INTO fleet_wallet_transactions
-        (organization_id, type, amount, fee_amount, net_amount, description, payout_request_id)
-        VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [org.id, 'withdrawal', amount, withdrawalFee, netPayout, `Payout request #${reqId}`, reqId]);
+        // Guarded even with the lock held: if this ever matches no row the
+        // deduction simply does not happen, rather than silently overdrawing.
+        // A wallet driven negative by a chargeback reversal fails here too,
+        // which is the intent — you cannot withdraw out of an overdrawn wallet.
+        const deducted = await client.query(
+          `UPDATE fleet_wallets SET balance = balance - $1, total_withdrawn = total_withdrawn + $2, updated_at = NOW()
+            WHERE organization_id = $3 AND balance >= $1`,
+          [amount, amount, org.id]);
+        if (deducted.rowCount !== 1) throw insufficient(fresh);
 
-      return reqId;
-    });
+        const { rows: insertedRows } = await client.query(`INSERT INTO fleet_payout_requests
+          (organization_id, requested_by, amount_requested, withdrawal_fee, net_payout, status, bank_account_name, bank_name, bank_account_number, bank_branch_code)
+          VALUES ($1,$2,$3,$4,$5, 'pending',$6,$7,$8,$9) RETURNING id`,
+          [org.id, req.user.id, amount, withdrawalFee, netPayout, bankAccountName, bankName, bankAccountNumber, bankBranchCode || null]);
 
+        const reqId = insertedRows[0].id;
+        await client.query(`INSERT INTO fleet_wallet_transactions
+          (organization_id, type, amount, fee_amount, net_amount, description, payout_request_id)
+          VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [org.id, 'withdrawal', amount, withdrawalFee, netPayout, `Payout request #${reqId}`, reqId]);
+
+        return reqId;
+      });
+    } catch (err) {
+      // A wallet that lost the race is a normal 400, not a server error, and
+      // reports the balance as it stood when the lock was granted.
+      if (err && err[INSUFFICIENT]) {
+        return res.status(400).json({
+          error: 'Insufficient available balance',
+          available_balance: err[INSUFFICIENT].available_balance,
+          pending_balance: err[INSUFFICIENT].pending_balance,
+        });
+      }
+      throw err;
+    }
     await logAudit(req.user.id, 'fleet.wallet.payout_requested', 'fleet_payout_requests', requestId, { amount, withdrawalFee, netPayout }, req.ip);
     res.json({ ok: true, payout_request_id: requestId, amount, withdrawal_fee: withdrawalFee, net_payout: netPayout });
   } catch (error) {

@@ -190,7 +190,7 @@ router.get('/job-cards', authRequired, workshopOnly, async (req, res) => {
     if (status) { where.push(`jc.status = $${params.length + 1}`); params.push(status); }
     if (search) {
       const like = `%${search}%`;
-      where.push(`(COALESCE(b.registration, jc.registration) ILIKE $${params.length + 1} OR COALESCE(b.vin, jc.vin) ILIKE $${params.length + 1} OR COALESCE(b.make, jc.make) ILIKE $${params.length + 1} OR COALESCE(b.model, jc.model) ILIKE $${params.length + 1} OR jc.description ILIKE $${params.length + 1} OR u.full_name ILIKE $${params.length + 1})`);
+      where.push(`(COALESCE(b.registration, jc.registration) ILIKE $${params.length + 1} OR COALESCE(b.vin, jc.vin) ILIKE $${params.length + 1} OR COALESCE(b.make, jc.make) ILIKE $${params.length + 1} OR COALESCE(b.model, jc.model) ILIKE $${params.length + 1} OR jc.description ILIKE $${params.length + 1} OR u.full_name ILIKE $${params.length + 1} OR o.name ILIKE $${params.length + 1} OR jc.fleet_owner_name ILIKE $${params.length + 1})`);
       params.push(like);
     }
 
@@ -796,11 +796,16 @@ router.get('/admin/jobs', authRequired, async (req, res) => {
     if (dateTo) { where.push(`jc.created_at::date <= $${params.length + 1}`); params.push(dateTo); }
     if (search) {
       const like = `%${search}%`;
-      where.push(`(COALESCE(b.registration, jc.registration) ILIKE $${params.length + 1} OR COALESCE(b.vin, jc.vin) ILIKE $${params.length + 1} OR COALESCE(b.make, jc.make) ILIKE $${params.length + 1} OR jc.description ILIKE $${params.length + 1} OR u.full_name ILIKE $${params.length + 1})`);
+      where.push(`(COALESCE(b.registration, jc.registration) ILIKE $${params.length + 1} OR COALESCE(b.vin, jc.vin) ILIKE $${params.length + 1} OR COALESCE(b.make, jc.make) ILIKE $${params.length + 1} OR jc.description ILIKE $${params.length + 1} OR u.full_name ILIKE $${params.length + 1} OR o.name ILIKE $${params.length + 1} OR jc.fleet_owner_name ILIKE $${params.length + 1})`);
       params.push(like);
     }
     const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const { rows: totalRows } = await pgDb.query(`SELECT COUNT(*) AS count FROM job_cards jc LEFT JOIN bikes b ON b.id = jc.bike_id LEFT JOIN users u ON u.id = jc.technician_id ${whereClause}`, params);
+    // Shares whereClause with the page query below, so it needs the same joins —
+    // the search now references o.name, which without this join is an error.
+    const { rows: totalRows } = await pgDb.query(`SELECT COUNT(*) AS count FROM job_cards jc
+      LEFT JOIN bikes b ON b.id = jc.bike_id
+      LEFT JOIN organizations o ON o.id = COALESCE(b.organization_id, jc.fleet_org_id)
+      LEFT JOIN users u ON u.id = jc.technician_id ${whereClause}`, params);
     const total = Number(totalRows[0].count) || 0;
     const orderBy = sortBy
       ? `ORDER BY ${sortBy} ${sortDir}`
@@ -1251,7 +1256,12 @@ router.get('/admin/revenue-by-org', authRequired, async (req, res) => {
   try {
     if (!['admin', 'superadmin'].includes(req.user.role)) return res.status(403).json({ error: 'Admin only' });
     const { rows: byOrg } = await pgDb.query(`
-      SELECT COALESCE(o.name, 'Walk-in / External') AS org_name,
+      -- Falls back to the name the workshop typed before lumping a job in with
+      -- the anonymous bucket. Previously every external fleet owner collapsed
+      -- into a single 'Walk-in / External' row, so the workshop's biggest
+      -- outside customers were invisible however much they were worth.
+      SELECT COALESCE(o.name, NULLIF(TRIM(jc.fleet_owner_name), ''), 'Walk-in / External') AS org_name,
+        (o.id IS NULL) AS is_external,
         COUNT(DISTINCT jc.id) AS job_count,
         COALESCE(SUM(i.quantity * i.unit_cost), 0) AS revenue
       FROM job_cards jc
@@ -1259,7 +1269,9 @@ router.get('/admin/revenue-by-org', authRequired, async (req, res) => {
       LEFT JOIN organizations o ON o.id = COALESCE(b.organization_id, jc.fleet_org_id)
       LEFT JOIN job_card_items i ON i.job_card_id = jc.id
       WHERE jc.status = 'completed'
-      GROUP BY COALESCE(o.id, -1), COALESCE(o.name, 'Walk-in / External')
+      GROUP BY COALESCE(o.id, -1),
+               COALESCE(o.name, NULLIF(TRIM(jc.fleet_owner_name), ''), 'Walk-in / External'),
+               (o.id IS NULL)
       ORDER BY revenue DESC
       LIMIT 20
     `);

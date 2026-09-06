@@ -107,12 +107,12 @@ export default function WorkshopJobCards() {
   const filtered = useMemo(() => (jobs || []).filter((j) => {
     if (statusFilter !== 'all' && j.status !== statusFilter) return false;
     if (myJobsOnly && j.technician_id !== user?.id) return false;
-    return matchesSearch(search, j.display_registration, j.display_make, j.display_model, j.display_vin, j.technician_name, j.fleet_org_name, j.description);
+    return matchesSearch(search, j.display_registration, j.display_make, j.display_model, j.display_vin, j.technician_name, j.fleet_org_name, j.fleet_owner_name, j.description);
   }), [jobs, statusFilter, myJobsOnly, search, user?.id]);
 
   const kanbanFiltered = useMemo(() => (jobs || []).filter((j) => {
     if (myJobsOnly && j.technician_id !== user?.id) return false;
-    return matchesSearch(search, j.display_registration, j.display_make, j.display_model, j.display_vin, j.technician_name, j.fleet_org_name, j.description);
+    return matchesSearch(search, j.display_registration, j.display_make, j.display_model, j.display_vin, j.technician_name, j.fleet_org_name, j.fleet_owner_name, j.description);
   }), [jobs, myJobsOnly, search, user?.id]);
 
   const selectBike = (bike) => {
@@ -287,7 +287,7 @@ export default function WorkshopJobCards() {
                     </td>
                     <td className="col-mobile-hide"><Badge status={STATUS_COLOR[job.status]}>{job.status.replace('_', ' ')}</Badge></td>
                     <td className="col-mobile-hide text-sm">{job.technician_name || <span className="muted">—</span>}</td>
-                    <td className="col-mobile-hide text-xs muted">{job.fleet_org_name || '—'}</td>
+                    <td className="col-mobile-hide text-xs">{job.fleet_org_name || job.fleet_owner_name || <span className="muted">—</span>}</td>
                     <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(job.total_cost)}</td>
                     <td className="col-mobile-hide" style={{ whiteSpace: 'nowrap' }}><span className="text-xs muted">{fmtDateTime(job.created_at)}</span></td>
                     <td onClick={(e) => e.stopPropagation()}>

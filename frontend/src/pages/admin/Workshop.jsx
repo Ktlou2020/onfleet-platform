@@ -24,6 +24,29 @@ const ACTION_LABELS = {
   'job_card.resumed': 'Work resumed',
 };
 
+
+// A job's fleet owner: the platform organisation when the bike belongs to one,
+// otherwise the free-text name the workshop entered when they booked it in.
+// Those were previously dropped entirely and every external job read "—".
+function fleetOwnerOf(jc) {
+  return jc.bike_org_name || jc.fleet_org_name || jc.fleet_owner_name || null;
+}
+function isExternalOwner(jc) {
+  return !jc.bike_org_name && !jc.fleet_org_name && !!jc.fleet_owner_name;
+}
+function FleetOwnerCell({ jc }) {
+  const name = fleetOwnerOf(jc);
+  if (!name) return <span className="muted">—</span>;
+  return (
+    <span>
+      {name}
+      {isExternalOwner(jc) && (
+        <span className="muted" style={{ fontSize: 10, marginLeft: 5 }} title="Entered by the workshop; not a fleet owner account on the platform">external</span>
+      )}
+    </span>
+  );
+}
+
 const TABS = ['Overview', 'All Jobs', 'Technicians', 'Fleet Health', 'Rates', 'Staff'];
 
 const JOB_TYPES = ['service', 'repair', 'inspection', 'tyres', 'brakes', 'electrical', 'bodywork', 'other'];
@@ -207,7 +230,7 @@ function JobDetailModal({ jobId, onClose, onChanged }) {
             <div><span className="muted">Bike: </span><strong>{[jc.bike_make, jc.bike_model].filter(Boolean).join(' ') || jc.make || '—'}</strong></div>
             <div><span className="muted">Reg / VIN: </span>{jc.bike_registration || jc.registration || jc.bike_vin || jc.vin || '—'}</div>
             <div><span className="muted">Technician: </span>{jc.technician_name || <span className="muted">Unassigned</span>}</div>
-            <div><span className="muted">Fleet: </span>{jc.bike_org_name || '—'}</div>
+            <div><span className="muted">Fleet: </span><FleetOwnerCell jc={jc} /></div>
             <div><span className="muted">Created: </span>{fmtDateTime(jc.created_at)}</div>
             {jc.completed_at && <div><span className="muted">Completed: </span>{fmtDateTime(jc.completed_at)}</div>}
           </div>
@@ -808,7 +831,7 @@ function AllJobsTab() {
   const exportCsv = () => {
     const rows = [
       ['ID', 'Bike', 'Make', 'Model', 'Type', 'Priority', 'Status', 'Technician', 'Fleet', 'Cost', 'Created', 'Completed'],
-      ...jobs.map((j) => [j.id, j.display_registration || '', j.display_make || '', j.display_model || '', j.job_type, j.priority, j.status, j.technician_name || '', j.fleet_org_name || '', j.total_cost, j.created_at, j.completed_at || ''])
+      ...jobs.map((j) => [j.id, j.display_registration || '', j.display_make || '', j.display_model || '', j.job_type, j.priority, j.status, j.technician_name || '', fleetOwnerOf(j) || '', j.total_cost, j.created_at, j.completed_at || ''])
     ];
     const csv = rows.map((r) => r.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
@@ -863,7 +886,7 @@ function AllJobsTab() {
                 <td>{job.priority !== 'normal' ? <Badge status={PRIORITY_COLOR[job.priority]}>{job.priority}</Badge> : <span className="muted text-xs">normal</span>}</td>
                 <td><Badge status={STATUS_COLOR[job.status]}>{job.status.replace('_', ' ')}</Badge></td>
                 <td className="text-sm">{job.technician_name || <span className="muted">—</span>}</td>
-                <td className="text-xs muted">{job.fleet_org_name || '—'}</td>
+                <td className="text-xs"><FleetOwnerCell jc={job} /></td>
                 <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(job.total_cost)}</td>
                 <td className="text-xs muted" style={{ whiteSpace: 'nowrap' }}>{fmtDateTime(job.created_at)}</td>
                 <td>

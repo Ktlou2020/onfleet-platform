@@ -28,14 +28,47 @@ async function logAudit(actorId, action, entity, entityId, metadata = {}, ip = n
   }
 }
 
+// The schedule is a view of the contract, not a second opinion on it. Laying
+// down totalWeeks flat instalments overshoots whenever weekly x weeks doesn't
+// land exactly on total_amount, and that surplus becomes a final week the rider
+// can never clear: it stays 'overdue' forever, and the daily overdue notice
+// keeps firing. One rider finished paying his bike — R64,268.87 against a
+// R64,190.20 contract — and was still sent "URGENT: pay immediately to avoid
+// agreement default" every day for a month, because his schedule had been laid
+// down as 81 x R800 = R64,800.
+//
+// Settle the difference on the final instalment so the schedule always sums to
+// what is actually owed. total_amount is already the billing authority — the
+// payment cap in routes/payments.js works off it, not off this table — so this
+// makes the schedule agree with the figure that was always in charge.
 async function buildPaymentSchedule(agreementId, weeklyAmount, totalWeeks, startDate, db = pgDb) {
   if (totalWeeks <= 0) return;
+
+  const weekly = +Number(weeklyAmount).toFixed(2);
+  let finalInstalment = weekly;
+  const { rows: agreementRows } = await db.query('SELECT total_amount FROM agreements WHERE id = $1', [agreementId]);
+  const contractTotal = Number(agreementRows[0]?.total_amount);
+  if (Number.isFinite(contractTotal) && contractTotal > 0) {
+    const remainder = +(contractTotal - weekly * (totalWeeks - 1)).toFixed(2);
+    // Only a plausible last instalment is trusted. A remainder that is negative
+    // or larger than two ordinary weeks means total_amount and the weekly terms
+    // disagree about more than rounding — the term length is wrong — and
+    // quietly reshaping the schedule would bury that rather than fix it.
+    if (remainder > 0 && remainder <= weekly * 2) {
+      finalInstalment = remainder;
+    } else {
+      console.warn(`[buildPaymentSchedule] agreement ${agreementId}: ${totalWeeks} x R${weekly.toFixed(2)} ` +
+        `cannot be reconciled to a total of R${contractTotal.toFixed(2)} — leaving the schedule flat. ` +
+        `Check total_weeks against the contract.`);
+    }
+  }
+
   const values = [];
   const placeholders = [];
   for (let i = 1; i <= totalWeeks; i++) {
     const base = values.length;
     placeholders.push(`($${base + 1},$${base + 2},$${base + 3},$${base + 4})`);
-    values.push(agreementId, i, addDays(startDate, (i - 1) * 7), weeklyAmount);
+    values.push(agreementId, i, addDays(startDate, (i - 1) * 7), i === totalWeeks ? finalInstalment : weekly);
   }
   await db.query(
     `INSERT INTO payment_schedules (agreement_id, week_number, due_date, amount_due) VALUES ${placeholders.join(',')}`,

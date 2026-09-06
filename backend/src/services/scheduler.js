@@ -36,6 +36,25 @@ async function notificationExistsForPeriod(userId, type, periodLabel) {
   return rows[0];
 }
 
+// This notice used to go out every single day for as long as an agreement was
+// behind, with no ceiling. Riders were receiving "URGENT: pay immediately to
+// avoid agreement default" daily for 118 consecutive days. Someone who cannot
+// pay this week does not need telling again tomorrow, and a message that
+// arrives every day for four months stops being read at all — which costs the
+// business the one channel it has when the rider CAN pay. It matters more than
+// it looks: WhatsApp and SMS have no provider wired up yet, so this currently
+// lands in-app, but the day one is connected this becomes a daily message to
+// every rider in arrears, at cost, on their phone.
+//
+// Back off as the debt ages. collectionsActions escalates separately at 7, 14
+// and 21 days (services/dunningService.js), so nothing is lost by easing off
+// here — the serious contact still happens, through the path built for it.
+function shouldSendOverdueToday(daysOverdue) {
+  if (daysOverdue <= 7) return true;                 // first week: daily, they may have simply missed one
+  if (daysOverdue <= 30) return daysOverdue % 3 === 0; // then every third day
+  return daysOverdue % 7 === 0;                      // beyond a month: weekly
+}
+
 async function notificationExistsToday(userId, type, title) {
   const { rows } = await pgDb.query(`SELECT id FROM notifications
     WHERE user_id = $1 AND type = $2 AND title = $3
@@ -209,13 +228,18 @@ async function runDailyReminders() {
   const byAgreement = {};
   for (const row of overdueRows) {
     if (!byAgreement[row.agreement_id]) {
-      byAgreement[row.agreement_id] = { ...row, overdueWeeks: 0, totalOwed: 0 };
+      byAgreement[row.agreement_id] = { ...row, overdueWeeks: 0, totalOwed: 0, oldestDue: row.due_date };
     }
-    byAgreement[row.agreement_id].overdueWeeks++;
-    byAgreement[row.agreement_id].totalOwed += (Number(row.amount_due) - Number(row.amount_paid));
+    const entry = byAgreement[row.agreement_id];
+    entry.overdueWeeks++;
+    entry.totalOwed += (Number(row.amount_due) - Number(row.amount_paid));
+    if (row.due_date < entry.oldestDue) entry.oldestDue = row.due_date;
   }
 
   for (const entry of Object.values(byAgreement)) {
+    const daysOverdue = Math.floor((Date.now() - new Date(`${entry.oldestDue}T00:00:00Z`).getTime()) / 86400000);
+    if (!shouldSendOverdueToday(daysOverdue)) continue;
+
     const title = `Overdue payment · ${entry.agreement_no}`;
     if (await notificationExistsToday(entry.user_id, 'payment_overdue', title)) continue;
     const owed = Number(entry.totalOwed).toFixed(2);
@@ -386,6 +410,7 @@ function start() {
 
 module.exports = {
   start,
+  shouldSendOverdueToday,
   runDailyReminders,
   runScheduleRecalc,
   runMonthlyStatements,

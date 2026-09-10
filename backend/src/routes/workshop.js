@@ -114,7 +114,16 @@ router.get('/dashboard', authRequired, workshopOnly, async (req, res) => {
         SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) AS in_progress_count,
         SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed_count,
         SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_count,
-        SUM(CASE WHEN status = 'completed' AND completed_at::date = CURRENT_DATE THEN 1 ELSE 0 END) AS completed_today
+        SUM(CASE WHEN status = 'completed' AND completed_at::date = CURRENT_DATE THEN 1 ELSE 0 END) AS completed_today,
+        -- Work that has been accepted and then not touched. Until this was
+        -- surfaced, 15 cards sat open with not one of them started, the oldest
+        -- for 49 days, including an 'urgent' untouched for 15 — none of it
+        -- visible anywhere in the workshop.
+        COALESCE(MAX(CASE WHEN status IN ('open','in_progress')
+          THEN FLOOR(EXTRACT(EPOCH FROM (NOW() - created_at))/86400) END), 0)::int AS oldest_active_days,
+        SUM(CASE WHEN status = 'open' AND started_at IS NULL
+                  AND created_at < NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) AS stalled_count,
+        SUM(CASE WHEN status IN ('open','in_progress') AND technician_id IS NULL THEN 1 ELSE 0 END) AS unassigned_count
       FROM job_cards
     `);
     const stats = statsRows[0];
@@ -134,15 +143,20 @@ router.get('/dashboard', authRequired, workshopOnly, async (req, res) => {
         COALESCE(b.make, jc.make) AS display_make,
         COALESCE(b.model, jc.model) AS display_model,
         u.full_name AS technician_name,
-        COALESCE((SELECT SUM(quantity * unit_cost) FROM job_card_items WHERE job_card_id = jc.id), 0) AS total_cost
+        COALESCE((SELECT SUM(quantity * unit_cost) FROM job_card_items WHERE job_card_id = jc.id), 0) AS total_cost,
+        FLOOR(EXTRACT(EPOCH FROM (NOW() - jc.created_at))/86400)::int AS days_open
       FROM job_cards jc
       LEFT JOIN bikes b ON b.id = jc.bike_id
       LEFT JOIN users u ON u.id = jc.technician_id
       WHERE jc.status IN ('open', 'in_progress')
+      -- Oldest first, not newest. Sorting active work newest-first buried the
+      -- jobs that had been waiting longest at the bottom of a LIMIT 10, which
+      -- is exactly the work someone needs to see: 15 cards were open against
+      -- that limit, so five of them appeared nowhere at all.
       ORDER BY
         CASE jc.priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 WHEN 'normal' THEN 3 ELSE 4 END,
-        jc.created_at DESC
-      LIMIT 10
+        jc.created_at ASC
+      LIMIT 50
     `);
 
     const { rows: myJobs } = await pgDb.query(`
@@ -150,14 +164,16 @@ router.get('/dashboard', authRequired, workshopOnly, async (req, res) => {
         COALESCE(b.registration, jc.registration) AS display_registration,
         COALESCE(b.make, jc.make) AS display_make,
         COALESCE(b.model, jc.model) AS display_model,
-        COALESCE((SELECT SUM(quantity * unit_cost) FROM job_card_items WHERE job_card_id = jc.id), 0) AS total_cost
+        COALESCE((SELECT SUM(quantity * unit_cost) FROM job_card_items WHERE job_card_id = jc.id), 0) AS total_cost,
+        FLOOR(EXTRACT(EPOCH FROM (NOW() - jc.created_at))/86400)::int AS days_open
       FROM job_cards jc
       LEFT JOIN bikes b ON b.id = jc.bike_id
       WHERE jc.technician_id = $1 AND jc.status IN ('open', 'in_progress')
       ORDER BY
         CASE jc.status WHEN 'in_progress' THEN 1 ELSE 2 END,
-        CASE jc.priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 WHEN 'normal' THEN 3 ELSE 4 END
-      LIMIT 8
+        CASE jc.priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 WHEN 'normal' THEN 3 ELSE 4 END,
+        jc.created_at ASC
+      LIMIT 20
     `, [req.user.id]);
 
     res.json({
@@ -169,7 +185,10 @@ router.get('/dashboard', authRequired, workshopOnly, async (req, res) => {
         cancelled_count: Number(stats.cancelled_count) || 0,
         completed_today: Number(stats.completed_today) || 0,
         total_revenue: +Number(revenueRow?.total_revenue || 0).toFixed(2),
-        revenue_today: +Number(revenueRow?.revenue_today || 0).toFixed(2)
+        revenue_today: +Number(revenueRow?.revenue_today || 0).toFixed(2),
+        oldest_active_days: Number(stats.oldest_active_days) || 0,
+        stalled_count: Number(stats.stalled_count) || 0,
+        unassigned_count: Number(stats.unassigned_count) || 0
       },
       active_jobs: activeJobs.map((j) => ({ ...j, total_cost: Number(j.total_cost) || 0 })),
       my_jobs: myJobs.map((j) => ({ ...j, total_cost: Number(j.total_cost) || 0 }))
@@ -205,15 +224,19 @@ router.get('/job-cards', authRequired, workshopOnly, async (req, res) => {
         b.image_url AS bike_image_url,
         o.name AS fleet_org_name,
         u.full_name AS technician_name,
-        COALESCE((SELECT SUM(quantity * unit_cost) FROM job_card_items WHERE job_card_id = jc.id), 0) AS total_cost
+        COALESCE((SELECT SUM(quantity * unit_cost) FROM job_card_items WHERE job_card_id = jc.id), 0) AS total_cost,
+        FLOOR(EXTRACT(EPOCH FROM (NOW() - jc.created_at))/86400)::int AS days_open
       FROM job_cards jc
       LEFT JOIN bikes b ON b.id = jc.bike_id
       LEFT JOIN organizations o ON o.id = COALESCE(b.organization_id, jc.fleet_org_id)
       LEFT JOIN users u ON u.id = jc.technician_id
       ${whereClause}
+      -- Open work sorts oldest-first so the longest wait is at the top; closed
+      -- work sorts newest-first, where recency is what you actually want.
       ORDER BY
         CASE jc.status WHEN 'in_progress' THEN 1 WHEN 'open' THEN 2 WHEN 'completed' THEN 3 ELSE 4 END,
         CASE jc.priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 WHEN 'normal' THEN 3 ELSE 4 END,
+        CASE WHEN jc.status IN ('open','in_progress') THEN jc.created_at END ASC,
         jc.created_at DESC
       LIMIT 300
     `, params);
@@ -237,6 +260,19 @@ router.post('/job-cards', authRequired, workshopOnly, async (req, res) => {
       if (!bikeRows[0]) return res.status(404).json({ error: 'Bike not found' });
     }
 
+    // An unassigned job used to fall to whoever created it. Because job cards
+    // are raised by an admin account, 89 of the first 97 landed on a single
+    // superadmin who does not turn spanners — so every card looked assigned,
+    // nobody owned any of it, and the one real technician's queue was empty.
+    // Unassigned is now honestly unassigned, and the dashboard counts it.
+    const assignedTo = technician_id ? toInt(technician_id) : null;
+    if (assignedTo !== null) {
+      const { rows: techRows } = await pgDb.query(
+        `SELECT id FROM users WHERE id = $1 AND status = 'active' AND deleted_at IS NULL
+           AND role IN ('technician','admin','superadmin')`, [assignedTo]);
+      if (!techRows[0]) return res.status(400).json({ error: 'Assign the job to an active technician' });
+    }
+
     const { rows: insertedRows } = await pgDb.query(`
       INSERT INTO job_cards (bike_id, vin, registration, make, model, year, color, engine_cc, fleet_owner_name, fleet_org_id, job_type, description, priority, technician_id, created_by)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id
@@ -250,7 +286,7 @@ router.post('/job-cards', authRequired, workshopOnly, async (req, res) => {
       job_type || 'service',
       description || null,
       priority || 'normal',
-      technician_id ? toInt(technician_id) : req.user.id,
+      assignedTo,
       req.user.id
     ]);
     const newId = insertedRows[0].id;
@@ -348,6 +384,21 @@ router.post('/job-cards/:id/complete', authRequired, workshopOnly, async (req, r
     // platform's standard service interval) unless the technician overrode
     // it — keeps the rule enforced server-side, not just as a frontend default.
     const parsedNextKm = next_service_km ? Number(next_service_km) : (parsedOdometer ? parsedOdometer + 3000 : null);
+
+    // 28 of the first 76 completed jobs closed with no cost line at all —
+    // every repair, inspection, electrical and 'other' card among them, since
+    // only 'service' cards get a line seeded automatically. Work left the
+    // workshop with no record of what it cost, and the revenue figure on the
+    // dashboard counted only the seeded ones. Closing uncosted is still
+    // allowed, but it now has to be a decision rather than an oversight.
+    const { rows: itemRows } = await pgDb.query(
+      'SELECT COUNT(*)::int AS n FROM job_card_items WHERE job_card_id = $1', [id]);
+    if (itemRows[0].n === 0 && !req.body.allow_uncosted) {
+      return res.status(400).json({
+        error: 'This job has no parts or labour recorded, so it would close with no cost against it. Add a line, or confirm you are closing it uncosted.',
+        code: 'no_cost_lines',
+      });
+    }
 
     await pgDb.query(`
       UPDATE job_cards SET status = 'completed', completed_at = NOW(),
@@ -481,6 +532,42 @@ router.delete('/job-cards/:id/items/:itemId', authRequired, workshopOnly, async 
 });
 
 // Search existing bikes
+// Approve the quote at whatever the job totals right now.
+//
+// The amount is snapshotted here rather than derived on read: approving a quote
+// is agreeing to a figure, and line items keep changing after the fact. An
+// approval that tracked the live total would silently agree to whatever the job
+// later grew into.
+router.post('/job-cards/:id/quote/approve', authRequired, workshopOnly, async (req, res) => {
+  try {
+    const id = toInt(req.params.id);
+    const { rows: cardRows } = await pgDb.query('SELECT status, quote_approved_at FROM job_cards WHERE id = $1', [id]);
+    const card = cardRows[0];
+    if (!card) return res.status(404).json({ error: 'Job card not found' });
+    if (card.status === 'completed' || card.status === 'cancelled') {
+      return res.status(400).json({ error: 'This job is already closed' });
+    }
+    if (card.quote_approved_at) return res.status(400).json({ error: 'The quote on this job is already approved' });
+
+    const { rows: totalRows } = await pgDb.query(
+      `SELECT COALESCE(SUM(quantity * unit_cost), 0) AS total, COUNT(*)::int AS lines
+         FROM job_card_items WHERE job_card_id = $1`, [id]);
+    if (totalRows[0].lines === 0) {
+      return res.status(400).json({ error: 'Add the parts and labour first — there is nothing to quote yet' });
+    }
+    const amount = +Number(totalRows[0].total).toFixed(2);
+
+    await pgDb.query(
+      `UPDATE job_cards SET quote_amount = $1, quote_approved_at = NOW(), quote_approved_by = $2 WHERE id = $3`,
+      [amount, req.user.id, id]);
+    await logAudit(req.user.id, 'job_card.quote_approved', id, { amount });
+
+    res.json({ ok: true, quote_amount: amount, job_card: await getJobCard(id) });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.get('/bikes/search', authRequired, workshopOnly, async (req, res) => {
   try {
     const q = String(req.query.q || '').trim();
@@ -535,9 +622,11 @@ router.post('/bikes', authRequired, workshopOnly, async (req, res) => {
 router.get('/technicians', authRequired, workshopOnly, async (req, res) => {
   try {
     const { rows: technicians } = await pgDb.query(`
-      SELECT id, full_name, email FROM users
+      SELECT id, full_name, email, role, (role = 'technician') AS is_technician FROM users
       WHERE role IN ('technician', 'admin', 'superadmin') AND status = 'active' AND deleted_at IS NULL
-      ORDER BY full_name
+      -- Real technicians first: admins remain assignable because a small
+      -- workshop genuinely needs that, but they should not be the easy default.
+      ORDER BY (role = 'technician') DESC, full_name
     `);
     res.json({ technicians });
   } catch (error) {

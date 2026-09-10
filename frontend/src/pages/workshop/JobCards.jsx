@@ -286,10 +286,33 @@ export default function WorkshopJobCards() {
                         : <span className="muted text-xs">normal</span>}
                     </td>
                     <td className="col-mobile-hide"><Badge status={STATUS_COLOR[job.status]}>{job.status.replace('_', ' ')}</Badge></td>
-                    <td className="col-mobile-hide text-sm">{job.technician_name || <span className="muted">—</span>}</td>
+                    <td className="col-mobile-hide text-sm">
+                      {job.technician_name
+                        || (['open', 'in_progress'].includes(job.status)
+                          ? <span style={{ color: 'var(--warn)', fontWeight: 600, fontSize: 12 }}>Unassigned</span>
+                          : <span className="muted">—</span>)}
+                    </td>
                     <td className="col-mobile-hide text-xs">{job.fleet_org_name || job.fleet_owner_name || <span className="muted">—</span>}</td>
                     <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(job.total_cost)}</td>
-                    <td className="col-mobile-hide" style={{ whiteSpace: 'nowrap' }}><span className="text-xs muted">{fmtDateTime(job.created_at)}</span></td>
+                    {/* Open work reads better as "how long has this been waiting"
+                        than as a date somebody has to subtract in their head. */}
+                    <td className="col-mobile-hide" style={{ whiteSpace: 'nowrap' }}>
+                      {['open', 'in_progress'].includes(job.status) ? (
+                        <span
+                          className="text-xs"
+                          style={{
+                            color: job.status === 'open' && !job.started_at && job.days_open >= 7 ? 'var(--danger)' : 'var(--muted)',
+                            fontWeight: job.days_open >= 7 ? 600 : 400,
+                          }}
+                          title={fmtDateTime(job.created_at)}
+                        >
+                          {job.days_open === 0 ? 'today' : `${job.days_open}d`}
+                          {job.status === 'open' && !job.started_at && job.days_open >= 7 ? ' · not started' : ''}
+                        </span>
+                      ) : (
+                        <span className="text-xs muted">{fmtDateTime(job.created_at)}</span>
+                      )}
+                    </td>
                     <td onClick={(e) => e.stopPropagation()}>
                       {job.status === 'open' && (
                         <button className="btn btn-sm" disabled={startingId === job.id} onClick={(e) => startJob(e, job.id)} title="Start this job">
@@ -379,8 +402,12 @@ export default function WorkshopJobCards() {
           <div className="field">
             <label className="label">Assign technician</label>
             <select value={form.technician_id} onChange={(e) => setForm((f) => ({ ...f, technician_id: e.target.value }))}>
-              <option value="">Assign later</option>
-              {technicians.map((t) => <option key={t.id} value={t.id}>{t.full_name}</option>)}
+              <option value="">Leave unassigned</option>
+              {technicians.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.full_name}{t.is_technician === false ? ` (${t.role})` : ''}
+                </option>
+              ))}
             </select>
           </div>
           <div className="field">

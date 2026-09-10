@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { ArrowLeft, Plus, Pencil, Trash2, Clock, ChevronDown, ChevronRight, Printer, FileText, Pause, Play, Camera, Image } from 'lucide-react';
+import { ArrowLeft, Plus, Pencil, Trash2, Clock, ChevronDown, ChevronRight, Printer, FileText, Pause, Play, Camera, Image, CheckCircle } from 'lucide-react';
 import api from '../../api';
 import { Badge, ConfirmModal, Loading, Modal, fmt, fmtDate, fmtDateTime } from '../../components/ui';
 
@@ -31,6 +31,29 @@ function elapsed(startedAt, pausedAt, totalPausedSeconds) {
   return `${Math.floor(hrs / 24)}d ${hrs % 24}h`;
 }
 
+// Says whether an OEM book exists for this bike at all. /parts-catalog/available
+// was built for exactly this and had never been called from anywhere.
+function CatalogueStatus({ make, model }) {
+  const [available, setAvailable] = useState(null);
+  useEffect(() => {
+    if (!make || !model) { setAvailable(null); return; }
+    let live = true;
+    api.get('/workshop/parts-catalog/available', { params: { make, model } })
+      .then((r) => { if (live) setAvailable(!!r.data.available); })
+      .catch(() => { if (live) setAvailable(null); });
+    return () => { live = false; };
+  }, [make, model]);
+
+  if (available === null) return null;
+  return (
+    <div className="text-xs muted" style={{ marginTop: 4 }}>
+      {available
+        ? <>OEM catalogue loaded for <strong>{make} {model}</strong> — start typing a part name or number.</>
+        : <>No OEM catalogue loaded for <strong>{make} {model}</strong>. Type the part in yourself.</>}
+    </div>
+  );
+}
+
 function PartsSuggestions({ query, onSelect }) {
   const [suggestions, setSuggestions] = useState([]);
   useEffect(() => {
@@ -57,20 +80,22 @@ function PartsSuggestions({ query, onSelect }) {
 }
 
 // OEM parts catalogue lookup, scoped to this job's bike make/model. Only
-// ingested models (see scripts/ingest-parts-catalog.js) return results —
-// other bikes just get nothing here and the plain description field above
-// still works as free text, no separate "unsupported model" state needed.
-function CatalogPartsSuggestions({ query, make, model, onSelect }) {
+// ingested models (see scripts/ingest-parts-catalog.js) return results. Silence
+// is ambiguous when it happens — the biggest model in the fleet, Honda Ace 125
+// at 210 bikes, has no catalogue loaded at all — so CatalogueStatus below says
+// which it is rather than leaving a technician to guess whether the part does
+// not exist or the book was never loaded.
+function CatalogPartsSuggestions({ query, make, model, onSelect, onResults }) {
   const [results, setResults] = useState([]);
   useEffect(() => {
-    if (!query || query.length < 2 || !make || !model) { setResults([]); return; }
+    if (!query || query.length < 2 || !make || !model) { setResults([]); onResults?.(0); return; }
     const t = setTimeout(() => {
       api.get('/workshop/parts-catalog/search', { params: { q: query, make, model } })
-        .then((r) => setResults(r.data.results))
+        .then((r) => { setResults(r.data.results); onResults?.(r.data.results.length); })
         .catch(() => {});
     }, 250);
     return () => clearTimeout(t);
-  }, [query, make, model]);
+  }, [query, make, model, onResults]);
 
   if (!results.length) return null;
   return (
@@ -224,6 +249,7 @@ export default function WorkshopJobCard() {
   const [showAddItem, setShowAddItem] = useState(false);
   const [editItem, setEditItem] = useState(null);
   const [itemForm, setItemForm] = useState(EMPTY_ITEM);
+  const [catalogHits, setCatalogHits] = useState(0);
   const [confirmDeleteItem, setConfirmDeleteItem] = useState(null);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [confirmComplete, setConfirmComplete] = useState(false);
@@ -282,13 +308,34 @@ export default function WorkshopJobCard() {
     }
   };
 
+  const approveQuote = async () => {
+    try {
+      setBusy(true);
+      const { data } = await api.post(`/workshop/job-cards/${id}/quote/approve`);
+      setCard(data.job_card);
+      toast.success(`Quote approved at ${fmt(data.quote_amount)}`);
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not approve the quote');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const completeJob = async () => {
     if (hasBike && !completeForm.odometer_km) {
       return toast.error('Odometer reading is required to complete a job on a bike');
     }
     try {
       setBusy(true);
-      const { data } = await api.post(`/workshop/job-cards/${id}/complete`, completeForm);
+      // The server refuses to close a job with no parts or labour unless the
+      // caller says so explicitly. Reaching this point means the technician has
+      // already passed the "complete with no line items?" confirm above, so
+      // that decision is what gets carried through. The server-side check is
+      // not redundant with the confirm — it holds for anything that is not
+      // this screen.
+      const uncosted = (card?.items?.length || 0) === 0;
+      const { data } = await api.post(`/workshop/job-cards/${id}/complete`,
+        uncosted ? { ...completeForm, allow_uncosted: true } : completeForm);
       setCard(data.job_card);
       setShowComplete(false);
       setHistory(null);
@@ -615,6 +662,11 @@ export default function WorkshopJobCard() {
         <h2 style={{ fontSize: 16, fontWeight: 700 }}>Line Items</h2>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
           <span style={{ fontWeight: 700, fontSize: 15 }}>Total: {fmt(card.total_cost)}</span>
+          {isOpen && card.items.length > 0 && !card.quote_approved_at && (
+            <button className="btn btn-sm btn-secondary" onClick={approveQuote} disabled={busy}>
+              <CheckCircle size={13} /> Approve quote
+            </button>
+          )}
           {isOpen && (
             <button className="btn btn-sm" onClick={() => { setEditItem(null); setItemForm(EMPTY_ITEM); setShowAddItem(true); }}>
               <Plus size={13} /> Add item
@@ -622,6 +674,25 @@ export default function WorkshopJobCard() {
           )}
         </div>
       </div>
+
+      {/* An approved quote is a figure that was agreed, so it is shown as the
+          figure it was agreed at — not recomputed from items that have moved
+          since. If the job has grown past it, say so rather than quietly
+          letting the total drift away from what was signed off. */}
+      {card.quote_approved_at && (
+        <div
+          className="card mb-2"
+          style={{ borderLeft: `3px solid ${Number(card.total_cost) > Number(card.quote_amount) + 0.01 ? 'var(--warn)' : 'var(--success)'}` }}
+        >
+          <div className="text-sm">
+            Quote approved at <strong>{fmt(card.quote_amount)}</strong> on {fmtDateTime(card.quote_approved_at)}.
+            {Number(card.total_cost) > Number(card.quote_amount) + 0.01 && (
+              <> The job has since grown to <strong>{fmt(card.total_cost)}</strong>
+                {' '}— {fmt(Number(card.total_cost) - Number(card.quote_amount))} above what was approved.</>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="card table-wrap" style={{ padding: 0, marginBottom: 20 }}>
         <table className="table">
@@ -902,20 +973,30 @@ export default function WorkshopJobCard() {
                 placeholder="e.g. Oil filter, Labour – brake pad replacement"
                 autoComplete="off"
               />
-              {itemForm.item_type === 'part' ? (
-                <CatalogPartsSuggestions
-                  query={itemForm.description}
-                  make={bikeMake}
-                  model={bikeModel}
-                  onSelect={(r) => setItemForm((f) => ({ ...f, description: `${r.part_number} — ${r.description}` }))}
-                />
-              ) : (
+              {/* The catalogue used to appear only once Type was switched to
+                  "Part", and the form opens on "Labor" — so in 97 job cards the
+                  OEM book was never once opened. It now searches whatever the
+                  type is, and choosing a part sets the type itself. */}
+              <CatalogPartsSuggestions
+                query={itemForm.description}
+                make={bikeMake}
+                model={bikeModel}
+                onResults={setCatalogHits}
+                onSelect={(r) => setItemForm((f) => ({
+                  ...f,
+                  item_type: 'part',
+                  description: `${r.part_number} — ${r.description}`,
+                }))}
+              />
+              {/* Only one popover at a time, or they stack. */}
+              {catalogHits === 0 && (
                 <PartsSuggestions
                   query={itemForm.description}
                   onSelect={(s) => setItemForm((f) => ({ ...f, description: s.description, item_type: s.item_type, unit_cost: String(s.avg_unit_cost || '') }))}
                 />
               )}
             </div>
+            <CatalogueStatus make={bikeMake} model={bikeModel} />
           </div>
           <div className="field">
             <label className="label">Unit cost (R)</label>

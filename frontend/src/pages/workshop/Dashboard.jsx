@@ -68,6 +68,24 @@ function JobCard({ job, onStart, busy }) {
           <span className="text-xs muted">{fmtDateTime(job.created_at)}</span>
           <span style={{ fontWeight: 700, fontSize: 13 }}>{fmt(job.total_cost)}</span>
         </div>
+        {/* Age was nowhere on this card, so a job waiting 49 days looked exactly
+            like one raised this morning. */}
+        {job.days_open >= 3 && (
+          <div
+            className="text-xs"
+            style={{
+              marginTop: 8, paddingTop: 8, borderTop: '1px dashed var(--border)',
+              display: 'flex', alignItems: 'center', gap: 5,
+              color: job.status === 'open' && !job.started_at && job.days_open >= 7 ? 'var(--danger)' : 'var(--muted)',
+              fontWeight: job.days_open >= 7 ? 600 : 400,
+            }}
+          >
+            <Clock size={11} />
+            {job.status === 'open' && !job.started_at
+              ? `Waiting ${job.days_open} days — not started`
+              : `Open ${job.days_open} days`}
+          </div>
+        )}
       </div>
       {job.status === 'open' && (
         <div
@@ -128,12 +146,48 @@ export default function WorkshopDashboard() {
         <p className="page-sub">Welcome back, {user?.full_name?.split(' ')[0]}. Here's your queue for today.</p>
       </div>
 
+      {/* A tile can be walked past. Work that has stopped moving, or that
+          belongs to nobody, gets said out loud. */}
+      {(stats.stalled_count > 0 || stats.unassigned_count > 0) && (
+        <div
+          className="card mb-4"
+          style={{ borderLeft: '3px solid var(--danger)', background: 'var(--surface-2)' }}
+        >
+          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+            <AlertTriangle size={18} style={{ color: 'var(--danger)', flexShrink: 0, marginTop: 1 }} />
+            <div className="text-sm">
+              {stats.stalled_count > 0 && (
+                <div>
+                  <strong>{stats.stalled_count} job{stats.stalled_count !== 1 ? 's have' : ' has'} been open
+                  more than 7 days without being started</strong>
+                  {stats.oldest_active_days > 0 && <> — the oldest has been waiting {stats.oldest_active_days} days.</>}
+                </div>
+              )}
+              {stats.unassigned_count > 0 && (
+                <div style={{ marginTop: stats.stalled_count > 0 ? 4 : 0 }}>
+                  {stats.unassigned_count} active job{stats.unassigned_count !== 1 ? 's are' : ' is'} not assigned to anyone.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 14, marginBottom: 32 }}>
         <KPI label="Open jobs" value={stats.open_count ?? 0} icon={AlertTriangle} accent="#f97316" />
         <KPI label="In progress" value={stats.in_progress_count ?? 0} icon={Clock} accent="#eab308" />
         <KPI label="Done today" value={stats.completed_today ?? 0} icon={CheckCircle} accent="#22c55e" />
         <KPI label="Revenue today" value={fmt(stats.revenue_today ?? 0)} icon={TrendingUp} accent="#6366f1" />
         <KPI label="Total revenue" value={fmt(stats.total_revenue ?? 0)} icon={TrendingUp} accent="#8b5cf6" />
+        {/* Nothing on this dashboard previously counted work that had stopped
+            moving, so 15 open jobs with none of them started drew no attention
+            at all. */}
+        <KPI
+          label="Stalled 7+ days"
+          value={stats.stalled_count ?? 0}
+          icon={AlertTriangle}
+          accent={stats.stalled_count ? '#ef4444' : '#94a3b8'}
+        />
       </div>
 
       {/* My Queue */}

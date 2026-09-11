@@ -4,7 +4,7 @@ const africanCountries = require('../constants/africanCountries');
 // Postgres versions — imports.js (this file's only DB-touching consumer) is
 // fully migrated. payments.js and csvImportsFleet.js only import this file's
 // pure functions (parseMoney, parseDateFlexible), which are unaffected.
-const { addDays, buildPaymentSchedule, generateAgreementNo } = require('../utils/helpersPg');
+const { addDays, buildPaymentSchedule, generateAgreementNo, reconcileScheduleToTotal } = require('../utils/helpersPg');
 const { normalizeBikeStatus } = require('../utils/bikeStatus');
 
 function parseCsv(text) {
@@ -480,7 +480,16 @@ async function upsertAgreementFromFleetRow(row) {
       existing.id
     ]);
     const { rows: countRows } = await pgDb.query(`SELECT COUNT(*) count FROM payment_schedules WHERE agreement_id = $1`, [existing.id]);
-    if (!Number(countRows[0].count)) await buildPaymentSchedule(existing.id, weeklyAmount, totalWeeks, startDate);
+    if (!Number(countRows[0].count)) {
+      await buildPaymentSchedule(existing.id, weeklyAmount, totalWeeks, startDate);
+    } else {
+      // The header above was just re-derived from this CSV row, and the
+      // schedule was left exactly as it was — which is how 248 of 375 imported
+      // agreements ended up billing a different total to the one on their own
+      // agreement. Bring the schedule back in line, unless a human has
+      // re-priced it, in which case their figure stands.
+      await reconcileScheduleToTotal(existing.id, totalAmount);
+    }
     const { rows } = await pgDb.query(`SELECT * FROM agreements WHERE id = $1`, [existing.id]);
     return rows[0];
   }

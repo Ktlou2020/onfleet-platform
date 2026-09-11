@@ -76,6 +76,49 @@ async function buildPaymentSchedule(agreementId, weeklyAmount, totalWeeks, start
   );
 }
 
+// Brings an existing schedule back in line with the contract total.
+//
+// buildPaymentSchedule settles the remainder on the final week, but only when
+// it lays a schedule down. The fleet CSV import re-derives total_amount and
+// total_weeks on every re-import and writes them to the agreement, while
+// rebuilding the schedule only when there isn't one — so the header moves and
+// the schedule stays where it was. 248 of 375 imported agreements have a
+// schedule that disagrees with their own header because of it.
+//
+// Only touches a schedule that is still uniformly priced. Varying instalments
+// mean someone set a remaining balance by hand and it was re-spread across the
+// open weeks; that is a human decision about what a rider owes, and an import
+// must not quietly overwrite it.
+async function reconcileScheduleToTotal(agreementId, contractTotal, db = pgDb) {
+  const total = Number(contractTotal);
+  if (!Number.isFinite(total) || total <= 0) return { changed: false, reason: 'no_contract_total' };
+
+  const { rows } = await db.query(
+    `SELECT id, week_number, amount_due FROM payment_schedules WHERE agreement_id = $1 ORDER BY week_number ASC`,
+    [agreementId]
+  );
+  if (!rows.length) return { changed: false, reason: 'no_schedule' };
+  if (new Set(rows.map((r) => Number(r.amount_due))).size > 1) {
+    return { changed: false, reason: 'repriced_by_hand' };
+  }
+
+  const scheduled = +rows.reduce((sum, r) => sum + Number(r.amount_due), 0).toFixed(2);
+  const excess = +(scheduled - total).toFixed(2);
+  if (Math.abs(excess) < 0.01) return { changed: false, reason: 'already_matches' };
+
+  const last = rows[rows.length - 1];
+  const nextDue = +(Number(last.amount_due) - excess).toFixed(2);
+  // A final instalment that lands at zero, goes negative, or balloons past two
+  // ordinary weeks means the term length disagrees with the total by more than
+  // a rounding remainder. Leave it alone and let that stay visible.
+  if (nextDue <= 0 || nextDue > Number(last.amount_due) * 2) {
+    return { changed: false, reason: 'implausible_remainder' };
+  }
+
+  await db.query('UPDATE payment_schedules SET amount_due = $1 WHERE id = $2', [nextDue, last.id]);
+  return { changed: true, week: last.week_number, from: Number(last.amount_due), to: nextDue, excess };
+}
+
 async function recalcScheduleStatuses(agreementId, db = pgDb) {
   const today = new Date().toISOString().slice(0, 10);
   await db.query(`
@@ -233,4 +276,5 @@ async function updateAgreementBalance(agreementId, remainingBalance) {
 module.exports = {
   logAudit, generateAgreementNo, addDays,
   buildPaymentSchedule, recalcScheduleStatuses, rebuildScheduleAllocations, updateAgreementBalance,
+  reconcileScheduleToTotal,
 };

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { shouldSendOverdueToday } from '../src/services/scheduler.js';
-import { buildPaymentSchedule } from '../src/utils/helpersPg.js';
+import { buildPaymentSchedule, reconcileScheduleToTotal } from '../src/utils/helpersPg.js';
 import { pgDb, resetAllPgTables, createPgAgreement } from './helpers/testPgDb.js';
 
 // Two riders were being chased for money they did not owe, and every rider in
@@ -85,5 +85,88 @@ describe.skipIf(!process.env.DATABASE_URL)('buildPaymentSchedule reconciles to t
     const { rows } = await pgDb.query(
       `SELECT SUM(amount_due) AS scheduled FROM payment_schedules WHERE agreement_id = $1`, [id]);
     expect(Number(rows[0].scheduled)).toBe(Number(agreementRows[0].total_amount));
+  });
+});
+
+// The fleet CSV import re-derives total_amount and total_weeks on every
+// re-import and writes them to the agreement, but only builds a schedule when
+// there isn't one — so the header moves and the schedule stays put. 248 of the
+// 375 imported agreements bill a different total to the one on their own
+// agreement because of it.
+describe.skipIf(!process.env.DATABASE_URL)('reconcileScheduleToTotal', () => {
+  let makeAgreement;
+
+  beforeEach(async () => {
+    await resetAllPgTables();
+    makeAgreement = async ({ weekly, weeks, total, scheduleAmounts = null }) => {
+      const ag = await createPgAgreement({ weekly_amount: weekly, total_weeks: weeks, total_amount: total });
+      const amounts = scheduleAmounts || Array.from({ length: weeks }, () => weekly);
+      for (let i = 0; i < amounts.length; i++) {
+        await pgDb.query(
+          `INSERT INTO payment_schedules (agreement_id, week_number, due_date, amount_due)
+           VALUES ($1,$2,$3,$4)`,
+          [ag.id, i + 1, `2026-01-${String((i % 28) + 1).padStart(2, '0')}`, amounts[i]]);
+      }
+      return ag.id;
+    };
+  });
+
+  const scheduleTotal = async (id) => {
+    const { rows } = await pgDb.query('SELECT SUM(amount_due) AS t FROM payment_schedules WHERE agreement_id = $1', [id]);
+    return +Number(rows[0].t).toFixed(2);
+  };
+
+  it('trims the final week so the schedule matches the contract', async () => {
+    // Exactly the shape Math.ceil produces in the importer: 81 x R800 = R64,800
+    // laid against a R64,190.20 contract.
+    const id = await makeAgreement({ weekly: 800, weeks: 81, total: 64190.20 });
+    const result = await reconcileScheduleToTotal(id, 64190.20);
+
+    expect(result.changed).toBe(true);
+    expect(result.week).toBe(81);
+    expect(result.to).toBe(190.20);
+    expect(await scheduleTotal(id)).toBe(64190.20);
+  });
+
+  it('leaves a schedule that already agrees with its contract', async () => {
+    const id = await makeAgreement({ weekly: 850, weeks: 4, total: 3400 });
+    const result = await reconcileScheduleToTotal(id, 3400);
+    expect(result.changed).toBe(false);
+    expect(result.reason).toBe('already_matches');
+  });
+
+  it('will not overwrite a schedule a human has re-priced', async () => {
+    // Varying instalments mean someone set a remaining balance by hand and it
+    // was re-spread. That is a decision about what a rider owes, and an import
+    // must not quietly undo it.
+    const id = await makeAgreement({ weekly: 850, weeks: 4, total: 3000, scheduleAmounts: [850, 850, 809.52, 809.52] });
+    const before = await scheduleTotal(id);
+    const result = await reconcileScheduleToTotal(id, 3000);
+
+    expect(result.changed).toBe(false);
+    expect(result.reason).toBe('repriced_by_hand');
+    expect(await scheduleTotal(id)).toBe(before);
+  });
+
+  it('refuses a remainder that means the term length is wrong, not the rounding', async () => {
+    // 4 x R850 = R3,400 against a R1,000 contract: no single final instalment
+    // fixes that, and papering over it would hide a real disagreement.
+    const id = await makeAgreement({ weekly: 850, weeks: 4, total: 1000 });
+    const result = await reconcileScheduleToTotal(id, 1000);
+    expect(result.changed).toBe(false);
+    expect(result.reason).toBe('implausible_remainder');
+  });
+
+  it('says so when there is no schedule to reconcile', async () => {
+    const ag = await createPgAgreement({ weekly_amount: 850, total_weeks: 4, total_amount: 3400 });
+    const result = await reconcileScheduleToTotal(ag.id, 3400);
+    expect(result.changed).toBe(false);
+    expect(result.reason).toBe('no_schedule');
+  });
+
+  it('also corrects a schedule that under-bills the contract', async () => {
+    const id = await makeAgreement({ weekly: 800, weeks: 10, total: 8500 });
+    expect((await reconcileScheduleToTotal(id, 8500)).changed).toBe(true);
+    expect(await scheduleTotal(id)).toBe(8500);
   });
 });

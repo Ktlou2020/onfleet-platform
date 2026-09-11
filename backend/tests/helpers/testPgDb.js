@@ -15,13 +15,29 @@ const pgDb = require('../../src/pgDb');
 const TEST_PASSWORD = 'Password123!';
 const TEST_PASSWORD_HASH = bcrypt.hashSync(TEST_PASSWORD, 4); // low cost factor — tests only
 
-async function resetAllPgTables() {
+// Routes legitimately write after they respond — workshop.js sends its JSON and
+// then runs logAudit() and notifyAdmins() without awaiting them. A test that has
+// its response and moves straight on leaves those inserts in flight, and they
+// deadlock against the next test's TRUNCATE. Waiting them out is not possible
+// from here (nothing hands back a handle), so take the lock explicitly with a
+// short timeout and retry: the stragglers finish in milliseconds.
+async function resetAllPgTables(attempt = 0) {
   const { rows } = await pgDb.query(
     `SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename != 'pgmigrations'`
   );
   if (!rows.length) return;
   const tableList = rows.map((r) => `"${r.tablename}"`).join(', ');
-  await pgDb.query(`TRUNCATE TABLE ${tableList} RESTART IDENTITY CASCADE`);
+  try {
+    await pgDb.query(`SET LOCAL lock_timeout = '2s'`);
+    await pgDb.query(`TRUNCATE TABLE ${tableList} RESTART IDENTITY CASCADE`);
+  } catch (err) {
+    // 40P01 deadlock_detected, 55P03 lock_not_available
+    if ((err.code === '40P01' || err.code === '55P03') && attempt < 4) {
+      await new Promise((r) => setTimeout(r, 100 * (attempt + 1)));
+      return resetAllPgTables(attempt + 1);
+    }
+    throw err;
+  }
 }
 
 let seq = 0;

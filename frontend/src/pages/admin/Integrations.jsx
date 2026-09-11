@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { KeyRound, Webhook, Plus, Trash2, Copy, Check, RefreshCw, Send, AlertTriangle } from 'lucide-react';
+import { KeyRound, Webhook, Plus, Trash2, Copy, Check, RefreshCw, Send, AlertTriangle, Database, ShieldCheck } from 'lucide-react';
 import api from '../../api';
 import { Loading, Modal, fmtDateTime } from '../../components/ui';
 
@@ -46,15 +46,35 @@ export default function AdminIntegrations() {
   const [hookUrl, setHookUrl] = useState('');
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(null);
+  const [backups, setBackups] = useState(null);
+  const [verifying, setVerifying] = useState(null);
 
   const load = useCallback(async () => {
-    const [k, w] = await Promise.all([
+    const [k, w, b] = await Promise.all([
       api.get('/admin/integrations/api-keys'),
       api.get('/admin/integrations/webhooks'),
+      // Backup health had no interface at all — the endpoint existed and
+      // nothing in the app had ever called it.
+      api.get('/admin/backups').catch(() => ({ data: null })),
     ]);
     setKeys(k.data.keys);
     setHooks(w.data.webhooks);
+    setBackups(b.data);
   }, []);
+
+  const verifyBackup = async (name) => {
+    setVerifying(name);
+    try {
+      const { data } = await api.post(`/admin/backups/${encodeURIComponent(name)}/verify`);
+      if (data.verified) toast.success('Checksum matches — this backup is intact');
+      else toast.error(data.issue || 'This backup did not verify');
+      await load();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Could not verify that backup');
+    } finally {
+      setVerifying(null);
+    }
+  };
 
   useEffect(() => { load().catch(() => toast.error('Could not load integrations')); }, [load]);
 
@@ -237,6 +257,84 @@ export default function AdminIntegrations() {
           </table>
         </div>
       </div>
+
+      {/* ── Backups ──────────────────────────────────────────────────── */}
+      {backups && (
+        <div className="card mb-4">
+          <div className="card-title"><h3><Database size={16} style={{ marginRight: 8, verticalAlign: -2 }} />Backups</h3></div>
+          <div className="muted text-sm mb-3">
+            The database is dumped nightly at 03:00 to the same persistent volume the uploads live on,
+            and the last 14 are kept. Each dump records a SHA-256 when it is written; verifying reads the
+            file back and compares it, which is the only check that catches contents changing underneath.
+          </div>
+
+          {(backups.summary.stale || backups.summary.damaged > 0) && (
+            <div className="card mb-3" style={{ borderLeft: '3px solid var(--danger)', background: 'var(--surface-2)' }}>
+              <div className="text-sm" style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <AlertTriangle size={16} style={{ color: 'var(--danger)', flexShrink: 0, marginTop: 2 }} />
+                <span>
+                  {backups.summary.damaged > 0 && (
+                    <><strong>{backups.summary.damaged} backup{backups.summary.damaged !== 1 ? 's are' : ' is'} damaged.</strong>{' '}</>
+                  )}
+                  {backups.summary.stale && (
+                    <>No backup in {backups.summary.latest_age_hours ?? '—'} hours — the nightly run should never leave a gap this long.</>
+                  )}
+                </span>
+              </div>
+            </div>
+          )}
+
+          <div className="row mb-3" style={{ gap: 18, flexWrap: 'wrap' }}>
+            <span className="text-sm"><span className="muted">Kept:</span> <strong>{backups.summary.count}</strong></span>
+            <span className="text-sm">
+              <span className="muted">Most recent:</span>{' '}
+              <strong style={{ color: backups.summary.stale ? 'var(--danger)' : 'var(--success)' }}>
+                {backups.summary.latest_age_hours !== null ? `${backups.summary.latest_age_hours}h ago` : 'never'}
+              </strong>
+            </span>
+            <span className="text-sm">
+              <span className="muted">Damaged:</span>{' '}
+              <strong style={{ color: backups.summary.damaged ? 'var(--danger)' : 'var(--success)' }}>{backups.summary.damaged}</strong>
+            </span>
+          </div>
+
+          <div className="table-wrap">
+            <table className="table">
+              <thead><tr><th>Taken</th><th>Size</th><th>Tables</th><th>State</th><th style={{ width: 110 }}></th></tr></thead>
+              <tbody>
+                {backups.backups.map((b) => (
+                  <tr key={b.name}>
+                    <td className="text-xs" style={{ whiteSpace: 'nowrap' }}>{b.created_at ? fmtDateTime(b.created_at) : b.name}</td>
+                    <td className="text-xs">{b.postgres?.bytes ? `${(b.postgres.bytes / 1048576).toFixed(1)} MB` : '—'}</td>
+                    <td className="text-xs">{b.postgres?.table_row_counts ? Object.keys(b.postgres.table_row_counts).length : '—'}</td>
+                    <td className="text-xs">
+                      {b.health === 'ok'
+                        ? <span style={{ color: 'var(--success)', fontWeight: 600 }}>{b.verified ? 'verified' : 'ok'}</span>
+                        : <span style={{ color: 'var(--danger)', fontWeight: 600 }} title={b.issue || ''}>{b.health.replace(/_/g, ' ')}</span>}
+                    </td>
+                    <td>
+                      <button
+                        className="btn btn-sm btn-secondary"
+                        onClick={() => verifyBackup(b.name)}
+                        disabled={verifying === b.name}
+                        title="Read the dump back and compare it to its recorded checksum"
+                      >
+                        <ShieldCheck size={13} /> {verifying === b.name ? 'Checking…' : 'Verify'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="muted text-xs" style={{ marginTop: 10, lineHeight: 1.5 }}>
+            These cover the database only. The {''}
+            <strong>uploaded documents are not in any backup</strong>, and both they and these dumps sit on
+            the same volume — losing it loses both at once.
+          </div>
+        </div>
+      )}
 
       <Modal isOpen={!!revealed} onClose={() => setRevealed(null)} title={revealed ? `Your ${revealed.label.toLowerCase()}` : ''}>
         {revealed && <SecretReveal label={revealed.label} value={revealed.value} onDone={() => setRevealed(null)} />}

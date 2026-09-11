@@ -1075,7 +1075,25 @@ router.get('/audit-logs', async (req, res) => {
 
 router.get('/backups', superadminOnly, async (req, res) => {
   const { listBackups } = require('../services/backupService');
-  res.json({ backups: listBackups() });
+  // { backups, summary } — the summary carries the two things worth alerting
+  // on: whether any backup is damaged, and whether the nightly run has been
+  // missed. Nothing checked either before.
+  res.json(listBackups());
+});
+
+// Reads a dump back and compares it against the sha256 recorded when it was
+// written. Deliberately on demand: it reads the whole file, and every backup
+// writes that hash but nothing had ever read one back.
+router.post('/backups/:name/verify', superadminOnly, async (req, res) => {
+  const { verifyBackup } = require('../services/backupService');
+  try {
+    const result = verifyBackup(String(req.params.name));
+    await logAudit(req.user.id, 'backup.verified', 'backups', null,
+      { name: req.params.name, verified: result.verified, health: result.health }, req.ip);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Verification failed' });
+  }
 });
 
 router.post('/backups/run', superadminOnly, async (req, res) => {

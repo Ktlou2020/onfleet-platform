@@ -34,9 +34,15 @@ describe.skipIf(!process.env.DATABASE_URL)('backupService', () => {
     await new Promise((r) => setTimeout(r, 1100)); // ensure a distinct timestamp-named directory
     const after = await runScheduledBackup();
 
-    const backups = listBackups();
+    // listBackups() now returns { backups, summary } — the summary is what the
+    // admin page alerts on, and it needs the whole set to work it out.
+    const { backups, summary } = listBackups();
     expect(backups.length).toBeGreaterThanOrEqual(2);
     expect(backups[0].postgres.sha256).toBe(after.postgres.sha256);
+    // A backup taken a moment ago is neither stale nor damaged.
+    expect(backups[0].health).toBe('ok');
+    expect(summary.stale).toBe(false);
+    expect(summary.damaged).toBe(0);
   });
 
   it('prunes backups beyond the retention count', async () => {

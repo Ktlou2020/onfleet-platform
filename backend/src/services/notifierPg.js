@@ -15,12 +15,21 @@ const { sendEmail } = require('./notifier');
 const { sendPushToUser } = require('./webPush');
 const { queueDigestEmail } = require('./alertDigestService');
 
+// Neither of these has a provider behind it yet. They used to return quietly,
+// and a quiet return is indistinguishable from a successful send — which is how
+// 42,707 WhatsApp messages and 1,266 SMS came to be recorded as delivered, with
+// a sent_at timestamp, without a single one leaving the server. They now say
+// what actually happened, and the caller records that instead.
+//
+// When a provider is wired up, return { delivered: true } on a successful send.
 async function sendSMS(to, body) {
   console.log(`[SMS→${to}] ${body}`);
+  return { delivered: false, reason: 'no_provider' };
 }
 
 async function sendWhatsApp(to, body) {
   console.log(`[WhatsApp→${to}] ${body}`);
+  return { delivered: false, reason: 'no_provider' };
 }
 
 // No dedicated notifications page exists for fleet-owner roles today —
@@ -63,10 +72,35 @@ async function sendNotification({ userId, channel, type, title, message, entityT
   }
 
   try {
-    if (channel === 'email' && user?.email) await sendEmail(user.email, title || type, message);
-    else if (channel === 'sms' && user?.phone) await sendSMS(user.phone, message);
-    else if (channel === 'whatsapp' && user?.phone) await sendWhatsApp(user.phone, message);
-    await pgDb.query(`UPDATE notifications SET status = 'sent', sent_at = NOW() WHERE id = $1`, [notificationId]);
+    // Every branch below has to say whether anything was actually delivered.
+    // The status used to be written unconditionally after this chain, so a
+    // channel that matched nothing at all — a WhatsApp message to one of the
+    // 320 riders with no phone number — was still recorded as sent. 722 rows
+    // claim a delivery that was never even attempted.
+    let outcome;
+    if (channel === 'email' && user?.email) {
+      await sendEmail(user.email, title || type, message);
+      outcome = { delivered: true };
+    } else if (channel === 'sms' && user?.phone) {
+      outcome = await sendSMS(user.phone, message);
+    } else if (channel === 'whatsapp' && user?.phone) {
+      outcome = await sendWhatsApp(user.phone, message);
+    } else if (channel === 'in_app') {
+      outcome = { delivered: true };   // the row itself is the delivery
+    } else {
+      outcome = { delivered: false, reason: 'no_contact_detail' };
+    }
+
+    // 'skipped' is not a failure: the message was composed and is on file, and
+    // there is simply no channel to carry it. Keeping that separate from
+    // 'failed' is what lets you see how much of the backlog turns real the day
+    // a provider is connected.
+    const status = outcome.delivered ? 'sent'
+      : outcome.reason === 'no_provider' ? 'skipped'
+      : 'failed';
+    await pgDb.query(
+      `UPDATE notifications SET status = $1, sent_at = CASE WHEN $1 = 'sent' THEN NOW() ELSE NULL END WHERE id = $2`,
+      [status, notificationId]);
   } catch (e) {
     console.error(`[notification:${channel}:${type}]`, e.message);
     await pgDb.query(`UPDATE notifications SET status = 'failed' WHERE id = $1`, [notificationId]);

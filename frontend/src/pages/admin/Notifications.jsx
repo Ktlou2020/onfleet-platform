@@ -104,7 +104,10 @@ export default function AdminNotifications() {
       total: notifications.length,
       sent: notifications.filter((item) => item.status === 'sent').length,
       read: notifications.filter((item) => item.status === 'read').length,
-      failed: notifications.filter((item) => item.status === 'failed').length
+      failed: notifications.filter((item) => item.status === 'failed').length,
+      // Composed, on file, and with no channel to carry it — an SMS or WhatsApp
+      // message with no provider wired up. These used to be counted as sent.
+      skipped: notifications.filter((item) => item.status === 'skipped').length
     };
   }, [list]);
 
@@ -125,7 +128,21 @@ export default function AdminNotifications() {
         <Stat label="Sent" value={stats.sent} icon={<Mail size={16} />} accent="var(--success)" />
         <Stat label="Read" value={stats.read} icon={<MessageSquare size={16} />} accent="var(--primary-light)" />
         <Stat label="Failed" value={stats.failed} icon={<Smartphone size={16} />} accent="var(--danger)" />
+        {stats.skipped > 0 && (
+          <Stat label="No channel" value={stats.skipped} icon={<Smartphone size={16} />} accent="var(--warn)" />
+        )}
       </div>
+
+      {stats.skipped > 0 && (
+        <div className="card mb-4" style={{ borderLeft: '3px solid var(--warn)', background: 'var(--surface-2)' }}>
+          <div className="text-sm">
+            <strong>{stats.skipped} message{stats.skipped !== 1 ? 's' : ''} had no channel to go out on.</strong>{' '}
+            SMS and WhatsApp have no provider connected, so those messages are composed and stored but not
+            delivered. They are listed as &ldquo;skipped&rdquo; rather than sent, which is what they used to
+            be recorded as.
+          </div>
+        </div>
+      )}
 
       <div className="row mb-4" style={{ flexWrap: 'wrap', gap: 8, alignItems: 'flex-end' }}>
         <SearchInput value={search} onChange={setSearch} placeholder="Search recipient, channel, title, message" style={{ flex: '1 1 240px', maxWidth: 380 }} />

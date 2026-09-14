@@ -14,6 +14,37 @@ const router = asyncRouter(express.Router());
 const PAYSTACK_BASE = 'https://api.paystack.co';
 const RIDER_PLAN_AMOUNTS = [500, 650, 700, 750, 800, 850, 1000, 1200];
 
+// Paystack subscriptions that can still take money from a rider. 'attention'
+// means a charge failed and Paystack is retrying it, so it will charge the
+// moment the card has funds; 'non-renewing' will not charge again and is left
+// out. Returns null when Paystack can't be reached, so the caller can refuse
+// rather than guess — a guess here is how riders ended up with ten.
+//
+// The customer record looks like it answers this, and doesn't: it has a
+// subscriptions field that came back empty for a rider with ten live ones.
+// Listing subscriptions by customer id is what returns them all.
+async function chargeableSubscriptionsFor(email) {
+  const headers = { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` };
+  try {
+    let customerId;
+    try {
+      const { data } = await axios.get(`${PAYSTACK_BASE}/customer/${encodeURIComponent(email)}`, { headers, timeout: 15000 });
+      customerId = data?.data?.id;
+    } catch (err) {
+      // No Paystack customer yet means no subscriptions: the normal first-link case.
+      if (err.response?.status === 404) return [];
+      throw err;
+    }
+    if (!customerId) return [];
+    const { data } = await axios.get(`${PAYSTACK_BASE}/subscription`,
+      { headers, timeout: 15000, params: { customer: customerId, perPage: 100 } });
+    return (data?.data || []).filter((sub) => ['active', 'attention'].includes(sub.status));
+  } catch (err) {
+    console.error('[subscription/init] could not read Paystack subscriptions:', err.response?.data?.message || err.message);
+    return null;
+  }
+}
+
 function getRiderPlanCode(weeklyAmount) {
   const amount = Math.round(Number(weeklyAmount));
   for (const amt of RIDER_PLAN_AMOUNTS) {
@@ -414,6 +445,30 @@ router.post('/:id/subscription/init', authRequired, adminOnly, async (req, res) 
     if (!planCode) {
       return res.status(400).json({
         error: `No payment plan configured for R${weeklyAmount}/week. Available: R${RIDER_PLAN_AMOUNTS.join(', R')}.`
+      });
+    }
+
+    // Every link initialises a brand-new Paystack subscription, and nothing ever
+    // cancelled the one before it. Links were regenerated freely — 61 for 25
+    // agreements — so 51 riders ended up with several live subscriptions at once
+    // and some were charged twice in a day. Check Paystack itself rather than
+    // local records: this route never wrote any, so they can't be trusted here.
+    const chargeable = await chargeableSubscriptionsFor(ag.email);
+    if (chargeable === null) {
+      return res.status(502).json({
+        error: 'Could not check this rider\'s existing Paystack subscriptions. Try again before generating a link, so a second subscription isn\'t created by mistake.',
+      });
+    }
+    if (chargeable.length) {
+      return res.status(409).json({
+        error: `${ag.full_name} already has ${chargeable.length} Paystack subscription${chargeable.length === 1 ? '' : 's'} that can still charge them. `
+          + 'Cancel it from Paystack subscriptions before generating a new link, or the rider will be charged twice.',
+        subscriptions: chargeable.map((sub) => ({
+          subscription_code: sub.subscription_code,
+          status: sub.status,
+          amount: (sub.amount || 0) / 100,
+          next_payment_date: sub.next_payment_date || null,
+        })),
       });
     }
 

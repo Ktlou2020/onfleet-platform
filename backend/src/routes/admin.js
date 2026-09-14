@@ -416,6 +416,74 @@ router.get('/dashboard', async (req, res) => {
   res.json({ stats, weekly_revenue: weekly });
 });
 
+// ---------- Paystack charge review queue ----------
+// Debit-order charges the platform couldn't credit on its own. Staff confirm or
+// dismiss each; see services/paystackChargeQueue.js for why nothing is credited
+// automatically.
+const paystackQueue = require('../services/paystackChargeQueue');
+
+function sendPaystackError(res, err, fallback) {
+  if (err instanceof paystackQueue.QueueError) return res.status(err.status).json({ error: err.message });
+  // Paystack's own message is the useful part when the gateway refuses something.
+  const gateway = err.response?.data?.message;
+  console.error(`[paystack-queue] ${fallback}:`, gateway || err.message);
+  return res.status(gateway ? 502 : 500).json({ error: gateway ? `Paystack: ${gateway}` : fallback });
+}
+
+router.get('/paystack-charges', async (req, res) => {
+  const status = ['unconfirmed', 'confirmed', 'dismissed'].includes(req.query.status) ? req.query.status : 'unconfirmed';
+  try {
+    const [charges, countsRes] = await Promise.all([
+      paystackQueue.listCharges({ status }),
+      pgDb.query(`SELECT status, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS amount FROM paystack_charges GROUP BY status`),
+    ]);
+    const counts = { unconfirmed: { count: 0, amount: 0 }, confirmed: { count: 0, amount: 0 }, dismissed: { count: 0, amount: 0 } };
+    for (const r of countsRes.rows) counts[r.status] = { count: Number(r.n), amount: Number(r.amount) };
+    res.json({ status, charges, counts });
+  } catch (err) {
+    sendPaystackError(res, err, 'Could not load Paystack charges');
+  }
+});
+
+router.post('/paystack-charges/:id/confirm', async (req, res) => {
+  try {
+    const result = await paystackQueue.confirmCharge(Number(req.params.id), {
+      agreementId: req.body.agreement_id, creditedAmount: req.body.credited_amount, userId: req.user.id, ip: req.ip,
+    });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    sendPaystackError(res, err, 'Could not confirm that charge');
+  }
+});
+
+router.post('/paystack-charges/:id/dismiss', async (req, res) => {
+  try {
+    const result = await paystackQueue.dismissCharge(Number(req.params.id), { note: req.body.note, userId: req.user.id, ip: req.ip });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    sendPaystackError(res, err, 'Could not dismiss that charge');
+  }
+});
+
+// Riders with more than one live Paystack subscription. Superadmin only:
+// cancelling one stops a rider's debit order, and that is not a routine action.
+router.get('/paystack-subscriptions/duplicates', superadminOnly, async (req, res) => {
+  try {
+    res.json(await paystackQueue.listDuplicateSubscriptions());
+  } catch (err) {
+    sendPaystackError(res, err, 'Could not read subscriptions from Paystack');
+  }
+});
+
+router.post('/paystack-subscriptions/:code/cancel', superadminOnly, async (req, res) => {
+  try {
+    const result = await paystackQueue.cancelSubscription(String(req.params.code), { userId: req.user.id, ip: req.ip });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    sendPaystackError(res, err, 'Could not cancel that subscription');
+  }
+});
+
 // ---------- Business KPIs ----------
 // The four numbers the dashboard was missing: whether riders are paying, how old
 // the unpaid money is, how many bikes have been lost, and how many on the road

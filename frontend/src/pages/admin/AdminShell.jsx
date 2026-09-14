@@ -4,7 +4,7 @@ import { useAuth } from '../../auth';
 import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
 import NotificationBell from '../../components/NotificationBell';
-import { LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell, Briefcase, ShieldCheck, PiggyBank, MapPin, UserCheck, Wrench, ShieldAlert, Gauge, Star, TrendingUp, Plug } from 'lucide-react';
+import { LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell, Briefcase, ShieldCheck, PiggyBank, MapPin, UserCheck, Wrench, ShieldAlert, Gauge, Star, TrendingUp, Plug, Inbox, Repeat } from 'lucide-react';
 
 const navItems = [
   { to: '/admin', label: 'Dashboard', icon: LayoutDashboard },
@@ -17,6 +17,8 @@ const navItems = [
   { to: '/admin/riders', label: 'Riders', icon: Star },
   { to: '/admin/claims', label: 'Insurance Claims', icon: ShieldAlert },
   { to: '/admin/payments', label: 'Payments', icon: CreditCard },
+  { to: '/admin/paystack-charges', label: 'Paystack charges', icon: Inbox },
+  { to: '/admin/paystack-subscriptions', label: 'Paystack subscriptions', icon: Repeat, superadminOnly: true },
   { to: '/admin/notifications', label: 'Notifications', icon: Bell },
   { to: '/admin/imports', label: 'CSV Imports', icon: UploadCloud },
   { to: '/admin/strategy', label: 'AI Strategy', icon: BrainCircuit },

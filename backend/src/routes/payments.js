@@ -16,13 +16,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 3 *
 const PAYSTACK_BASE = 'https://api.paystack.co';
 
 // Paystack fees: 2.9% + R1 per transaction — fee is ADDED on top of rider's payment
-function calcPaystackFee(amountZAR) {
-  return +(amountZAR * 0.029 + 1).toFixed(2);
-}
-function calcGrossAmount(amountZAR) {
-  const fee = calcPaystackFee(amountZAR);
-  return +(amountZAR + fee).toFixed(2);
-}
+const { calcPaystackFee, calcGrossAmount } = require('../utils/paystackFees');
+const { queueCharge: queuePaystackCharge } = require('../services/paystackChargeQueue');
 function creditedAmount(payment) {
   return Number(payment?.net_amount) || Number(payment?.amount) || 0;
 }
@@ -377,6 +372,15 @@ router.post('/paystack/webhook', async (req, res) => {
     if (!agreementId && riderId) {
       const { rows: agRows } = await pgDb.query(`SELECT id FROM agreements WHERE user_id = $1 AND status IN ('active','paused','defaulted') ORDER BY id DESC LIMIT 1`, [riderId]);
       if (agRows[0]) agreementId = agRows[0].id;
+    }
+
+    // A platform rider has no organisation, so nothing below can record their
+    // charge — and for as long as this branch has existed their debit orders
+    // were dropped right here, without a log line. Hold the charge for a person
+    // to confirm rather than crediting it: staff also enter these by hand, and
+    // an automatic credit would land on top of theirs.
+    if (!orgId && grossAmountZAR > 0) {
+      await queuePaystackCharge(event.data, { source: 'webhook' });
     }
 
     if (orgId && grossAmountZAR > 0) {

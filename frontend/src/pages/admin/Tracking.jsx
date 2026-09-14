@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, Circle, Polygon, CircleMarker, useMap, useMapEvents } from 'react-leaflet';
+import { MAP_TILES } from '../../utils/mapTiles';
 import MarkerClusterGroup from 'react-leaflet-cluster';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -175,10 +176,7 @@ function SpeedTrail({ positions }) {
   return <>{segments.map((s, i) => <Polyline key={i} positions={s.pts} color={s.color} weight={3} opacity={0.85} />)}</>;
 }
 
-const TILES = {
-  street:    { url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',                                                         attribution: '&copy; <a href="https://openstreetmap.org">OpenStreetMap</a>' },
-  satellite: { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attribution: '&copy; Esri' },
-};
+const TILES = MAP_TILES;
 
 const TRAIL_RANGES = [
   { id: '1h',  label: '1 h',   hours: 1 },
@@ -1738,7 +1736,7 @@ export default function Tracking({ readOnly = false }) {
         )}
 
         <MapContainer center={[-26.2, 28.0]} zoom={10} style={{ height: '100%', width: '100%', cursor: pickingCenter || drawingPolygon ? 'crosshair' : undefined }}>
-          <TileLayer key={tileMode} url={TILES[tileMode].url} attribution={TILES[tileMode].attribution} />
+          <TileLayer key={tileMode} {...TILES[tileMode]} />
           {flyTo && <FlyTo position={flyTo} />}
           <FitBounds trigger={fitTrigger} positions={allPositions} />
           {pickingCenter && <MapClickHandler onMapClick={handleMapClick} />}

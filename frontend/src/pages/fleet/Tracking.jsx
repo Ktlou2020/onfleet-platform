@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
+import { MAP_TILES } from '../../utils/mapTiles';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
@@ -49,10 +50,7 @@ function speedColor(kmh) {
   return '#ef4444';
 }
 
-const TILES = {
-  street:    { url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', attribution: '© OpenStreetMap' },
-  satellite: { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attribution: '© Esri' },
-};
+const TILES = MAP_TILES;
 
 const ALERT_TYPE_LABELS = {
   speeding: 'Speeding', harsh_acceleration: 'Harsh accel', harsh_braking: 'Harsh brake',
@@ -313,7 +311,7 @@ export default function FleetTracking() {
       {/* ── Map ── */}
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         <MapContainer center={[-26.2, 28.0]} zoom={10} style={{ height: '100%', width: '100%' }}>
-          <TileLayer key={tileMode} url={TILES[tileMode].url} attribution={TILES[tileMode].attribution} />
+          <TileLayer key={tileMode} {...TILES[tileMode]} />
           <FitBounds devices={devices} />
           <SpeedTrail trail={trail} />
           {devices.filter(d => d.lat && d.lng).map(d => (

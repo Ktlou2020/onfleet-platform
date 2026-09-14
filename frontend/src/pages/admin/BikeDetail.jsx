@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import { MAP_TILES } from '../../utils/mapTiles';
 import L from 'leaflet';
 import api from '../../api';
 import toast from 'react-hot-toast';
@@ -514,7 +515,7 @@ export default function AdminBikeDetail() {
       <div className="grid grid-2 mb-4">
         <div className="card">
           <h3 className="mb-3">Live location</h3>
-          {pos ? <div style={{ height: 320, borderRadius: 8, overflow: 'hidden' }}><MapContainer center={pos} zoom={13} style={{ height: '100%' }}><TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" /><Marker position={pos} icon={bikeIcon}><Popup>{bike.make} {bike.model}</Popup></Marker></MapContainer></div> : <div className="muted">No GPS data yet.</div>}
+          {pos ? <div style={{ height: 320, borderRadius: 8, overflow: 'hidden' }}><MapContainer center={pos} zoom={13} style={{ height: '100%' }}><TileLayer {...MAP_TILES.street} /><Marker position={pos} icon={bikeIcon}><Popup>{bike.make} {bike.model}</Popup></Marker></MapContainer></div> : <div className="muted">No GPS data yet.</div>}
         </div>
         <div className="card">
           <div className="flex-between mb-3" style={{ gap: 12, flexWrap: 'wrap' }}>

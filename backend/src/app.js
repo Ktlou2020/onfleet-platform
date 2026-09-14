@@ -90,7 +90,18 @@ function buildApp() {
 
   app.get('/api/health', (req, res) => res.json({ ok: true, service: 'onfleet-api', time: new Date().toISOString() }));
 
-  app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: false, crossOriginEmbedderPolicy: false }));
+  // helmet's default Referrer-Policy is no-referrer, which strips the Referer
+  // from every request the browser makes to other sites — including map tiles.
+  // OpenStreetMap blocks tile requests that arrive without one, so every map
+  // in the portal rendered as "Access blocked" squares. strict-origin-when-cross-origin
+  // is the browser default: other sites see only https://portal.onfleet.africa/,
+  // never the path, so agreement ids and tokens in URLs still don't leak.
+  app.use(helmet({
+    contentSecurityPolicy: false,
+    crossOriginResourcePolicy: false,
+    crossOriginEmbedderPolicy: false,
+    referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+  }));
 
   const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || process.env.FRONTEND_URL || '')
     .split(',').map((o) => o.trim().replace(/\/+$/, '')).filter(Boolean);

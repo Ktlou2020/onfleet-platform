@@ -416,6 +416,158 @@ router.get('/dashboard', async (req, res) => {
   res.json({ stats, weekly_revenue: weekly });
 });
 
+// ---------- Business KPIs ----------
+// The four numbers the dashboard was missing: whether riders are paying, how old
+// the unpaid money is, how many bikes have been lost, and how many on the road
+// could actually be found. Same platform scope as /dashboard, so these sit
+// beside its figures without contradicting them.
+//
+// Collection rate is deliberately not "everything billed against everything
+// paid". A schedule keeps its future weeks after an agreement ends, and an early
+// payoff leaves paid-up weeks falling due in later months, so a naive sum makes
+// the rate look like it is collapsing when it is not. Billing only counts while
+// an agreement was running: up to discontinued_at, or for a completed agreement
+// its last payment, which is what completed it. A defaulted agreement records no
+// end date at all, so it is left out of both sides and reported as excluded
+// rather than given an end date someone would have to invent.
+router.get('/kpis', async (req, res) => {
+  try {
+    const agreementScope = superadminPortalAgreementScope('a', 'b', 'u');
+    const bikeScope = superadminVisibleBikeScope('b');
+    const scoped = `SELECT a.* FROM agreements a JOIN bikes b ON b.id = a.bike_id JOIN users u ON u.id = a.user_id WHERE ${agreementScope}`;
+    const n = (v) => Number(v || 0);
+    const pct = (part, whole) => (whole > 0 ? Math.round((1000 * part) / whole) / 10 : null);
+    const money = (v) => Math.round(n(v) * 100) / 100;
+
+    const [collectionRes, excludedRes, ageingRes, overdueRes, fleetRes, trackerRes] = await Promise.all([
+      pgDb.query(`
+        WITH sa AS (${scoped}),
+        lp AS (
+          SELECT agreement_id, MAX(COALESCE(paid_at, created_at))::date AS last_paid
+            FROM payments WHERE status = 'success' GROUP BY agreement_id),
+        life AS (
+          SELECT sa.id,
+                 CASE WHEN sa.status = 'completed' THEN lp.last_paid
+                      WHEN sa.status IN ('discontinued','defaulted') THEN sa.discontinued_at::date END AS ended,
+                 (sa.status IN ('discontinued','defaulted') AND sa.discontinued_at IS NULL) AS excluded
+            FROM sa LEFT JOIN lp ON lp.agreement_id = sa.id),
+        months AS (
+          SELECT generate_series(date_trunc('month', CURRENT_DATE) - INTERVAL '5 months',
+                                 date_trunc('month', CURRENT_DATE), INTERVAL '1 month')::date AS m),
+        billed AS (
+          SELECT date_trunc('month', ps.due_date)::date AS m, SUM(ps.amount_due) AS v
+            FROM payment_schedules ps JOIN life l ON l.id = ps.agreement_id
+           WHERE NOT l.excluded AND ps.status <> 'waived'
+             AND ps.due_date <= CURRENT_DATE
+             AND ps.due_date >= date_trunc('month', CURRENT_DATE) - INTERVAL '5 months'
+             AND (l.ended IS NULL OR ps.due_date <= l.ended)
+           GROUP BY 1),
+        collected AS (
+          SELECT date_trunc('month', COALESCE(p.paid_at, p.created_at))::date AS m,
+                 SUM(COALESCE(NULLIF(p.net_amount, 0), p.amount)) AS v
+            FROM payments p JOIN life l ON l.id = p.agreement_id
+           WHERE p.status = 'success' AND NOT l.excluded
+             AND COALESCE(p.paid_at, p.created_at) >= date_trunc('month', CURRENT_DATE) - INTERVAL '5 months'
+           GROUP BY 1)
+        SELECT to_char(months.m, 'YYYY-MM') AS month, COALESCE(billed.v, 0) AS billed, COALESCE(collected.v, 0) AS collected
+          FROM months LEFT JOIN billed USING (m) LEFT JOIN collected USING (m)
+         ORDER BY months.m`),
+      pgDb.query(`WITH sa AS (${scoped})
+        SELECT COUNT(*) AS c FROM sa WHERE status IN ('discontinued','defaulted') AND discontinued_at IS NULL`),
+      pgDb.query(`
+        WITH sa AS (${scoped}),
+        owed AS (
+          SELECT sa.id,
+                 COALESCE(SUM(ps.amount_due - ps.amount_paid) FILTER (WHERE ps.status = 'overdue'), 0) AS amount,
+                 MIN(ps.due_date) FILTER (WHERE ps.status = 'overdue') AS oldest
+            FROM sa LEFT JOIN payment_schedules ps ON ps.agreement_id = sa.id
+           WHERE sa.status = 'active'
+           GROUP BY sa.id)
+        SELECT CASE WHEN amount <= 0.01 THEN 'current'
+                    WHEN CURRENT_DATE - oldest <= 30 THEN 'd1_30'
+                    WHEN CURRENT_DATE - oldest <= 90 THEN 'd31_90'
+                    ELSE 'd90_plus' END AS bucket,
+               COUNT(*) AS agreements, COALESCE(SUM(amount), 0) AS amount
+          FROM owed GROUP BY 1`),
+      // Identical joins and filter to the dashboard's Overdue amount tile, so the
+      // split below always adds back up to the figure shown there.
+      pgDb.query(`
+        SELECT COALESCE(SUM(ps.amount_due - ps.amount_paid) FILTER (WHERE a.status = 'active'), 0) AS active,
+               COALESCE(SUM(ps.amount_due - ps.amount_paid) FILTER (WHERE a.status <> 'active'), 0) AS other
+          FROM payment_schedules ps
+          JOIN agreements a ON a.id = ps.agreement_id
+          JOIN bikes b ON b.id = a.bike_id
+          JOIN users u ON u.id = a.user_id
+         WHERE ps.status = 'overdue' AND ${agreementScope}`),
+      pgDb.query(`
+        SELECT COUNT(*) AS fleet,
+               COUNT(*) FILTER (WHERE b.status = 'stolen') AS stolen,
+               COUNT(*) FILTER (WHERE b.status = 'written_off') AS written_off,
+               COUNT(*) FILTER (WHERE b.status IN ('stolen','written_off') AND b.purchase_price > 0) AS priced,
+               COALESCE(SUM(b.purchase_price) FILTER (WHERE b.status IN ('stolen','written_off') AND b.purchase_price > 0), 0) AS priced_value,
+               COUNT(*) FILTER (WHERE b.status IN ('stolen','written_off')
+                                  AND NOT EXISTS (SELECT 1 FROM tracking_devices d WHERE d.bike_id = b.id)) AS lost_untracked
+          FROM bikes b WHERE ${bikeScope}`),
+      pgDb.query(`
+        SELECT COUNT(DISTINCT a.bike_id) AS on_road,
+               COUNT(DISTINCT a.bike_id) FILTER (WHERE EXISTS (SELECT 1 FROM tracking_devices d WHERE d.bike_id = a.bike_id)) AS tracked,
+               COUNT(DISTINCT a.bike_id) FILTER (WHERE EXISTS (
+                 SELECT 1 FROM tracking_devices d WHERE d.bike_id = a.bike_id AND d.last_seen_at > NOW() - INTERVAL '24 hours')) AS reporting_24h
+          FROM agreements a JOIN bikes b ON b.id = a.bike_id JOIN users u ON u.id = a.user_id
+         WHERE a.status = 'active' AND ${agreementScope}`),
+    ]);
+
+    const months = collectionRes.rows.map((r) => ({
+      month: r.month, billed: money(r.billed), collected: money(r.collected), rate: pct(n(r.collected), n(r.billed)),
+    }));
+    // The headline uses the last three complete months: the current one is still
+    // being billed and paid, and would drag the figure around all month.
+    const complete = months.slice(0, -1).slice(-3);
+    const threeBilled = complete.reduce((sum, m) => sum + m.billed, 0);
+    const threeCollected = complete.reduce((sum, m) => sum + m.collected, 0);
+
+    const BUCKETS = [['current', 'Up to date'], ['d1_30', '1–30 days'], ['d31_90', '31–90 days'], ['d90_plus', 'Over 90 days']];
+    const byBucket = Object.fromEntries(ageingRes.rows.map((r) => [r.bucket, r]));
+    const buckets = BUCKETS.map(([key, label]) => ({
+      key, label, agreements: n(byBucket[key]?.agreements), amount: money(byBucket[key]?.amount),
+    }));
+
+    const fleet = fleetRes.rows[0];
+    const lost = n(fleet.stolen) + n(fleet.written_off);
+    const tracker = trackerRes.rows[0];
+
+    res.json({
+      generated_at: new Date().toISOString(),
+      collections: {
+        months,
+        three_month: {
+          from: complete[0]?.month || null, to: complete[complete.length - 1]?.month || null,
+          billed: money(threeBilled), collected: money(threeCollected), rate: pct(threeCollected, threeBilled),
+        },
+        excluded_agreements: n(excludedRes.rows[0].c),
+      },
+      arrears: {
+        buckets,
+        active_overdue: money(overdueRes.rows[0].active),
+        other_overdue: money(overdueRes.rows[0].other),
+        total_overdue: money(n(overdueRes.rows[0].active) + n(overdueRes.rows[0].other)),
+      },
+      losses: {
+        fleet: n(fleet.fleet), stolen: n(fleet.stolen), written_off: n(fleet.written_off), lost,
+        loss_rate: pct(lost, n(fleet.fleet)), lost_untracked: n(fleet.lost_untracked),
+        priced: n(fleet.priced), priced_value: money(fleet.priced_value),
+      },
+      trackers: {
+        on_road: n(tracker.on_road), tracked: n(tracker.tracked), reporting_24h: n(tracker.reporting_24h),
+        coverage: pct(n(tracker.tracked), n(tracker.on_road)),
+      },
+    });
+  } catch (error) {
+    console.error('[admin:kpis]', error.message);
+    res.status(500).json({ error: 'Could not calculate KPIs' });
+  }
+});
+
 // ---------- Rider signup activity ----------
 // Scoped to organization_id IS NULL — the direct platform self-signup flow
 // (frontend/src/pages/Signup.jsx + /application). Fleet-owner-recruited

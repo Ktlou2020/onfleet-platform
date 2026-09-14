@@ -8,9 +8,128 @@ import { fmt, matchesSearch } from '../../components/ui';
 import { useAuth } from '../../auth';
 import { Users, Bike, AlertCircle, TrendingUp, FileCheck, ShieldCheck, Wrench, ImagePlus, ClipboardList, BadgeCheck, Shield, CreditCard } from 'lucide-react';
 
+// Rates below 75% read as a problem to act on this week rather than a blip.
+const rateAccent = (rate) => (rate === null || rate === undefined
+  ? undefined
+  : rate >= 90 ? 'var(--success)' : rate >= 75 ? 'var(--warn)' : 'var(--danger)');
+
+const monthLabel = (ym) => new Date(`${ym}-01T00:00:00Z`)
+  .toLocaleString('en-ZA', { month: 'short', year: 'numeric', timeZone: 'UTC' });
+
+// Whether riders are paying, how old the unpaid money is, how many bikes are
+// gone, and how many on the road could be found. None of these were anywhere
+// on the dashboard, so none of them were being watched.
+function KpiPanel({ kpis }) {
+  if (!kpis) return null;
+  const { collections, arrears, losses, trackers } = kpis;
+  const over90 = arrears.buckets.find((b) => b.key === 'd90_plus') || { amount: 0, agreements: 0 };
+  const three = collections.three_month;
+
+  return (
+    <div className="card mb-4">
+      <div className="card-title"><h3>Business health</h3></div>
+
+      <div className="grid grid-4 mb-4">
+        <Stat
+          label="Collection rate"
+          value={three.rate === null ? '—' : `${three.rate}%`}
+          delta={`${fmt(three.collected)} of ${fmt(three.billed)} billed · last 3 full months`}
+          icon={<TrendingUp size={16} />}
+          accent={rateAccent(three.rate)}
+        />
+        <Stat
+          label="Over 90 days behind"
+          value={fmt(over90.amount)}
+          delta={`${over90.agreements} active agreement${over90.agreements === 1 ? '' : 's'}`}
+          icon={<AlertCircle size={16} />}
+          accent="var(--danger)"
+        />
+        <Stat
+          label="Bikes lost"
+          value={losses.lost}
+          delta={`${losses.loss_rate ?? 0}% of ${losses.fleet} · ${losses.stolen} stolen, ${losses.written_off} written off`}
+          icon={<Bike size={16} />}
+          accent="var(--danger)"
+        />
+        <Stat
+          label="Bikes on the road with a tracker"
+          value={`${trackers.tracked} / ${trackers.on_road}`}
+          delta={`${trackers.coverage ?? 0}% covered · ${trackers.reporting_24h} reported in 24h`}
+          icon={<Shield size={16} />}
+          accent={(trackers.coverage ?? 0) >= 80 ? 'var(--success)' : 'var(--danger)'}
+        />
+      </div>
+
+      <div className="grid grid-2" style={{ gap: 24 }}>
+        <div>
+          <div className="text-sm" style={{ fontWeight: 600, marginBottom: 6 }}>Billed and collected, by month</div>
+          <div className="table-wrap">
+            <table className="table">
+              <thead><tr><th>Month</th><th>Billed</th><th>Collected</th><th>Rate</th></tr></thead>
+              <tbody>
+                {collections.months.map((m, i) => (
+                  <tr key={m.month}>
+                    <td className="text-xs" style={{ whiteSpace: 'nowrap' }}>
+                      {monthLabel(m.month)}{i === collections.months.length - 1 ? ' (so far)' : ''}
+                    </td>
+                    <td className="text-xs">{fmt(m.billed)}</td>
+                    <td className="text-xs">{fmt(m.collected)}</td>
+                    <td className="text-xs" style={{ color: rateAccent(m.rate), fontWeight: 600 }}>
+                      {m.rate === null ? '—' : `${m.rate}%`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="muted text-xs" style={{ marginTop: 8, lineHeight: 1.5 }}>
+            Billing only counts while an agreement was running, so ended agreements don't drag the rate down.
+            A month can pass 100% when riders catch up on arrears.
+            {collections.excluded_agreements > 0 && (
+              <> {collections.excluded_agreements} defaulted agreement{collections.excluded_agreements === 1 ? ' has' : 's have'} no
+              end date recorded and {collections.excluded_agreements === 1 ? 'is' : 'are'} left out.</>
+            )}
+          </div>
+        </div>
+
+        <div>
+          <div className="text-sm" style={{ fontWeight: 600, marginBottom: 6 }}>How far behind active agreements are</div>
+          <div className="table-wrap">
+            <table className="table">
+              <thead><tr><th>Behind by</th><th>Agreements</th><th>Owed</th></tr></thead>
+              <tbody>
+                {arrears.buckets.map((b) => (
+                  <tr key={b.key}>
+                    <td className="text-xs">{b.label}</td>
+                    <td className="text-xs">{b.agreements}</td>
+                    <td className="text-xs" style={b.key === 'd90_plus' && b.amount > 0 ? { color: 'var(--danger)', fontWeight: 600 } : undefined}>
+                      {b.key === 'current' ? '—' : fmt(b.amount)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="muted text-xs" style={{ marginTop: 8, lineHeight: 1.5 }}>
+            Active agreements owe {fmt(arrears.active_overdue)}.
+            {arrears.other_overdue > 0 && (
+              <> The Overdue amount above is {fmt(arrears.total_overdue)} because it also counts {fmt(arrears.other_overdue)} still
+              owed on agreements that are paused or have ended.</>
+            )}
+            {losses.lost > 0 && losses.priced === 0 && (
+              <> None of the {losses.lost} lost bikes has a purchase price recorded, so their value can't be totalled.</>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AdminDashboard() {
   const { user } = useAuth();
   const [d, setD] = useState(null);
+  const [kpis, setKpis] = useState(null);
   const [search, setSearch] = useState('');
   const [branding, setBranding] = useState(null);
   const [heroImageFile, setHeroImageFile] = useState(null);
@@ -25,6 +144,8 @@ export default function AdminDashboard() {
   useEffect(() => {
     loadDashboard();
     loadBranding();
+    // Loaded separately so a failure here never takes the rest of the dashboard with it.
+    api.get('/admin/kpis').then((r) => setKpis(r.data)).catch(() => setKpis(null));
   }, [user?.role]);
 
   const s = d?.stats || {};
@@ -94,6 +215,8 @@ export default function AdminDashboard() {
         <Stat label="Bikes in repairs" value={s.bikes_maintenance} icon={<Wrench size={16}/>} accent="var(--warn)" />
         <Stat label="Compliance alerts" value={s.expiring_license_disc} delta={`${s.pending_kyc} docs pending · ${s.expiring_insurance} insurance`} icon={<ShieldCheck size={16}/>} accent="var(--warn)" />
       </div>
+
+      <KpiPanel kpis={kpis} />
 
       {user?.role === 'superadmin' && (
         <div className="card mb-4">

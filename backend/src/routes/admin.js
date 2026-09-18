@@ -421,6 +421,7 @@ router.get('/dashboard', async (req, res) => {
 // dismiss each; see services/paystackChargeQueue.js for why nothing is credited
 // automatically.
 const paystackQueue = require('../services/paystackChargeQueue');
+const { alertContact } = require('../services/alertContact');
 
 function sendPaystackError(res, err, fallback) {
   if (err instanceof paystackQueue.QueueError) return res.status(err.status).json({ error: err.message });
@@ -2392,7 +2393,8 @@ router.post('/integrations/webhooks/:id/test', superadminOnly, async (req, res) 
     occurred_at: new Date().toISOString(),
     sent_at: new Date().toISOString(),
     vehicle: { id: null, registration: 'TEST-123', make: 'Test', model: 'Vehicle', group: null, last_known_position: null },
-    driver: { id: null, name: 'Test Rider', phone: '+27000000000', agreement_no: 'TEST' },
+    contact: alertContact(),
+    driver: { id: null, name: 'Test Rider', phone: alertContact().phone, agreement_no: 'TEST' },
     detail: { note: 'Specimen event from OnFleet — your endpoint is reachable.' },
   });
   const { rows: inserted } = await pgDb.query(

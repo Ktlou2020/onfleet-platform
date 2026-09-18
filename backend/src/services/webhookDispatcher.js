@@ -18,6 +18,7 @@
 
 const crypto = require('crypto');
 const pgDb = require('../pgDb');
+const { alertContact } = require('./alertContact');
 const trackingEvents = require('../trackingEvents');
 
 const MAX_ATTEMPTS = 6;
@@ -53,6 +54,12 @@ async function buildEventBody(alert) {
   try { detail = typeof alert.payload === 'string' ? JSON.parse(alert.payload || '{}') : (alert.payload || {}); }
   catch { detail = {}; }
 
+  // The number the control room should call: OnFleet's office line during
+  // office hours, the after-hours line otherwise. It replaces the rider's own
+  // number in driver.phone, which is where receivers already look, and is also
+  // sent on its own so alerts for a bike with no active rider still carry it.
+  const contact = alertContact(alert.created_at);
+
   return {
     event_id: `alert-${alert.id}`,
     event_type: alert.alert_type,
@@ -69,8 +76,9 @@ async function buildEventBody(alert) {
         ? { lat: v.last_known_lat, lng: v.last_known_lng, at: v.last_location_at }
         : null,
     },
+    contact,
     driver: v.rider_id
-      ? { id: v.rider_id, name: v.rider_name, phone: v.rider_phone, agreement_no: v.agreement_no }
+      ? { id: v.rider_id, name: v.rider_name, phone: contact.phone, agreement_no: v.agreement_no }
       : null,
     detail,
   };

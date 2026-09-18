@@ -155,7 +155,8 @@ backfill after downtime, or to reconcile what you received against what we sent.
       "acknowledged_at": null,
       "resolved_at": null,
       "vehicle": { "id": 2, "registration": "REG46", "make": "TestMake", "model": "TestModel" },
-      "driver": { "name": "Test User 48", "phone": "+27821234567" },
+      "contact": { "phone": "0101411165", "hours": "office" },
+      "driver": { "name": "Test User 48", "phone": "0101411165" },
       "detail": { "lat": -26.2041, "lng": 28.0473 }
     }
   ]
@@ -209,7 +210,8 @@ X-OnFleet-Signature: sha256=<hmac>
     "group": { "id": 1, "name": "Johannesburg Hub" },
     "last_known_position": { "lat": -26.2041, "lng": 28.0473, "at": "2026-08-26T10:28:58.479Z" }
   },
-  "driver": { "id": 2, "name": "Test User 48", "phone": "+27821234567", "agreement_no": "OF-TEST-47" },
+  "contact": { "phone": "0101411165", "hours": "office" },
+  "driver": { "id": 2, "name": "Test User 48", "phone": "0101411165", "agreement_no": "OF-TEST-47" },
   "detail": { "lat": -26.2041, "lng": 28.0473 }
 }
 ```
@@ -285,5 +287,5 @@ provided so an integrator can prioritise without hard-coding a list.
 
 1. **Initial load** — `GET /vehicles` and `GET /groups`; store vehicles by `id` (stable) and keep `registration` for display.
 2. **Periodic sync** — repeat `GET /vehicles` on your normal cycle (30 minutes is fine). Treat it as the full current state: vehicles absent from the response are no longer in scope, `driver` changes as bikes are reallocated.
-3. **Alarms** — receive by webhook. Verify the signature, dedupe on `event_id`, act on `event_type` + `severity`, and use `driver.phone` to reach the rider.
+3. **Alarms** — receive by webhook. Verify the signature, dedupe on `event_id`, act on `event_type` + `severity`, and call `contact.phone` — OnFleet's office line (010 141 1165) for alarms raised Monday to Friday 08:00–17:00 Johannesburg time, and the after-hours line (081 539 5612) at all other times. `driver.phone` carries the same number; `contact` is present even when no rider is assigned.
 4. **Recovery** — after any downtime, `GET /alerts?since=<last event you processed>` to close the gap. Retries also cover this, but the pull is authoritative.

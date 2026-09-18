@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const pgDb = require('../pgDb');
 const asyncRouter = require('../utils/asyncRouter');
 const { ALERT_SEVERITY, ALL_ALERT_TYPES } = require('../constants/alertTypes');
+const { alertContact } = require('../services/alertContact');
 
 const router = asyncRouter(express.Router());
 
@@ -186,7 +187,11 @@ router.get('/alerts', async (req, res) => {
 
   res.json({
     count: rows.length,
-    alerts: rows.map((r) => ({
+    alerts: rows.map((r) => {
+      // Same rule as webhook deliveries: which OnFleet number to call, decided
+      // by when the alert happened.
+      const contact = alertContact(r.created_at);
+      return {
       id: r.id,
       event_type: r.alert_type,
       severity: r.severity,
@@ -194,9 +199,11 @@ router.get('/alerts', async (req, res) => {
       acknowledged_at: r.acknowledged_at,
       resolved_at: r.resolved_at,
       vehicle: r.bike_id ? { id: r.bike_id, registration: r.registration, make: r.make, model: r.model } : null,
-      driver: r.rider_name ? { name: r.rider_name, phone: r.rider_phone } : null,
+      contact,
+      driver: r.rider_name ? { name: r.rider_name, phone: contact.phone } : null,
       detail: (() => { try { return JSON.parse(r.payload || '{}'); } catch { return {}; } })(),
-    })),
+      };
+    }),
   });
 });
 

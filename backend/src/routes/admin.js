@@ -2272,6 +2272,38 @@ router.delete('/integrations/api-keys/:id', superadminOnly, async (req, res) => 
   res.json({ ok: true });
 });
 
+const { ALERT_SEVERITY: WEBHOOK_ALERT_SEVERITY, ALL_ALERT_TYPES: WEBHOOK_ALERT_TYPES } = require('../constants/alertTypes');
+
+// Which alert types a webhook receives. NULL means every type, including ones
+// added later; a list means only those. An empty list is refused rather than
+// stored: "send nothing" is what Pause is for, and an active webhook that never
+// delivers looks like a broken integration to whoever runs the other end.
+function normaliseWebhookEventTypes(input) {
+  if (input === null || input === undefined || input === 'all') return { value: null };
+  if (!Array.isArray(input)) return { error: 'event_types must be a list of alert types, or null for every type' };
+  const chosen = [...new Set(input.map((t) => String(t).trim()).filter(Boolean))];
+  if (!chosen.length) return { error: 'Choose at least one alert type, or pause the webhook to stop deliveries' };
+  const unknown = chosen.filter((t) => !WEBHOOK_ALERT_TYPES.includes(t));
+  if (unknown.length) return { error: `Unknown alert type${unknown.length === 1 ? '' : 's'}: ${unknown.join(', ')}` };
+  // Catalogue order, so the stored value is the same however the list arrived.
+  return { value: WEBHOOK_ALERT_TYPES.filter((t) => chosen.includes(t)).join(',') };
+}
+
+// The alert catalogue with how often each type fired recently, so choosing what
+// a webhook receives is done against real volumes. Idle alone was over 90% of
+// alerts in a month, and most of it is noise to a control room.
+router.get('/integrations/alert-types', superadminOnly, async (req, res) => {
+  const { rows } = await pgDb.query(
+    `SELECT alert_type, COUNT(*)::int AS n FROM tracking_alerts
+      WHERE created_at > NOW() - INTERVAL '30 days' GROUP BY alert_type`);
+  const counts = Object.fromEntries(rows.map((r) => [r.alert_type, r.n]));
+  res.json({
+    alert_types: WEBHOOK_ALERT_TYPES.map((type) => ({
+      type, severity: WEBHOOK_ALERT_SEVERITY[type], last_30_days: counts[type] || 0,
+    })),
+  });
+});
+
 router.get('/integrations/webhooks', superadminOnly, async (req, res) => {
   const { rows } = await pgDb.query(
     `SELECT e.id, e.name, e.url, e.scope, e.event_types, e.active,
@@ -2299,9 +2331,8 @@ router.post('/integrations/webhooks', superadminOnly, async (req, res) => {
   }
   // Caller may pin specific events; omitting the list means "send everything",
   // which is what a control room normally wants.
-  const eventTypes = Array.isArray(req.body.event_types) && req.body.event_types.length
-    ? req.body.event_types.join(',')
-    : null;
+  const { value: eventTypes, error: eventTypesError } = normaliseWebhookEventTypes(req.body.event_types);
+  if (eventTypesError) return res.status(400).json({ error: eventTypesError });
   const secret = `whsec_${crypto.randomBytes(24).toString('hex')}`;
   const { rows } = await pgDb.query(
     `INSERT INTO webhook_endpoints (name, url, secret, scope, event_types, created_by)
@@ -2311,14 +2342,32 @@ router.post('/integrations/webhooks', superadminOnly, async (req, res) => {
   res.status(201).json({ ok: true, id: rows[0].id, name, url, secret, event_types: eventTypes });
 });
 
+// Pause/resume, and choose which alert types the endpoint receives. The
+// dispatcher reads this on every alert, so a change applies to the next one.
 router.put('/integrations/webhooks/:id', superadminOnly, async (req, res) => {
-  const active = req.body.active === undefined ? null : !!req.body.active;
-  if (active === null) return res.status(400).json({ error: 'Nothing to update' });
+  const sets = [];
+  const params = [];
+  const after = {};
+  if (req.body.active !== undefined) {
+    params.push(!!req.body.active);
+    sets.push(`active = $${params.length}`);
+    after.active = !!req.body.active;
+  }
+  if (Object.prototype.hasOwnProperty.call(req.body, 'event_types')) {
+    const { value, error } = normaliseWebhookEventTypes(req.body.event_types);
+    if (error) return res.status(400).json({ error });
+    params.push(value);
+    sets.push(`event_types = $${params.length}`);
+    after.event_types = value;
+  }
+  if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
+
+  const { rows: beforeRows } = await pgDb.query('SELECT active, event_types FROM webhook_endpoints WHERE id = $1', [req.params.id]);
+  if (!beforeRows[0]) return res.status(404).json({ error: 'Webhook not found' });
+  params.push(req.params.id);
   const { rows } = await pgDb.query(
-    `UPDATE webhook_endpoints SET active = $1 WHERE id = $2 RETURNING id, name, active`,
-    [active, req.params.id]);
-  if (!rows[0]) return res.status(404).json({ error: 'Webhook not found' });
-  await logAudit(req.user.id, 'admin.webhook_update', 'webhook_endpoints', rows[0].id, { active }, req.ip);
+    `UPDATE webhook_endpoints SET ${sets.join(', ')} WHERE id = $${params.length} RETURNING id, name, active, event_types`, params);
+  await logAudit(req.user.id, 'admin.webhook_update', 'webhook_endpoints', rows[0].id, { before: beforeRows[0], after }, req.ip);
   res.json({ ok: true, webhook: rows[0] });
 });
 

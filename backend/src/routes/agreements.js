@@ -306,6 +306,50 @@ router.post('/:id/status', authRequired, adminOnly, async (req, res) => {
   res.json({ ok: true });
 });
 
+// Cancel is for agreements that should never have existed: test data, a
+// duplicate, one opened on the wrong rider or bike. It differs from the other
+// ways out on purpose. Completing marks the bike paid off; defaulting and the
+// generic status route put it back to 'ready_to_go', which would hand a test
+// bike to the next rider. Cancelling leaves the bike exactly as it is, stops
+// billing by waiving every unpaid week, and needs a reason on record.
+const CANCELLABLE_STATUSES = ['active', 'paused', 'defaulted'];
+
+router.post('/:id/cancel', authRequired, adminOnly, async (req, res) => {
+  const reason = String(req.body?.reason || '').trim();
+  if (reason.length < 5) return res.status(400).json({ error: 'Give a reason for cancelling (at least 5 characters)' });
+  if (reason.length > 500) return res.status(400).json({ error: 'Keep the reason under 500 characters' });
+
+  const result = await pgDb.withTransaction(async (client) => {
+    const { rows } = await client.query(`SELECT a.*
+      FROM agreements a
+      JOIN bikes b ON b.id = a.bike_id
+      JOIN users u ON u.id = a.user_id
+      WHERE a.id = $1 AND ${adminVisibleAgreementClause('a', 'b', 'u')}
+      FOR UPDATE OF a`, [req.params.id]);
+    const agreement = rows[0];
+    if (!agreement) return { status: 404, body: { error: 'Agreement not found' } };
+    if (!CANCELLABLE_STATUSES.includes(agreement.status)) {
+      return { status: 409, body: { error: `A ${agreement.status} agreement can't be cancelled` } };
+    }
+    const stamp = new Date().toISOString().slice(0, 10);
+    await client.query(`UPDATE agreements
+      SET status = 'cancelled',
+          notes = CONCAT_WS(E'\\n', NULLIF(notes, ''), $1::text),
+          updated_at = NOW()
+      WHERE id = $2`, [`Cancelled ${stamp}: ${reason}`, agreement.id]);
+    const { rowCount: waived } = await client.query(`UPDATE payment_schedules SET status = 'waived'
+      WHERE agreement_id = $1 AND status <> 'waived' AND amount_paid < amount_due`, [agreement.id]);
+    return { status: 200, body: { ok: true, waived_rows: waived }, agreement, waived };
+  });
+
+  if (result.agreement) {
+    await logAudit(req.user.id, 'agreement.cancelled', 'agreements', result.agreement.id, {
+      previous_status: result.agreement.status, reason, waived_rows: result.waived, bike_id: result.agreement.bike_id,
+    }, req.ip);
+  }
+  res.status(result.status).json(result.body);
+});
+
 router.post('/:id/reinstate', authRequired, adminOnly, async (req, res) => {
   try {
     const { rows: agreementRows } = await pgDb.query(`SELECT a.id

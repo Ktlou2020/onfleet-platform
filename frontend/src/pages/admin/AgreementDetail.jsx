@@ -57,6 +57,8 @@ export default function AdminAgreementDetail() {
   const [newBalance, setNewBalance] = useState('');
   const [showScheduleEdit, setShowScheduleEdit] = useState(false);
   const [newTotalWeeks, setNewTotalWeeks] = useState('');
+  const [showCancel, setShowCancel] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
 
   const load = () => api.get(`/agreements/${id}`).then((response) => {
     setData(response.data);
@@ -81,6 +83,21 @@ export default function AdminAgreementDetail() {
       load();
     } catch (error) {
       toast.error(error.response?.data?.error || 'Failed');
+    }
+  };
+
+  const cancelAgreement = async () => {
+    try {
+      setBusyAction('cancel');
+      const { data: result } = await api.post(`/agreements/${id}/cancel`, { reason: cancelReason.trim() });
+      toast.success(`Agreement cancelled${result.waived_rows ? `, ${result.waived_rows} unpaid weeks waived` : ''}`);
+      setShowCancel(false);
+      setCancelReason('');
+      load();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not cancel the agreement');
+    } finally {
+      setBusyAction('');
     }
   };
 
@@ -247,8 +264,9 @@ export default function AdminAgreementDetail() {
             {agreement.signed_contract_path && <a className="btn btn-sm btn-secondary" href={agreement.signed_contract_path} target="_blank" rel="noreferrer">Signed copy</a>}
             {agreement.status === 'active' && <button className="btn btn-sm btn-secondary" onClick={() => updateStatus('paused')} disabled={busyAction === 'paused'}>Pause</button>}
             {agreement.status === 'paused' && <button className="btn btn-sm btn-secondary" onClick={() => updateStatus('active')} disabled={busyAction === 'active'}>Resume</button>}
-            {!['completed', 'discontinued'].includes(agreement.status) && <button className="btn btn-sm btn-success" onClick={() => updateStatus('completed')} disabled={busyAction === 'completed'}>Mark completed</button>}
+            {!['completed', 'discontinued', 'cancelled'].includes(agreement.status) && <button className="btn btn-sm btn-success" onClick={() => updateStatus('completed')} disabled={busyAction === 'completed'}>Mark completed</button>}
             {agreement.status === 'active' && <button className="btn btn-sm btn-danger" onClick={() => updateStatus('defaulted')} disabled={busyAction === 'defaulted'}>Default</button>}
+            {['active', 'paused', 'defaulted'].includes(agreement.status) && <button className="btn btn-sm btn-secondary" onClick={() => setShowCancel(true)}>Cancel agreement</button>}
           </div>
         </div>
 
@@ -400,6 +418,36 @@ export default function AdminAgreementDetail() {
           <div className="row">
             <button className="btn" onClick={editSchedule} disabled={busyAction === 'schedule'}>{busyAction === 'schedule' ? 'Saving…' : 'Save'}</button>
             <button className="btn btn-secondary" onClick={() => { setShowScheduleEdit(false); setNewTotalWeeks(''); }}>Cancel</button>
+          </div>
+        </Modal>
+      )}
+
+      {showCancel && (
+        <Modal title="Cancel agreement" onClose={() => { setShowCancel(false); setCancelReason(''); }}>
+          <p className="muted text-sm mb-3">
+            Use this for an agreement that shouldn't exist: test data, a duplicate, or one opened on the wrong rider or bike.
+            Every unpaid week is waived so nothing more is billed, and payments already recorded stay as they are.
+            The bike's status is <strong>not</strong> changed. To end a real rider's agreement, use Mark completed or Default instead.
+          </p>
+          <p className="muted text-sm mb-3">
+            This doesn't stop a Paystack debit order. If the rider has one, cancel it on the Paystack subscriptions page.
+          </p>
+          <div className="field">
+            <label className="label">Reason</label>
+            <textarea
+              rows={3}
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              placeholder="e.g. Test agreement, not a real rider"
+              maxLength={500}
+              autoFocus
+            />
+          </div>
+          <div className="row">
+            <button className="btn btn-danger" onClick={cancelAgreement} disabled={busyAction === 'cancel' || cancelReason.trim().length < 5}>
+              {busyAction === 'cancel' ? 'Cancelling…' : 'Cancel agreement'}
+            </button>
+            <button className="btn btn-secondary" onClick={() => { setShowCancel(false); setCancelReason(''); }}>Keep it</button>
           </div>
         </Modal>
       )}

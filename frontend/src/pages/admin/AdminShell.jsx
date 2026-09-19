@@ -1,12 +1,13 @@
 import { useMemo, useState } from 'react';
-import { Outlet, NavLink, useNavigate } from 'react-router-dom';
+import { Outlet, NavLink, useNavigate, useLocation, matchPath } from 'react-router-dom';
 import { useAuth } from '../../auth';
 import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
 import NotificationBell from '../../components/NotificationBell';
-import { LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell, Briefcase, ShieldCheck, PiggyBank, MapPin, UserCheck, Wrench, ShieldAlert, Gauge, Star, TrendingUp, Plug, Inbox, Repeat } from 'lucide-react';
+import { LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell, Briefcase, ShieldCheck, PiggyBank, MapPin, UserCheck, Wrench, ShieldAlert, Gauge, Star, TrendingUp, Plug, Inbox, Repeat, MoreHorizontal, X } from 'lucide-react';
 
 const navItems = [
+  { section: 'Operations', mobileOnly: true },
   { to: '/admin', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/admin/applications', label: 'Applications', icon: FileCheck },
   { to: '/admin/signup-stats', label: 'Signup Stats', icon: TrendingUp },
@@ -35,12 +36,31 @@ const navItems = [
   { to: '/admin/audit', label: 'Audit Logs', icon: ClipboardList }
 ];
 
+// Phones get no sidebar, and the bottom bar used to show just the first five
+// items with no way to reach the other twenty. It now shows the pages used
+// most from a phone, plus More, which opens every page grouped as in the sidebar.
+const MOBILE_PRIMARY = ['/admin', '/admin/agreements', '/admin/tracking', '/admin/payments'];
+
+function groupedNav(items) {
+  const groups = [];
+  for (const item of items) {
+    if (item.section || !groups.length) groups.push({ title: item.section || null, items: [] });
+    if (!item.section) groups[groups.length - 1].items.push(item);
+  }
+  return groups.filter((g) => g.items.length);
+}
+
 export default function AdminShell() {
   const { user, logout } = useAuth();
   const nav = useNavigate();
   const [search, setSearch] = useState('');
+  const [moreOpen, setMoreOpen] = useState(false);
+  const location = useLocation();
 
   const allowedNav = useMemo(() => navItems.filter((item) => !item.superadminOnly || user?.role === 'superadmin'), [user?.role]);
+  const primaryNav = useMemo(() => MOBILE_PRIMARY.map((to) => allowedNav.find((item) => item.to === to)).filter(Boolean), [allowedNav]);
+  const moreGroups = useMemo(() => groupedNav(allowedNav), [allowedNav]);
+  const onPrimaryPage = primaryNav.some((item) => matchPath({ path: item.to, end: item.to === '/admin' || !!item.end }, location.pathname));
   const filteredNav = useMemo(() => allowedNav.filter((item) => !item.section && matchesSearch(search, item.label, item.to)), [allowedNav, search]);
 
   const goToFirstMatch = (event) => {
@@ -60,7 +80,7 @@ export default function AdminShell() {
         </div>
         <nav>
           {allowedNav.map((item, i) => {
-            if (item.section) return <div key={`sec-${i}`} className="nav-section-label">{item.section}</div>;
+            if (item.section) return item.mobileOnly ? null : <div key={`sec-${i}`} className="nav-section-label">{item.section}</div>;
             const Icon = item.icon;
             return <NavLink key={item.to} to={item.to} end={item.to === '/admin' || item.end}><Icon size={16} /> {item.label}</NavLink>;
           })}
@@ -75,16 +95,68 @@ export default function AdminShell() {
         </div>
       </aside>
       <nav className="mobile-bottom-nav">
-        {allowedNav.filter((item) => !item.section).slice(0, 5).map((item) => {
+        {primaryNav.map((item) => {
           const Icon = item.icon;
           return (
-            <NavLink key={item.to} to={item.to} end={item.to === '/admin' || item.end}>
+            <NavLink key={item.to} to={item.to} end={item.to === '/admin' || item.end} onClick={() => setMoreOpen(false)}>
               <Icon size={20} />
               <span>{item.label}</span>
             </NavLink>
           );
         })}
+        <button
+          className={`mobile-more-btn${moreOpen || !onPrimaryPage ? ' active' : ''}`}
+          onClick={() => setMoreOpen((open) => !open)}
+          aria-label="More navigation options"
+          aria-expanded={moreOpen}
+        >
+          <MoreHorizontal size={20} />
+          <span>More</span>
+        </button>
       </nav>
+
+      {moreOpen && (
+        <div className="mobile-more-overlay" onClick={() => setMoreOpen(false)}>
+          <div className="mobile-more-sheet" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Admin menu">
+            <div className="mobile-more-header">
+              <span className="text-sm" style={{ fontWeight: 600 }}>Admin menu</span>
+              <button className="icon-btn" onClick={() => setMoreOpen(false)} aria-label="Close menu">
+                <X size={18} />
+              </button>
+            </div>
+            {moreGroups.map((group) => (
+              <div key={group.title || 'main'}>
+                {group.title && <div className="mobile-more-section">{group.title}</div>}
+                <div className="mobile-more-grid mobile-more-grid--wrap">
+                  {group.items.map((item) => {
+                    const Icon = item.icon;
+                    return (
+                      <NavLink key={item.to} to={item.to} end={item.to === '/admin' || item.end} onClick={() => setMoreOpen(false)}>
+                        <span className="mobile-more-icon"><Icon size={22} /></span>
+                        <span className="mobile-more-label">{item.label}</span>
+                      </NavLink>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+            <div className="mobile-more-user">
+              <div className="avatar" style={{ flexShrink: 0 }}>{user?.full_name?.[0]}</div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div className="text-sm" style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user?.full_name}</div>
+                <div className="text-xs muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user?.email}</div>
+              </div>
+              <button
+                onClick={() => { logout(); nav('/login'); }}
+                className="btn btn-secondary btn-sm"
+                style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6 }}
+              >
+                <LogOut size={14} /> Sign out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="main">
         <div className="topbar" style={{ gap: 16 }}>
           <div className="text-sm muted">Admin Console · OnFleet Africa</div>

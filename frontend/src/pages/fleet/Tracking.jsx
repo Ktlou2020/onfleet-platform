@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import { MAP_TILES } from '../../utils/mapTiles';
+import { useIsMobile, useFitHeight, SHEET_HEIGHTS, SHEET_HALF_SHARE } from '../../utils/mobileMap';
+import SheetHandle, { sheetStyle } from '../../components/SheetHandle';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
@@ -8,7 +10,7 @@ import {
   Navigation, Gauge, Satellite, AlertCircle, Layers, Maximize2,
   Signal, SignalZero, SignalLow, SignalMedium, SignalHigh,
   Battery, BatteryLow, BatteryMedium, BatteryFull, X,
-  CheckCircle, Clock, Route, Activity,
+  CheckCircle, Clock, Route, Activity, List as ListIcon, Map as MapIcon,
 } from 'lucide-react';
 import api from '../../api';
 import toast from 'react-hot-toast';
@@ -97,6 +99,20 @@ function FitBounds({ devices }) {
   return null;
 }
 
+// On a phone, bring the chosen bike into the part of the map the bottom sheet
+// doesn't cover. Desktop keeps its current behaviour (no automatic move).
+function PanToSelected({ selected, bottomInset }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!selected?.lat || !selected?.lng) return;
+    const zoom = Math.max(map.getZoom(), 15);
+    const shift = (map.getSize().y * bottomInset) / 2;
+    map.flyTo(map.unproject(map.project([selected.lat, selected.lng], zoom).add([0, shift]), zoom), zoom, { duration: 1 });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.bike_id, map]);
+  return null;
+}
+
 function SpeedTrail({ trail }) {
   if (!trail || trail.length < 2) return null;
   const segments = [];
@@ -125,6 +141,14 @@ export default function FleetTracking() {
   const [detailTab, setDetailTab] = useState('controls'); // controls | history
   const [trailRange, setTrailRange] = useState('1h');
   const sseRef = useRef(null);
+
+  // Phone layout: map fills the page, the bike list opens over it, and the
+  // selected bike's details sit in a bottom sheet (same as admin GPS Tracking).
+  const isMobile = useIsMobile();
+  const [mobileView, setMobileView] = useState('map'); // 'map' | 'list'
+  const [sheetSize, setSheetSize] = useState('half');
+  const rootRef = useRef(null);
+  const mobileHeight = useFitHeight(rootRef, isMobile && !loading);
 
   const loadDevices = useCallback(async () => {
     const { data } = await api.get('/fleet/tracking/map');
@@ -181,6 +205,8 @@ export default function FleetTracking() {
 
   async function selectDevice(device) {
     setSelected(device);
+    setMobileView('map');
+    setSheetSize('half');
     setDetailTab('controls');
     await loadTrail(device.bike_id, trailRange);
     const devList = (await api.get('/fleet/tracking/devices')).data;
@@ -235,22 +261,32 @@ export default function FleetTracking() {
   }
 
   return (
-    <div style={{ display: 'flex', height: 'calc(100vh - 64px)', overflow: 'hidden', margin: '-24px' }}>
+    <div ref={rootRef} style={isMobile
+      ? { display: 'flex', height: mobileHeight || 'calc(100dvh - 140px)', overflow: 'hidden', margin: '-12px -12px 0', position: 'relative' }
+      : { display: 'flex', height: 'calc(100vh - 64px)', overflow: 'hidden', margin: '-24px' }}>
 
       {/* ── Left sidebar ── */}
-      <div style={{ width: 260, borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', overflow: 'hidden', flexShrink: 0 }}>
+      <div style={isMobile
+        ? { display: mobileView === 'list' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden', position: 'absolute', inset: 0, zIndex: 1200, background: 'var(--surface)' }
+        : { width: 260, borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', overflow: 'hidden', flexShrink: 0 }}>
         <div style={{ borderBottom: '1px solid var(--border)', display: 'flex' }}>
           <button
             onClick={() => setTab('devices')}
-            style={{ flex: 1, padding: '10px 0', fontSize: 12, fontWeight: 600, background: tab === 'devices' ? 'var(--primary)' : 'transparent', color: tab === 'devices' ? '#fff' : 'var(--muted)', border: 'none', cursor: 'pointer' }}>
+            style={{ flex: 1, padding: isMobile ? '13px 0' : '10px 0', fontSize: isMobile ? 13 : 12, fontWeight: 600, background: tab === 'devices' ? 'var(--primary)' : 'transparent', color: tab === 'devices' ? '#fff' : 'var(--muted)', border: 'none', cursor: 'pointer' }}>
             Bikes ({devices.length})
           </button>
           <button
             onClick={() => { setTab('alerts'); loadAlerts(); }}
-            style={{ flex: 1, padding: '10px 0', fontSize: 12, fontWeight: 600, background: tab === 'alerts' ? 'var(--primary)' : 'transparent', color: tab === 'alerts' ? '#fff' : 'var(--muted)', border: 'none', cursor: 'pointer', position: 'relative' }}>
+            style={{ flex: 1, padding: isMobile ? '13px 0' : '10px 0', fontSize: isMobile ? 13 : 12, fontWeight: 600, background: tab === 'alerts' ? 'var(--primary)' : 'transparent', color: tab === 'alerts' ? '#fff' : 'var(--muted)', border: 'none', cursor: 'pointer', position: 'relative' }}>
             Alerts
             {unackedCount > 0 && <span style={{ position: 'absolute', top: 6, right: 12, background: 'var(--danger)', color: '#fff', borderRadius: 10, fontSize: 10, fontWeight: 700, padding: '1px 5px' }}>{unackedCount}</span>}
           </button>
+          {isMobile && (
+            <button onClick={() => setMobileView('map')} aria-label="Show map"
+              style={{ padding: '10px 14px', fontSize: 12, fontWeight: 600, background: 'transparent', color: 'var(--fg)', border: 'none', borderLeft: '1px solid var(--border)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <MapIcon size={14} /> Map
+            </button>
+          )}
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto', padding: 8 }}>
@@ -310,9 +346,10 @@ export default function FleetTracking() {
 
       {/* ── Map ── */}
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-        <MapContainer center={[-26.2, 28.0]} zoom={10} style={{ height: '100%', width: '100%' }}>
+        <MapContainer center={[-26.2, 28.0]} zoom={10} zoomControl={!isMobile} style={{ height: '100%', width: '100%' }}>
           <TileLayer key={tileMode} {...TILES[tileMode]} />
           <FitBounds devices={devices} />
+          {isMobile && <PanToSelected selected={selected} bottomInset={SHEET_HALF_SHARE} />}
           <SpeedTrail trail={trail} />
           {devices.filter(d => d.lat && d.lng).map(d => (
             <Marker
@@ -331,6 +368,21 @@ export default function FleetTracking() {
             </Marker>
           ))}
         </MapContainer>
+
+        {/* Phone: open the bike list or alerts over the map */}
+        {isMobile && (
+          <div style={{ position: 'absolute', top: 10, left: 10, zIndex: 1000, display: 'flex', gap: 6 }}>
+            <button onClick={() => { setTab('devices'); setMobileView('list'); }}
+              style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, fontWeight: 600, color: 'var(--fg)', display: 'flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 10px rgba(0,0,0,.35)', cursor: 'pointer' }}>
+              <ListIcon size={15} /> Bikes <span style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 400 }}>{onlineCount}/{devices.length} online</span>
+            </button>
+            <button onClick={() => { setTab('alerts'); loadAlerts(); setMobileView('list'); }} aria-label="Alerts"
+              style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', color: 'var(--fg)', display: 'flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 10px rgba(0,0,0,.35)', cursor: 'pointer' }}>
+              <Bell size={15} />
+              {unackedCount > 0 && <span style={{ background: 'var(--danger)', color: '#fff', borderRadius: 10, fontSize: 10, fontWeight: 700, padding: '0 5px', lineHeight: '16px' }}>{unackedCount}</span>}
+            </button>
+          </div>
+        )}
 
         {/* Map controls */}
         <div style={{ position: 'absolute', top: 10, right: 10, zIndex: 1000, display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -351,9 +403,12 @@ export default function FleetTracking() {
 
       {/* ── Right detail panel ── */}
       {selected && (
-        <div style={{ width: 300, borderLeft: '1px solid var(--border)', display: 'flex', flexDirection: 'column', overflow: 'hidden', flexShrink: 0 }}>
+        <div style={isMobile
+          ? { ...sheetStyle(SHEET_HEIGHTS[sheetSize]), overflow: 'hidden' }
+          : { width: 300, borderLeft: '1px solid var(--border)', display: 'flex', flexDirection: 'column', overflow: 'hidden', flexShrink: 0 }}>
+          {isMobile && <SheetHandle size={sheetSize} onChange={setSheetSize} />}
           {/* Header */}
-          <div style={{ padding: '14px 14px 10px', borderBottom: '1px solid var(--border)' }}>
+          <div style={{ padding: isMobile ? '4px 14px 10px' : '14px 14px 10px', borderBottom: '1px solid var(--border)', background: isMobile ? 'var(--surface)' : undefined }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
                 <div style={{ fontWeight: 700, fontSize: 15 }}>{selected.registration}</div>

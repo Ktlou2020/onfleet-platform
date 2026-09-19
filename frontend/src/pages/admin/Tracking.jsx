@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, Circle, Polygon, CircleMarker, useMap, useMapEvents } from 'react-leaflet';
 import { MAP_TILES } from '../../utils/mapTiles';
+import { useIsMobile, useFitHeight, SHEET_HEIGHTS, SHEET_HALF_SHARE } from '../../utils/mobileMap';
+import SheetHandle, { sheetStyle } from '../../components/SheetHandle';
 import MarkerClusterGroup from 'react-leaflet-cluster';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -15,7 +17,7 @@ import {
   Battery, BatteryLow, BatteryMedium, BatteryFull, BatteryCharging,
   Signal, SignalZero, SignalLow, SignalMedium, SignalHigh, Satellite,
   Play, Pause, SkipBack, ChevronsRight, LayoutDashboard,
-  List as ListIcon, Map as MapIcon, ChevronUp, ChevronDown,
+  List as ListIcon, Map as MapIcon,
 } from 'lucide-react';
 import api from '../../api';
 import toast from 'react-hot-toast';
@@ -454,26 +456,13 @@ function parseCommandResponse(command, raw) {
 // opens over it, and the selected bike's details sit in a bottom sheet. The
 // desktop three-column layout squeezed a 272px list and a 380px panel onto a
 // 375px screen, leaving no map at all.
-const MOBILE_QUERY = '(max-width: 640px)';
-function useIsMobile() {
-  const [mobile, setMobile] = useState(() => typeof window !== 'undefined' && window.matchMedia(MOBILE_QUERY).matches);
-  useEffect(() => {
-    const mq = window.matchMedia(MOBILE_QUERY);
-    const onChange = () => setMobile(mq.matches);
-    mq.addEventListener('change', onChange);
-    return () => mq.removeEventListener('change', onChange);
-  }, []);
-  return mobile;
-}
-const SHEET_HEIGHTS = { peek: '148px', half: '52%', full: 'calc(100% - 52px)' };
-
 export default function Tracking({ readOnly = false }) {
   const isMobile = useIsMobile();
   const [mobileView, setMobileView] = useState('map');   // 'map' | 'list'
   const [sheetSize, setSheetSize] = useState('half');    // 'peek' | 'half' | 'full'
   const [showLegend, setShowLegend] = useState(false);
-  const [mobileHeight, setMobileHeight] = useState(null);
   const rootRef = useRef(null);
+  const mobileHeight = useFitHeight(rootRef, isMobile);
   const [searchParams, setSearchParams] = useSearchParams();
 
   // ── device list & selection ──────────────────────────────────────
@@ -591,23 +580,6 @@ export default function Tracking({ readOnly = false }) {
     el.style.overflow = 'hidden';
     return () => { el.style.padding = prev.padding; el.style.overflow = prev.overflow; };
   }, []);
-
-  // On a phone the page sits between the top bar and the fixed bottom menu, so
-  // its height is measured rather than assumed.
-  useEffect(() => {
-    if (!isMobile) { setMobileHeight(null); return; }
-    const measure = () => {
-      const el = rootRef.current;
-      if (!el) return;
-      const nav = document.querySelector('.mobile-bottom-nav');
-      const h = window.innerHeight - el.getBoundingClientRect().top - (nav?.offsetHeight || 0);
-      setMobileHeight(Math.max(320, Math.round(h)));
-    };
-    measure();
-    window.addEventListener('resize', measure);
-    window.addEventListener('orientationchange', measure);
-    return () => { window.removeEventListener('resize', measure); window.removeEventListener('orientationchange', measure); };
-  }, [isMobile]);
 
   // Replay controls sit above the sheet, so shrink it out of the way
   useEffect(() => { if (isMobile && replayTrip) setSheetSize('peek'); }, [isMobile, replayTrip]);
@@ -1795,7 +1767,7 @@ export default function Tracking({ readOnly = false }) {
 
         <MapContainer center={[-26.2, 28.0]} zoom={10} zoomControl={!isMobile} style={{ height: '100%', width: '100%', cursor: pickingCenter || drawingPolygon ? 'crosshair' : undefined }}>
           <TileLayer key={tileMode} {...TILES[tileMode]} />
-          {flyTo && <FlyTo position={flyTo} bottomInset={isMobile && selected ? 0.52 : 0} />}
+          {flyTo && <FlyTo position={flyTo} bottomInset={isMobile && selected ? SHEET_HALF_SHARE : 0} />}
           <FitBounds trigger={fitTrigger} positions={allPositions} />
           {pickingCenter && <MapClickHandler onMapClick={handleMapClick} />}
           {drawingPolygon && <PolygonDrawer onAddPoint={addPolygonPoint} onFinish={finishPolygon} />}
@@ -2037,19 +2009,10 @@ export default function Tracking({ readOnly = false }) {
       {/* ── Device detail panel ──────────────────────────────────────── */}
       {selectedDevice && (
         <div style={isMobile
-          ? { position: 'absolute', left: 0, right: 0, bottom: 0, height: SHEET_HEIGHTS[sheetSize], zIndex: 1150, display: 'flex', flexDirection: 'column', background: 'var(--surface-2)', overflowY: sheetSize === 'peek' ? 'hidden' : 'auto', borderTop: '1px solid var(--border)', borderRadius: '16px 16px 0 0', boxShadow: '0 -6px 24px rgba(0,0,0,.45)', transition: 'height .2s ease' }
+          ? { ...sheetStyle(SHEET_HEIGHTS[sheetSize]), overflowY: sheetSize === 'peek' ? 'hidden' : 'auto' }
           : { width: 380, minWidth: 380, display: 'flex', flexDirection: 'column', borderLeft: '1px solid var(--border)', background: 'var(--surface-2)', overflowY: 'auto' }}>
 
-          {/* Phone: grab bar cycles the sheet between peek, half and full */}
-          {isMobile && (
-            <button
-              onClick={() => setSheetSize(sz => (sz === 'peek' ? 'half' : sz === 'half' ? 'full' : 'peek'))}
-              aria-label={sheetSize === 'full' ? 'Shrink details' : 'Expand details'}
-              style={{ position: 'sticky', top: 0, zIndex: 3, background: 'var(--surface)', border: 'none', borderRadius: '16px 16px 0 0', padding: '6px 0 2px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, color: 'var(--muted)', cursor: 'pointer', flexShrink: 0 }}>
-              <span style={{ width: 40, height: 4, borderRadius: 2, background: 'var(--border)' }} />
-              {sheetSize === 'full' ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
-            </button>
-          )}
+          {isMobile && <SheetHandle size={sheetSize} onChange={setSheetSize} />}
 
           {/* Device header */}
           <div style={{ padding: isMobile ? '6px 14px 14px' : 14, borderBottom: '1px solid var(--border)', background: 'var(--surface)', position: 'sticky', top: isMobile ? 26 : 0, zIndex: 2 }}>

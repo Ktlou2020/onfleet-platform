@@ -405,6 +405,14 @@ function start() {
   const { runAutomatedDunning } = require('./dunningService');
   cron.schedule('0 7 * * *', () => runAutomatedDunning().catch(e => console.error('[dunning]', e.message)));
 
+  // Morning report to every admin — 08:00 in Johannesburg. The server clock is
+  // UTC, so the timezone is explicit rather than writing '0 6' and having it
+  // drift if the host's zone ever changes.
+  const { sendDailyAdminReport } = require('./dailyAdminReport');
+  cron.schedule('0 8 * * *', () => sendDailyAdminReport()
+    .then((r) => console.log('[daily-report]', r.skipped || `sent to ${r.sent.length}, failed ${r.failed.length}`))
+    .catch(e => console.error('[daily-report]', e.message)), { timezone: 'Africa/Johannesburg' });
+
   console.log('🕒 Scheduler started');
 }
 

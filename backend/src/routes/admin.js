@@ -485,6 +485,21 @@ router.post('/paystack-subscriptions/:code/cancel', superadminOnly, async (req, 
   }
 });
 
+// ---------- Daily report ----------
+// Daily admin report (sent by the scheduler at 08:00 SAST). Preview renders
+// today's report as it would go out now; send-to-me emails it only to the
+// caller, so it can be checked without mailing every admin a second time.
+router.get('/reports/daily/preview', async (req, res) => {
+  const { collectDailyReport, renderDailyReport } = require('../services/dailyAdminReport');
+  res.type('html').send(renderDailyReport(await collectDailyReport()));
+});
+
+router.post('/reports/daily/send-to-me', superadminOnly, async (req, res) => {
+  const { sendDailyAdminReport } = require('../services/dailyAdminReport');
+  const result = await sendDailyAdminReport({ force: true, to: { email: req.user.email } });
+  res.status(result.failed.length ? 502 : 200).json(result);
+});
+
 // ---------- Business KPIs ----------
 // The four numbers the dashboard was missing: whether riders are paying, how old
 // the unpaid money is, how many bikes have been lost, and how many on the road

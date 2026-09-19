@@ -151,19 +151,45 @@ router.get('/devices/:id', authRequired, trackingReadOnly, async (req, res) => {
   res.json({ ...d, device_status: status, connected: status !== 'offline' ? 1 : 0, ...(bike || {}) });
 });
 
+// Registering, relinking and removing trackers are audited. Before this there
+// was no record of who put a tracker on which bike, so a tracker found on the
+// wrong (or a paid-off) bike couldn't be traced back. Plates are stored with
+// the bike ids so the entry still reads correctly if a bike is renamed, and
+// the IMEI is in every entry so the audit log search finds it.
+async function bikePlate(bikeId) {
+  if (!bikeId) return null;
+  const { rows } = await pgDb.query('SELECT registration FROM bikes WHERE id=$1', [bikeId]);
+  return rows[0]?.registration || null;
+}
+
 router.post('/devices', authRequired, adminOnly, async (req, res) => {
   const { imei, model, bike_id, label } = req.body;
   if (!imei || String(imei).trim().length < 10) return res.status(400).json({ error: 'Valid IMEI required' });
   const validModels = ['FMB920', 'FMB965', 'FMC920', 'other'];
   if (model && !validModels.includes(model)) return res.status(400).json({ error: `Model must be one of: ${validModels.join(', ')}` });
+  const cleanImei = String(imei).trim();
   try {
     const { rows } = await pgDb.query(
       `INSERT INTO tracking_devices (imei, model, bike_id, label) VALUES ($1,$2,$3,$4) RETURNING id`,
-      [String(imei).trim(), model || 'other', bike_id || null, label || null]
+      [cleanImei, model || 'other', bike_id || null, label || null]
     );
+    await logAudit(req.user.id, 'tracking.device_register', 'tracking_devices', rows[0].id, {
+      imei: cleanImei, model: model || 'other', label: label || null,
+      bike_id: bike_id || null, registration: await bikePlate(bike_id),
+    }, req.ip);
     res.status(201).json({ id: rows[0].id });
   } catch (err) {
-    if (err.message.includes('unique') || err.code === '23505') return res.status(409).json({ error: 'IMEI already registered' });
+    if (err.message.includes('unique') || err.code === '23505') {
+      // A failed attempt is worth keeping too: it usually means someone tried
+      // to put a tracker that is already in use onto a second bike.
+      const { rows: existing } = await pgDb.query('SELECT id, bike_id FROM tracking_devices WHERE imei=$1', [cleanImei]);
+      await logAudit(req.user.id, 'tracking.device_register_rejected', 'tracking_devices', existing[0]?.id || null, {
+        imei: cleanImei, reason: 'IMEI already registered',
+        attempted_bike_id: bike_id || null, attempted_registration: await bikePlate(bike_id),
+        current_bike_id: existing[0]?.bike_id || null, current_registration: await bikePlate(existing[0]?.bike_id),
+      }, req.ip);
+      return res.status(409).json({ error: 'IMEI already registered' });
+    }
     throw err;
   }
 });
@@ -174,8 +200,9 @@ router.put('/devices/:id', authRequired, adminOnly, async (req, res) => {
   if (model !== undefined && !validModels.includes(model)) return res.status(400).json({ error: `Model must be one of: ${validModels.join(', ')}` });
   const speedLimit = req.body.speed_limit_kmh != null ? Number(req.body.speed_limit_kmh) : null;
   if (speedLimit !== null && (speedLimit < 10 || speedLimit > 300)) return res.status(400).json({ error: 'speed_limit_kmh must be 10–300' });
-  const { rows } = await pgDb.query('SELECT id FROM tracking_devices WHERE id=$1', [req.params.id]);
+  const { rows } = await pgDb.query('SELECT id, imei, model, bike_id, label, speed_limit_kmh FROM tracking_devices WHERE id=$1', [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Device not found' });
+  const before = rows[0];
   if ('bike_id' in req.body) {
     await pgDb.query(
       `UPDATE tracking_devices SET model=COALESCE($1,model), bike_id=$2, label=COALESCE($3,label), speed_limit_kmh=COALESCE($4,speed_limit_kmh), updated_at=NOW() WHERE id=$5`,
@@ -187,13 +214,37 @@ router.put('/devices/:id', authRequired, adminOnly, async (req, res) => {
       [model || null, label || null, speedLimit, rows[0].id]
     );
   }
+  const { rows: afterRows } = await pgDb.query('SELECT model, bike_id, label, speed_limit_kmh FROM tracking_devices WHERE id=$1', [before.id]);
+  const after = afterRows[0];
+  const changes = {};
+  for (const field of ['model', 'label', 'speed_limit_kmh']) {
+    if (String(before[field] ?? '') !== String(after[field] ?? '')) changes[field] = { from: before[field], to: after[field] };
+  }
+  const relinked = String(before.bike_id ?? '') !== String(after.bike_id ?? '');
+  if (relinked) {
+    const action = !after.bike_id ? 'tracking.device_unlink' : !before.bike_id ? 'tracking.device_link' : 'tracking.device_relink';
+    await logAudit(req.user.id, action, 'tracking_devices', before.id, {
+      imei: before.imei,
+      from_bike_id: before.bike_id, from_registration: await bikePlate(before.bike_id),
+      to_bike_id: after.bike_id, to_registration: await bikePlate(after.bike_id),
+      ...(Object.keys(changes).length ? { changes } : {}),
+    }, req.ip);
+  } else if (Object.keys(changes).length) {
+    await logAudit(req.user.id, 'tracking.device_update', 'tracking_devices', before.id, {
+      imei: before.imei, bike_id: after.bike_id, registration: await bikePlate(after.bike_id), changes,
+    }, req.ip);
+  }
   res.json({ ok: true });
 });
 
 router.delete('/devices/:id', authRequired, adminOnly, async (req, res) => {
-  const { rows } = await pgDb.query('SELECT id, imei FROM tracking_devices WHERE id=$1', [req.params.id]);
+  const { rows } = await pgDb.query('SELECT id, imei, model, bike_id, label FROM tracking_devices WHERE id=$1', [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Device not found' });
   await pgDb.query('DELETE FROM tracking_devices WHERE id=$1', [rows[0].id]);
+  await logAudit(req.user.id, 'tracking.device_delete', 'tracking_devices', rows[0].id, {
+    imei: rows[0].imei, model: rows[0].model, label: rows[0].label,
+    bike_id: rows[0].bike_id, registration: await bikePlate(rows[0].bike_id),
+  }, req.ip);
   res.json({ ok: true });
 });
 
@@ -435,10 +486,13 @@ router.get('/dashboard', authRequired, trackingReadOnly, async (req, res) => {
     { rows: stolenRows },
   ] = await Promise.all([
     pgDb.query('SELECT imei, last_seen_at, engine_cut_active FROM tracking_devices'),
+    // Coverage is measured against bikes out with riders. Paid-off, stolen and
+    // workshop bikes aren't expected to carry a tracker, and counting them made
+    // the fleet look 5% covered when the real gap is the active fleet.
     pgDb.query(`
       SELECT COUNT(*) AS total_in_service,
              COUNT(*) FILTER (WHERE id IN (SELECT bike_id FROM tracking_devices WHERE bike_id IS NOT NULL)) AS with_device
-      FROM bikes WHERE status NOT IN ('sold', 'written_off')
+      FROM bikes WHERE status = 'active'
     `),
     pgDb.query(
       `SELECT alert_type, COUNT(*) AS count FROM tracking_alerts WHERE created_at >= $1 GROUP BY alert_type ORDER BY count DESC`,

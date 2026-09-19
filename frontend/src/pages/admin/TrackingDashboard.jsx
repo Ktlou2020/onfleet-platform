@@ -84,7 +84,7 @@ export default function TrackingDashboard() {
       <div className="grid grid-4 mb-4">
         <Stat
           label="Tracker coverage" value={`${stats.fleet_coverage.with_device}/${stats.fleet_coverage.total_in_service}`}
-          delta={coverageGap > 0 ? `${coverageGap} bike${coverageGap === 1 ? '' : 's'} without a tracker` : 'Full fleet covered'}
+          delta={coverageGap > 0 ? `${coverageGap} active bike${coverageGap === 1 ? '' : 's'} without a tracker` : 'Every active bike covered'}
           icon={<Radio size={16} />} accent={coverageGap > 0 ? 'var(--danger)' : 'var(--success)'}
         />
         <Stat label="Online now" value={stats.devices.active} delta={`${stats.devices.total} devices total`} icon={<Zap size={16} />} accent="var(--success)" />

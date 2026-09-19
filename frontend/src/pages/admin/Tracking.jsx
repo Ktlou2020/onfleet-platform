@@ -15,6 +15,7 @@ import {
   Battery, BatteryLow, BatteryMedium, BatteryFull, BatteryCharging,
   Signal, SignalZero, SignalLow, SignalMedium, SignalHigh, Satellite,
   Play, Pause, SkipBack, ChevronsRight, LayoutDashboard,
+  List as ListIcon, Map as MapIcon, ChevronUp, ChevronDown,
 } from 'lucide-react';
 import api from '../../api';
 import toast from 'react-hot-toast';
@@ -114,9 +115,18 @@ function DeviceStatusIcon({ status, size = 12 }) {
   return <WifiOff size={size} color="#94a3b8" />;
 }
 
-function FlyTo({ position }) {
+// bottomInset: share of the map covered from below (the phone's detail sheet).
+// The bike is centred in the part still visible instead of behind the sheet.
+function FlyTo({ position, bottomInset = 0 }) {
   const map = useMap();
-  useEffect(() => { if (position) map.flyTo(position, 15, { duration: 1.2 }); }, [position, map]);
+  useEffect(() => {
+    if (!position) return;
+    if (!bottomInset) { map.flyTo(position, 15, { duration: 1.2 }); return; }
+    const shift = (map.getSize().y * bottomInset) / 2;
+    const target = map.unproject(map.project(position, 15).add([0, shift]), 15);
+    map.flyTo(target, 15, { duration: 1.2 });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [position, map]);
   return null;
 }
 
@@ -440,7 +450,30 @@ function parseCommandResponse(command, raw) {
   return null; // fall back to raw monospace display
 }
 
+// Phones get a different layout: the map fills the screen, the device list
+// opens over it, and the selected bike's details sit in a bottom sheet. The
+// desktop three-column layout squeezed a 272px list and a 380px panel onto a
+// 375px screen, leaving no map at all.
+const MOBILE_QUERY = '(max-width: 640px)';
+function useIsMobile() {
+  const [mobile, setMobile] = useState(() => typeof window !== 'undefined' && window.matchMedia(MOBILE_QUERY).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(MOBILE_QUERY);
+    const onChange = () => setMobile(mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  return mobile;
+}
+const SHEET_HEIGHTS = { peek: '148px', half: '52%', full: 'calc(100% - 52px)' };
+
 export default function Tracking({ readOnly = false }) {
+  const isMobile = useIsMobile();
+  const [mobileView, setMobileView] = useState('map');   // 'map' | 'list'
+  const [sheetSize, setSheetSize] = useState('half');    // 'peek' | 'half' | 'full'
+  const [showLegend, setShowLegend] = useState(false);
+  const [mobileHeight, setMobileHeight] = useState(null);
+  const rootRef = useRef(null);
   const [searchParams, setSearchParams] = useSearchParams();
 
   // ── device list & selection ──────────────────────────────────────
@@ -558,6 +591,26 @@ export default function Tracking({ readOnly = false }) {
     el.style.overflow = 'hidden';
     return () => { el.style.padding = prev.padding; el.style.overflow = prev.overflow; };
   }, []);
+
+  // On a phone the page sits between the top bar and the fixed bottom menu, so
+  // its height is measured rather than assumed.
+  useEffect(() => {
+    if (!isMobile) { setMobileHeight(null); return; }
+    const measure = () => {
+      const el = rootRef.current;
+      if (!el) return;
+      const nav = document.querySelector('.mobile-bottom-nav');
+      const h = window.innerHeight - el.getBoundingClientRect().top - (nav?.offsetHeight || 0);
+      setMobileHeight(Math.max(320, Math.round(h)));
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    window.addEventListener('orientationchange', measure);
+    return () => { window.removeEventListener('resize', measure); window.removeEventListener('orientationchange', measure); };
+  }, [isMobile]);
+
+  // Replay controls sit above the sheet, so shrink it out of the way
+  useEffect(() => { if (isMobile && replayTrip) setSheetSize('peek'); }, [isMobile, replayTrip]);
 
   // Request browser notification permission once (silently — no prompt if already decided)
   useEffect(() => {
@@ -966,6 +1019,8 @@ export default function Tracking({ readOnly = false }) {
     const version = ++selectVersionRef.current;
     const todayStr = todayInSAST();
     setSelected(device.id);
+    setMobileView('map');
+    setSheetSize('half');
     setDetailTab('activity');
     setTrips([]);
     setActivityStats(null);
@@ -1306,10 +1361,12 @@ export default function Tracking({ readOnly = false }) {
   // ── render ───────────────────────────────────────────────────────
 
   return (
-    <div style={{ display: 'flex', height: 'calc(100vh - 64px)', overflow: 'hidden' }}>
+    <div ref={rootRef} style={{ display: 'flex', height: isMobile && mobileHeight ? mobileHeight : 'calc(100vh - 64px)', overflow: 'hidden', position: 'relative' }}>
 
       {/* ── Left sidebar ──────────────────────────────────────────── */}
-      <div style={{ width: 272, minWidth: 272, display: 'flex', flexDirection: 'column', borderRight: '1px solid var(--border)', background: 'var(--surface-2)' }}>
+      <div style={isMobile
+        ? { display: mobileView === 'list' ? 'flex' : 'none', flexDirection: 'column', position: 'absolute', inset: 0, zIndex: 1200, background: 'var(--surface-2)' }
+        : { width: 272, minWidth: 272, display: 'flex', flexDirection: 'column', borderRight: '1px solid var(--border)', background: 'var(--surface-2)' }}>
 
         {/* Header */}
         <div style={{ padding: '10px 12px 0', background: 'var(--surface)', borderBottom: '1px solid var(--border)' }}>
@@ -1322,6 +1379,7 @@ export default function Tracking({ readOnly = false }) {
             <Link to="/admin/tracking/dashboard" className="btn btn-sm btn-secondary" title="Dashboard"><LayoutDashboard size={12} /></Link>
             <button className="btn btn-sm btn-secondary" title="Refresh" onClick={loadDevices}><RefreshCw size={12} /></button>
             {!readOnly && <button className="btn btn-sm btn-primary" onClick={() => setShowAdd(true)}><Plus size={12} /> Add</button>}
+            {isMobile && <button className="btn btn-sm btn-secondary" onClick={() => setMobileView('map')} aria-label="Show map"><MapIcon size={12} /> Map</button>}
           </div>
 
           {/* Tab bar */}
@@ -1340,7 +1398,7 @@ export default function Tracking({ readOnly = false }) {
                   if (tab === 'geofences') loadGeofences();
                 }}
                 style={{
-                  flex: 1, padding: '6px 2px 7px', fontSize: 11,
+                  flex: 1, padding: isMobile ? '10px 2px 11px' : '6px 2px 7px', fontSize: isMobile ? 13 : 11,
                   fontWeight: sideTab === tab ? 700 : 400,
                   color: sideTab === tab ? 'var(--primary)' : 'var(--muted)',
                   background: 'none', border: 'none',
@@ -1735,9 +1793,9 @@ export default function Tracking({ readOnly = false }) {
           </div>
         )}
 
-        <MapContainer center={[-26.2, 28.0]} zoom={10} style={{ height: '100%', width: '100%', cursor: pickingCenter || drawingPolygon ? 'crosshair' : undefined }}>
+        <MapContainer center={[-26.2, 28.0]} zoom={10} zoomControl={!isMobile} style={{ height: '100%', width: '100%', cursor: pickingCenter || drawingPolygon ? 'crosshair' : undefined }}>
           <TileLayer key={tileMode} {...TILES[tileMode]} />
-          {flyTo && <FlyTo position={flyTo} />}
+          {flyTo && <FlyTo position={flyTo} bottomInset={isMobile && selected ? 0.52 : 0} />}
           <FitBounds trigger={fitTrigger} positions={allPositions} />
           {pickingCenter && <MapClickHandler onMapClick={handleMapClick} />}
           {drawingPolygon && <PolygonDrawer onAddPoint={addPolygonPoint} onFinish={finishPolygon} />}
@@ -1841,6 +1899,29 @@ export default function Tracking({ readOnly = false }) {
           })()}
         </MapContainer>
 
+        {/* Phone: open the list, with live status and unread alerts at a glance */}
+        {isMobile && (
+          <div style={{ position: 'absolute', top: 10, left: 10, zIndex: 1000, display: 'flex', gap: 6, alignItems: 'center' }}>
+            <button className="btn btn-sm btn-secondary"
+              style={{ padding: '8px 12px', fontSize: 13, background: 'var(--surface)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 10px rgba(0,0,0,.35)' }}
+              onClick={() => setMobileView('list')}>
+              <ListIcon size={15} /> Devices
+              <span style={{ fontSize: 11, color: 'var(--muted)' }}>{devices.length}</span>
+            </button>
+            <button className="btn btn-sm btn-secondary"
+              style={{ padding: '8px 10px', fontSize: 13, background: 'var(--surface)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 10px rgba(0,0,0,.35)' }}
+              onClick={() => { setSideTab('alerts'); setAlertsUnread(0); loadAlerts(); setMobileView('list'); }}
+              aria-label="Alerts">
+              <Bell size={15} />
+              {alertsUnread ? <span style={{ background: '#ef4444', color: '#fff', borderRadius: 8, fontSize: 10, padding: '0 5px', fontWeight: 700, lineHeight: '16px' }}>{alertsUnread}</span> : null}
+            </button>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '6px 8px' }}>
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: sseOnline ? '#22c55e' : '#94a3b8' }} />
+              <span style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 600 }}>{sseOnline ? 'LIVE' : 'offline'}</span>
+            </span>
+          </div>
+        )}
+
         {/* Map controls */}
         <div style={{ position: 'absolute', top: 10, right: 10, zIndex: 1000, display: 'flex', flexDirection: 'column', gap: 6 }}>
           <button
@@ -1848,7 +1929,7 @@ export default function Tracking({ readOnly = false }) {
             style={{ fontSize: 11, padding: '6px 10px', background: 'var(--surface)', border: '1px solid var(--border)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', gap: 6 }}
             onClick={() => setTileMode(m => m === 'street' ? 'satellite' : 'street')}
           >
-            <Layers size={13} />{tileMode === 'street' ? 'Satellite' : 'Street'}
+            <Layers size={13} />{isMobile ? '' : (tileMode === 'street' ? 'Satellite' : 'Street')}
           </button>
           {allPositions.length > 0 && (
             <button
@@ -1856,13 +1937,21 @@ export default function Tracking({ readOnly = false }) {
               style={{ fontSize: 11, padding: '6px 10px', background: 'var(--surface)', border: '1px solid var(--border)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', gap: 6 }}
               onClick={() => setFitTrigger(t => t + 1)}
             >
-              <Maximize2 size={13} />Fit all
+              <Maximize2 size={13} />{isMobile ? '' : 'Fit all'}
+            </button>
+          )}
+          {isMobile && (
+            <button
+              className="btn btn-sm btn-secondary"
+              style={{ fontSize: 11, padding: '6px 10px', background: 'var(--surface)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 6 }}
+              onClick={() => setShowLegend(v => !v)} aria-expanded={showLegend}>
+              <Info size={13} />
             </button>
           )}
         </div>
 
         {/* Legend */}
-        <div style={{ position: 'absolute', bottom: 30, right: 10, zIndex: 1000, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 11, backdropFilter: 'blur(8px)' }}>
+        {(!isMobile || showLegend) && <div onClick={() => isMobile && setShowLegend(false)} style={{ position: 'absolute', ...(isMobile ? { top: 150, right: 10 } : { bottom: 30, right: 10 }), zIndex: 1000, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 11, backdropFilter: 'blur(8px)' }}>
           <div style={{ fontWeight: 700, color: 'var(--muted)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 6 }}>Markers</div>
           {[['#22c55e', 'Online · ignition on'], ['#f97316', 'Online · idle'], ['#6366f1', 'Sleeping'], ['#94a3b8', 'Offline']].map(([c, l]) => (
             <div key={l} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
@@ -1875,7 +1964,7 @@ export default function Tracking({ readOnly = false }) {
               <div style={{ width: 18, height: 3, background: c, flexShrink: 0, borderRadius: 2 }} />{l}
             </div>
           ))}
-        </div>
+        </div>}
 
         {/* ── Replay control bar ──────────────────────────────────── */}
         {replayTrip && (() => {
@@ -1887,7 +1976,7 @@ export default function Tracking({ readOnly = false }) {
           const kmh     = Math.round(cur?.speed_kmh || 0);
           return (
             <div style={{
-              position: 'absolute', bottom: 36, left: 12, right: 12, zIndex: 1100,
+              position: 'absolute', bottom: isMobile && selectedDevice ? `calc(${SHEET_HEIGHTS[sheetSize]} + 10px)` : 36, left: 12, right: 12, zIndex: 1100,
               background: 'rgba(15,15,20,.88)', backdropFilter: 'blur(10px)',
               borderRadius: 12, padding: '10px 14px', color: '#fff',
               boxShadow: '0 4px 24px rgba(0,0,0,.5)',
@@ -1947,10 +2036,23 @@ export default function Tracking({ readOnly = false }) {
 
       {/* ── Device detail panel ──────────────────────────────────────── */}
       {selectedDevice && (
-        <div style={{ width: 380, minWidth: 380, display: 'flex', flexDirection: 'column', borderLeft: '1px solid var(--border)', background: 'var(--surface-2)', overflowY: 'auto' }}>
+        <div style={isMobile
+          ? { position: 'absolute', left: 0, right: 0, bottom: 0, height: SHEET_HEIGHTS[sheetSize], zIndex: 1150, display: 'flex', flexDirection: 'column', background: 'var(--surface-2)', overflowY: sheetSize === 'peek' ? 'hidden' : 'auto', borderTop: '1px solid var(--border)', borderRadius: '16px 16px 0 0', boxShadow: '0 -6px 24px rgba(0,0,0,.45)', transition: 'height .2s ease' }
+          : { width: 380, minWidth: 380, display: 'flex', flexDirection: 'column', borderLeft: '1px solid var(--border)', background: 'var(--surface-2)', overflowY: 'auto' }}>
+
+          {/* Phone: grab bar cycles the sheet between peek, half and full */}
+          {isMobile && (
+            <button
+              onClick={() => setSheetSize(sz => (sz === 'peek' ? 'half' : sz === 'half' ? 'full' : 'peek'))}
+              aria-label={sheetSize === 'full' ? 'Shrink details' : 'Expand details'}
+              style={{ position: 'sticky', top: 0, zIndex: 3, background: 'var(--surface)', border: 'none', borderRadius: '16px 16px 0 0', padding: '6px 0 2px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, color: 'var(--muted)', cursor: 'pointer', flexShrink: 0 }}>
+              <span style={{ width: 40, height: 4, borderRadius: 2, background: 'var(--border)' }} />
+              {sheetSize === 'full' ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+            </button>
+          )}
 
           {/* Device header */}
-          <div style={{ padding: 14, borderBottom: '1px solid var(--border)', background: 'var(--surface)', position: 'sticky', top: 0, zIndex: 2 }}>
+          <div style={{ padding: isMobile ? '6px 14px 14px' : 14, borderBottom: '1px solid var(--border)', background: 'var(--surface)', position: 'sticky', top: isMobile ? 26 : 0, zIndex: 2 }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>

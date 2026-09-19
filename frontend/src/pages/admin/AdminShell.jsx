@@ -159,7 +159,7 @@ export default function AdminShell() {
       )}
       <div className="main">
         <div className="topbar" style={{ gap: 16 }}>
-          <div className="text-sm muted">Admin Console · OnFleet Africa</div>
+          <div className="text-sm muted hide-mobile">Admin Console · OnFleet Africa</div>
           <div style={{ position: 'relative', width: 'min(520px, 100%)', marginLeft: 'auto' }}>
             <SearchInput value={search} onChange={setSearch} placeholder="Search admin tabs and press Enter" inputProps={{ onKeyDown: goToFirstMatch }} style={{ width: '100%' }} />
             {!!search && (

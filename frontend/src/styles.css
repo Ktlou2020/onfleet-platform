@@ -1354,7 +1354,9 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   }
   .topbar .hide-mobile { display: none !important; }
   /* Search fills available topbar width on mobile */
-  .topbar > div[style*="position: relative"] { width: 100% !important; max-width: 100% !important; margin-left: 0 !important; }
+  .topbar > div[style*="position: relative"] { flex: 1 1 0; width: auto !important; min-width: 0; max-width: 100% !important; margin-left: 0 !important; }
+  /* Search and the bell share one row, so pages keep their height */
+  .topbar { flex-wrap: nowrap; align-items: center; }
 
   /* Notification bell: stack the two columns instead of side-by-side */
   .notification-bell-panel { width: 92vw; }

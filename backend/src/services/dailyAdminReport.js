@@ -173,14 +173,13 @@ async function agreementsSection(yesterday) {
      ), sched AS (
        SELECT agreement_id,
               COUNT(*) FILTER (WHERE due_date <= $1) AS weeks_due,
-              BOOL_OR(due_date = $1) AS due_yesterday,
-              MAX(due_date) AS final_due
+              BOOL_OR(due_date = $1) AS due_yesterday
          FROM payment_schedules WHERE status <> 'waived' GROUP BY agreement_id
      )
      SELECT a.id, a.agreement_no, a.weekly_amount, a.total_amount,
             u.full_name, u.phone, b.registration,
             COALESCE(p.paid, 0) AS paid, p.last_paid_at,
-            COALESCE(s.weeks_due, 0) AS weeks_due, COALESCE(s.due_yesterday, FALSE) AS due_yesterday, s.final_due
+            COALESCE(s.weeks_due, 0) AS weeks_due, COALESCE(s.due_yesterday, FALSE) AS due_yesterday
        FROM agreements a
        LEFT JOIN paid p ON p.agreement_id = a.id
        LEFT JOIN sched s ON s.agreement_id = a.id
@@ -199,7 +198,6 @@ async function agreementsSection(yesterday) {
       ...r, weekly, total, paid, arrears, remaining,
       weeksBehind: weekly > 0 ? Math.ceil(+(arrears / weekly).toFixed(6)) : 0,
       weeksLeft: weekly > 0 ? +(remaining / weekly).toFixed(1) : null,
-      final_due: isoDate(r.final_due),
     };
   });
 
@@ -317,7 +315,7 @@ function badge(text, colour) {
 function attentionItems(r) {
   const { tracking: t, agreements: a, operations: o } = r;
   const items = [];
-  if (t.alerts.openCritical) items.push([C.red, `${plural(t.alerts.openCritical, 'critical alert')} still open`, '/admin/tracking']);
+  if (t.alerts.openCritical) items.push([C.red, `${plural(t.alerts.openCritical, 'critical alert')} still unresolved (all time)`, '/admin/tracking']);
   if (a.missed.length) items.push([C.red, `${plural(a.missed.length, 'rider')} missed yesterday's payment (${rand(a.missedTotal)})`, '/admin/collections']);
   if (t.devices.silent.length) items.push([C.amber, `${plural(t.devices.silent.length, 'tracker')} silent for more than 24 hours`, '/admin/tracking/dashboard']);
   if (t.devices.neverConnected.length) items.push([C.amber, `${plural(t.devices.neverConnected.length, 'tracker')} registered but never connected`, '/admin/tracking/dashboard']);
@@ -427,8 +425,8 @@ function renderDailyReport(r) {
   if (!a.nearPayoff.length) {
     parts.push(p('No riders are within three weeks of paying off.', C.muted));
   } else {
-    const s = capped(a.nearPayoff, (x) => [rider(x), esc(x.registration || '—'), agreementLink(x), rand(x.remaining), x.weeksLeft, esc(x.final_due || '—')], 'riders');
-    parts.push(table(['Rider', 'Bike', 'Agreement', { label: 'Left to pay', right: true }, { label: 'Weeks left', right: true }, 'Final due'], s.rows, { note: s.note }));
+    const s = capped(a.nearPayoff, (x) => [rider(x), esc(x.registration || '—'), agreementLink(x), rand(x.remaining), x.weeksLeft, esc(x.last_paid_at ? sastTime(x.last_paid_at) : 'Never')], 'riders');
+    parts.push(table(['Rider', 'Bike', 'Agreement', { label: 'Left to pay', right: true }, { label: 'Weeks left', right: true }, 'Last paid'], s.rows, { note: s.note }));
   }
   if (a.paidInFull.length) {
     parts.push(h3('Paid in full but still open'));

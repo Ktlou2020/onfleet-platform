@@ -3363,7 +3363,9 @@ router.put('/tracking/alerts/:id/acknowledge', companyRoleAllowed(FLEET_RESOURCE
     [req.params.id, orgBikeIds]
   );
   if (!rows[0]) return res.status(404).json({ error: 'Alert not found' });
-  await pgDb.query('UPDATE tracking_alerts SET acknowledged_at=NOW() WHERE id=$1', [rows[0].id]);
+  await pgDb.query(
+    'UPDATE tracking_alerts SET acknowledged_at=COALESCE(acknowledged_at, NOW()), acknowledged_by=COALESCE(acknowledged_by, $2) WHERE id=$1',
+    [rows[0].id, req.user.id]);
   res.json({ ok: true });
 });
 
@@ -3372,8 +3374,8 @@ router.post('/tracking/alerts/acknowledge-all', companyRoleAllowed(FLEET_RESOURC
   const orgBikeIds = await getOrgBikeIds(req.user.organization_id);
   if (!orgBikeIds.length) return res.json({ ok: true });
   await pgDb.query(
-    'UPDATE tracking_alerts SET acknowledged_at=NOW() WHERE acknowledged_at IS NULL AND bike_id = ANY($1)',
-    [orgBikeIds]
+    'UPDATE tracking_alerts SET acknowledged_at=NOW(), acknowledged_by=$2 WHERE acknowledged_at IS NULL AND bike_id = ANY($1)',
+    [orgBikeIds, req.user.id]
   );
   res.json({ ok: true });
 });

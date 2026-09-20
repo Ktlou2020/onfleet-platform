@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { RefreshCw, BellOff, CheckCircle2, Eye, Wifi, WifiOff, X, User, Phone } from 'lucide-react';
 import api from '../api';
 import toast from 'react-hot-toast';
+import { ALERT_OUTCOMES, outcomeLabel, OUTCOME_COLORS } from '../lib/alertOutcomes';
 import { Modal } from '../components/ui';
 import { ALERT_LABELS, ALERT_COLORS, ALERT_SEVERITY, ALERT_FILTER_GROUPS, CRITICAL_ALERT_TYPES } from '../lib/alertMeta';
 
@@ -197,11 +198,13 @@ export default function ControlRoomAlerts() {
   const openResolve = (alert) => { setResolving(alert); setComment(''); };
   const closeResolve = () => { if (!submitting) { setResolving(null); setComment(''); } };
 
-  const submitResolve = useCallback(async () => {
-    if (!resolving || !comment.trim()) return;
+  // One tap on an outcome closes the alert. The note is optional — requiring
+  // typed text is why the queue was never cleared.
+  const submitResolve = useCallback(async (outcome) => {
+    if (!resolving || (!outcome && !comment.trim())) return;
     setSubmitting(true);
     try {
-      const { data } = await api.put(`/tracking/alerts/${resolving.id}/resolve`, { comment: comment.trim() });
+      const { data } = await api.put(`/tracking/alerts/${resolving.id}/resolve`, { outcome, comment: comment.trim() });
       setAlerts(prev => statusTab === 'open' ? prev.filter(a => a.id !== data.id) : prev.map(a => a.id === data.id ? data : a));
       setSelected(prev => { if (!prev.has(data.id)) return prev; const next = new Set(prev); next.delete(data.id); return next; });
       toast.success('Alert closed');
@@ -233,12 +236,12 @@ export default function ControlRoomAlerts() {
   const openBulkResolve = () => { if (selected.size) { setBulkComment(''); setBulkResolving(true); } };
   const closeBulkResolve = () => { if (!bulkSubmitting) { setBulkResolving(false); setBulkComment(''); } };
 
-  const submitBulkResolve = useCallback(async () => {
-    if (!selected.size || !bulkComment.trim()) return;
+  const submitBulkResolve = useCallback(async (outcome) => {
+    if (!selected.size || (!outcome && !bulkComment.trim())) return;
     setBulkSubmitting(true);
     try {
       const ids = [...selected];
-      const { data } = await api.post('/tracking/alerts/resolve-bulk', { ids, comment: bulkComment.trim() });
+      const { data } = await api.post('/tracking/alerts/resolve-bulk', { ids, outcome, comment: bulkComment.trim() });
       const resolvedIds = new Set((data.resolved || []).map(a => a.id));
       const resolvedMap = new Map((data.resolved || []).map(a => [a.id, a]));
       setAlerts(prev => statusTab === 'open'
@@ -381,12 +384,25 @@ export default function ControlRoomAlerts() {
                           )}
                         </>
                       )}
+                      {!isResolved && a.acknowledged_at && (
+                        <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 6 }}>
+                          Acknowledged by <strong>{a.acknowledged_by_name || 'Unknown'}</strong> · {fmtSASTtime(a.acknowledged_at)}
+                        </div>
+                      )}
                       {isResolved && (
                         <div style={{ marginTop: 8, padding: '8px 10px', background: 'var(--surface-2)', borderRadius: 6 }}>
                           <div style={{ fontSize: 10, color: 'var(--muted)' }}>
                             Closed by <strong>{a.resolved_by_name || 'Unknown'}</strong> · {fmtSASTtime(a.resolved_at)}
+                            {a.acknowledged_by_name && a.acknowledged_by_name !== a.resolved_by_name && <> · acknowledged by {a.acknowledged_by_name}</>}
                           </div>
-                          <div style={{ fontSize: 11, marginTop: 3 }}>{a.resolution_comment}</div>
+                          {a.resolution_outcome && (
+                            <div style={{ marginTop: 4 }}>
+                              <span style={{ display: 'inline-block', padding: '1px 8px', borderRadius: 9, fontSize: 10, fontWeight: 700, color: '#fff', background: OUTCOME_COLORS[a.resolution_outcome] || '#6b7280' }}>
+                                {outcomeLabel(a.resolution_outcome)}
+                              </span>
+                            </div>
+                          )}
+                          {a.resolution_comment && <div style={{ fontSize: 11, marginTop: 3 }}>{a.resolution_comment}</div>}
                         </div>
                       )}
                     </div>
@@ -434,19 +450,28 @@ export default function ControlRoomAlerts() {
             <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
               {alertMeta(resolving).label} · {resolving.bike_registration || `Bike #${resolving.bike_id}`} · {fmtSASTtime(resolving.created_at)}
             </div>
-            <label className="label" style={{ fontSize: 12 }}>Resolution comment (required, kept for audit)</label>
+            <label className="label" style={{ fontSize: 12 }}>What happened?</label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 14 }}>
+              {ALERT_OUTCOMES.map(o => (
+                <button key={o.id} className="btn btn-sm btn-secondary" title={o.hint} disabled={submitting}
+                  onClick={() => submitResolve(o.id)}
+                  style={{ justifyContent: 'flex-start', gap: 8, borderLeft: `3px solid ${OUTCOME_COLORS[o.id]}` }}>
+                  {o.label}
+                </button>
+              ))}
+            </div>
+            <label className="label" style={{ fontSize: 12 }}>Note (optional)</label>
             <textarea
-              autoFocus
-              rows={4}
+              rows={3}
               value={comment}
               onChange={e => setComment(e.target.value)}
-              placeholder="What happened and what action was taken?"
+              placeholder="Anything worth knowing later"
               style={{ width: '100%', resize: 'vertical' }}
             />
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
               <button className="btn btn-sm btn-secondary" onClick={closeResolve} disabled={submitting}>Cancel</button>
-              <button className="btn btn-sm btn-primary" onClick={submitResolve} disabled={submitting || !comment.trim()}>
-                {submitting ? 'Closing…' : 'Close alert'}
+              <button className="btn btn-sm btn-primary" onClick={() => submitResolve(null)} disabled={submitting || !comment.trim()}>
+                {submitting ? 'Closing…' : 'Close with note only'}
               </button>
             </div>
           </div>
@@ -458,19 +483,28 @@ export default function ControlRoomAlerts() {
           <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
             This comment will be recorded on all {selected.size} selected alert{selected.size !== 1 ? 's' : ''} for audit purposes.
           </div>
-          <label className="label" style={{ fontSize: 12 }}>Resolution comment (required, kept for audit)</label>
+          <label className="label" style={{ fontSize: 12 }}>What happened?</label>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 14 }}>
+            {ALERT_OUTCOMES.map(o => (
+              <button key={o.id} className="btn btn-sm btn-secondary" title={o.hint} disabled={bulkSubmitting}
+                onClick={() => submitBulkResolve(o.id)}
+                style={{ justifyContent: 'flex-start', gap: 8, borderLeft: `3px solid ${OUTCOME_COLORS[o.id]}` }}>
+                {o.label}
+              </button>
+            ))}
+          </div>
+          <label className="label" style={{ fontSize: 12 }}>Note (optional)</label>
           <textarea
-            autoFocus
-            rows={4}
+            rows={3}
             value={bulkComment}
             onChange={e => setBulkComment(e.target.value)}
-            placeholder="What happened and what action was taken?"
+            placeholder="Anything worth knowing later"
             style={{ width: '100%', resize: 'vertical' }}
           />
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
             <button className="btn btn-sm btn-secondary" onClick={closeBulkResolve} disabled={bulkSubmitting}>Cancel</button>
-            <button className="btn btn-sm btn-primary" onClick={submitBulkResolve} disabled={bulkSubmitting || !bulkComment.trim()}>
-              {bulkSubmitting ? 'Closing…' : `Close ${selected.size} alert${selected.size !== 1 ? 's' : ''}`}
+            <button className="btn btn-sm btn-primary" onClick={() => submitBulkResolve(null)} disabled={bulkSubmitting || !bulkComment.trim()}>
+              {bulkSubmitting ? 'Closing…' : `Close ${selected.size} with note only`}
             </button>
           </div>
         </div>

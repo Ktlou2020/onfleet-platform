@@ -13,6 +13,7 @@ const { cutCommandForModel, restoreCommandForModel } = require('../services/engi
 const gpsImportService = require('../services/gpsImportService');
 const asyncRouter = require('../utils/asyncRouter');
 const { ALL_ALERT_TYPES } = require('../constants/alertTypes');
+const { ALERT_OUTCOMES, ALERT_OUTCOME_IDS, REAL_OUTCOME_IDS } = require('../constants/alertOutcomes');
 const { notifyRiderEngineState } = require('../services/engineCutNotifier');
 
 const router = asyncRouter(express.Router());
@@ -740,29 +741,74 @@ router.get('/alerts', authRequired, trackingReadOnly, async (req, res) => {
   params.push(limit);
   sql += ` ORDER BY created_at DESC LIMIT $${params.length}`;
   const { rows } = await pgDb.query(sql, params);
-  const resolverIds = [...new Set(rows.map(a => a.resolved_by).filter(Boolean))];
-  const resolverMap = {};
-  if (resolverIds.length) {
-    const { rows: resolvers } = await pgDb.query('SELECT id, full_name FROM users WHERE id = ANY($1)', [resolverIds]);
-    for (const u of resolvers) resolverMap[u.id] = u.full_name;
+  const peopleIds = [...new Set(rows.flatMap(a => [a.resolved_by, a.acknowledged_by]).filter(Boolean))];
+  const nameMap = {};
+  if (peopleIds.length) {
+    const { rows: people } = await pgDb.query('SELECT id, full_name FROM users WHERE id = ANY($1)', [peopleIds]);
+    for (const u of people) nameMap[u.id] = u.full_name;
   }
   await attachBikeRegistrations(rows);
   for (const a of rows) {
-    a.resolved_by_name = a.resolved_by ? (resolverMap[a.resolved_by] || null) : null;
+    a.resolved_by_name = a.resolved_by ? (nameMap[a.resolved_by] || null) : null;
+    a.acknowledged_by_name = a.acknowledged_by ? (nameMap[a.acknowledged_by] || null) : null;
   }
   res.json(rows);
 });
 
+// Acknowledging stops a critical alert escalating, so it records who did it.
 router.put('/alerts/:id/acknowledge', authRequired, trackingReadOnly, async (req, res) => {
-  const { rows } = await pgDb.query('SELECT id FROM tracking_alerts WHERE id=$1', [req.params.id]);
+  const { rows } = await pgDb.query('SELECT id, alert_type, bike_id, acknowledged_at FROM tracking_alerts WHERE id=$1', [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Alert not found' });
-  await pgDb.query('UPDATE tracking_alerts SET acknowledged_at=NOW() WHERE id=$1', [rows[0].id]);
+  await pgDb.query(
+    'UPDATE tracking_alerts SET acknowledged_at=COALESCE(acknowledged_at, NOW()), acknowledged_by=COALESCE(acknowledged_by, $1) WHERE id=$2',
+    [req.user.id, rows[0].id]);
+  if (!rows[0].acknowledged_at) {
+    await logAudit(req.user.id, 'alert.acknowledge', 'tracking_alerts', rows[0].id,
+      { alert_type: rows[0].alert_type, bike_id: rows[0].bike_id }, req.ip);
+  }
   res.json({ ok: true });
 });
 
+// The outcome catalogue, plus how the last 30 days were closed. "Real" alerts
+// are the ones an outcome marks as a genuine event, which is the noise ratio
+// the control room is judged on.
+router.get('/alerts/outcomes', authRequired, trackingReadOnly, async (req, res) => {
+  const { rows } = await pgDb.query(
+    `SELECT resolution_outcome AS outcome, COUNT(*)::int AS count
+       FROM tracking_alerts
+      WHERE resolved_at >= NOW() - INTERVAL '30 days'
+      GROUP BY 1`);
+  const { rows: [totals] } = await pgDb.query(
+    `SELECT COUNT(*)::int AS raised,
+            COUNT(*) FILTER (WHERE resolved_at IS NOT NULL)::int AS closed,
+            COUNT(*) FILTER (WHERE resolution_outcome = ANY($1))::int AS real_events
+       FROM tracking_alerts WHERE created_at >= NOW() - INTERVAL '30 days'`, [REAL_OUTCOME_IDS]);
+  const { rows: [open] } = await pgDb.query(
+    `SELECT COUNT(*)::int AS open,
+            COUNT(*) FILTER (WHERE severity IN ('critical','high'))::int AS open_serious,
+            MIN(created_at) AS oldest
+       FROM tracking_alerts WHERE resolved_at IS NULL`);
+  res.json({ outcomes: ALERT_OUTCOMES, counts: rows, totals, open });
+});
+
+// Closing takes an outcome from the catalogue, a comment, or both. Demanding
+// a typed comment is why nothing was being closed at all; a tap on "False
+// alarm" is a better record than an empty queue.
+function readOutcome(body) {
+  const outcome = body.outcome === undefined || body.outcome === null || body.outcome === '' ? null : String(body.outcome).trim();
+  if (outcome && !ALERT_OUTCOME_IDS.includes(outcome)) {
+    return { error: `Unknown outcome "${outcome}". Choose one of: ${ALERT_OUTCOME_IDS.join(', ')}` };
+  }
+  const comment = String(body.comment || '').trim();
+  if (!outcome && !comment) return { error: 'Choose an outcome, or write a comment, to close an alert' };
+  if (comment.length > 1000) return { error: 'Keep the comment under 1000 characters' };
+  return { outcome, comment: comment || null };
+}
+
 router.put('/alerts/:id/resolve', authRequired, trackingReadOnly, async (req, res) => {
-  const comment = String(req.body.comment || '').trim();
-  if (!comment) return res.status(400).json({ error: 'A comment is required to close an alert' });
+  const parsed = readOutcome(req.body || {});
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  const { outcome, comment } = parsed;
   const { rows } = await pgDb.query('SELECT * FROM tracking_alerts WHERE id=$1', [req.params.id]);
   const alert = rows[0];
   if (!alert) return res.status(404).json({ error: 'Alert not found' });
@@ -770,41 +816,44 @@ router.put('/alerts/:id/resolve', authRequired, trackingReadOnly, async (req, re
 
   const { rows: updated } = await pgDb.query(
     `UPDATE tracking_alerts
-     SET resolved_by=$1, resolved_at=NOW(), resolution_comment=$2, acknowledged_at=COALESCE(acknowledged_at, NOW())
-     WHERE id=$3 RETURNING *`,
-    [req.user.id, comment, alert.id]
+     SET resolved_by=$1, resolved_at=NOW(), resolution_comment=$2, resolution_outcome=$3,
+         acknowledged_at=COALESCE(acknowledged_at, NOW()), acknowledged_by=COALESCE(acknowledged_by, $1)
+     WHERE id=$4 RETURNING *`,
+    [req.user.id, comment, outcome, alert.id]
   );
   const resolved = updated[0];
   await attachBikeRegistrations([resolved]);
   resolved.resolved_by_name = req.user.full_name;
 
   await logAudit(req.user.id, 'alert.resolve', 'tracking_alerts', resolved.id,
-    { alert_type: resolved.alert_type, bike_id: resolved.bike_id, comment }, req.ip);
+    { alert_type: resolved.alert_type, bike_id: resolved.bike_id, outcome, comment }, req.ip);
   trackingEvents.emit('alert_resolved', resolved);
 
   res.json(resolved);
 });
 
 router.post('/alerts/resolve-bulk', authRequired, trackingReadOnly, async (req, res) => {
-  const comment = String(req.body.comment || '').trim();
-  if (!comment) return res.status(400).json({ error: 'A comment is required to close alerts' });
+  const parsed = readOutcome(req.body || {});
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  const { outcome, comment } = parsed;
   const ids = Array.isArray(req.body.ids) ? [...new Set(req.body.ids.map(Number).filter(Number.isFinite))] : [];
   if (!ids.length) return res.status(400).json({ error: 'No alerts selected' });
   if (ids.length > 500) return res.status(400).json({ error: 'Too many alerts selected (max 500)' });
 
   const { rows: resolved } = await pgDb.query(
     `UPDATE tracking_alerts
-     SET resolved_by=$1, resolved_at=NOW(), resolution_comment=$2, acknowledged_at=COALESCE(acknowledged_at, NOW())
-     WHERE id = ANY($3) AND resolved_at IS NULL
+     SET resolved_by=$1, resolved_at=NOW(), resolution_comment=$2, resolution_outcome=$3,
+         acknowledged_at=COALESCE(acknowledged_at, NOW()), acknowledged_by=COALESCE(acknowledged_by, $1)
+     WHERE id = ANY($4) AND resolved_at IS NULL
      RETURNING *`,
-    [req.user.id, comment, ids]
+    [req.user.id, comment, outcome, ids]
   );
 
   await attachBikeRegistrations(resolved);
   for (const alert of resolved) {
     alert.resolved_by_name = req.user.full_name;
     await logAudit(req.user.id, 'alert.resolve', 'tracking_alerts', alert.id,
-      { alert_type: alert.alert_type, bike_id: alert.bike_id, comment, bulk: true }, req.ip);
+      { alert_type: alert.alert_type, bike_id: alert.bike_id, outcome, comment, bulk: true }, req.ip);
     trackingEvents.emit('alert_resolved', alert);
   }
 
@@ -845,12 +894,14 @@ router.post('/bikes/:bikeId/notes', authRequired, trackingReadOnly, async (req, 
 
 router.post('/alerts/acknowledge-all', authRequired, trackingReadOnly, async (req, res) => {
   const bikeId = req.body.bike_id ? Number(req.body.bike_id) : null;
-  if (bikeId) {
-    await pgDb.query('UPDATE tracking_alerts SET acknowledged_at=NOW() WHERE bike_id=$1 AND acknowledged_at IS NULL', [bikeId]);
-  } else {
-    await pgDb.query('UPDATE tracking_alerts SET acknowledged_at=NOW() WHERE acknowledged_at IS NULL');
-  }
-  res.json({ ok: true });
+  const sql = 'UPDATE tracking_alerts SET acknowledged_at=NOW(), acknowledged_by=$1 WHERE acknowledged_at IS NULL';
+  const { rowCount } = bikeId
+    ? await pgDb.query(`${sql} AND bike_id=$2`, [req.user.id, bikeId])
+    : await pgDb.query(sql, [req.user.id]);
+  // Clearing the whole queue in one click is worth a record of who did it.
+  await logAudit(req.user.id, 'alert.acknowledge_all', 'tracking_alerts', bikeId || null,
+    { bike_id: bikeId, acknowledged: rowCount }, req.ip);
+  res.json({ ok: true, acknowledged: rowCount });
 });
 
 // ---------- Alert settings ----------

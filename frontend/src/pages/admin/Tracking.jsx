@@ -461,6 +461,9 @@ export default function Tracking({ readOnly = false }) {
   const [mobileView, setMobileView] = useState('map');   // 'map' | 'list'
   const [sheetSize, setSheetSize] = useState('half');    // 'peek' | 'half' | 'full'
   const [showLegend, setShowLegend] = useState(false);
+  // Install check: proof that a tracker really works, run at the bike
+  const [installCheck, setInstallCheck] = useState(null);
+  const [installBusy, setInstallBusy] = useState(false);
   const rootRef = useRef(null);
   const mobileHeight = useFitHeight(rootRef, isMobile);
   const [searchParams, setSearchParams] = useSearchParams();
@@ -991,6 +994,7 @@ export default function Tracking({ readOnly = false }) {
     const version = ++selectVersionRef.current;
     const todayStr = todayInSAST();
     setSelected(device.id);
+    setInstallCheck(null);
     setMobileView('map');
     setSheetSize('half');
     setDetailTab('activity');
@@ -1329,6 +1333,30 @@ export default function Tracking({ readOnly = false }) {
       <div style={{ color: 'var(--muted)', fontSize: 14 }}>Loading tracking…</div>
     </div>
   );
+
+  const runInstallCheck = useCallback(async (deviceId) => {
+    setInstallBusy(true);
+    try {
+      const { data } = await api.get(`/tracking/devices/${deviceId}/install-check`);
+      setInstallCheck(data);
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Could not run the install check');
+    } finally { setInstallBusy(false); }
+  }, []);
+
+  const commissionDevice = useCallback(async (deviceId, ready) => {
+    const overrideReason = ready ? null : window.prompt('Some checks have not passed. Sign off anyway? Say why:');
+    if (!ready && !overrideReason) return;
+    setInstallBusy(true);
+    try {
+      await api.post(`/tracking/devices/${deviceId}/commission`, { override_reason: overrideReason });
+      toast.success('Install signed off');
+      await runInstallCheck(deviceId);
+      loadDevices();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Could not sign off this install');
+    } finally { setInstallBusy(false); }
+  }, [runInstallCheck, loadDevices]);
 
   // ── render ───────────────────────────────────────────────────────
 
@@ -2477,6 +2505,42 @@ export default function Tracking({ readOnly = false }) {
 
           {/* ── Info tab ─────────────────────────────────────────── */}
           {detailTab === 'info' && <>
+
+            {/* Install check — proof the tracker is really installed */}
+            <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', flex: 1 }}>Install check</div>
+                <button className="btn btn-sm btn-secondary" style={{ fontSize: 11 }} disabled={installBusy}
+                  onClick={() => runInstallCheck(selectedDevice.id)}>{installBusy ? 'Checking…' : 'Run check'}</button>
+              </div>
+              {!installCheck && <div style={{ fontSize: 11, color: 'var(--muted)' }}>Run this at the bike to prove the tracker is powered, fixed on satellites and reporting.</div>}
+              {installCheck && (
+                <>
+                  {installCheck.checks.map(c => (
+                    <div key={c.id} style={{ display: 'flex', gap: 6, alignItems: 'flex-start', marginBottom: 4 }}>
+                      {c.passed
+                        ? <CheckCircle size={12} style={{ color: '#22c55e', flexShrink: 0, marginTop: 2 }} />
+                        : <XCircle size={12} style={{ color: c.required ? '#ef4444' : 'var(--muted)', flexShrink: 0, marginTop: 2 }} />}
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 12 }}>{c.label}{!c.required && <span style={{ color: 'var(--muted)' }}> (optional)</span>}</div>
+                        <div style={{ fontSize: 10, color: 'var(--muted)' }}>{c.detail}</div>
+                      </div>
+                    </div>
+                  ))}
+                  <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {installCheck.commissioning?.commissioned_at
+                      ? <span style={{ fontSize: 11, color: '#22c55e' }}>Signed off {fmtSAST(installCheck.commissioning.commissioned_at)}</span>
+                      : <span style={{ fontSize: 11, color: 'var(--muted)' }}>Not signed off yet</span>}
+                    {!readOnly && (
+                      <button className="btn btn-sm btn-primary" style={{ fontSize: 11, marginLeft: 'auto' }} disabled={installBusy}
+                        onClick={() => commissionDevice(selectedDevice.id, installCheck.ready)}>
+                        {installCheck.commissioning?.commissioned_at ? 'Re-sign off' : 'Sign off install'}
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
 
             {/* Location */}
             {selectedMapDevice?.lat && (

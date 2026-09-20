@@ -861,6 +861,33 @@ router.post('/alerts/resolve-bulk', authRequired, trackingReadOnly, async (req, 
   res.json({ resolved, resolved_count: resolved.length, skipped_count: skipped });
 });
 
+// ---------- Tracker health and installs ----------
+// What the tracking platform is actually delivering, and proof that each
+// tracker was really installed rather than just registered.
+
+const deviceCommissioning = require('../services/deviceCommissioning');
+
+router.get('/device-health', authRequired, trackingReadOnly, async (req, res) => {
+  res.json(await deviceCommissioning.fleetHealth());
+});
+
+router.get('/devices/:id/install-check', authRequired, trackingReadOnly, async (req, res) => {
+  const result = await deviceCommissioning.runChecks(Number(req.params.id));
+  if (!result) return res.status(404).json({ error: 'Device not found' });
+  res.json(result);
+});
+
+router.post('/devices/:id/commission', authRequired, adminOnly, async (req, res) => {
+  const deviceId = Number(req.params.id);
+  const overrideReason = String(req.body.override_reason || '').trim() || null;
+  const notes = String(req.body.notes || '').trim() || null;
+  const result = await deviceCommissioning.commission({ deviceId, actorId: req.user.id, notes, overrideReason });
+  if (result.error) return res.status(result.checks ? 409 : 404).json(result);
+  await logAudit(req.user.id, 'tracking.device_commissioned', 'tracking_devices', deviceId,
+    { override_reason: overrideReason, notes }, req.ip);
+  res.json(result);
+});
+
 // ---------- Theft cases ----------
 // The playbook for a bike that may be being taken: a case opens itself on a
 // tamper, towing, movement, night-movement, power-disconnect or critical

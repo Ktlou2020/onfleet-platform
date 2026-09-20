@@ -30,20 +30,23 @@ export default function TrackingDashboard() {
   const [stats, setStats] = useState(null);
   const [devices, setDevices] = useState([]);
   const [mapDevices, setMapDevices] = useState([]);
+  const [health, setHealth] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async (isRefresh) => {
     if (isRefresh) setRefreshing(true);
     try {
-      const [statsRes, devicesRes, mapRes] = await Promise.all([
+      const [statsRes, devicesRes, mapRes, healthRes] = await Promise.all([
         api.get('/tracking/dashboard'),
         api.get('/tracking/devices'),
         api.get('/tracking/map'),
+        api.get('/tracking/device-health'),
       ]);
       setStats(statsRes.data);
       setDevices(devicesRes.data);
       setMapDevices(mapRes.data);
+      setHealth(healthRes.data.summary);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -91,6 +94,23 @@ export default function TrackingDashboard() {
         <Stat label="Sleeping" value={stats.devices.sleeping} delta="Idle 10min–1hr" icon={<Radio size={16} />} accent="var(--warn)" />
         <Stat label="Offline" value={stats.devices.offline} delta={`${stats.devices.never_connected} never connected`} icon={<WifiOff size={16} />} accent={stats.devices.offline ? 'var(--danger)' : 'var(--success)'} />
       </div>
+
+      {health && (
+        <div className="grid grid-4 mb-4">
+          <Stat label="Trackers reporting" value={`${health.reporting}/${health.total}`}
+            delta={health.reporting_pct == null ? '—' : `${health.reporting_pct}% reported in the last hour`}
+            icon={<Radio size={16} />} accent={health.reporting_pct >= 90 ? 'var(--success)' : 'var(--warn)'} />
+          <Stat label="Gone quiet" value={health.silent + health.quiet}
+            delta={`${health.silent} silent over 24h`} icon={<WifiOff size={16} />}
+            accent={health.silent ? 'var(--danger)' : undefined} />
+          <Stat label="Never connected" value={health.never_connected}
+            delta="Registered but never reached the server" icon={<WifiOff size={16} />}
+            accent={health.never_connected ? 'var(--danger)' : 'var(--success)'} />
+          <Stat label="Installs not signed off" value={health.uncommissioned}
+            delta={health.awaiting_install_proof ? `${health.awaiting_install_proof} overdue by more than a day` : 'All recent'}
+            icon={<ShieldAlert size={16} />} accent={health.awaiting_install_proof ? 'var(--warn)' : undefined} />
+        </div>
+      )}
 
       <div className="grid grid-4 mb-4">
         <Stat label="Open alerts" value={stats.alerts.open_total} delta={`${stats.alerts.unacknowledged} unacknowledged`} icon={<Bell size={16} />} accent={stats.alerts.open_total ? 'var(--warn)' : 'var(--success)'} />

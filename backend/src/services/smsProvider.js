@@ -38,15 +38,23 @@ function detectSmsProvider() {
   return { name: pick, configured };
 }
 
-async function sendWithTwilio(to, body, { whatsapp = false } = {}) {
+async function sendWithTwilio(to, body, { whatsapp = false, contentSid = null, variables = null } = {}) {
   const sid = read('TWILIO_ACCOUNT_SID');
   const from = whatsapp ? read('TWILIO_WHATSAPP_FROM') : read('TWILIO_SMS_FROM');
   if (!from) return { delivered: false, reason: 'no_provider' };
   const params = new URLSearchParams({
     To: whatsapp ? `whatsapp:${to}` : to,
     From: whatsapp && !from.startsWith('whatsapp:') ? `whatsapp:${from}` : from,
-    Body: body,
   });
+  // WhatsApp only lets a business start a conversation with a template Meta has
+  // approved, so a template id wins over free text. Free text still works
+  // inside the 24-hour window after someone messages us, and on the sandbox.
+  if (contentSid) {
+    params.set('ContentSid', contentSid);
+    if (variables && Object.keys(variables).length) params.set('ContentVariables', JSON.stringify(variables));
+  } else {
+    params.set('Body', body);
+  }
   const res = await axios.post(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, params, {
     auth: { username: sid, password: read('TWILIO_AUTH_TOKEN') },
     timeout: 15000,
@@ -68,25 +76,33 @@ async function sendWithClickatell(to, body) {
   return { delivered: true, provider: 'clickatell', id: res.data?.messages?.[0]?.apiMessageId || null };
 }
 
-async function sendSms(to, body, { whatsapp = false } = {}) {
+// WhatsApp is configured separately from SMS: the same Twilio account can carry
+// one and not the other, and a missing WhatsApp sender should not look like a
+// missing SMS provider.
+function detectWhatsAppProvider() {
+  const twilio = !!(read('TWILIO_ACCOUNT_SID') && read('TWILIO_AUTH_TOKEN') && read('TWILIO_WHATSAPP_FROM'));
+  return { name: twilio ? 'twilio' : 'none', configured: twilio };
+}
+
+async function sendSms(to, body, { whatsapp = false, contentSid = null, variables = null } = {}) {
   const number = toE164(to);
   if (!number) return { delivered: false, reason: 'bad_number' };
-  const provider = detectSmsProvider();
+  const provider = whatsapp ? detectWhatsAppProvider() : detectSmsProvider();
   if (!provider.configured) {
-    console.log(`[SMS→${number}] ${body}`);
+    console.log(`[${whatsapp ? 'WhatsApp' : 'SMS'}→${number}] ${body}`);
     return { delivered: false, reason: 'no_provider' };
   }
   try {
-    if (provider.name === 'twilio') return await sendWithTwilio(number, body, { whatsapp });
+    if (provider.name === 'twilio') return await sendWithTwilio(number, body, { whatsapp, contentSid, variables });
     if (whatsapp) return { delivered: false, reason: 'no_provider' }; // only Twilio carries WhatsApp today
     if (provider.name === 'brevo') return await sendWithBrevo(number, body);
     if (provider.name === 'clickatell') return await sendWithClickatell(number, body);
     return { delivered: false, reason: 'no_provider' };
   } catch (error) {
     const detail = error.response?.data?.message || error.response?.status || error.message;
-    console.error(`[SMS→${number}] failed:`, detail);
+    console.error(`[${whatsapp ? 'WhatsApp' : 'SMS'}→${number}] failed:`, detail);
     return { delivered: false, reason: 'send_failed', error: String(detail) };
   }
 }
 
-module.exports = { sendSms, detectSmsProvider, toE164 };
+module.exports = { sendSms, detectSmsProvider, detectWhatsAppProvider, toE164 };

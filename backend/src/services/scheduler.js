@@ -217,7 +217,15 @@ async function runDailyReminders() {
     if (await notificationExistsToday(d.user_id, 'payment_reminder', title)) continue;
     const msg = `Hi ${d.full_name.split(' ')[0]}, your weekly OnFleet payment of R${Number(d.amount_due).toFixed(2)} for agreement ${d.agreement_no} is due tomorrow (${d.due_date}). Pay via the app to keep your rent-to-own on track.`;
     try {
-      await sendNotification({ userId: d.user_id, channel: 'whatsapp', type: 'payment_reminder', title, message: msg });
+      await sendNotification({
+        userId: d.user_id, channel: 'whatsapp', type: 'payment_reminder', title, message: msg,
+        templateValues: {
+          first_name: d.full_name.split(' ')[0],
+          amount: Number(d.amount_due).toFixed(2),
+          agreement_no: d.agreement_no,
+          due_date: d.due_date,
+        },
+      });
       await sendNotification({ userId: d.user_id, channel: 'sms', type: 'payment_reminder', message: msg });
       await sendNotification({ userId: d.user_id, channel: 'email', type: 'payment_reminder', title: 'OnFleet payment due tomorrow', message: msg });
     } catch (err) {
@@ -255,7 +263,15 @@ async function runDailyReminders() {
     const weeksText = entry.overdueWeeks > 1 ? ` (${entry.overdueWeeks} weeks overdue)` : '';
     const msg = `URGENT: OnFleet payment of R${owed}${weeksText} for ${entry.agreement_no} is overdue. Please pay immediately to avoid agreement default.`;
     try {
-      await sendNotification({ userId: entry.user_id, channel: 'whatsapp', type: 'payment_overdue', title, message: msg });
+      await sendNotification({
+        userId: entry.user_id, channel: 'whatsapp', type: 'payment_overdue', title, message: msg,
+        templateValues: {
+          first_name: entry.full_name.split(' ')[0],
+          amount: owed,
+          agreement_no: entry.agreement_no,
+          weeks_note: entry.overdueWeeks > 1 ? ` (${entry.overdueWeeks} weeks)` : '',
+        },
+      });
     } catch (err) {
       console.error(`[daily-reminder] overdue notify failed for ${entry.agreement_no}:`, err.message);
     }

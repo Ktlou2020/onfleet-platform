@@ -10,7 +10,8 @@
 // of head start on a stolen bike. Escalation now repeats in rounds until
 // somebody acknowledges, and each round reaches further:
 //
-//   round 1 (5 min)   — email and push to the recipients, SMS to the duty phone
+//   round 1 (5 min)   — email and push to the recipients, WhatsApp (or SMS if
+//                       WhatsApp can't carry it) to the duty phone
 //   round 2 (15 min)  — the same, and the control room's webhook fires again
 //   round 3 (30 min)  — the same
 //   round 4 (60 min)  — the same, then it stops chasing
@@ -131,12 +132,29 @@ async function escalateOnce(alert) {
     ...extraDutyPhones(),
     ...recipients.map((u) => u.phone).filter(Boolean),
   ].map((p) => toE164(p)).filter(Boolean))];
-  const provider = detectSmsProvider();
+  // WhatsApp first — it is read faster and costs less than an SMS — then SMS
+  // for the same number if WhatsApp couldn't carry it.
+  const { templateFor, templateVariables } = require('../constants/whatsappTemplates');
+  const template = templateFor('alert_escalation');
+  const templateValues = {
+    round: `${round}/${MAX_ROUNDS}`, alert: label, bike: reg, minutes: String(minutesAgo),
+  };
+  const smsProviderName = detectSmsProvider().name;
   for (const phone of phones) {
+    const viaWhatsApp = await sendSms(phone, sms, {
+      whatsapp: true,
+      contentSid: template?.sid || null,
+      variables: template ? templateVariables('alert_escalation', templateValues) : null,
+    });
+    await record(alert.id, round, 'whatsapp', phone,
+      viaWhatsApp.delivered ? 'sent' : viaWhatsApp.reason === 'no_provider' ? 'skipped' : 'failed',
+      viaWhatsApp.delivered ? 'twilio' : (viaWhatsApp.error || viaWhatsApp.reason));
+    if (viaWhatsApp.delivered) continue;
+
     const outcome = await sendSms(phone, sms);
     await record(alert.id, round, 'sms', phone,
       outcome.delivered ? 'sent' : outcome.reason === 'no_provider' ? 'skipped' : 'failed',
-      outcome.delivered ? provider.name : (outcome.error || outcome.reason));
+      outcome.delivered ? smsProviderName : (outcome.error || outcome.reason));
   }
 
   // From the second round, the control room's own systems are told again.

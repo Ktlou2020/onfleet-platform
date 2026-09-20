@@ -31,8 +31,18 @@ async function sendSMS(to, body) {
   return sendSms(to, body);
 }
 
-async function sendWhatsApp(to, body) {
-  return sendSms(to, body, { whatsapp: true });
+// WhatsApp needs a Meta-approved template to start a conversation. The caller
+// passes the values for its slots (see constants/whatsappTemplates.js); with no
+// template configured for that message type we send free text, which is what
+// Twilio's sandbox and an already-open conversation accept.
+async function sendWhatsApp(to, body, { type = null, templateValues = null } = {}) {
+  const { templateFor, templateVariables } = require('../constants/whatsappTemplates');
+  const template = type ? templateFor(type) : null;
+  return sendSms(to, body, {
+    whatsapp: true,
+    contentSid: template?.sid || null,
+    variables: template && templateValues ? templateVariables(type, templateValues) : null,
+  });
 }
 
 // No dedicated notifications page exists for fleet-owner roles today —
@@ -44,7 +54,7 @@ function notificationsUrlForRole(role) {
   return '/';
 }
 
-async function sendNotification({ userId, channel, type, title, message, entityType = null, entityId = null, throwOnError = true, digest = false }) {
+async function sendNotification({ userId, channel, type, title, message, entityType = null, entityId = null, throwOnError = true, digest = false, templateValues = null }) {
   let user = null;
   if (userId) {
     const { rows } = await pgDb.query('SELECT email, phone, role FROM users WHERE id = $1', [userId]);
@@ -87,7 +97,7 @@ async function sendNotification({ userId, channel, type, title, message, entityT
     } else if (channel === 'sms' && user?.phone) {
       outcome = await sendSMS(user.phone, message);
     } else if (channel === 'whatsapp' && user?.phone) {
-      outcome = await sendWhatsApp(user.phone, message);
+      outcome = await sendWhatsApp(user.phone, message, { type, templateValues });
     } else if (channel === 'in_app') {
       outcome = { delivered: true };   // the row itself is the delivery
     } else {

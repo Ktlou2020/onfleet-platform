@@ -44,6 +44,7 @@ if (process.env.NODE_ENV !== 'test') {
   const startBackgroundServices = () => {
     require('./services/scheduler').start();
     require('./services/webhookDispatcher').start();
+    require('./services/theftCaseService').start();
     const TCP_PORT = Number(process.env.TELTONIKA_TCP_PORT || 5000);
     require('./tcp/teltonikaServer').start(TCP_PORT);
   };

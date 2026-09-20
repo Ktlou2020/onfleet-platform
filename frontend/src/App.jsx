@@ -57,6 +57,7 @@ const AdminRiders = lazy(() => import('./pages/admin/Riders'));
 const AdminSignupStats = lazy(() => import('./pages/admin/SignupStats'));
 const AdminIntegrations = lazy(() => import('./pages/admin/Integrations'));
 const AdminPaystackCharges = lazy(() => import('./pages/admin/PaystackCharges'));
+const AdminTheftCases = lazy(() => import('./pages/admin/TheftCases'));
 const AdminPaystackSubscriptions = lazy(() => import('./pages/admin/PaystackSubscriptions'));
 const AdminAuditLogs = lazy(() => import('./pages/admin/AuditLogs'));
 const AdminClaims = lazy(() => import('./pages/admin/Claims'));
@@ -183,6 +184,7 @@ export default function App() {
             <Route path="bikes" element={<AdminBikes />} />
             <Route path="bikes/:id" element={<AdminBikeDetail />} />
             <Route path="payments" element={<AdminPayments />} />
+            <Route path="theft-cases" element={<AdminTheftCases />} />
             <Route path="paystack-charges" element={<AdminPaystackCharges />} />
             <Route path="paystack-subscriptions" element={<AdminPaystackSubscriptions />} />
             <Route path="notifications" element={<AdminNotifications />} />

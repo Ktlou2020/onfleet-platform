@@ -861,6 +861,147 @@ router.post('/alerts/resolve-bulk', authRequired, trackingReadOnly, async (req, 
   res.json({ resolved, resolved_count: resolved.length, skipped_count: skipped });
 });
 
+// ---------- Theft cases ----------
+// The playbook for a bike that may be being taken: a case opens itself on a
+// tamper, towing, movement, night-movement, power-disconnect or critical
+// theft-risk alert, collects everything that happens to that bike while it is
+// open, and closes with an outcome. That is where the recovery rate comes from.
+
+const theftCases = require('../services/theftCaseService');
+
+router.get('/theft-cases', authRequired, trackingReadOnly, async (req, res) => {
+  const status = String(req.query.status || 'open');
+  const where = status === 'all' ? '' :
+    status === 'closed' ? 'WHERE tc.closed_at IS NOT NULL' : 'WHERE tc.closed_at IS NULL';
+  const { rows } = await pgDb.query(
+    `SELECT tc.*, b.registration, b.make, b.model AS bike_model, b.status AS bike_status,
+            b.last_known_lat, b.last_known_lng, b.last_location_at,
+            td.imei, td.connected, td.last_seen_at, td.engine_cut_active,
+            u.full_name AS opened_by_name, cu.full_name AS closed_by_name,
+            (SELECT COUNT(*)::int FROM theft_case_events e WHERE e.case_id = tc.id) AS event_count
+       FROM theft_cases tc
+       JOIN bikes b ON b.id = tc.bike_id
+       LEFT JOIN tracking_devices td ON td.id = tc.device_id
+       LEFT JOIN users u ON u.id = tc.opened_by
+       LEFT JOIN users cu ON cu.id = tc.closed_by
+       ${where}
+      ORDER BY tc.opened_at DESC LIMIT 200`);
+  res.json(rows);
+});
+
+// How the fleet is doing at getting bikes back — the number this whole
+// playbook exists to move.
+router.get('/theft-cases/stats', authRequired, trackingReadOnly, async (req, res) => {
+  const { rows: [all] } = await pgDb.query(
+    `SELECT COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE closed_at IS NULL)::int AS open,
+            COUNT(*) FILTER (WHERE status = 'recovered')::int AS recovered,
+            COUNT(*) FILTER (WHERE status = 'false_alarm')::int AS false_alarms,
+            COUNT(*) FILTER (WHERE status = 'written_off')::int AS written_off,
+            ROUND(AVG(EXTRACT(epoch FROM closed_at - opened_at) / 3600) FILTER (WHERE status = 'recovered')::numeric, 1) AS avg_hours_to_recover
+       FROM theft_cases`);
+  const genuine = all.recovered + all.written_off;
+  res.json({ ...all, recovery_rate_pct: genuine ? Math.round((all.recovered / genuine) * 100) : null });
+});
+
+router.get('/theft-cases/:id', authRequired, trackingReadOnly, async (req, res) => {
+  const { rows } = await pgDb.query(
+    `SELECT tc.*, b.registration, b.make, b.model AS bike_model, b.status AS bike_status, b.vin,
+            td.imei, td.model AS device_model, td.connected, td.last_seen_at, td.engine_cut_active,
+            u.full_name AS opened_by_name, cu.full_name AS closed_by_name,
+            r.full_name AS rider_name, r.phone AS rider_phone
+       FROM theft_cases tc
+       JOIN bikes b ON b.id = tc.bike_id
+       LEFT JOIN tracking_devices td ON td.id = tc.device_id
+       LEFT JOIN users u ON u.id = tc.opened_by
+       LEFT JOIN users cu ON cu.id = tc.closed_by
+       LEFT JOIN LATERAL (SELECT user_id FROM agreements WHERE bike_id = b.id AND status = 'active' ORDER BY id DESC LIMIT 1) ag ON TRUE
+       LEFT JOIN users r ON r.id = ag.user_id
+      WHERE tc.id = $1`, [req.params.id]);
+  const theftCase = rows[0];
+  if (!theftCase) return res.status(404).json({ error: 'Case not found' });
+
+  const { rows: events } = await pgDb.query(
+    `SELECT e.*, u.full_name AS actor_name FROM theft_case_events e
+       LEFT JOIN users u ON u.id = e.actor_id
+      WHERE e.case_id = $1 ORDER BY e.created_at, e.id`, [theftCase.id]);
+  // From a quarter of an hour before the case opened: the alert that triggered
+  // it is a moment older than the case itself, and the lead-up is what tells
+  // you whether the bike was tampered with before it moved.
+  const { rows: alerts } = await pgDb.query(
+    `SELECT id, alert_type, severity, created_at, acknowledged_at, resolved_at, resolution_outcome
+       FROM tracking_alerts
+      WHERE bike_id = $1 AND created_at >= $2::timestamptz - INTERVAL '15 minutes'
+      ORDER BY created_at DESC LIMIT 100`,
+    [theftCase.bike_id, theftCase.opened_at]);
+  const { rows: pings } = await pgDb.query(
+    `SELECT lat, lng, speed_kmh, heading, ignition, recorded_at FROM gps_pings
+      WHERE bike_id = $1 AND recorded_at >= $2::timestamptz - INTERVAL '15 minutes'
+      ORDER BY recorded_at DESC LIMIT 500`,
+    [theftCase.bike_id, theftCase.opened_at]);
+  res.json({ case: theftCase, events, alerts, pings });
+});
+
+router.post('/theft-cases', authRequired, adminOnly, async (req, res) => {
+  const bikeId = Number(req.body.bike_id);
+  if (!Number.isFinite(bikeId)) return res.status(400).json({ error: 'Which bike?' });
+  const reason = String(req.body.reason || '').trim();
+  if (reason.length < 3) return res.status(400).json({ error: 'Say why this case is being opened' });
+  const { rows: bike } = await pgDb.query('SELECT id FROM bikes WHERE id=$1', [bikeId]);
+  if (!bike[0]) return res.status(404).json({ error: 'Bike not found' });
+  const { rows: dev } = await pgDb.query('SELECT id FROM tracking_devices WHERE bike_id=$1 LIMIT 1', [bikeId]);
+
+  const { theftCase, created } = await theftCases.openCase({
+    bikeId, deviceId: dev[0]?.id || null, reason, actorId: req.user.id,
+  });
+  await logAudit(req.user.id, created ? 'theft_case.open' : 'theft_case.reuse', 'theft_cases', theftCase.id,
+    { bike_id: bikeId, reason }, req.ip);
+  res.status(created ? 201 : 200).json({ case: theftCase, created });
+});
+
+router.post('/theft-cases/:id/notes', authRequired, trackingReadOnly, async (req, res) => {
+  const note = String(req.body.note || '').trim();
+  if (!note) return res.status(400).json({ error: 'Write something to add' });
+  const { rows } = await pgDb.query('SELECT id FROM theft_cases WHERE id=$1', [req.params.id]);
+  if (!rows[0]) return res.status(404).json({ error: 'Case not found' });
+  const event = await theftCases.addEvent(rows[0].id, 'note', note.slice(0, 2000), null, req.user.id);
+  res.status(201).json(event);
+});
+
+router.put('/theft-cases/:id/status', authRequired, trackingReadOnly, async (req, res) => {
+  const status = String(req.body.status || '');
+  const note = String(req.body.note || '').trim() || null;
+  const police = String(req.body.police_reference || '').trim() || null;
+  const caseId = Number(req.params.id);
+  try {
+    const updated = theftCases.CLOSED_STATUSES.includes(status)
+      ? await theftCases.closeCase({ caseId, status, note, policeReference: police, actorId: req.user.id })
+      : await theftCases.setStatus({ caseId, status, policeReference: police, actorId: req.user.id });
+    if (!updated) return res.status(404).json({ error: 'Case not found, or already closed' });
+    await logAudit(req.user.id, 'theft_case.status', 'theft_cases', caseId,
+      { status, police_reference: police, note }, req.ip);
+    res.json(updated);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Live follow asks the tracker where it is every minute or so, instead of
+// waiting for its own reporting interval. It costs SIM data, so it is
+// time-boxed and can be stopped.
+router.post('/theft-cases/:id/follow', authRequired, trackingReadOnly, async (req, res) => {
+  const minutes = Math.min(Math.max(Number(req.body.minutes) || theftCases.FOLLOW_MINUTES, 5), 720);
+  const updated = await theftCases.extendFollow(Number(req.params.id), minutes, req.user.id);
+  if (!updated) return res.status(404).json({ error: 'Case not found, or already closed' });
+  res.json(updated);
+});
+
+router.delete('/theft-cases/:id/follow', authRequired, trackingReadOnly, async (req, res) => {
+  const updated = await theftCases.stopFollow(Number(req.params.id), req.user.id);
+  if (!updated) return res.status(404).json({ error: 'Case not found, or already closed' });
+  res.json(updated);
+});
+
 // ---------- Bike notes ----------
 // Free-text operational log control room/admin attach to a bike. Explicitly
 // on trackingReadOnly (not adminOnly) — control room is otherwise read-only

@@ -22,14 +22,17 @@ const { queueDigestEmail } = require('./alertDigestService');
 // what actually happened, and the caller records that instead.
 //
 // When a provider is wired up, return { delivered: true } on a successful send.
+// A provider is wired up now (services/smsProvider.js). With no credentials
+// configured it still reports 'no_provider' and the row still says 'skipped' —
+// the honesty above is unchanged, it is just no longer the only outcome.
+const { sendSms } = require('./smsProvider');
+
 async function sendSMS(to, body) {
-  console.log(`[SMS→${to}] ${body}`);
-  return { delivered: false, reason: 'no_provider' };
+  return sendSms(to, body);
 }
 
 async function sendWhatsApp(to, body) {
-  console.log(`[WhatsApp→${to}] ${body}`);
-  return { delivered: false, reason: 'no_provider' };
+  return sendSms(to, body, { whatsapp: true });
 }
 
 // No dedicated notifications page exists for fleet-owner roles today —

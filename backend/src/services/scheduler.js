@@ -369,12 +369,12 @@ function start() {
   // closed here is also evicted from that map rather than lingering in it.
   setTimeout(runStaleTripSweep, 30_000);
 
-  // Critical-alert escalation — re-notify on panic/tamper/theft-risk/etc.
-  // alerts nobody has acknowledged after 15 min. Runs every 5 minutes so an
-  // unacknowledged alert is caught within minutes of crossing the threshold.
+  // Critical-alert escalation — chases panic/tamper/theft-risk/etc. alerts
+  // nobody has acknowledged, in rounds at 5, 15, 30 and 60 minutes. Runs every
+  // two minutes so the first round is close to its five-minute mark.
   const { checkUnacknowledgedCriticalAlerts } = require('./alertEscalationService');
   const runEscalationCheck = () => checkUnacknowledgedCriticalAlerts().catch(e => console.error('[alert-escalation]', e.message));
-  setInterval(runEscalationCheck, 5 * 60_000);
+  setInterval(runEscalationCheck, 2 * 60_000);
   setTimeout(runEscalationCheck, 20_000); // initial check shortly after boot
 
   // AI risk-profile baseline rebuild — nightly at 02:30, plus a warmup shortly after boot

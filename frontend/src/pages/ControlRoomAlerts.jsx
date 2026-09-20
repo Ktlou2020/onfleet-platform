@@ -38,8 +38,10 @@ const STATUS_TABS = [
   { id: 'all',      label: 'All' },
 ];
 
-// Must match ESCALATION_DELAY_MS in backend/src/services/alertEscalationService.js
-const ESCALATION_DELAY_MS = 15 * 60_000;
+// Must match the first round in backend/src/constants/alertEscalation.js.
+// After this, escalation repeats at 15, 30 and 60 minutes until someone
+// acknowledges — the countdown shown is to the first one.
+const ESCALATION_DELAY_MS = 5 * 60_000;
 
 // null = not escalation-eligible (not critical, already ack'd/resolved/escalated).
 // Otherwise ms remaining until escalation (negative once the cron is due to fire).

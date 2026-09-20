@@ -19,6 +19,7 @@
 const crypto = require('crypto');
 const pgDb = require('../pgDb');
 const { alertContact } = require('./alertContact');
+const { MAX_ROUNDS } = require('../constants/alertEscalation');
 const trackingEvents = require('../trackingEvents');
 
 const MAX_ATTEMPTS = 6;
@@ -121,6 +122,38 @@ async function queueAlert(alert) {
   return queued;
 }
 
+// A second (and third) shout for an alert nobody has acknowledged. Same event
+// type, so a receiver's type filter still applies, but a distinct event_id per
+// round so it is delivered rather than deduplicated, and an `escalation` block
+// so a receiver can tell a chase from the original.
+async function queueEscalation(alert, round, minutesUnacknowledged) {
+  const targets = await endpointsFor(alert.alert_type);
+  if (!targets.length) return 0;
+
+  const body = await buildEventBody(alert);
+  body.event_id = `escalation-${alert.id}-${round}`;
+  body.sent_at = new Date().toISOString();
+  body.escalation = { round, of: MAX_ROUNDS, minutes_unacknowledged: minutesUnacknowledged };
+  const serialized = JSON.stringify(body);
+
+  let queued = 0;
+  for (const endpoint of targets) {
+    try {
+      const { rows } = await pgDb.query(
+        `INSERT INTO webhook_deliveries (endpoint_id, event_type, event_id, payload)
+         VALUES ($1,$2,$3,$4)
+         ON CONFLICT (endpoint_id, event_id) DO NOTHING
+         RETURNING id`,
+        [endpoint.id, body.event_type, body.event_id, serialized]);
+      if (rows[0]) queued += 1;
+    } catch (e) {
+      console.error('[webhooks] queue escalation failed:', e.message);
+    }
+  }
+  if (queued) setImmediate(() => flush().catch(() => {}));
+  return queued;
+}
+
 async function deliver(delivery, endpoint) {
   const signature = signPayload(endpoint.secret, delivery.payload);
   const controller = new AbortController();
@@ -215,4 +248,4 @@ function start() {
   console.log('[webhooks] outbound dispatcher started');
 }
 
-module.exports = { start, flush, queueAlert, signPayload, buildEventBody };
+module.exports = { start, flush, queueAlert, queueEscalation, signPayload, buildEventBody };

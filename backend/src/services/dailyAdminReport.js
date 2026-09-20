@@ -252,6 +252,17 @@ async function operationsSection(from, to, today) {
     `SELECT COUNT(*)::int AS n FROM notifications
       WHERE status = 'failed' AND created_at >= $1 AND created_at < $2`, [from, to]);
 
+  // Bikes due for service by distance as well as date — the trackers know how
+  // hard each bike is being ridden, so this arrives before the bike is overdue.
+  let service = { total: 0, overdue: 0, bikes: [] };
+  try {
+    const { bikesDueForService } = require('./serviceDue');
+    const due = await bikesDueForService();
+    service = { total: due.length, overdue: due.filter((b) => b.state === 'overdue').length, bikes: due.slice(0, 15) };
+  } catch (e) {
+    service = { total: 0, overdue: 0, bikes: [], error: e.message };
+  }
+
   let backup = null;
   try {
     backup = require('./backupService').listBackups().summary;
@@ -259,7 +270,7 @@ async function operationsSection(from, to, today) {
     backup = { error: e.message };
   }
 
-  return { received, paystack, applications, workshop, payouts, paperwork, failedMessages: failedMessages.n, backup };
+  return { received, paystack, applications, workshop, payouts, paperwork, failedMessages: failedMessages.n, backup, service };
 }
 
 async function collectDailyReport(now = new Date()) {
@@ -323,6 +334,7 @@ function attentionItems(r) {
   if (o.paystack.n) items.push([C.amber, `${plural(o.paystack.n, 'Paystack debit order')} to review (${rand(o.paystack.total)})`, '/admin/paystack-charges']);
   if (o.backup && (o.backup.error || o.backup.stale || o.backup.damaged)) items.push([C.red, 'Last night\'s backup needs checking', '/admin/integrations']);
   if (o.paperwork.length) items.push([C.amber, `${plural(o.paperwork.length, 'active bike')} with licence disc or insurance expiring within 14 days`, '/admin/bikes']);
+  if (o.service.overdue) items.push([C.amber, `${plural(o.service.overdue, 'bike')} overdue for service`, '/admin/workshop']);
   if (a.nearPayoff.length) items.push([C.green, `${plural(a.nearPayoff.length, 'rider')} within ${PAYOFF_WEEKS} weeks of paying off`, '/admin/agreements']);
   return items;
 }
@@ -449,6 +461,16 @@ function renderDailyReport(r) {
   ];
   parts.push(table(['', ''], other.map(([k, v, link]) =>
     [`<a href="${PORTAL}${link}" style="color:${C.ink};text-decoration:none">${esc(k)}</a>`, esc(v)])));
+  if (o.service.bikes.length) {
+    parts.push(h3(`Bikes due for service: ${o.service.total}${o.service.overdue ? `, ${o.service.overdue} overdue` : ''}`));
+    const { describe } = require('./serviceDue');
+    const s = capped(o.service.bikes, (b) => [
+      `${esc(b.registration || `Bike #${b.id}`)}${b.organization_name ? `<br><span style="color:${C.muted};font-size:12px">${esc(b.organization_name)}</span>` : ''}`,
+      esc(b.rider_name || '—'),
+      `<span style="color:${b.state === 'overdue' ? C.red : C.amber}">${esc(describe(b))}</span>`,
+    ], 'bikes');
+    parts.push(table(['Bike', 'Rider', 'Service'], s.rows, { note: s.note }));
+  }
   if (o.paperwork.length) {
     parts.push(h3('Licence discs and insurance expiring within 14 days'));
     const s = capped(o.paperwork, (b) => {

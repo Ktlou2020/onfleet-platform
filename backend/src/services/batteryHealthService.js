@@ -19,6 +19,7 @@ function battPct(mv) { return Math.min(100, Math.max(0, Math.round((mv - 3200) /
 const DECLINE_WINDOW_DAYS = 5;
 const DECLINE_THRESHOLD_PCT = 15; // total drop across the window worth flagging
 const ALERT_COOLDOWN_DAYS = 7; // don't refire every day once a device is flagged
+const MIN_READINGS = 3;        // enough readings in the window to call it a trend
 
 // One row per device-with-a-bike: parse the internal battery (io[67], per
 // the corrected Teltonika field mapping) out of its most recent ping today.
@@ -57,21 +58,29 @@ async function isAlertEnabled(alertType) {
 async function checkDeclines() {
   if (!(await isAlertEnabled('battery_declining'))) return 0;
 
+  // A reading is taken once a day, and a tracker that sleeps through a day
+  // leaves a gap. Demanding a reading on every day of the window meant a
+  // failing battery on a bike that stood still over a weekend was never
+  // reported — exactly the bike whose battery matters. Three readings across
+  // the window, at least two days apart, is enough to see a decline.
   const { rows: histories } = await pgDb.query(
-    `SELECT device_id, array_agg(battery_pct ORDER BY recorded_at ASC) AS pcts
+    `SELECT device_id,
+            array_agg(battery_pct ORDER BY recorded_at ASC) AS pcts,
+            MIN(recorded_at) AS first_at, MAX(recorded_at) AS last_at
      FROM device_battery_history
      WHERE recorded_at >= CURRENT_DATE - INTERVAL '${DECLINE_WINDOW_DAYS - 1} days'
      GROUP BY device_id
-     HAVING COUNT(*) >= $1`,
-    [DECLINE_WINDOW_DAYS]
+     HAVING COUNT(*) >= $1 AND MAX(recorded_at) - MIN(recorded_at) >= INTERVAL '2 days'`,
+    [MIN_READINGS]
   );
 
   let fired = 0;
-  for (const { device_id, pcts } of histories) {
+  for (const { device_id, pcts, first_at, last_at } of histories) {
     const from = pcts[0];
     const to = pcts[pcts.length - 1];
     const drop = from - to;
     if (drop < DECLINE_THRESHOLD_PCT) continue;
+    const spanDays = Math.max(1, Math.round((new Date(last_at) - new Date(first_at)) / 86400000));
 
     const { rows: cooldownRows } = await pgDb.query(
       `SELECT id FROM tracking_alerts
@@ -88,7 +97,7 @@ async function checkDeclines() {
     const { rows: bikeRows } = await pgDb.query('SELECT registration FROM bikes WHERE id=$1', [bikeId]);
     const reg = bikeRows[0]?.registration || null;
 
-    const payload = JSON.stringify({ from_pct: from, to_pct: to, days: DECLINE_WINDOW_DAYS });
+    const payload = JSON.stringify({ from_pct: from, to_pct: to, days: spanDays, readings: pcts.length });
     const { rows: alertRows } = await pgDb.query(
       `INSERT INTO tracking_alerts (bike_id, device_id, alert_type, severity, payload, created_at)
        VALUES ($1,$2,'battery_declining',$3,$4,NOW()) RETURNING id`,

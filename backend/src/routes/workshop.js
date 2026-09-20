@@ -723,6 +723,26 @@ router.get('/parts-catalog/available', authRequired, workshopOnly, async (req, r
 });
 
 // Upcoming service schedule — bikes due within N days
+// Bikes due for service by distance as well as by date, with how hard each is
+// being ridden and when it will reach its service distance at that rate. See
+// services/serviceDue.js for why date alone was not enough.
+router.get('/service-due', authRequired, workshopOnly, async (req, res) => {
+  const { bikesDueForService } = require('../services/serviceDue');
+  const bikes = await bikesDueForService({
+    organizationId: req.query.organization_id ? Number(req.query.organization_id) : null,
+    ownFleetOnly: req.query.own_fleet === '1',
+  });
+  res.json({
+    bikes,
+    summary: {
+      total: bikes.length,
+      overdue: bikes.filter((b) => b.state === 'overdue').length,
+      due_soon: bikes.filter((b) => b.state === 'due_soon').length,
+      by_distance: bikes.filter((b) => b.reason === 'distance').length,
+    },
+  });
+});
+
 router.get('/upcoming-services', authRequired, workshopOnly, async (req, res) => {
   try {
     const days = Math.min(Number(req.query.days) || 30, 90);

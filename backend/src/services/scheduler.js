@@ -55,6 +55,15 @@ function shouldSendOverdueToday(daysOverdue) {
   return daysOverdue % 7 === 0;                      // beyond a month: weekly
 }
 
+// Was this exact reminder already sent in the last N days? Service reminders
+// repeat weekly at most, so a rider who can't book today isn't told daily.
+async function notificationExistsWithin(userId, type, title, days) {
+  const { rows } = await pgDb.query(`SELECT id FROM notifications
+    WHERE user_id = $1 AND type = $2 AND title = $3 AND created_at >= NOW() - ($4 || ' days')::interval
+    LIMIT 1`, [userId, type, title, String(days)]);
+  return !!rows[0];
+}
+
 async function notificationExistsToday(userId, type, title) {
   const { rows } = await pgDb.query(`SELECT id FROM notifications
     WHERE user_id = $1 AND type = $2 AND title = $3
@@ -252,21 +261,30 @@ async function runDailyReminders() {
     }
   }
 
-  const { rows: serviceDue } = await pgDb.query(`
-    SELECT b.*, a.user_id, a.agreement_no, u.full_name FROM bikes b
-    JOIN agreements a ON a.bike_id = b.id AND a.status = 'active'
-    JOIN users u ON u.id = a.user_id
-    WHERE b.next_service_date IS NOT NULL AND b.next_service_date <= CURRENT_DATE + 7`);
-  for (const s of serviceDue) {
+  // A bike is due when its distance says so as well as when its date does: the
+  // trackers credit every trip to the odometer, and a rider doing 90 km a day
+  // reaches the next service interval weeks before the date on the card.
+  // This used to fire every day for the whole week before the date, with no
+  // guard at all — one message is a reminder, seven is noise.
+  const { bikesDueForService, describe } = require('./serviceDue');
+  const dueBikes = (await bikesDueForService()).filter((b) => b.rider_id);
+  for (const bike of dueBikes) {
+    const title = `service_due_${bike.id}_${bike.state}`;
     try {
+      if (await notificationExistsToday(bike.rider_id, 'service_reminder', title)) continue;
+      if (await notificationExistsWithin(bike.rider_id, 'service_reminder', title, 7)) continue;
+      const lead = bike.state === 'overdue'
+        ? `Your ${bike.make} ${bike.model} is overdue for its service`
+        : `Your ${bike.make} ${bike.model} is due for its free service soon`;
       await sendNotification({
-        userId: s.user_id,
+        userId: bike.rider_id,
         channel: 'sms',
         type: 'service_reminder',
-        message: `Reminder: Your ${s.make} ${s.model} is due for free monthly service on ${s.next_service_date}. Book it via the app.`
+        title,
+        message: `${lead} (${describe(bike)}). Book it via the app.`
       });
     } catch (err) {
-      console.error(`[daily-reminder] service reminder failed for ${s.agreement_no}:`, err.message);
+      console.error(`[daily-reminder] service reminder failed for bike ${bike.registration || bike.id}:`, err.message);
     }
   }
 
@@ -275,19 +293,10 @@ async function runDailyReminders() {
 }
 
 async function runFleetServiceReminders() {
-  const today = new Date().toISOString().slice(0, 10);
-  // Bikes owned by fleet organisations due for service within 30 days (or already overdue)
-  const { rows: bikes } = await pgDb.query(`
-    SELECT b.id, b.registration, b.vin, b.make, b.model, b.next_service_date, b.status,
-           b.organization_id, o.name AS org_name
-    FROM bikes b
-    JOIN organizations o ON o.id = b.organization_id
-    WHERE b.organization_id IS NOT NULL
-      AND b.next_service_date IS NOT NULL
-      AND b.next_service_date <= CURRENT_DATE + 30
-      AND b.status NOT IN ('sold','written_off','stolen')
-  `);
-
+  // Due by distance or by date — see services/serviceDue.js. Date alone missed
+  // every hard-working bike that reaches its service interval early.
+  const { bikesDueForService, describe } = require('./serviceDue');
+  const bikes = (await bikesDueForService()).filter((b) => b.organization_id);
   if (!bikes.length) return;
 
   // Group by organisation
@@ -298,7 +307,7 @@ async function runFleetServiceReminders() {
   }
 
   for (const [orgId, orgBikes] of Object.entries(byOrg)) {
-    const orgName = orgBikes[0].org_name;
+    const orgName = orgBikes[0].organization_name;
     const { rows: admins } = await pgDb.query(`
       SELECT id, full_name, email FROM users
       WHERE organization_id = $1 AND role IN ('fleet_owner_admin','fleet_owner_ops')
@@ -307,14 +316,13 @@ async function runFleetServiceReminders() {
 
     if (!admins.length) continue;
 
-    const overdue = orgBikes.filter((b) => b.next_service_date < today);
-    const upcoming = orgBikes.filter((b) => b.next_service_date >= today);
+    const overdue = orgBikes.filter((b) => b.state === 'overdue');
     const title = `Service due — ${orgBikes.length} bike${orgBikes.length !== 1 ? 's' : ''} (${orgName})`;
 
     const bikeLines = orgBikes.map((b) => {
-      const label = b.registration || b.vin || `Bike #${b.id}`;
-      const flag = b.next_service_date < today ? ' ⚠ OVERDUE' : '';
-      return `  • ${label} (${b.make} ${b.model}) — service date: ${b.next_service_date}${flag}`;
+      const label = b.registration || `Bike #${b.id}`;
+      const flag = b.state === 'overdue' ? ' ⚠ OVERDUE' : '';
+      return `  • ${label} (${b.make} ${b.model}) — ${describe(b)}${flag}`;
     }).join('\n');
 
     const body = `Hi [name],\n\n${orgName} has ${orgBikes.length} bike${orgBikes.length !== 1 ? 's' : ''} due for service${overdue.length ? ` (${overdue.length} overdue)` : ''}:\n\n${bikeLines}\n\nBasic service is R275 per bike. Please contact us to book your service appointments.\n\nOnFleet Africa Workshop`;

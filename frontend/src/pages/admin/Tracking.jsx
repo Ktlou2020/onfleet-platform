@@ -1328,12 +1328,6 @@ export default function Tracking({ readOnly = false }) {
     }
   }, []);
 
-  if (loading) return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 'calc(100vh - 64px)' }}>
-      <div style={{ color: 'var(--muted)', fontSize: 14 }}>Loading tracking…</div>
-    </div>
-  );
-
   const runInstallCheck = useCallback(async (deviceId) => {
     setInstallBusy(true);
     try {
@@ -1357,6 +1351,12 @@ export default function Tracking({ readOnly = false }) {
       toast.error(e.response?.data?.error || 'Could not sign off this install');
     } finally { setInstallBusy(false); }
   }, [runInstallCheck, loadDevices]);
+
+  if (loading) return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 'calc(100vh - 64px)' }}>
+      <div style={{ color: 'var(--muted)', fontSize: 14 }}>Loading tracking…</div>
+    </div>
+  );
 
   // ── render ───────────────────────────────────────────────────────
 

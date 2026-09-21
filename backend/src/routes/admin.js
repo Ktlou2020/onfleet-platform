@@ -586,8 +586,18 @@ router.post('/parts-orders', async (req, res) => {
     neededBy: req.body.needed_by || null,
     notes: req.body.notes || null,
   });
+  // Part numbers the supplier's price list doesn't carry are refused: they come
+  // back rejected and the bike waits. The caller can override a line by giving
+  // a reason with it, which is kept on the order.
+  if (order?.blocked) {
+    return res.status(409).json({
+      error: `${order.blocked.length} part number${order.blocked.length === 1 ? ' is' : 's are'} not in the price list, so ${order.blocked.length === 1 ? 'it would be' : 'they would be'} rejected. Use the suggested number, leave the line out, or say why to order it anyway.`,
+      blocked: order.blocked,
+    });
+  }
   await logAudit(req.user.id, 'parts_order.create', 'parts_orders', order.id,
-    { reference: order.reference, lines: order.items.length, total: order.total_ex_vat }, req.ip);
+    { reference: order.reference, lines: order.items.length, total: order.total_ex_vat,
+      overridden: order.items.filter((i) => i.override_reason).map((i) => i.part_number) }, req.ip);
   res.status(201).json(order);
 });
 

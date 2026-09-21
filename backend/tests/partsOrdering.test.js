@@ -103,13 +103,16 @@ describe.skipIf(!process.env.DATABASE_URL)('ordering parts from Hero', () => {
     });
 
     it('names the file after the reference so a reply can be matched to it', async () => {
-      const order = await ordering.createOrder({ lines: [{ part_number: 'X', description: 'Thing', qty: 1 }], actorId: admin.id });
+      const order = await ordering.createOrder({
+        lines: [{ part_number: '20K910S', description: 'CHAIN SPROCKET KIT (ACHIEVER)', qty: 1 }], actorId: admin.id });
       expect(ordering.rfqFileName(order)).toBe(`${order.reference}-Hero-SA.xlsx`);
       expect(order.reference).toMatch(/^RFQ-\d{4}-0001$/);
     });
 
     it('states the delivery term, as their SOP asks', async () => {
-      const order = await ordering.createOrder({ lines: [{ part_number: 'X', description: 'Thing', qty: 1 }], actorId: admin.id, deliveryMethod: 'courier_hero' });
+      const order = await ordering.createOrder({
+        lines: [{ part_number: '20K910S', description: 'CHAIN SPROCKET KIT (ACHIEVER)', qty: 1 }],
+        actorId: admin.id, deliveryMethod: 'courier_hero' });
       expect(ordering.rfqEmailBody(order)).toMatch(/arrange courier delivery/i);
     });
   });
@@ -179,6 +182,62 @@ describe.skipIf(!process.env.DATABASE_URL)('ordering parts from Hero', () => {
       expect(res.status).toBe(200);
       expect(res.headers['content-disposition']).toMatch(/RFQ-\d{4}-\d{4}-Hero-SA\.xlsx/);
       expect(readWorkbook(res.body)[0].rows[20][1]).toBe('K06431KTNA701S');
+    });
+  });
+
+  // Hero quote and ship against the exact number requested, so a number their
+  // price list doesn't carry is a rejected line and a bike waiting for a part
+  // that was never coming.
+  describe('part numbers the price list does not carry', () => {
+    const spark = { part_number: '31916KRM4099S', description: 'Spark Plug', qty_to_order: 1 };
+    const brake = { part_number: 'K06431KTNA701S', description: 'KIT, BRAKE SHOE', qty_to_order: 2 };
+
+    beforeEach(async () => {
+      await pgDb.query(`INSERT INTO parts_catalog (make, model, group_code, group_name, part_number, description, price_ex_vat, source)
+        VALUES ('Hero','Eco 150','E','ENGINE','31916KRM84099S','SPARK PLUG', 37.13, 'dealer_list')`);
+    });
+
+    it('refuses the order and names the part, with the number Hero do sell', async () => {
+      const res = await request(app).post('/api/admin/parts-orders').set(authHeader(admin))
+        .send({ lines: [brake, spark] });
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/not in the price list/i);
+      expect(res.body.blocked).toHaveLength(1);
+      expect(res.body.blocked[0]).toMatchObject({ part_number: '31916KRM4099S' });
+      expect(res.body.blocked[0].did_you_mean[0].part_number).toBe('31916KRM84099S');
+      expect((await pgDb.query('SELECT COUNT(*)::int AS n FROM parts_orders')).rows[0].n).toBe(0);
+    });
+
+    it('lets it through with a reason, and keeps the reason on the line', async () => {
+      const res = await request(app).post('/api/admin/parts-orders').set(authHeader(admin))
+        .send({ lines: [brake, { ...spark, override_reason: 'Confirmed with Hero by phone' }] });
+      expect(res.status).toBe(201);
+      const line = res.body.items.find((i) => i.part_number === '31916KRM4099S');
+      expect(line.override_reason).toBe('Confirmed with Hero by phone');
+    });
+
+    it('records in the audit log which lines were overridden', async () => {
+      await request(app).post('/api/admin/parts-orders').set(authHeader(admin))
+        .send({ lines: [{ ...spark, override_reason: 'Price list is behind' }] });
+      const { rows } = await pgDb.query(`SELECT metadata FROM audit_logs WHERE action = 'parts_order.create'`);
+      expect(JSON.parse(rows[0].metadata).overridden).toEqual(['31916KRM4099S']);
+    });
+
+    it('asks nothing when the number is one Hero sell', async () => {
+      const res = await request(app).post('/api/admin/parts-orders').set(authHeader(admin))
+        .send({ lines: [{ part_number: '31916KRM84099S', description: 'SPARK PLUG', qty_to_order: 1 }] });
+      expect(res.status).toBe(201);
+      expect(res.body.items[0].override_reason).toBeNull();
+    });
+
+    // The OCR'd manufacturer book is reference, not a price list: nothing in it
+    // can be ordered against unless the dealer list carries it too.
+    it('does not accept a number that is only in the OCR\'d catalogue', async () => {
+      await pgDb.query(`INSERT INTO parts_catalog (make, model, group_code, group_name, part_number, description, source)
+        VALUES ('Hero','Eco 150','E-1','COVER','12391-KRM-840','GASKET, HEAD COVER', 'catalogue')`);
+      const res = await request(app).post('/api/admin/parts-orders').set(authHeader(admin))
+        .send({ lines: [{ part_number: '12391-KRM-840', description: 'GASKET, HEAD COVER', qty_to_order: 1 }] });
+      expect(res.status).toBe(409);
     });
   });
 

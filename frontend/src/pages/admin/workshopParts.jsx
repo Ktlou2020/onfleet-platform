@@ -229,16 +229,40 @@ export function PartsOrdersTab() {
   );
   const chosenTotal = chosen.reduce((sum, l) => sum + (l.unit_price_ex_vat || 0) * l.qty_to_order, 0);
 
+  // A part number Hero's price list doesn't carry would come back rejected, so
+  // the server refuses it. Here it becomes a choice: use the number they do
+  // sell, leave the line out, or say why to send it anyway.
+  const [blocked, setBlocked] = useState(null);
+  const [overrides, setOverrides] = useState({});   // part number → reason
+  const [swaps, setSwaps] = useState({});           // part number → number to use instead
+
   const createOrder = async () => {
     setBusy('create');
     try {
-      const { data } = await api.post('/admin/parts-orders', { lines: chosen, delivery_method: 'collect' });
+      const lines = chosen.map((line) => {
+        const swapTo = swaps[line.part_number];
+        const swapped = swapTo && line.did_you_mean?.find((s) => s.part_number === swapTo);
+        if (swapped) {
+          return { ...line, part_number: swapped.part_number, description: swapped.description,
+            unit_price_ex_vat: Number(swapped.price_ex_vat) || null, did_you_mean: undefined };
+        }
+        return overrides[line.part_number] ? { ...line, override_reason: overrides[line.part_number] } : line;
+      });
+      const { data } = await api.post('/admin/parts-orders', { lines, delivery_method: 'collect' });
       toast.success(`${data.reference} created with ${data.items.length} lines`);
       setSkip(new Set());
+      setBlocked(null);
+      setOverrides({});
+      setSwaps({});
       await load();
       setOpenOrder(data.id);
     } catch (e) {
-      toast.error(e.response?.data?.error || 'Could not create that order');
+      if (e.response?.status === 409 && e.response.data?.blocked) {
+        setBlocked(e.response.data.blocked);
+        toast.error(e.response.data.error);
+      } else {
+        toast.error(e.response?.data?.error || 'Could not create that order');
+      }
     } finally { setBusy(''); }
   };
 
@@ -264,6 +288,25 @@ export function PartsOrdersTab() {
           </div>
         </div>
 
+        {blocked?.length > 0 && (
+          <div className="card mt-2" style={{ borderLeft: '3px solid var(--danger)', padding: 12 }}>
+            <strong>Not in Hero's price list</strong>
+            <p className="text-sm muted" style={{ margin: '4px 0 6px' }}>
+              Hero supply against the exact number requested, so these lines would come back rejected.
+              Use the number they sell, untick the line, or order it anyway with a reason.
+            </p>
+            <ul className="text-sm" style={{ margin: 0, paddingLeft: 18 }}>
+              {blocked.map((b) => (
+                <li key={b.part_number}>
+                  <span style={{ fontFamily: 'monospace' }}>{b.part_number}</span>
+                  {b.description ? ` — ${b.description}` : ''}
+                  {b.did_you_mean?.[0] && <span className="muted"> · closest: {b.did_you_mean[0].part_number} ({b.did_you_mean[0].description})</span>}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {!!suggestion?.lines?.length && (
           <div style={{ overflowX: 'auto', marginTop: 12 }}>
             <table className="table">
@@ -280,16 +323,47 @@ export function PartsOrdersTab() {
                   return (
                     <tr key={line.part_number} style={{ opacity: included ? 1 : 0.45 }}>
                       <td>
-                        <input type="checkbox" checked={included} onChange={() => setSkip((prev) => {
-                          const next = new Set(prev);
-                          if (next.has(line.part_number)) next.delete(line.part_number); else next.add(line.part_number);
-                          return next;
-                        })} />
+                        <input type="checkbox" checked={included} onChange={() => {
+                          setSkip((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(line.part_number)) next.delete(line.part_number); else next.add(line.part_number);
+                            return next;
+                          });
+                          setBlocked((prev) => prev?.filter((b) => b.part_number !== line.part_number) || null);
+                        }} />
                       </td>
                       <td style={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
-                        {line.part_number}
-                        {!line.in_catalogue && <span className="badge badge-warn" style={{ marginLeft: 6, fontSize: 9 }}>not in the price list</span>}
+                        {swaps[line.part_number] || line.part_number}
+                        {!line.in_catalogue && !swaps[line.part_number] && !overrides[line.part_number] && (
+                          <span className="badge badge-warn" style={{ marginLeft: 6, fontSize: 9 }}>not in the price list</span>
+                        )}
+                        {swaps[line.part_number] && <span className="text-xs muted"> · was {line.part_number}</span>}
+                        {overrides[line.part_number] && (
+                          <div className="text-xs muted" style={{ whiteSpace: 'normal' }}>ordering anyway: {overrides[line.part_number]}</div>
+                        )}
                         {line.replaced_by && <div className="text-xs" style={{ color: 'var(--danger)' }}>replaced by {line.replaced_by}</div>}
+                        {!line.in_catalogue && !swaps[line.part_number] && !overrides[line.part_number] && line.did_you_mean?.length > 0 && (
+                          <div className="text-xs" style={{ whiteSpace: 'normal', marginTop: 2 }}>
+                            Hero sell {line.did_you_mean[0].part_number} ({line.did_you_mean[0].description}){' '}
+                            <button className="btn btn-sm btn-secondary" style={{ padding: '0 6px', fontSize: 10 }}
+                              onClick={() => {
+                                setSwaps((prev) => ({ ...prev, [line.part_number]: line.did_you_mean[0].part_number }));
+                                setBlocked((prev) => prev?.filter((b) => b.part_number !== line.part_number) || null);
+                              }}>
+                              use it
+                            </button>{' '}
+                            <button className="btn btn-sm btn-secondary" style={{ padding: '0 6px', fontSize: 10 }}
+                              onClick={() => {
+                                const reason = window.prompt(`Order ${line.part_number} anyway? Hero's price list doesn't carry it, so it may be rejected. Say why:`);
+                                if (reason?.trim()) {
+                                  setOverrides((prev) => ({ ...prev, [line.part_number]: reason.trim() }));
+                                  setBlocked((prev) => prev?.filter((b) => b.part_number !== line.part_number) || null);
+                                }
+                              }}>
+                              order anyway
+                            </button>
+                          </div>
+                        )}
                       </td>
                       <td>{line.description}{line.our_name && <span className="text-xs muted"> · our name: {line.our_name}</span>}</td>
                       <td style={{ textAlign: 'right' }}>{line.qty_to_order}</td>

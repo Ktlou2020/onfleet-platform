@@ -158,6 +158,15 @@ async function suggestOrder({ make = 'Hero', model = 'Eco 150', db = pgDb } = {}
   }).filter((line) => line.qty_to_order > 0)
     .sort((a, z) => z.qty_to_order - a.qty_to_order || a.description.localeCompare(z.description));
 
+  // A line the price list doesn't carry can't be ordered as it stands, so the
+  // nearest entries come with it — usually the manufacturer's own documents
+  // disagreeing by a character.
+  const { nearestParts } = require('./partsImport');
+  for (const line of lines) {
+    if (line.in_catalogue) continue;
+    line.did_you_mean = await nearestParts(line.part_number, { make, model, db });
+  }
+
   return {
     make,
     model,
@@ -169,10 +178,42 @@ async function suggestOrder({ make = 'Hero', model = 'Eco 150', db = pgDb } = {}
   };
 }
 
+// Which of these part numbers the supplier actually sells. Hero quote and ship
+// against the exact number requested — "no quotations will be issued if the OEM
+// part numbers are not supplied in RFQ" — so a number that isn't in their price
+// list is a rejected line and a bike waiting for a part that was never coming.
+async function checkAgainstPriceList(lines, { make, model, db = pgDb } = {}) {
+  const numbers = [...new Set(lines.map((l) => plain(l.part_number)).filter(Boolean))];
+  if (!numbers.length) return { known: new Set(), blocked: [] };
+
+  const { rows } = await db.query(
+    `SELECT UPPER(REGEXP_REPLACE(part_number, '[^A-Za-z0-9]', '', 'g')) AS key
+       FROM parts_catalog
+      WHERE source <> 'catalogue'
+        AND UPPER(REGEXP_REPLACE(part_number, '[^A-Za-z0-9]', '', 'g')) = ANY($1)`, [numbers]);
+  const known = new Set(rows.map((r) => r.key));
+
+  const { nearestParts } = require('./partsImport');
+  const blocked = [];
+  for (const line of lines) {
+    if (known.has(plain(line.part_number))) continue;
+    if (line.override_reason) continue;
+    blocked.push({
+      part_number: line.part_number,
+      description: line.description || null,
+      did_you_mean: line.did_you_mean || await nearestParts(line.part_number, { make, model, db }),
+    });
+  }
+  return { known, blocked };
+}
+
 async function createOrder({ lines, make = 'Hero', model = 'Eco 150', actorId = null, automatic = false,
   deliveryMethod = null, neededBy = null, notes = null, db = pgDb } = {}) {
   const usable = (lines || []).filter((l) => l.part_number && (l.qty_to_order || l.qty) > 0);
   if (!usable.length) return null;
+
+  const { blocked } = await checkAgainstPriceList(usable, { make, model, db });
+  if (blocked.length) return { blocked };
 
   const reference = await nextReference(db);
   const { rows } = await db.query(
@@ -185,12 +226,13 @@ async function createOrder({ lines, make = 'Hero', model = 'Eco 150', actorId = 
   for (const line of usable) {
     await db.query(
       `INSERT INTO parts_order_items (order_id, part_number, description, qty, bike_model,
-                                      unit_price_ex_vat, job_card_id, bike_id, reason)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+                                      unit_price_ex_vat, job_card_id, bike_id, reason, override_reason)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
       [order.id, line.part_number, line.description || line.part_number, line.qty_to_order || line.qty,
         line.bike_model || `${make} ${model}`, line.unit_price_ex_vat ?? null,
         line.job_cards?.[0] || line.job_card_id || null, line.bikes?.[0] || line.bike_id || null,
-        (line.reasons || []).join(', ') || line.reason || null]);
+        (line.reasons || []).join(', ') || line.reason || null,
+        line.override_reason || null]);
     if (line.job_cards?.length) {
       await db.query(`UPDATE job_card_items SET ordered_in = $1
                        WHERE job_card_id = ANY($2) AND part_number = $3 AND ordered_in IS NULL`,
@@ -293,6 +335,6 @@ async function setStatus({ orderId, status, quoteReference = null, quotedTotal =
 }
 
 module.exports = {
-  suggestOrder, createOrder, getOrder, renderRfq, rfqFileName, rfqEmailBody, markSent, setStatus,
+  suggestOrder, createOrder, checkAgainstPriceList, getOrder, renderRfq, rfqFileName, rfqEmailBody, markSent, setStatus,
   nextReference, DEALER, SUPPLIER_EMAIL, RFQ_CELLS, FIRST_ITEM_ROW,
 };

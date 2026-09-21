@@ -681,23 +681,13 @@ router.get('/parts-suggestions', authRequired, workshopOnly, async (req, res) =>
 // frontend falls back to the free-text description field in that case.
 router.get('/parts-catalog/search', authRequired, workshopOnly, async (req, res) => {
   try {
-    const q = String(req.query.q || '').trim();
-    const make = String(req.query.make || '').trim();
-    const model = String(req.query.model || '').trim();
-    if (q.length < 2) return res.json({ results: [] });
-
-    const conditions = ['(LOWER(part_number) LIKE $1 OR LOWER(description) LIKE $1)'];
-    const params = [`%${q.toLowerCase()}%`];
-    if (make) { params.push(make); conditions.push(`LOWER(make) = LOWER($${params.length})`); }
-    if (model) { params.push(model); conditions.push(`LOWER(model) = LOWER($${params.length})`); }
-
-    const { rows: results } = await pgDb.query(`
-      SELECT id, make, model, group_code, group_name, ref_no, part_number, description, remark, qty_required, diagram_image_path
-      FROM parts_catalog
-      WHERE ${conditions.join(' AND ')}
-      ORDER BY part_number
-      LIMIT 25
-    `, params);
+    const { searchParts } = require('../services/partsImport');
+    const { results } = await searchParts({
+      q: req.query.q,
+      make: req.query.make || null,
+      model: req.query.model || null,
+      limit: req.query.limit || 25,
+    });
     res.json({ results });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -723,6 +713,37 @@ router.get('/parts-catalog/available', authRequired, workshopOnly, async (req, r
 });
 
 // Upcoming service schedule — bikes due within N days
+// What this bike needs at the kilometres on its clock: the manufacturer's
+// tasks for the service it is due, the parts to replace now, and the ones
+// close enough to be worth doing while it is on the ramp.
+router.get('/service-plan', authRequired, workshopOnly, async (req, res) => {
+  const { servicePlanFor } = require('../services/servicePlan');
+  const bikeId = req.query.bike_id ? Number(req.query.bike_id) : null;
+  let make = String(req.query.make || '').trim();
+  let model = String(req.query.model || '').trim();
+  let odometer = req.query.odometer_km != null ? Number(req.query.odometer_km) : null;
+
+  if (bikeId) {
+    const { rows } = await pgDb.query('SELECT make, model, odometer_km, registration FROM bikes WHERE id = $1', [bikeId]);
+    if (!rows[0]) return res.status(404).json({ error: 'Bike not found' });
+    make = make || rows[0].make;
+    model = model || rows[0].model;
+    if (odometer == null || Number.isNaN(odometer)) odometer = Number(rows[0].odometer_km) || 0;
+  }
+  if (!make || !model) return res.status(400).json({ error: 'Which bike, or which make and model?' });
+
+  const plan = await servicePlanFor({ make, model, odometerKm: odometer, bikeId });
+  if (plan.error) return res.status(400).json(plan);
+  res.json(plan);
+});
+
+// Which models have a service schedule loaded at all.
+router.get('/service-plan/models', authRequired, workshopOnly, async (req, res) => {
+  const { rows } = await pgDb.query(
+    `SELECT make, model, COUNT(*)::int AS scheduled_parts FROM service_schedule_parts GROUP BY 1, 2 ORDER BY 1, 2`);
+  res.json(rows);
+});
+
 // Bikes due for service by distance as well as by date, with how hard each is
 // being ridden and when it will reach its service distance at that rate. See
 // services/serviceDue.js for why date alone was not enough.

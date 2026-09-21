@@ -216,4 +216,54 @@ async function sendHtmlEmail(to, subject, htmlContent) {
   console.log(`[HTML-EMAIL→${emailTo}] ${subject}`);
 }
 
-module.exports = { sendEmail, sendHtmlEmail, detectEmailProvider };
+// An email with a file attached — a request for quotation on the supplier's
+// own form, for instance. Brevo takes the file inline as base64; SMTP takes a
+// buffer. With no provider configured it says what it would have sent rather
+// than pretending it went.
+async function sendEmailWithAttachment(to, subject, body, attachment) {
+  const emailTo = String(to || '').trim().replace(/[\r\n]/g, '');
+  if (!emailTo) throw new Error('No recipient for that email');
+  if (!attachment?.content || !attachment?.name) throw new Error('No attachment to send');
+  const provider = detectEmailProvider();
+  const sender = getSenderIdentity();
+  const replyTo = getReplyToIdentity();
+  const content = Buffer.isBuffer(attachment.content) ? attachment.content : Buffer.from(attachment.content);
+
+  if (provider.name === 'brevo' && provider.configured) {
+    const payload = {
+      sender, to: [{ email: emailTo }], subject, textContent: body,
+      attachment: [{ content: content.toString('base64'), name: attachment.name }],
+    };
+    if (replyTo?.email) payload.replyTo = replyTo;
+    try {
+      await axios.post('https://api.brevo.com/v3/smtp/email', payload, {
+        headers: { 'api-key': readEnv('BREVO_API_KEY', ''), 'content-type': 'application/json', accept: 'application/json' },
+        timeout: 60000,
+      });
+      return { delivered: true, provider: 'brevo' };
+    } catch (error) {
+      const status = error.response?.status;
+      const detail = error.response?.data?.message || error.message || 'unknown error';
+      throw new Error(status ? `Brevo API ${status}: ${detail}` : `Brevo API error: ${detail}`);
+    }
+  }
+
+  if (provider.name === 'smtp' && provider.configured) {
+    const mailer = getTransporter();
+    if (!mailer) throw new Error('SMTP is not configured');
+    await mailer.sendMail({
+      from: `${sender.name} <${sender.email}>`,
+      to: emailTo,
+      replyTo: replyTo?.email ? `${replyTo.name} <${replyTo.email}>` : undefined,
+      subject,
+      text: body,
+      attachments: [{ filename: attachment.name, content }],
+    });
+    return { delivered: true, provider: 'smtp' };
+  }
+
+  console.log(`[EMAIL+ATTACHMENT→${emailTo}] ${subject} (${attachment.name}, ${content.length} bytes)`);
+  return { delivered: false, reason: 'no_provider' };
+}
+
+module.exports = { sendEmail, sendHtmlEmail, sendEmailWithAttachment, detectEmailProvider };

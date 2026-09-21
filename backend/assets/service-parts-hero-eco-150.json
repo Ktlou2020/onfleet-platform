@@ -1,0 +1,401 @@
+{
+ "source": "Hero ECO 150 Maintenance Schedule (36-month dealer spreadsheet)",
+ "make": "Hero",
+ "model": "Eco 150",
+ "intervals_km": [
+  500,
+  3500,
+  6500,
+  9500,
+  12500,
+  15500,
+  18500,
+  21500,
+  24500,
+  27500,
+  30500,
+  33500,
+  36500,
+  39500,
+  42500,
+  45500,
+  48500,
+  51500,
+  54500,
+  57500,
+  60500,
+  63500,
+  66500,
+  69500,
+  72500,
+  75500,
+  78500,
+  81500,
+  84500,
+  87500,
+  90500,
+  93500,
+  96500,
+  99500,
+  102500,
+  105200
+ ],
+ "items": [
+  {
+   "description": "Engine oil",
+   "part_number": "SPDMCYL09SEES",
+   "qty_per_service": 1,
+   "qty_36_months": 18,
+   "at_km": [
+    500,
+    6500,
+    12500,
+    18500,
+    24500,
+    30500,
+    36500,
+    42500,
+    48500,
+    54500,
+    60500,
+    66500,
+    72500,
+    78500,
+    84500,
+    90500,
+    96500,
+    102500
+   ]
+  },
+  {
+   "description": "Engine oil filter (strainer)",
+   "part_number": "15421KTN900S",
+   "qty_per_service": 1,
+   "qty_36_months": 2,
+   "at_km": [
+    30500,
+    60500
+   ]
+  },
+  {
+   "description": "Brake Pads Front",
+   "part_number": "K06431KTNA701S",
+   "qty_per_service": 1,
+   "qty_36_months": 8,
+   "at_km": [
+    12500,
+    24500,
+    36500,
+    48500,
+    60500,
+    72500,
+    84500,
+    96500
+   ]
+  },
+  {
+   "description": "Brake Pads Rear",
+   "part_number": "K06431KTNA701S",
+   "qty_per_service": 1,
+   "qty_36_months": 8,
+   "at_km": [
+    12500,
+    24500,
+    36500,
+    48500,
+    60500,
+    72500,
+    84500,
+    96500
+   ]
+  },
+  {
+   "description": "Chain and Sprocket kit",
+   "part_number": "20K910S",
+   "qty_per_service": 1,
+   "qty_36_months": 7,
+   "at_km": [
+    15500,
+    30500,
+    45500,
+    57500,
+    69500,
+    84500,
+    99500
+   ]
+  },
+  {
+   "description": "Spark Plug",
+   "part_number": "31916KRM4099S",
+   "qty_per_service": 1,
+   "qty_36_months": 8,
+   "at_km": [
+    12500,
+    24500,
+    36500,
+    48500,
+    60500,
+    72500,
+    84500,
+    96500
+   ]
+  },
+  {
+   "description": "Drive Chain Slider",
+   "part_number": "52170KTN700S",
+   "qty_per_service": 1,
+   "qty_36_months": 1,
+   "at_km": [
+    54500
+   ]
+  },
+  {
+   "description": "Wheel Damper",
+   "part_number": "41241KSP900S",
+   "qty_per_service": 1,
+   "qty_36_months": 8,
+   "at_km": [
+    15500,
+    30500,
+    42500,
+    54500,
+    66500,
+    78500,
+    90500,
+    102500
+   ]
+  },
+  {
+   "description": "Element Comp Air filter",
+   "part_number": "17211KVN900S",
+   "qty_per_service": 1,
+   "qty_36_months": 8,
+   "at_km": [
+    12500,
+    24500,
+    36500,
+    48500,
+    60500,
+    72500,
+    84500,
+    96500
+   ]
+  },
+  {
+   "description": "Speedometer Cable",
+   "part_number": "44830KTN950S",
+   "qty_per_service": 1,
+   "qty_36_months": 3,
+   "at_km": [
+    18500,
+    57500,
+    90500
+   ]
+  },
+  {
+   "description": "Clutch Cable",
+   "part_number": "22870KTN700S",
+   "qty_per_service": 1,
+   "qty_36_months": 3,
+   "at_km": [
+    30500,
+    60500,
+    90500
+   ]
+  },
+  {
+   "description": "Brake Cable",
+   "part_number": "45450AAM000S",
+   "qty_per_service": 1,
+   "qty_36_months": 1,
+   "at_km": [
+    51500,
+    102500
+   ]
+  },
+  {
+   "description": "Throttle Cable",
+   "part_number": "17910KTN700S",
+   "qty_per_service": 1,
+   "qty_36_months": 1,
+   "at_km": [
+    51500,
+    102500
+   ]
+  },
+  {
+   "description": "Gasket Right",
+   "part_number": "11393KWK900S",
+   "qty_per_service": 1,
+   "qty_36_months": 5,
+   "at_km": [
+    18500,
+    36500,
+    54500,
+    72500,
+    90500
+   ]
+  },
+  {
+   "description": "Gasket Left",
+   "part_number": "11395KWK900S",
+   "qty_per_service": 1,
+   "qty_36_months": 1,
+   "at_km": [
+    51500
+   ]
+  },
+  {
+   "description": "Tappet Cover Gasket",
+   "part_number": "12391KRM840S",
+   "qty_per_service": 1,
+   "qty_36_months": 5,
+   "at_km": [
+    21500,
+    42500,
+    63500,
+    81500,
+    105200
+   ]
+  },
+  {
+   "description": "Front Tyre",
+   "part_number": "44711KFN850RS",
+   "qty_per_service": 1,
+   "qty_36_months": 3,
+   "at_km": [
+    30500,
+    60500,
+    90500
+   ]
+  },
+  {
+   "description": "Rear Tyre",
+   "part_number": "42711KCC730S",
+   "qty_per_service": 1,
+   "qty_36_months": 6,
+   "at_km": [
+    15500,
+    33500,
+    51500,
+    69500,
+    87500,
+    105200
+   ]
+  },
+  {
+   "description": "Front Wheel Bearing",
+   "part_number": "961406301010S",
+   "qty_per_service": 1,
+   "qty_36_months": 1,
+   "at_km": [
+    51500
+   ]
+  },
+  {
+   "description": "Rear Wheel Bearing",
+   "part_number": "961406302010S",
+   "qty_per_service": 1,
+   "qty_36_months": 1,
+   "at_km": [
+    51500
+   ]
+  },
+  {
+   "description": "Oil Seal Kit",
+   "part_number": "K55912KTNA910S",
+   "qty_per_service": 1,
+   "qty_36_months": 1,
+   "at_km": [
+    51500
+   ]
+  },
+  {
+   "description": "Outer Comp. Clutch",
+   "part_number": "22100KTN900S",
+   "qty_per_service": 1,
+   "qty_36_months": 2,
+   "at_km": [
+    30500,
+    51500
+   ]
+  },
+  {
+   "description": "Pressure Plate",
+   "part_number": "22355KRM840S",
+   "qty_per_service": 1,
+   "qty_36_months": 3,
+   "at_km": [
+    30500,
+    60500,
+    90500
+   ]
+  },
+  {
+   "description": "Friction Plate Kit",
+   "part_number": "K22222KTNA900S",
+   "qty_per_service": 1,
+   "qty_36_months": 2,
+   "at_km": [
+    42500,
+    81500
+   ]
+  },
+  {
+   "description": "Steel Plate",
+   "part_number": "22321KPS900S",
+   "qty_per_service": 1,
+   "qty_36_months": 2,
+   "at_km": [
+    42500,
+    81500
+   ]
+  },
+  {
+   "description": "Bulb Head light",
+   "part_number": "34901-KSP-910S",
+   "qty_per_service": 1,
+   "qty_36_months": 8,
+   "at_km": [
+    12500,
+    24500,
+    36500,
+    48500,
+    60500,
+    72500,
+    84500,
+    96500
+   ]
+  },
+  {
+   "description": "Indicator Bulb",
+   "part_number": "34904AAM301S",
+   "qty_per_service": 1,
+   "qty_36_months": 4,
+   "at_km": [
+    21500,
+    45500,
+    69500,
+    93500
+   ]
+  },
+  {
+   "description": "Ball Race Set",
+   "part_number": "25K170S",
+   "qty_per_service": 1,
+   "qty_36_months": 1,
+   "at_km": [
+    51500
+   ]
+  },
+  {
+   "description": "Cam Chain Kit",
+   "part_number": "22K170S",
+   "qty_per_service": 1,
+   "qty_36_months": 1,
+   "at_km": [
+    51500
+   ]
+  }
+ ]
+}

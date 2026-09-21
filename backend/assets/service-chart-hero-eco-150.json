@@ -1,0 +1,565 @@
+{
+ "source": "Hero Maintenance Chart ECO 150 (manufacturer PDF)",
+ "make": "Hero",
+ "model": "Eco 150",
+ "legend": {
+  "I": "Inspect",
+  "R": "Replace",
+  "C": "Clean",
+  "L": "Lubricate",
+  "A": "Adjust if required",
+  "O": "Oil change",
+  "T": "Top up",
+  "E": "Emission check"
+ },
+ "services": [
+  {
+   "service_no": 1,
+   "km_from": 500,
+   "km_to": 750
+  },
+  {
+   "service_no": 2,
+   "km_from": 3000,
+   "km_to": 3500
+  },
+  {
+   "service_no": 3,
+   "km_from": 6000,
+   "km_to": 6500
+  },
+  {
+   "service_no": 4,
+   "km_from": 9000,
+   "km_to": 9500
+  },
+  {
+   "service_no": 5,
+   "km_from": 12000,
+   "km_to": 12500
+  },
+  {
+   "service_no": 6,
+   "km_from": 15000,
+   "km_to": 15500
+  },
+  {
+   "service_no": 7,
+   "km_from": 18000,
+   "km_to": 18500
+  },
+  {
+   "service_no": 8,
+   "km_from": 21000,
+   "km_to": 21500
+  },
+  {
+   "service_no": 9,
+   "km_from": 24000,
+   "km_to": 24500
+  },
+  {
+   "service_no": 10,
+   "km_from": 27000,
+   "km_to": 27500
+  },
+  {
+   "service_no": 11,
+   "km_from": 30000,
+   "km_to": 30500
+  }
+ ],
+ "items": [
+  {
+   "item": "Fuel Line",
+   "actions": {
+    "1": "I",
+    "2": "I",
+    "3": "I",
+    "4": "I",
+    "5": "I",
+    "6": "I",
+    "7": "I",
+    "8": "I",
+    "9": "I",
+    "10": "I",
+    "11": "I"
+   },
+   "note": null
+  },
+  {
+   "item": "Throttle Operation",
+   "actions": {
+    "1": "I,A",
+    "2": "I,A",
+    "3": "I,A",
+    "4": "I,A",
+    "5": "I,A",
+    "6": "I,A",
+    "7": "I,A",
+    "8": "I,A",
+    "9": "I,A",
+    "10": "I,A",
+    "11": "I,A"
+   },
+   "note": null
+  },
+  {
+   "item": "Bystarter Operation",
+   "actions": {
+    "1": "I",
+    "2": "I",
+    "3": "I",
+    "4": "I",
+    "5": "I",
+    "6": "I",
+    "7": "I",
+    "8": "I",
+    "9": "I",
+    "10": "I",
+    "11": "I"
+   },
+   "note": null
+  },
+  {
+   "item": "Engine Idle Speed/Carburetor",
+   "actions": {
+    "1": "C,A",
+    "2": "A",
+    "3": "C,A",
+    "4": "A",
+    "5": "C,A",
+    "6": "A",
+    "7": "C,A",
+    "8": "A",
+    "9": "C,A",
+    "10": "A",
+    "11": "C,A"
+   },
+   "note": null
+  },
+  {
+   "item": "Air Cleaner Element*",
+   "actions": {
+    "1": "C",
+    "2": "C",
+    "3": "C",
+    "4": "C",
+    "5": "R",
+    "6": "C",
+    "7": "C",
+    "8": "C",
+    "9": "R",
+    "10": "C",
+    "11": "C"
+   },
+   "note": "Do not open air cleaner element Do not open air cleaner element"
+  },
+  {
+   "item": "Air Cleaner Element^",
+   "actions": {},
+   "note": "unless there is a drivability problem R unless there is a drivability problem R"
+  },
+  {
+   "item": "Air Cleaner Drain Tube",
+   "actions": {
+    "1": "I,C",
+    "2": "I,C",
+    "3": "I,C",
+    "4": "I,C",
+    "5": "I,C",
+    "6": "I,C",
+    "7": "I,C",
+    "8": "I,C",
+    "9": "I,C",
+    "10": "I,C",
+    "11": "I,C"
+   },
+   "note": null
+  },
+  {
+   "item": "Spark Plug",
+   "actions": {
+    "1": "I,C,A",
+    "2": "I,C,A",
+    "3": "I,C,A",
+    "4": "I,C,A",
+    "5": "R",
+    "6": "I,C,A",
+    "7": "I,C,A",
+    "8": "I,C,A",
+    "9": "R",
+    "10": "I,C,A",
+    "11": "I,C,A"
+   },
+   "note": null
+  },
+  {
+   "item": "Valve Clearance",
+   "actions": {
+    "1": "I,A",
+    "2": "I,A",
+    "3": "I,A",
+    "4": "I,A",
+    "5": "I,A",
+    "6": "I,A",
+    "7": "I,A",
+    "8": "I,A",
+    "9": "I,A",
+    "10": "I,A",
+    "11": "I,A"
+   },
+   "note": null
+  },
+  {
+   "item": "Engine Oil**",
+   "actions": {
+    "1": "O",
+    "2": "I,T",
+    "3": "O",
+    "4": "I,T",
+    "5": "O",
+    "6": "I,T",
+    "7": "O",
+    "8": "I,T",
+    "9": "O",
+    "10": "I,T",
+    "11": "O"
+   },
+   "note": null
+  },
+  {
+   "item": "Engine Oil Strainer Screen",
+   "actions": {
+    "1": "C",
+    "3": "C",
+    "5": "C",
+    "7": "C",
+    "9": "C",
+    "11": "C"
+   },
+   "note": null
+  },
+  {
+   "item": "Engine Oil Centrifugal Filter",
+   "actions": {
+    "1": "C",
+    "3": "C",
+    "5": "C",
+    "7": "C",
+    "9": "C",
+    "11": "C"
+   },
+   "note": null
+  },
+  {
+   "item": "Electric Starter/Oil Circulation",
+   "actions": {
+    "1": "I",
+    "2": "I",
+    "3": "I",
+    "4": "I",
+    "5": "I",
+    "6": "I",
+    "7": "I",
+    "8": "I",
+    "9": "I",
+    "10": "I",
+    "11": "I"
+   },
+   "note": null
+  },
+  {
+   "item": "Drive Chain@",
+   "actions": {},
+   "note": "I,C,L,A at every 2000 km I,C,L,A at every 2000 km"
+  },
+  {
+   "item": "Drive Chain Slider",
+   "actions": {
+    "2": "I",
+    "3": "I",
+    "4": "I",
+    "5": "I",
+    "6": "I",
+    "7": "I",
+    "8": "I",
+    "9": "I",
+    "10": "I",
+    "11": "I"
+   },
+   "note": null
+  },
+  {
+   "item": "Battery Voltage",
+   "actions": {
+    "1": "I",
+    "2": "I",
+    "3": "I",
+    "4": "I",
+    "5": "I",
+    "6": "I",
+    "7": "I",
+    "8": "I",
+    "9": "I",
+    "10": "I",
+    "11": "I"
+   },
+   "note": null
+  },
+  {
+   "item": "Battery",
+   "actions": {
+    "1": "I,T",
+    "2": "I,T",
+    "3": "I,T",
+    "4": "I,T",
+    "5": "I,T",
+    "6": "I,T",
+    "7": "I,T",
+    "8": "I,T",
+    "9": "I,T",
+    "10": "I,T",
+    "11": "I,T"
+   },
+   "note": null
+  },
+  {
+   "item": "Brake Shoe/Pad Wear",
+   "actions": {
+    "1": "I,A",
+    "2": "I,A",
+    "3": "I,A",
+    "4": "I,A",
+    "5": "I,A",
+    "6": "I,A",
+    "7": "I,A",
+    "8": "I,A",
+    "9": "I,A",
+    "10": "I,A",
+    "11": "I,A"
+   },
+   "note": null
+  },
+  {
+   "item": "Brake Fluid",
+   "actions": {
+    "1": "I",
+    "2": "I",
+    "3": "I",
+    "4": "I",
+    "5": "I",
+    "6": "I",
+    "7": "I",
+    "8": "I",
+    "9": "I",
+    "10": "I",
+    "11": "R"
+   },
+   "note": null
+  },
+  {
+   "item": "Brake System (Brake Cam/Pedal)",
+   "actions": {
+    "2": "C,L",
+    "4": "C,L",
+    "6": "C,L",
+    "8": "C,L",
+    "10": "C,L"
+   },
+   "note": null
+  },
+  {
+   "item": "Stop Lamp Switch/Headlamp Focus",
+   "actions": {
+    "1": "I,A",
+    "2": "I,A",
+    "3": "I,A",
+    "4": "I,A",
+    "5": "I,A",
+    "6": "I,A",
+    "7": "I,A",
+    "8": "I,A",
+    "9": "I,A",
+    "10": "I,A",
+    "11": "I,A"
+   },
+   "note": null
+  },
+  {
+   "item": "Clutch",
+   "actions": {
+    "1": "I,A",
+    "2": "I,A",
+    "3": "I,A",
+    "4": "I,A",
+    "5": "I,A",
+    "6": "I,A",
+    "7": "I,A",
+    "8": "I,A",
+    "9": "I,A",
+    "10": "I,A",
+    "11": "I,A"
+   },
+   "note": null
+  },
+  {
+   "item": "Side Stand/Main Stand",
+   "actions": {
+    "1": "L",
+    "2": "L",
+    "3": "L",
+    "4": "L",
+    "5": "L",
+    "6": "L",
+    "7": "L",
+    "8": "L",
+    "9": "L",
+    "10": "L",
+    "11": "L"
+   },
+   "note": null
+  },
+  {
+   "item": "Side Stand Switch",
+   "actions": {
+    "1": "I,C",
+    "2": "I,C",
+    "3": "I,C",
+    "4": "I,C",
+    "5": "I,C",
+    "6": "I,C",
+    "7": "I,C",
+    "8": "I,C",
+    "9": "I,C",
+    "10": "I,C",
+    "11": "I,C"
+   },
+   "note": null
+  },
+  {
+   "item": "Nuts, Bolts & Fasteners***",
+   "actions": {
+    "1": "I",
+    "2": "I",
+    "3": "I",
+    "4": "I",
+    "5": "I",
+    "6": "I",
+    "7": "I",
+    "8": "I",
+    "9": "I",
+    "10": "I",
+    "11": "I"
+   },
+   "note": null
+  },
+  {
+   "item": "Wheel Bearings",
+   "actions": {
+    "1": "I",
+    "2": "I",
+    "3": "I",
+    "4": "I",
+    "5": "I",
+    "6": "I",
+    "7": "I",
+    "8": "I",
+    "9": "I",
+    "10": "I",
+    "11": "I"
+   },
+   "note": null
+  },
+  {
+   "item": "Wheels/Tyres",
+   "actions": {
+    "1": "I",
+    "2": "I",
+    "3": "I",
+    "4": "I",
+    "5": "I",
+    "6": "I",
+    "7": "I",
+    "8": "I",
+    "9": "I",
+    "10": "I",
+    "11": "I"
+   },
+   "note": null
+  },
+  {
+   "item": "Steering Head Bearings",
+   "actions": {
+    "1": "I",
+    "2": "I,A",
+    "3": "I",
+    "4": "I,A",
+    "5": "I,L,A",
+    "6": "I",
+    "7": "I,A",
+    "8": "I",
+    "9": "I,L,A",
+    "10": "I",
+    "11": "I,A"
+   },
+   "note": null
+  },
+  {
+   "item": "Front Suspension/Oil****",
+   "actions": {
+    "1": "I",
+    "2": "I",
+    "3": "I",
+    "4": "I",
+    "5": "I",
+    "6": "I",
+    "7": "I",
+    "8": "I",
+    "9": "I",
+    "10": "I",
+    "11": "R"
+   },
+   "note": null
+  },
+  {
+   "item": "Rear Suspension",
+   "actions": {
+    "1": "I",
+    "2": "I",
+    "3": "I",
+    "4": "I",
+    "5": "I",
+    "6": "I",
+    "7": "I",
+    "8": "I",
+    "9": "I",
+    "10": "I",
+    "11": "I"
+   },
+   "note": null
+  },
+  {
+   "item": "Secondary Air Injection",
+   "actions": {
+    "3": "I",
+    "5": "I",
+    "7": "I",
+    "9": "I",
+    "11": "I"
+   },
+   "note": null
+  },
+  {
+   "item": "Muffler (Catalytic Converter).",
+   "actions": {
+    "3": "I,E",
+    "5": "I,E",
+    "7": "I,E",
+    "9": "I,E",
+    "11": "I,E"
+   },
+   "note": null
+  }
+ ]
+}

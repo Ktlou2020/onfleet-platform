@@ -485,6 +485,169 @@ router.post('/paystack-subscriptions/:code/cancel', superadminOnly, async (req, 
   }
 });
 
+// ---------- Parts catalogue and ordering ----------
+// The dealer parts list, the service schedule it feeds, and requests for
+// quotation on Hero's own form. See services/partsImport.js, servicePlan.js
+// and partsOrdering.js for why each works the way it does.
+
+const spreadsheetUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 },
+});
+
+router.post('/parts-catalog/import', spreadsheetUpload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Attach the parts list spreadsheet' });
+  const make = String(req.body.make || '').trim();
+  const model = String(req.body.model || '').trim();
+  if (!make || !model) return res.status(400).json({ error: 'Say which make and model this list is for' });
+
+  const { importParts, parseWorkbook } = require('../services/partsImport');
+  try {
+    if (String(req.body.preview) === '1') {
+      const parsed = parseWorkbook(req.file.buffer, { make, model });
+      return res.json({ preview: true, sheets: parsed.sheets, total: parsed.parts.length,
+        sample: parsed.parts.slice(0, 10), skipped: parsed.skipped.slice(0, 10) });
+    }
+    const result = await importParts(req.file.buffer, { make, model });
+    if (result.error) return res.status(400).json(result);
+    await logAudit(req.user.id, 'parts_catalog.import', 'parts_catalog', null,
+      { make, model, file: req.file.originalname, added: result.added, updated: result.updated }, req.ip);
+    res.json(result);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+router.get('/parts-catalog', async (req, res) => {
+  const { searchParts } = require('../services/partsImport');
+  const result = await searchParts({
+    q: req.query.q, make: req.query.make || null, model: req.query.model || null,
+    limit: req.query.limit, offset: req.query.offset,
+  });
+  res.json(result);
+});
+
+// What is in the catalogue at all, so the page can offer the models it holds.
+router.get('/parts-catalog/models', async (req, res) => {
+  const { rows } = await pgDb.query(
+    `SELECT make, model, COUNT(*)::int AS parts,
+            COUNT(*) FILTER (WHERE price_ex_vat IS NOT NULL)::int AS priced,
+            COUNT(*) FILTER (WHERE is_kit)::int AS kits,
+            MAX(updated_at) AS updated_at
+       FROM parts_catalog GROUP BY make, model ORDER BY parts DESC`);
+  res.json(rows);
+});
+
+// ---------- Requests for quotation ----------
+
+router.get('/parts-orders', async (req, res) => {
+  const status = String(req.query.status || '').trim();
+  const params = [];
+  let where = '';
+  if (status && status !== 'all') { params.push(status); where = `WHERE o.status = $${params.length}`; }
+  const { rows } = await pgDb.query(
+    `SELECT o.*, u.full_name AS created_by_name,
+            (SELECT COUNT(*)::int FROM parts_order_items i WHERE i.order_id = o.id) AS line_count,
+            (SELECT COALESCE(SUM(i.qty * COALESCE(i.unit_price_ex_vat, 0)), 0) FROM parts_order_items i WHERE i.order_id = o.id) AS total_ex_vat
+       FROM parts_orders o LEFT JOIN users u ON u.id = o.created_by
+       ${where} ORDER BY o.created_at DESC LIMIT 100`, params);
+  res.json(rows);
+});
+
+// What the workshop needs right now, ready to become an order.
+router.get('/parts-orders/suggestion', async (req, res) => {
+  const { suggestOrder } = require('../services/partsOrdering');
+  res.json(await suggestOrder({
+    make: req.query.make || 'Hero',
+    model: req.query.model || 'Eco 150',
+  }));
+});
+
+router.get('/parts-orders/:id', async (req, res) => {
+  const { getOrder } = require('../services/partsOrdering');
+  const order = await getOrder(Number(req.params.id));
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  res.json(order);
+});
+
+router.post('/parts-orders', async (req, res) => {
+  const { suggestOrder, createOrder } = require('../services/partsOrdering');
+  const make = String(req.body.make || 'Hero');
+  const model = String(req.body.model || 'Eco 150');
+  // With no lines given, the order is built from what the workshop needs.
+  const lines = Array.isArray(req.body.lines) && req.body.lines.length
+    ? req.body.lines
+    : (await suggestOrder({ make, model })).lines;
+  if (!lines.length) return res.status(400).json({ error: 'Nothing to order at the moment' });
+
+  const order = await createOrder({
+    lines, make, model, actorId: req.user.id,
+    deliveryMethod: req.body.delivery_method || null,
+    neededBy: req.body.needed_by || null,
+    notes: req.body.notes || null,
+  });
+  await logAudit(req.user.id, 'parts_order.create', 'parts_orders', order.id,
+    { reference: order.reference, lines: order.items.length, total: order.total_ex_vat }, req.ip);
+  res.status(201).json(order);
+});
+
+// The order as Hero's own RFQ spreadsheet.
+router.get('/parts-orders/:id/rfq', async (req, res) => {
+  const { getOrder, renderRfq, rfqFileName } = require('../services/partsOrdering');
+  const order = await getOrder(Number(req.params.id));
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  const file = renderRfq(order);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${rfqFileName(order)}"`);
+  res.send(file);
+});
+
+// Emails the RFQ to the supplier. A person presses this — the order is built
+// automatically, but nothing leaves for a supplier without someone deciding.
+router.post('/parts-orders/:id/send', async (req, res) => {
+  const { getOrder, renderRfq, rfqFileName, rfqEmailBody, markSent, SUPPLIER_EMAIL } = require('../services/partsOrdering');
+  const { sendEmailWithAttachment } = require('../services/notifier');
+  const order = await getOrder(Number(req.params.id));
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (order.status !== 'draft') return res.status(409).json({ error: `This order has already been ${order.status}` });
+  if (!order.items.length) return res.status(400).json({ error: 'This order has no lines' });
+
+  const to = String(req.body.to || order.supplier_email || SUPPLIER_EMAIL).trim();
+  const subject = `Request for quotation ${order.reference} — ${order.make} ${order.model}`;
+  try {
+    const outcome = await sendEmailWithAttachment(to, subject, rfqEmailBody(order), {
+      name: rfqFileName(order), content: renderRfq(order),
+    });
+    if (!outcome.delivered) {
+      return res.status(502).json({ error: 'No email provider is configured, so the RFQ was not sent. Download it and send it yourself.' });
+    }
+    const sent = await markSent({ orderId: order.id, actorId: req.user.id, sentTo: to });
+    await logAudit(req.user.id, 'parts_order.send', 'parts_orders', order.id,
+      { reference: order.reference, to, lines: order.items.length }, req.ip);
+    res.json({ ...sent, sent_to: to });
+  } catch (error) {
+    res.status(502).json({ error: `Could not send the RFQ: ${error.message}` });
+  }
+});
+
+router.put('/parts-orders/:id/status', async (req, res) => {
+  const { setStatus, getOrder } = require('../services/partsOrdering');
+  try {
+    const updated = await setStatus({
+      orderId: Number(req.params.id),
+      status: String(req.body.status || ''),
+      quoteReference: req.body.quote_reference || null,
+      quotedTotal: req.body.quoted_total_ex_vat || null,
+    });
+    if (!updated) return res.status(404).json({ error: 'Order not found' });
+    await logAudit(req.user.id, 'parts_order.status', 'parts_orders', updated.id,
+      { status: updated.status, quote_reference: updated.quote_reference }, req.ip);
+    res.json(await getOrder(updated.id));
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 // ---------- Daily report ----------
 // Daily admin report (sent by the scheduler at 08:00 SAST). Preview renders
 // today's report as it would go out now; send-to-me emails it only to the

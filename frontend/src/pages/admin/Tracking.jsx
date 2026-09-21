@@ -519,6 +519,8 @@ export default function Tracking({ readOnly = false }) {
 
   // ── alert settings modal ──────────────────────────────────────────
   const [showAlertSettings,    setShowAlertSettings]    = useState(false);
+  const [showNightCurfew,     setShowNightCurfew]     = useState(false);
+  const [curfew,              setCurfew]              = useState(null);
   const [alertSettings,        setAlertSettings]        = useState([]);
   const [notifUsers,           setNotifUsers]           = useState([]);
   const [savingAlertSettings,  setSavingAlertSettings]  = useState(false);
@@ -639,6 +641,45 @@ export default function Tracking({ readOnly = false }) {
       const { data } = await api.get('/tracking/alerts?limit=100');
       setAlerts(data);
     } catch { /* silent */ }
+  }, []);
+
+  // The overnight curfew. Loaded when the panel is opened rather than with the
+  // page: it is rarely looked at, but when it is looked at it is usually 01:00
+  // and something has gone wrong, so it must be current.
+  const openNightCurfew = useCallback(async () => {
+    setShowNightCurfew(true);
+    setCurfew(null);
+    try {
+      const { data } = await api.get('/tracking/night-curfew');
+      setCurfew(data);
+    } catch {
+      toast.error('Could not load the curfew settings');
+      setShowNightCurfew(false);
+    }
+  }, []);
+
+  const setCurfewEnabled = useCallback(async (enabled) => {
+    setCurfew(c => c && { ...c, enabled });          // answer the click immediately
+    try {
+      await api.put('/tracking/night-curfew', { enabled });
+      toast.success(enabled ? 'Overnight curfew on' : 'Overnight curfew off — no bike will be cut automatically at night');
+    } catch {
+      setCurfew(c => c && { ...c, enabled: !enabled }); // put it back; it did not take
+      toast.error('Could not change the curfew');
+    }
+  }, []);
+
+  const setBikeExempt = useCallback(async (bikeId, exempt, registration) => {
+    try {
+      await api.put(`/tracking/night-curfew/bike/${bikeId}`, { exempt });
+      const { data } = await api.get('/tracking/night-curfew');
+      setCurfew(data);
+      toast.success(exempt
+        ? `${registration || 'Bike'} may now move at night`
+        : `${registration || 'Bike'} is back under the curfew`);
+    } catch {
+      toast.error('Could not change that bike');
+    }
   }, []);
 
   const openAlertSettings = useCallback(async (deviceId = null) => {
@@ -1624,6 +1665,7 @@ export default function Tracking({ readOnly = false }) {
           <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)', display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={{ fontSize: 11, color: 'var(--muted)', flex: 1 }}>Recent events</span>
             {!readOnly && <button className="btn btn-sm btn-secondary" title="Alert settings" onClick={() => openAlertSettings()}><Settings size={11} /></button>}
+            <button className="btn btn-sm btn-secondary" title="Overnight curfew (00:00–04:00)" onClick={openNightCurfew}><Moon size={11} /></button>
             <button className="btn btn-sm btn-secondary" onClick={loadAlerts}><RefreshCw size={11} /></button>
             {alerts.some(a => !a.acknowledged_at) && (
               <button className="btn btn-sm btn-secondary" style={{ fontSize: 11 }} onClick={acknowledgeAll}>Ack all</button>
@@ -3047,6 +3089,93 @@ export default function Tracking({ readOnly = false }) {
       )}
 
       {/* ── Alert Settings Modal ─────────────────────────────────────── */}
+      {showNightCurfew && (() => {
+        const exempt = curfew?.exempt_bikes || [];
+        const exemptIds = new Set(exempt.map(b => b.id));
+        // Only bikes with a tracker can be cut, so only those are worth listing.
+        const candidates = devices
+          .filter(d => d.bike_id && d.registration && !exemptIds.has(d.bike_id))
+          .sort((a, z) => a.registration.localeCompare(z.registration));
+
+        return (
+          <Modal onClose={() => setShowNightCurfew(false)} title="Overnight curfew">
+            {!curfew && <div className="text-sm muted">Loading…</div>}
+            {curfew && <>
+              <div style={{
+                display: 'flex', alignItems: 'flex-start', gap: 12, padding: 12, borderRadius: 8,
+                border: `1px solid ${curfew.enabled ? 'var(--border)' : '#f9731655'}`,
+                background: curfew.enabled ? 'var(--surface-2)' : '#f9731615', marginBottom: 16,
+              }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 2 }}>
+                    {curfew.enabled ? 'On — bikes are cut automatically at night' : 'Off — nothing is cut automatically'}
+                  </div>
+                  <div className="text-xs muted">
+                    A bike moving between <strong>00:00 and 04:00</strong> has its engine cut once it slows
+                    to under {curfew.cut_below_kmh} km/h. It is never cut at speed.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  aria-pressed={curfew.enabled}
+                  onClick={() => setCurfewEnabled(!curfew.enabled)}
+                  style={{
+                    width: 46, height: 26, borderRadius: 13, border: 'none', padding: 0, flexShrink: 0,
+                    background: curfew.enabled ? '#22c55e' : 'var(--border)', cursor: 'pointer',
+                    position: 'relative', transition: 'background .18s',
+                  }}>
+                  <span style={{
+                    position: 'absolute', top: 3, left: curfew.enabled ? 23 : 3,
+                    width: 20, height: 20, borderRadius: 10, background: '#fff',
+                    boxShadow: '0 1px 4px rgba(0,0,0,.25)', transition: 'left .18s',
+                  }} />
+                </button>
+              </div>
+
+              <div className="text-xs muted" style={{ marginBottom: 16, lineHeight: 1.6 }}>
+                The cut waits for the bike to slow down, because killing a motorcycle's engine at speed can
+                put its rider on the road. A stolen bike still stops at the first robot, and will not restart
+                until somebody restores it here.
+                <br /><br />
+                Bikes that have been <strong>sold, paid off or written off are never cut</strong> — they are not
+                ours to immobilise.
+              </div>
+
+              <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 8 }}>
+                Allowed to move at night ({exempt.length})
+              </div>
+              {!exempt.length && (
+                <div className="text-xs muted" style={{ marginBottom: 10 }}>
+                  No exceptions — every bike with a tracker is covered.
+                </div>
+              )}
+              {exempt.map(b => (
+                <div key={b.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderBottom: '1px solid var(--border)' }}>
+                  <span style={{ flex: 1, fontSize: 13 }}>{b.registration}</span>
+                  <span className="text-xs muted">{b.status}</span>
+                  <button className="btn btn-sm btn-secondary" style={{ fontSize: 11 }}
+                    onClick={() => setBikeExempt(b.id, false, b.registration)}>
+                    Put back
+                  </button>
+                </div>
+              ))}
+
+              <select
+                value=""
+                onChange={e => { if (e.target.value) { const d = candidates.find(c => String(c.bike_id) === e.target.value); setBikeExempt(Number(e.target.value), true, d?.registration); } }}
+                style={{ width: '100%', marginTop: 12, fontSize: 12, padding: '7px 10px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', cursor: 'pointer' }}
+              >
+                <option value="">Let a bike out at night…</option>
+                {candidates.map(d => <option key={d.bike_id} value={d.bike_id}>{d.registration}</option>)}
+              </select>
+              <div className="text-xs muted" style={{ marginTop: 6 }}>
+                An exempt bike still raises the night-movement alert — it just is not cut. Who exempted it is recorded.
+              </div>
+            </>}
+          </Modal>
+        );
+      })()}
+
       {showAlertSettings && (() => {
         // Pill toggle component
         const Toggle = ({ checked, onChange, disabled, title }) => (

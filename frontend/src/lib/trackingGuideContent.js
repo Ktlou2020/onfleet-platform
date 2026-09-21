@@ -106,6 +106,8 @@ export const TRACKING_SECTIONS = [
         'A bike entering one raises "Entered a no-go zone" — its own critical alert, which escalates until somebody answers — and cuts the engine automatically. Riding back out raises "Left a no-go zone" instead, which is the quiet one.'],
       ['speed', 'Set a realistic speed limit per tracker.',
         'Every tracker shipped at 120 km/h, which is why no speeding alert ever fired despite 26,979 pings over 80 km/h in a month.'],
+      ['curfew', 'Know what the overnight curfew does on its own, between 00:00 and 04:00.',
+        'A bike moving in that window has its engine cut without waiting for anybody — but only once it slows below 10 km/h, because cutting a motorcycle at speed can put its rider on the road. Bikes that are sold, paid off or written off are never cut. The Alerts tab has the switch that stops all of it, and the list of bikes allowed out at night.'],
     ],
     links: [{ label: 'Open geofences', to: '/admin/tracking', adminTo: '/admin/tracking' }],
   },
@@ -143,6 +145,7 @@ export const TRACKING_SECTIONS = [
       ['An alert keeps escalating', 'Nobody has acknowledged it', 'Acknowledge it. That is what stops the chase, and it records who stopped it.'],
       ['The engine will not restore', 'The command has not reached the tracker yet', 'It is re-sent when the tracker reconnects. The bike stays cut until it does — check the tracker is online.'],
       ['A theft case opened for nothing', 'A knock or a tow-truck set off a tamper alert', 'Close it as a false alarm. That keeps the recovery rate honest.'],
+      ['A rider is stranded after midnight', 'The overnight curfew cut their bike', 'Restore the engine from the tracker\u2019s Controls, then exempt that bike on the Alerts tab so it does not happen again tomorrow.'],
     ],
   },
 ];

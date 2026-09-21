@@ -1208,6 +1208,45 @@ router.delete('/alert-settings/device/:device_id', authRequired, adminOnly, asyn
   res.json({ ok: true });
 });
 
+// The overnight curfew — a bike moving between 00:00 and 04:00 SAST has its
+// engine cut automatically once it slows to walking pace.
+//
+// Both of these are audited. Something that immobilises vehicles on its own
+// should leave a record of who turned it on, who turned it off, and who
+// decided a particular bike was allowed out at night.
+router.get('/night-curfew', authRequired, trackingReadOnly, async (req, res) => {
+  const nightCurfew = require('../services/nightCurfew');
+  const { rows: exempt } = await pgDb.query(
+    `SELECT id, registration, status FROM bikes WHERE night_curfew_exempt = TRUE ORDER BY registration`);
+  res.json({
+    enabled: await nightCurfew.isEnabled(),
+    cut_below_kmh: nightCurfew.CUT_BELOW_KMH,
+    covered_statuses: nightCurfew.CUTTABLE_STATUSES,
+    exempt_bikes: exempt,
+  });
+});
+
+router.put('/night-curfew', authRequired, adminOnly, async (req, res) => {
+  const nightCurfew = require('../services/nightCurfew');
+  const enabled = !!req.body.enabled;
+  await nightCurfew.setEnabled(enabled);
+  await logAudit(req.user.id, enabled ? 'tracking.night_curfew_on' : 'tracking.night_curfew_off',
+    'app_settings', null, { enabled });
+  res.json({ ok: true, enabled });
+});
+
+router.put('/night-curfew/bike/:bike_id', authRequired, adminOnly, async (req, res) => {
+  const bikeId = Number(req.params.bike_id);
+  if (!Number.isInteger(bikeId)) return res.status(400).json({ error: 'Bad bike id' });
+  const exempt = !!req.body.exempt;
+  const { rows } = await pgDb.query(
+    'UPDATE bikes SET night_curfew_exempt = $1 WHERE id = $2 RETURNING id, registration', [exempt, bikeId]);
+  if (!rows.length) return res.status(404).json({ error: 'Bike not found' });
+  await logAudit(req.user.id, exempt ? 'tracking.night_curfew_exempt' : 'tracking.night_curfew_unexempt',
+    'bikes', bikeId, { registration: rows[0].registration, reason: req.body.reason || null });
+  res.json({ ok: true, bike: rows[0], exempt });
+});
+
 router.get('/notification-users', authRequired, trackingReadOnly, async (req, res) => {
   const { rows: users } = await pgDb.query(
     `SELECT id, full_name, email, role FROM users WHERE role IN ('superadmin','admin') AND deleted_at IS NULL ORDER BY full_name`

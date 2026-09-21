@@ -4,6 +4,7 @@ const pgDb = require('../pgDb');
 const trackingEvents = require('../trackingEvents');
 const { sendNotification } = require('./notifierPg');
 const { ALERT_SEVERITY } = require('../constants/alertTypes');
+const nightCurfew = require('./nightCurfew');
 
 // In-memory trip state per bike
 const openTrips = new Map();
@@ -140,7 +141,7 @@ const ALERT_LABELS = {
   bike_dormant:     'Bike inactive for days',
   night_movement:   'Movement during high-theft hours (00:00–04:00)',
   towing:           'Possible towing (ignition off, sustained movement)',
-  engine_cut_auto:  'Engine cut automatically — entered a no-go zone',
+  engine_cut_auto:  'Engine cut automatically',
   danger_zone_enter: 'Entered a no-go zone',
   danger_zone_exit:  'Left a no-go zone',
 };
@@ -276,14 +277,26 @@ async function processPing(bikeId, deviceId, lat, lng, speed, ignition, recorded
       const elapsedMs = ts - candidate.streakStartTs;
       const displacementM = haversineKm(candidate.streakStartLat, candidate.streakStartLng, lat, lng) * 1000;
       if (elapsedMs >= NIGHT_MOVEMENT_SUSTAINED_MS && displacementM >= NIGHT_MOVEMENT_MIN_DISPLACEMENT_M) {
-        await fireAlert(bikeId, deviceId, 'night_movement', {
+        const nightPayload = {
           lat, lng, speed_kmh: speed, sast_hour: nightHour,
           sustained_sec: Math.round(elapsedMs / 1000), displacement_m: Math.round(displacementM),
-        }, recordedAt, ts);
+        };
+        await fireAlert(bikeId, deviceId, 'night_movement', nightPayload, recordedAt, ts);
+        // Arming is separate from the alert on purpose: an admin who silences
+        // the night_movement alert has asked for less noise, not for stolen
+        // bikes to keep running.
+        await nightCurfew.arm(bikeId, deviceId, nightPayload);
       }
     }
   } else {
     nightMovementCandidates.delete(bikeId);
+  }
+
+  // An armed bike is cut as soon as it is down to walking pace — checked on
+  // every ping, including ones outside the window, because a bike confirmed
+  // at 03:58 should not get away with still moving at 04:02.
+  if (nightCurfew.isArmed(bikeId)) {
+    await nightCurfew.cutIfSlowEnough(bikeId, speed);
   }
 
   // Ignition off + real sustained road distance can only mean the bike is

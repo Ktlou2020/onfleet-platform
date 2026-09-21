@@ -1,9 +1,8 @@
 'use strict';
 
 const pgDb = require('../pgDb');
-const { cutCommandForModel } = require('./engineCommands');
-const { ALERT_SEVERITY, zoneAlertType } = require('../constants/alertTypes');
-const { notifyRiderEngineState } = require('./engineCutNotifier');
+const { zoneAlertType } = require('../constants/alertTypes');
+const { autoCut } = require('./autoEngineCut');
 
 // Active geofences change only via admin CRUD (routes/tracking.js), not per
 // ping — cached in memory and refreshed on demand instead of re-querying on
@@ -29,57 +28,16 @@ function reloadGeofences() {
 // Warm the cache at boot so the first real ping doesn't pay the query cost inline.
 setTimeout(() => loadGeofences().catch(() => {}), 2000);
 
-async function autoEngineCut(deviceId, bikeId, geofence) {
-  try {
-    const { rows } = await pgDb.query(
-      'SELECT id, imei, model FROM tracking_devices WHERE id = $1',
-      [deviceId]
-    );
-    if (!rows.length) return;
-    const device = rows[0];
-    const cutCmd = cutCommandForModel(device.model);
-
-    const { rows: cmdRows } = await pgDb.query(
-      `INSERT INTO tracking_commands (device_id, command, status, created_at)
-       VALUES ($1, $2, 'pending', NOW()) RETURNING id`,
-      [deviceId, cutCmd]
-    );
-    const cmdId = cmdRows[0].id;
-
-    // Persist "should stay cut" — setdigout doesn't survive a device power
-    // cycle, so this gets re-checked and re-sent on every reconnect
-    // (teltonikaServer.js) until explicitly restored.
-    await pgDb.query(
-      `UPDATE tracking_devices SET engine_cut_active=TRUE, engine_cut_reason=$1, engine_cut_at=NOW(), engine_cut_by=NULL WHERE id=$2`,
-      [`Entered no-go zone: ${geofence.name}`, deviceId]
-    );
-
-    // Lazy require avoids circular dep (teltonikaServer → geofenceService → teltonikaServer)
-    const { sendCommand } = require('../tcp/teltonikaServer');
-    const sent = sendCommand(device.imei, cmdId, cutCmd);
-    console.log(`[GeofenceService] Auto engine cut ${sent ? 'sent' : 'queued'} for ${device.imei} — entered: ${geofence.name}`);
-
-    const cutPayloadObj = { geofence_name: geofence.name, cmd: cutCmd, queued: !sent };
-    const { rows: alertRows } = await pgDb.query(
-      `INSERT INTO tracking_alerts (bike_id, device_id, alert_type, severity, payload, created_at)
-       VALUES ($1,$2,'engine_cut_auto',$3,$4,NOW()) RETURNING id`,
-      [bikeId, deviceId, ALERT_SEVERITY.engine_cut_auto, JSON.stringify(cutPayloadObj)]
-    );
-    // Routed through tripService's emitAlert (not a plain trackingEvents.emit)
-    // so this — arguably the most urgent alert type there is, a bike's
-    // engine was just physically cut — actually reaches a human by email,
-    // same as the other critical alert types. Previously it only ever
-    // showed up live in an open tracking tab.
-    const { emitAlert } = require('./tripService');
-    await emitAlert(alertRows[0].id, bikeId, deviceId, 'engine_cut_auto', cutPayloadObj, new Date().toISOString());
-
-    // The rider is the one standing next to a bike that just stopped working —
-    // tell them what happened and who to call, not only the control room.
-    notifyRiderEngineState(bikeId, 'cut', { reason: `entered a no-go zone (${geofence.name})`, automatic: true })
-      .catch((e) => console.error('[GeofenceService] rider engine-cut notify failed:', e.message));
-  } catch (e) {
-    console.error('[GeofenceService] Auto engine cut failed:', e.message);
-  }
+// Entering a no-go zone cuts the engine, through the same path as the
+// overnight curfew so both behave identically afterwards.
+function autoEngineCut(deviceId, bikeId, geofence) {
+  return autoCut({
+    deviceId,
+    bikeId,
+    reason: `Entered no-go zone: ${geofence.name}`,
+    riderReason: `it entered a no-go zone (${geofence.name})`,
+    payload: { geofence_id: geofence.id, geofence_name: geofence.name },
+  });
 }
 
 // Ray-casting point-in-polygon; coords: [[lat,lng], ...]

@@ -17,7 +17,7 @@ import {
   Battery, BatteryLow, BatteryMedium, BatteryFull, BatteryCharging,
   Signal, SignalZero, SignalLow, SignalMedium, SignalHigh, Satellite,
   Play, Pause, SkipBack, ChevronsRight, LayoutDashboard,
-  List as ListIcon, Map as MapIcon,
+  List as ListIcon, Map as MapIcon, Eye,
 } from 'lucide-react';
 import api from '../../api';
 import toast from 'react-hot-toast';
@@ -1623,7 +1623,7 @@ export default function Tracking({ readOnly = false }) {
         {sideTab === 'alerts' && <>
           <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)', display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={{ fontSize: 11, color: 'var(--muted)', flex: 1 }}>Recent events</span>
-            {!readOnly && <button className="btn btn-sm btn-secondary" title="Alert settings" onClick={openAlertSettings}><Settings size={11} /></button>}
+            {!readOnly && <button className="btn btn-sm btn-secondary" title="Alert settings" onClick={() => openAlertSettings()}><Settings size={11} /></button>}
             <button className="btn btn-sm btn-secondary" onClick={loadAlerts}><RefreshCw size={11} /></button>
             {alerts.some(a => !a.acknowledged_at) && (
               <button className="btn btn-sm btn-secondary" style={{ fontSize: 11 }} onClick={acknowledgeAll}>Ack all</button>
@@ -3159,7 +3159,25 @@ export default function Tracking({ readOnly = false }) {
                 <span style={{ fontWeight: 700, fontSize: 12, flex: 1 }}>Alert types</span>
                 <span style={{ fontSize: 10, color: 'var(--muted)', width: 54, textAlign: 'center' }}>Active</span>
                 <span style={{ fontSize: 10, color: 'var(--muted)', width: 54, textAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3 }}><Mail size={10} /> Email</span>
+                {!alertSettingsDeviceId && (
+                  <span title="What the control room's alert list shows. The alert is still raised and still escalates."
+                    style={{ fontSize: 10, color: 'var(--muted)', width: 66, textAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3 }}>
+                    <Eye size={10} /> Control room
+                  </span>
+                )}
               </div>
+              {!alertSettingsDeviceId && (() => {
+                const hidden = alertSettings.filter(x => x.control_room_visible === false);
+                return (
+                  <p style={{ fontSize: 11, color: 'var(--muted)', margin: '0 0 8px', lineHeight: 1.5 }}>
+                    <strong>Control room</strong> decides what their alert list shows. Everything else is unchanged:
+                    the alert is still raised, still escalates, and you still see it here.
+                    {hidden.length > 0 && (
+                      <> Currently hidden from them: {hidden.map(x => ALERT_LABELS[x.alert_type] || x.alert_type).join(', ')}.</>
+                    )}
+                  </p>
+                );
+              })()}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 0, maxHeight: 310, overflowY: 'auto', borderRadius: 8, border: '1px solid var(--border)' }}>
                 {alertSettings.map((s, idx) => (
                   <div key={s.alert_type} style={{
@@ -3183,6 +3201,12 @@ export default function Tracking({ readOnly = false }) {
                     <div style={{ width: 54, display: 'flex', justifyContent: 'center' }}>
                       <Toggle checked={s.notify_enabled} disabled={!s.enabled} onChange={v => setAlertSettings(prev => prev.map((x, i) => i === idx ? { ...x, notify_enabled: v } : x))} />
                     </div>
+                    {!alertSettingsDeviceId && (
+                      <div style={{ width: 66, display: 'flex', justifyContent: 'center' }}>
+                        <Toggle checked={s.control_room_visible !== false} disabled={!s.enabled}
+                          onChange={v => setAlertSettings(prev => prev.map((x, i) => i === idx ? { ...x, control_room_visible: v } : x))} />
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

@@ -585,8 +585,15 @@ router.get('/live', authRequired, trackingReadOnly, (req, res) => {
   res.flushHeaders();
 
   const onPing         = (p) => { try { res.write(`event: ping\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
-  const onAlert         = (p) => { try { res.write(`event: alert\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
-  const onAlertResolved = (p) => { try { res.write(`event: alert_resolved\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
+  // The control room's stream carries only what its list would show, so an
+  // alert can't arrive live that the page then can't find.
+  let hidden = new Set();
+  if (!seesEverything(req.user)) {
+    controlRoomHiddenTypes().then((set) => { hidden = set; }).catch(() => {});
+  }
+  const visible = (p) => !p?.alert_type || !hidden.has(p.alert_type);
+  const onAlert         = (p) => { try { if (visible(p)) res.write(`event: alert\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
+  const onAlertResolved = (p) => { try { if (visible(p)) res.write(`event: alert_resolved\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
   const onDeviceStatus = (p) => { try { res.write(`event: device_status\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
   const onRiskUpdate   = (p) => { try { res.write(`event: risk_update\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
   trackingEvents.on('ping', onPing);
@@ -723,6 +730,22 @@ router.get('/trips', authRequired, trackingReadOnly, async (req, res) => {
 
 // ---------- Alerts ----------
 
+// Which alert types the control room is shown. An outsourced room watching for
+// theft does not need a month of idling alerts, and that noise is what makes a
+// tamper alert easy to miss. Only their view is narrowed: the alert is still
+// raised, still escalates, and admins still see it.
+//
+// Visible unless an admin has said otherwise, so a new alert type never
+// arrives invisible.
+async function controlRoomHiddenTypes(db = pgDb) {
+  const { rows } = await db.query(
+    `SELECT alert_type FROM alert_settings WHERE control_room_visible = FALSE`);
+  return new Set(rows.map((r) => r.alert_type));
+}
+
+const seesEverything = (user) => user?.role !== 'control_room';
+
+
 router.get('/alerts', authRequired, trackingReadOnly, async (req, res) => {
   const limit      = Math.min(Number(req.query.limit) || 100, 500);
   const bikeId     = req.query.bike_id ? Number(req.query.bike_id) : null;
@@ -732,6 +755,10 @@ router.get('/alerts', authRequired, trackingReadOnly, async (req, res) => {
   const to   = req.query.to   ? new Date(req.query.to)   : null;
   const params = [];
   let sql = 'SELECT * FROM tracking_alerts WHERE 1=1';
+  if (!seesEverything(req.user)) {
+    const hidden = await controlRoomHiddenTypes();
+    if (hidden.size) { params.push([...hidden]); sql += ` AND alert_type <> ALL($${params.length})`; }
+  }
   if (bikeId)     { params.push(bikeId); sql += ` AND bike_id=$${params.length}`; }
   if (unackedOnly) sql += ' AND acknowledged_at IS NULL';
   if (status === 'open')     sql += ' AND resolved_at IS NULL';
@@ -1062,10 +1089,15 @@ router.post('/bikes/:bikeId/notes', authRequired, trackingReadOnly, async (req, 
 
 router.post('/alerts/acknowledge-all', authRequired, trackingReadOnly, async (req, res) => {
   const bikeId = req.body.bike_id ? Number(req.body.bike_id) : null;
-  const sql = 'UPDATE tracking_alerts SET acknowledged_at=NOW(), acknowledged_by=$1 WHERE acknowledged_at IS NULL';
-  const { rowCount } = bikeId
-    ? await pgDb.query(`${sql} AND bike_id=$2`, [req.user.id, bikeId])
-    : await pgDb.query(sql, [req.user.id]);
+  let sql = 'UPDATE tracking_alerts SET acknowledged_at=NOW(), acknowledged_by=$1 WHERE acknowledged_at IS NULL';
+  const params = [req.user.id];
+  if (bikeId) { params.push(bikeId); sql += ` AND bike_id=$${params.length}`; }
+  // Acknowledging everything should not reach alerts this person cannot see.
+  if (!seesEverything(req.user)) {
+    const hidden = await controlRoomHiddenTypes();
+    if (hidden.size) { params.push([...hidden]); sql += ` AND alert_type <> ALL($${params.length})`; }
+  }
+  const { rowCount } = await pgDb.query(sql, params);
   // Clearing the whole queue in one click is worth a record of who did it.
   await logAudit(req.user.id, 'alert.acknowledge_all', 'tracking_alerts', bikeId || null,
     { bike_id: bikeId, acknowledged: rowCount }, req.ip);
@@ -1101,6 +1133,7 @@ router.get('/alert-settings', authRequired, trackingReadOnly, async (req, res) =
     const enabledDefault = !DISABLED_BY_DEFAULT.has(t);
     return {
       alert_type: t,
+      control_room_visible: g ? g.control_room_visible !== false : true,
       enabled: active ? active.enabled : enabledDefault,
       notify_enabled: active ? active.notify_enabled : enabledDefault,
       recipient_user_ids: (() => { try { return JSON.parse(active?.recipient_user_ids || '[]'); } catch { return []; } })(),
@@ -1130,12 +1163,13 @@ router.put('/alert-settings', authRequired, adminOnly, async (req, res) => {
       if (!ALL_ALERT_TYPES.includes(s.alert_type)) continue;
       const recipIds = JSON.stringify(Array.isArray(s.recipient_user_ids) ? s.recipient_user_ids : []);
       await pgDb.query(`
-        INSERT INTO alert_settings (alert_type, enabled, notify_enabled, recipient_user_ids, updated_at)
-        VALUES ($1,$2,$3,$4,NOW())
+        INSERT INTO alert_settings (alert_type, enabled, notify_enabled, recipient_user_ids, control_room_visible, updated_at)
+        VALUES ($1,$2,$3,$4,$5,NOW())
         ON CONFLICT (alert_type) DO UPDATE SET
           enabled=EXCLUDED.enabled, notify_enabled=EXCLUDED.notify_enabled,
-          recipient_user_ids=EXCLUDED.recipient_user_ids, updated_at=NOW()
-      `, [s.alert_type, s.enabled !== false, s.notify_enabled !== false, recipIds]);
+          recipient_user_ids=EXCLUDED.recipient_user_ids,
+          control_room_visible=EXCLUDED.control_room_visible, updated_at=NOW()
+      `, [s.alert_type, s.enabled !== false, s.notify_enabled !== false, recipIds, s.control_room_visible !== false]);
     }
     if (applyToAll) {
       // Clear all device overrides so everything falls back to global

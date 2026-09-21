@@ -126,7 +126,7 @@
   },
   {
    "description": "Spark Plug",
-   "part_number": "31916KRM4099S",
+   "part_number": "31916KRM84099S",
    "qty_per_service": 1,
    "qty_36_months": 8,
    "at_km": [
@@ -138,7 +138,9 @@
     72500,
     84500,
     96500
-   ]
+   ],
+   "corrected_from": "31916KRM4099S",
+   "correction_note": "The 36-month schedule prints 31916KRM4099S; Hero's dealer price list sells 31916KRM84099S, described as SPARK PLUG (R37.13, replaces 31916-KRM-841). Hero supply against the number requested, so the schedule's number would be rejected."
   },
   {
    "description": "Drive Chain Slider",

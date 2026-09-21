@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PartsTab, PartsOrdersTab } from './workshopParts';
+import WorkshopGuide from '../../components/WorkshopGuide';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Trophy, Medal, Award, Copy, Check, Clock, FileText, Image, Trash2, Upload, ChevronUp, ChevronDown as ChevronDownIcon, ArrowUpDown } from 'lucide-react';
@@ -48,7 +49,7 @@ function FleetOwnerCell({ jc }) {
   );
 }
 
-const TABS = ['Overview', 'All Jobs', 'Technicians', 'Fleet Health', 'Parts', 'Parts orders', 'Rates', 'Staff'];
+const TABS = ['Overview', 'All Jobs', 'Technicians', 'Fleet Health', 'Parts', 'Parts orders', 'Rates', 'Staff', 'Guide'];
 
 const JOB_TYPES = ['service', 'repair', 'inspection', 'tyres', 'brakes', 'electrical', 'bodywork', 'other'];
 const PRIORITIES = ['normal', 'high', 'urgent'];
@@ -1358,6 +1359,7 @@ export default function AdminWorkshop() {
       {tab === 'Fleet Health' && <FleetHealthTab />}
       {tab === 'Parts' && <PartsTab />}
       {tab === 'Parts orders' && <PartsOrdersTab />}
+      {tab === 'Guide' && <WorkshopGuide portal="admin" />}
       {tab === 'Rates' && <RatesTab />}
       {tab === 'Staff' && <StaffTab />}
 

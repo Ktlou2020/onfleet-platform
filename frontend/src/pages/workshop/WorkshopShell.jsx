@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, ClipboardList, LogOut, Wrench , Package } from 'lucide-react';
+import { LayoutDashboard, ClipboardList, LogOut, Wrench , Package , BookOpen } from 'lucide-react';
 import { useAuth } from '../../auth';
 import api from '../../api';
 
@@ -38,6 +38,9 @@ export default function WorkshopShell() {
           <NavLink to="/workshop/app/parts" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <Package size={16} /> Parts
           </NavLink>
+          <NavLink to="/workshop/app/guide" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <BookOpen size={16} /> Guide
+          </NavLink>
         </nav>
         <div className="user-mini">
           <div className="avatar">{user?.full_name?.[0]}</div>
@@ -62,6 +65,10 @@ export default function WorkshopShell() {
         <NavLink to="/workshop/app/parts">
           <Package size={20} />
           <span>Parts</span>
+        </NavLink>
+        <NavLink to="/workshop/app/guide">
+          <BookOpen size={20} />
+          <span>Guide</span>
         </NavLink>
       </nav>
       <div className="main">

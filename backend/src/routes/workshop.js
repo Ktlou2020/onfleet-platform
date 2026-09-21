@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const pgDb = require('../pgDb');
-const { authRequired } = require('../middleware/auth');
+const { authRequired, adminOnly } = require('../middleware/auth');
 const { sendEmail } = require('../services/notifier');
 const { sendNotification } = require('../services/notifierPg');
 const UPLOAD_DIRS = require('../uploadPaths');
@@ -718,6 +718,51 @@ router.get('/parts-catalog/available', authRequired, workshopOnly, async (req, r
 });
 
 // Upcoming service schedule — bikes due within N days
+// ---------- Workshop guide ----------
+// The guide is in the product rather than in a folder somewhere, and it
+// remembers where each person got to — so a manager can see who has been
+// through it, and a technician can pick it up where they left off.
+
+router.get('/guide/progress', authRequired, workshopOnly, async (req, res) => {
+  const guide = String(req.query.guide || 'workshop');
+  const { rows } = await pgDb.query(
+    'SELECT step_key, completed_at FROM guide_progress WHERE user_id = $1 AND guide = $2', [req.user.id, guide]);
+  res.json({ guide, done: rows.map((r) => r.step_key), completed_at: rows[0]?.completed_at || null });
+});
+
+router.put('/guide/progress', authRequired, workshopOnly, async (req, res) => {
+  const guide = String(req.body.guide || 'workshop');
+  const stepKey = String(req.body.step_key || '').trim();
+  if (!stepKey || stepKey.length > 100) return res.status(400).json({ error: 'Which step?' });
+
+  if (req.body.done === false) {
+    await pgDb.query('DELETE FROM guide_progress WHERE user_id = $1 AND guide = $2 AND step_key = $3',
+      [req.user.id, guide, stepKey]);
+  } else {
+    await pgDb.query(
+      `INSERT INTO guide_progress (user_id, guide, step_key) VALUES ($1,$2,$3)
+       ON CONFLICT (user_id, guide, step_key) DO NOTHING`, [req.user.id, guide, stepKey]);
+  }
+  const { rows } = await pgDb.query(
+    'SELECT step_key FROM guide_progress WHERE user_id = $1 AND guide = $2', [req.user.id, guide]);
+  res.json({ guide, done: rows.map((r) => r.step_key) });
+});
+
+// Who on the team has worked through it — for whoever is bringing people on.
+router.get('/guide/progress/team', authRequired, adminOnly, async (req, res) => {
+  const guide = String(req.query.guide || 'workshop');
+  const { rows } = await pgDb.query(
+    `SELECT u.id, u.full_name, u.role,
+            COUNT(g.step_key)::int AS steps_done,
+            MAX(g.completed_at) AS last_activity
+       FROM users u
+       LEFT JOIN guide_progress g ON g.user_id = u.id AND g.guide = $1
+      WHERE u.role IN ('technician', 'admin', 'superadmin') AND u.deleted_at IS NULL AND u.status = 'active'
+      GROUP BY u.id, u.full_name, u.role
+      ORDER BY steps_done DESC, u.full_name`, [guide]);
+  res.json(rows);
+});
+
 // What this bike needs at the kilometres on its clock: the manufacturer's
 // tasks for the service it is due, the parts to replace now, and the ones
 // close enough to be worth doing while it is on the ramp.

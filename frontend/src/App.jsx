@@ -76,6 +76,7 @@ const WorkshopDashboard = lazy(() => import('./pages/workshop/Dashboard'));
 const WorkshopJobCards = lazy(() => import('./pages/workshop/JobCards'));
 const WorkshopJobCard = lazy(() => import('./pages/workshop/JobCard'));
 const WorkshopParts = lazy(() => import('./pages/workshop/Parts'));
+const WorkshopGuidePage = lazy(() => import('./pages/workshop/Guide'));
 const FleetImpersonate = lazy(() => import('./pages/fleet/FleetImpersonate'));
 const FleetRiderApply = lazy(() => import('./pages/FleetRiderApply'));
 const Privacy = lazy(() => import('./pages/Privacy'));
@@ -218,6 +219,7 @@ export default function App() {
             <Route path="job-cards" element={<WorkshopJobCards />} />
             <Route path="job-cards/:id" element={<WorkshopJobCard />} />
             <Route path="parts" element={<WorkshopParts />} />
+            <Route path="guide" element={<WorkshopGuidePage />} />
           </Route>
         </Routes>
       </Suspense>

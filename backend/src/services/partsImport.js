@@ -185,9 +185,11 @@ async function searchParts({ q, make = null, model = null, limit = 50, offset = 
        FROM parts_catalog
       WHERE ${where.join(' AND ')}
       ORDER BY
-        -- an exact part number first, then kits, then everything by name
+        -- an exact part number first; then the priced dealer list ahead of the
+        -- older OCR'd catalogue, since the same part can be in both and only
+        -- the dealer list can be ordered against; then kits, then by name
         (UPPER(REGEXP_REPLACE(part_number, '[^A-Za-z0-9]', '', 'g')) = $${params.length + 1}) DESC,
-        is_kit DESC, description
+        (price_ex_vat IS NOT NULL) DESC, is_kit DESC, description
       LIMIT $${params.length + 2} OFFSET $${params.length + 3}`,
     [...params, plain, Math.min(Number(limit) || 50, 200), Math.max(Number(offset) || 0, 0)]);
   return { results: rows, total: count.total };

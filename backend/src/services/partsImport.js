@@ -124,6 +124,9 @@ function parseWorkbook(buffer, { make, model }) {
 }
 
 async function importParts(buffer, { make, model, source = 'dealer_list', db = pgDb }) {
+  // 'catalogue' is the OCR'd manufacturer book, which predates the uniqueness
+  // rule and keeps its duplicates; an import must be its own source.
+  if (source === 'catalogue') throw new Error('Imported lists need their own source name');
   const parsed = parseWorkbook(buffer, { make, model });
   if (!parsed.parts.length) {
     return { ...parsed, added: 0, updated: 0, error: 'No parts found in that spreadsheet' };
@@ -138,6 +141,7 @@ async function importParts(buffer, { make, model, source = 'dealer_list', db = p
           status, supersedes, alternate_part_number, price_ex_vat, is_kit, source, updated_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
        ON CONFLICT (make, model, part_number, source, COALESCE(ref_no, ''), COALESCE(group_code, ''))
+         WHERE source <> 'catalogue'
        DO UPDATE SET description = EXCLUDED.description, group_name = EXCLUDED.group_name,
                      status = EXCLUDED.status, supersedes = EXCLUDED.supersedes,
                      alternate_part_number = EXCLUDED.alternate_part_number,

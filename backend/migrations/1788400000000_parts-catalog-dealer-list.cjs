@@ -33,9 +33,16 @@ exports.up = (pgm) => {
 
   // One row per part number per source, so re-importing a price list updates
   // rather than duplicating.
+  //
+  // Only for imported lists: the rows already in the table came from OCR of a
+  // manufacturer PDF and contain genuine duplicates (the same bolt listed
+  // under two reference numbers in one group). A unique index across those
+  // cannot be created, and deleting them to force one would throw away
+  // catalogue data to satisfy a constraint that exists for imports.
   pgm.sql(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_parts_catalog_identity
-      ON parts_catalog (make, model, part_number, source, COALESCE(ref_no, ''), COALESCE(group_code, ''));
+      ON parts_catalog (make, model, part_number, source, COALESCE(ref_no, ''), COALESCE(group_code, ''))
+      WHERE source <> 'catalogue';
   `);
 };
 

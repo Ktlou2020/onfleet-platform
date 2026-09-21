@@ -196,14 +196,16 @@
   },
   {
    "description": "Clutch Cable",
-   "part_number": "22870KTN700S",
+   "part_number": "22870KTN950S",
    "qty_per_service": 1,
    "qty_36_months": 3,
    "at_km": [
     30500,
     60500,
     90500
-   ]
+   ],
+   "corrected_from": "22870KTN700S",
+   "correction_note": "The 36-month schedule prints 22870KTN700S, which Hero's dealer price list does not carry. Their list sells 22870KTN950S, CABLE COMP., CLUTCH (R38.61). The nearest number, 22871KTN700S, is the cable's boot (R3.47) \u2014 the right part is the cable itself."
   },
   {
    "description": "Brake Cable",
@@ -335,13 +337,15 @@
   },
   {
    "description": "Friction Plate Kit",
-   "part_number": "K22222KTNA900S",
+   "part_number": "K22222KTNA900EES",
    "qty_per_service": 1,
    "qty_36_months": 2,
    "at_km": [
     42500,
     81500
-   ]
+   ],
+   "corrected_from": "K22222KTNA900S",
+   "correction_note": "The schedule prints K22222KTNA900S; the price list sells the same kit as K22222KTNA900EES, KIT DISC CLUTCH FRICTION (R708.84). The list uses an EES suffix on several kit numbers."
   },
   {
    "description": "Steel Plate",

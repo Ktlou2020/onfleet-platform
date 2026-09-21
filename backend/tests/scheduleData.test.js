@@ -36,13 +36,26 @@ describe('the Hero Eco 150 reference data', () => {
     expect(catalogue.parts.some((p) => plain(p.part_number) === plain(plug.part_number))).toBe(true);
   });
 
-  // The rest are known and flagged on the job card rather than guessed at: the
-  // closest number is not always the right part (the clutch cable's nearest
-  // match by number is the cable's boot).
-  it('knows exactly which scheduled parts are still missing from the price list', () => {
+  // Read by description and confirmed, not matched on digits: the clutch
+  // cable's nearest number is the cable's boot at a tenth of the price.
+  it('uses the clutch parts Hero actually sell', () => {
+    const cable = schedule.items.find((i) => i.description.trim() === 'Clutch Cable');
+    expect(cable).toMatchObject({ part_number: '22870KTN950S', corrected_from: '22870KTN700S' });
+    const kit = schedule.items.find((i) => i.description.trim() === 'Friction Plate Kit');
+    expect(kit).toMatchObject({ part_number: 'K22222KTNA900EES', corrected_from: 'K22222KTNA900S' });
+
     const inList = new Set(catalogue.parts.map((p) => plain(p.part_number)));
-    const missing = schedule.items.filter((i) => !inList.has(plain(i.part_number))).map((i) => i.description);
-    expect(missing.sort()).toEqual(['Clutch Cable', 'Friction Plate Kit', 'Tappet Cover Gasket']);
+    expect(inList.has(plain(cable.part_number))).toBe(true);
+    expect(inList.has(plain(kit.part_number))).toBe(true);
+  });
+
+  // One is left: the price list has both a head cover gasket at R29.70 and a
+  // second, different gasket at R1.98, and guessing between them would put the
+  // wrong part on a bike. It stays flagged on the job card instead.
+  it('knows exactly which scheduled part is still missing from the price list', () => {
+    const inList = new Set(catalogue.parts.map((p) => plain(p.part_number)));
+    const missing = schedule.items.filter((i) => !inList.has(plain(i.part_number))).map((i) => i.description.trim());
+    expect(missing).toEqual(['Tappet Cover Gasket']);
   });
 
   it('carries a price for every part it does have', () => {

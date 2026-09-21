@@ -73,9 +73,23 @@ export function paginateItems(items, page = 1, pageSize = 10) {
   };
 }
 
-export function Stat({ label, value, delta, icon, accent }) {
+// onClick makes the tile a way in rather than just a number: a count of
+// trackers that is not clickable leaves you knowing 13 are wrong and with no
+// way to find out which. Without it the tile renders and behaves exactly as
+// it always did.
+export function Stat({ label, value, delta, icon, accent, onClick }) {
+  const interactive = typeof onClick === 'function';
+  const interactiveProps = interactive ? {
+    role: 'button',
+    tabIndex: 0,
+    onClick,
+    onKeyDown: (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(e); }
+    },
+    'aria-label': `${label}: ${value}. Show them.`,
+  } : {};
   return (
-    <div className="stat">
+    <div className={interactive ? 'stat stat-clickable' : 'stat'} {...interactiveProps}>
       <div className="flex-between">
         <div className="stat-label">{label}</div>
         {icon && <div style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--surface-2)',

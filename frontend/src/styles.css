@@ -1544,3 +1544,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
     border-top: 1px solid var(--border);
   }
 }
+
+/* A stat tile that opens the list behind its number. */
+.stat-clickable { cursor: pointer; transition: border-color .15s, transform .15s; }
+.stat-clickable:hover { border-color: var(--primary); transform: translateY(-1px); }
+.stat-clickable:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }

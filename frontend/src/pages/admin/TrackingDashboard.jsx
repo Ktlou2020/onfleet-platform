@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell } from 'recharts';
 import { Radio, ShieldAlert, Bell, Zap, ZapOff, Route, Gauge, AlertTriangle, WifiOff, BatteryWarning, MapPinOff, RefreshCw } from 'lucide-react';
 import api from '../../api';
-import { Stat, Loading } from '../../components/ui';
+import { Stat, Loading, Modal } from '../../components/ui';
 import { ALERT_LABELS, ALERT_COLORS } from '../../lib/alertMeta';
 import { computeDeviceHealth } from '../../lib/trackingHelpers';
 
@@ -31,6 +31,9 @@ export default function TrackingDashboard() {
   const [devices, setDevices] = useState([]);
   const [mapDevices, setMapDevices] = useState([]);
   const [health, setHealth] = useState(null);
+  // The devices behind the health counts, so a tile can open its own list.
+  const [healthDevices, setHealthDevices] = useState([]);
+  const [drill, setDrill] = useState(null); // { title, note, devices }
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -47,6 +50,7 @@ export default function TrackingDashboard() {
       setDevices(devicesRes.data);
       setMapDevices(mapRes.data);
       setHealth(healthRes.data.summary);
+      setHealthDevices(healthRes.data.devices || []);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -68,6 +72,11 @@ export default function TrackingDashboard() {
     color: ALERT_COLORS[r.alert_type] || '#94a3b8',
   }));
   const coverageGap = stats.fleet_coverage.total_in_service - stats.fleet_coverage.with_device;
+
+  // Open a tile's list. `note` says what the reader is looking at and what to
+  // do about it, so the list is not just names.
+  const openDrill = (title, note, filter) =>
+    setDrill({ title, note, devices: healthDevices.filter(filter) });
 
   return (
     <>
@@ -99,22 +108,27 @@ export default function TrackingDashboard() {
         <div className="grid grid-4 mb-4">
           <Stat label="Trackers reporting" value={`${health.reporting}/${health.total}`}
             delta={health.reporting_pct == null ? '—' : `${health.reporting_pct}% reported in the last hour`}
-            icon={<Radio size={16} />} accent={health.reporting_pct >= 90 ? 'var(--success)' : 'var(--warn)'} />
+            icon={<Radio size={16} />} accent={health.reporting_pct >= 90 ? 'var(--success)' : 'var(--warn)'}
+            onClick={() => openDrill('Trackers reporting', 'Reported in the last hour — these are fine.', (d) => d.state === 'reporting')} />
           <Stat label="Gone quiet" value={health.silent + health.quiet}
             delta={`${health.silent} silent over 24h`} icon={<WifiOff size={16} />}
-            accent={health.silent ? 'var(--danger)' : undefined} />
+            accent={health.silent ? 'var(--danger)' : undefined}
+            onClick={() => openDrill('Gone quiet', 'Nothing heard for over an hour. Silence on a bike that is being ridden is the one to chase.', (d) => d.state === 'quiet' || d.state === 'silent')} />
           <Stat label="Never connected" value={health.never_connected}
             delta="Registered but never reached the server" icon={<WifiOff size={16} />}
-            accent={health.never_connected ? 'var(--danger)' : 'var(--success)'} />
+            accent={health.never_connected ? 'var(--danger)' : 'var(--success)'}
+            onClick={() => openDrill('Never connected', 'Registered but never reached us at all — not installed, whatever it looks like. Check power, the SIM\u2019s data and APN, and that it points at hayabusa.proxy.rlwy.net port 52322 over TCP.', (d) => d.state === 'never_connected')} />
           <Stat label="Installs not signed off" value={health.uncommissioned}
             delta={health.awaiting_install_proof ? `${health.awaiting_install_proof} overdue by more than a day` : 'All recent'}
-            icon={<ShieldAlert size={16} />} accent={health.awaiting_install_proof ? 'var(--warn)' : undefined} />
+            icon={<ShieldAlert size={16} />} accent={health.awaiting_install_proof ? 'var(--warn)' : undefined}
+            onClick={() => openDrill('Installs not signed off', 'Fitted but never proved. Run the install check from the tracker\u2019s Controls.', (d) => !d.commissioned)} />
           {/* A tracker whose ignition line was never wired reports a dead 0 for
               ever, so every ordinary ride reads as a tow. Towing and movement
               alerts stay off for these until somebody turns a key. */}
           <Stat label="Ignition line not wired" value={health.ignition_unwired ?? 0}
             delta={health.ignition_unwired ? 'Never seen on — towing alerts off for these' : 'Every tracker has proved its ignition'}
-            icon={<ZapOff size={16} />} accent={health.ignition_unwired ? 'var(--warn)' : 'var(--success)'} />
+            icon={<ZapOff size={16} />} accent={health.ignition_unwired ? 'var(--warn)' : 'var(--success)'}
+            onClick={() => openDrill('Ignition line not wired', 'These have never once reported the ignition on, so their wire is almost certainly not connected. Their odometers are not moving and their services will not come due. Towing and unauthorised-movement alerts stay off until one reads on.', (d) => d.bike_id && !d.ignition_wired)} />
         </div>
       )}
 
@@ -199,6 +213,51 @@ export default function TrackingDashboard() {
             </div>
           )}
       </div>
+
+      {drill && (
+        <Modal onClose={() => setDrill(null)} title={drill.title}>
+          <div className="text-sm muted" style={{ marginBottom: 14 }}>{drill.note}</div>
+          {!drill.devices.length && <div className="text-sm muted">Nothing here — nothing to do.</div>}
+          {drill.devices.map((d) => (
+            <Link
+              key={d.id}
+              to={d.bike_id ? `/admin/tracking?bike=${d.bike_id}` : '/admin/tracking'}
+              onClick={() => setDrill(null)}
+              className="row"
+              style={{
+                justifyContent: 'space-between', alignItems: 'center', gap: 12,
+                padding: '9px 10px', borderRadius: 8, marginBottom: 6,
+                background: 'var(--surface-2)', textDecoration: 'none', color: 'inherit',
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: 13 }}>
+                  {d.registration || d.label || 'Not linked to a bike'}
+                </div>
+                <div className="muted text-xs" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {d.imei}{d.model ? ` · ${d.model}` : ''}
+                </div>
+              </div>
+              <div className="muted text-xs" style={{ textAlign: 'right', flexShrink: 0 }}>
+                {d.minutes_since_ping == null ? 'never seen' : lastSeenText(d.minutes_since_ping)}
+              </div>
+            </Link>
+          ))}
+          <div className="text-xs muted" style={{ marginTop: 10 }}>
+            {drill.devices.length} tracker{drill.devices.length === 1 ? '' : 's'} · choose one to open it on the map
+          </div>
+        </Modal>
+      )}
     </>
   );
+}
+
+// Minutes since the last ping, read the way somebody would say it out loud.
+function lastSeenText(minutes) {
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  return `${days}d ago`;
 }

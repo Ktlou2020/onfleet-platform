@@ -3049,8 +3049,8 @@ export default function Tracking({ readOnly = false }) {
       {/* ── Alert Settings Modal ─────────────────────────────────────── */}
       {showAlertSettings && (() => {
         // Pill toggle component
-        const Toggle = ({ checked, onChange, disabled }) => (
-          <button type="button" onClick={() => !disabled && onChange(!checked)} style={{
+        const Toggle = ({ checked, onChange, disabled, title }) => (
+          <button type="button" title={title} aria-pressed={checked} onClick={() => !disabled && onChange(!checked)} style={{
             width: 38, height: 22, borderRadius: 11, border: 'none', padding: 0, flexShrink: 0,
             background: checked ? (disabled ? '#86efac' : '#22c55e') : 'var(--border)',
             cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.5 : 1,
@@ -3188,6 +3188,10 @@ export default function Tracking({ readOnly = false }) {
                     <div style={{ width: 8, height: 8, borderRadius: 4, background: s.enabled ? (ALERT_COLORS[s.alert_type] || '#94a3b8') : '#94a3b8', flexShrink: 0 }} />
                     <span style={{ flex: 1, fontSize: 12, color: s.enabled ? 'var(--text)' : 'var(--muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
                       {ALERT_LABELS[s.alert_type] || s.alert_type}
+                      {!s.enabled && (
+                        <span title="This type is switched off, so no alert of this kind is raised at all"
+                          style={{ fontSize: 9, fontWeight: 700, color: 'var(--muted)', border: '1px solid var(--border)', padding: '1px 5px', borderRadius: 4 }}>OFF</span>
+                      )}
                       {alertSettingsDeviceId && s.device_override && (
                         <span style={{ fontSize: 9, fontWeight: 700, color: '#6366f1', background: 'rgba(99,102,241,.12)', padding: '1px 5px', borderRadius: 4 }}>custom</span>
                       )}
@@ -3199,11 +3203,14 @@ export default function Tracking({ readOnly = false }) {
                       <Toggle checked={s.enabled} onChange={v => setAlertSettings(prev => prev.map((x, i) => i === idx ? { ...x, enabled: v } : x))} />
                     </div>
                     <div style={{ width: 54, display: 'flex', justifyContent: 'center' }}>
-                      <Toggle checked={s.notify_enabled} disabled={!s.enabled} onChange={v => setAlertSettings(prev => prev.map((x, i) => i === idx ? { ...x, notify_enabled: v } : x))} />
+                      <Toggle checked={s.notify_enabled}
+                        title={s.enabled ? 'Email the recipients when this alert fires' : 'This type is off, so nothing fires — this takes effect when you switch Active on'}
+                        onChange={v => setAlertSettings(prev => prev.map((x, i) => i === idx ? { ...x, notify_enabled: v } : x))} />
                     </div>
                     {!alertSettingsDeviceId && (
                       <div style={{ width: 66, display: 'flex', justifyContent: 'center' }}>
-                        <Toggle checked={s.control_room_visible !== false} disabled={!s.enabled}
+                        <Toggle checked={s.control_room_visible !== false}
+                          title={s.enabled ? 'Show this type in the control room\'s alert list' : 'This type is off, so nothing fires — this takes effect when you switch Active on'}
                           onChange={v => setAlertSettings(prev => prev.map((x, i) => i === idx ? { ...x, control_room_visible: v } : x))} />
                       </div>
                     )}

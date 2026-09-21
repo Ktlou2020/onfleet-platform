@@ -28,6 +28,7 @@ requireFromHere.cache[pgDbPath] = {
 };
 
 const tripService = requireFromHere('../src/services/tripService.js');
+const ignitionTrust = requireFromHere('../src/services/ignitionTrust.js');
 
 beforeEach(() => {
   resetAllTables();
@@ -42,6 +43,15 @@ const T0 = new Date('2026-01-05T10:00:00.000Z').getTime();
 const iso = (offsetMs) => new Date(T0 + offsetMs).toISOString();
 
 describe('processPing — devices that report an ignition signal', () => {
+  // "Reports an ignition signal" now means a tracker whose ignition line has
+  // been seen ON at least once. One that reports a dead 0 for ever was never
+  // wired, and is handled in the block below — its every ride used to read as
+  // a tow, and it recorded no trips at all.
+  beforeEach(() => {
+    ignitionTrust.reset();
+    ignitionTrust.note(1, 1);
+  });
+
   it('does not open a trip while moving with ignition off', async () => {
     const bike = createBike();
     await tripService.processPing(bike.id, 1, -26.1, 28.0, 20, 0, iso(0), {});
@@ -141,5 +151,19 @@ describe('processPing — devices with no ignition signal (io[239] absent, ignit
     await tripService.processPing(bikeB.id, 2, -26.21, 28.11, 20, null, iso(60_000 + 5 * 60_000 + 1000), {});
 
     expect(tripEndUpdates()).toHaveLength(1);
+  });
+});
+
+// A tracker whose ignition line was never connected reports a well-formed 0 on
+// every ping. Gating trips on that 0 meant the bike recorded no trips at all,
+// so its odometer never moved and its service never came due — while every
+// ride raised a towing alert.
+describe('processPing — a tracker whose ignition line was never wired', () => {
+  beforeEach(() => { ignitionTrust.reset(); });
+
+  it('opens a trip from movement instead of waiting for an ignition that never comes', async () => {
+    const bike = createBike();
+    await tripService.processPing(bike.id, 99, -26.1, 28.0, 20, 0, iso(0), {});
+    expect(tripInserts()).toHaveLength(1);
   });
 });

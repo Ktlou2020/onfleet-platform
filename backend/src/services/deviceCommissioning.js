@@ -51,9 +51,18 @@ function buildChecks(device, ping, ioRow) {
       detail: extMv == null ? 'No external voltage reported' : `${(extMv / 1000).toFixed(1)} V`,
     },
     {
+      // Reporting element 239 is not the same as the wire being connected: an
+      // unwired ignition line reports a well-formed 0 for ever, and that dead
+      // 0 makes every ordinary ride look like a tow. So this passes only once
+      // the tracker has actually been seen reporting the ignition ON — turn
+      // the key during the install and it passes on the spot.
       id: 'ignition', label: 'Ignition line connected', required: false,
-      passed: io[239] != null,
-      detail: io[239] == null ? 'No ignition signal — trips will be guessed from movement instead' : `Ignition ${Number(io[239]) ? 'on' : 'off'}`,
+      passed: !!device.ignition_trusted_at,
+      detail: device.ignition_trusted_at
+        ? `Seen on — ignition now reads ${Number(io[239]) ? 'on' : 'off'}`
+        : io[239] == null
+          ? 'No ignition signal — trips will be guessed from movement instead'
+          : 'Reads off and never yet on — turn the key. Until it reads on, towing and movement alerts stay off for this tracker',
     },
     {
       id: 'battery', label: 'Backup battery charged', required: false,
@@ -130,6 +139,7 @@ async function commission({ deviceId, actorId, notes = null, overrideReason = nu
 async function fleetHealth() {
   const { rows: devices } = await pgDb.query(
     `SELECT d.id, d.imei, d.model, d.firmware_version, d.last_seen_at, d.created_at, d.bike_id,
+            d.ignition_trusted_at,
             b.registration, b.status AS bike_status,
             dc.commissioned_at, dc.override_reason,
             (SELECT io_data FROM gps_pings WHERE bike_id = d.bike_id ORDER BY recorded_at DESC LIMIT 1) AS io_data
@@ -154,6 +164,10 @@ async function fleetHealth() {
       external_mv: io[66] != null ? Number(io[66]) : null,
       gsm: io[21] != null ? Number(io[21]) : null,
       commissioned: !!d.commissioned_at,
+      // Reporting an ignition element is not the same as the wire being
+      // connected: an unwired one reports 0 for ever, and that dead 0 turns
+      // every ordinary ride into a towing alert.
+      ignition_wired: !!d.ignition_trusted_at,
       // A tracker registered more than a day ago that nobody has signed off
       installed: !!d.commissioned_at || (now - new Date(d.created_at).getTime()) < STALE_INSTALL_HOURS * 3600_000,
     };
@@ -171,6 +185,7 @@ async function fleetHealth() {
       uncommissioned: count((d) => !d.commissioned),
       awaiting_install_proof: count((d) => !d.installed),
       on_inactive_bikes: count((d) => d.bike_id && d.bike_status !== 'active'),
+      ignition_unwired: count((d) => d.bike_id && !d.ignition_wired),
       unlinked: count((d) => !d.bike_id),
       // The number worth reporting: trackers that did their job in the last hour
       reporting_pct: enriched.length ? Math.round((count((d) => d.state === 'reporting') / enriched.length) * 100) : null,

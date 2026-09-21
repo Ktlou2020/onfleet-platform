@@ -10,10 +10,14 @@ const app = buildApp();
 
 const IO_GOOD = JSON.stringify({ 21: 4, 66: 12400, 67: 4000, 239: 1 });
 
-async function addDevice({ imei = '353201352317926', bikeId = null, lastSeen = null } = {}) {
+// ignitionWired defaults on: a well-installed tracker has been seen reporting
+// the ignition ON, which is what the install check now asks for. An unwired
+// line reports a well-formed 0 for ever and used to pass on that alone.
+async function addDevice({ imei = '353201352317926', bikeId = null, lastSeen = null, ignitionWired = true } = {}) {
   const { rows } = await pgDb.query(
-    `INSERT INTO tracking_devices (imei, model, bike_id, last_seen_at) VALUES ($1,'FMB920',$2,$3) RETURNING *`,
-    [imei, bikeId, lastSeen]);
+    `INSERT INTO tracking_devices (imei, model, bike_id, last_seen_at, ignition_trusted_at)
+     VALUES ($1,'FMB920',$2,$3,$4) RETURNING *`,
+    [imei, bikeId, lastSeen, ignitionWired ? new Date() : null]);
   return rows[0];
 }
 async function addPing(bikeId, { io = IO_GOOD, lat = -26.2, lng = 28.0, sats = 9, at = new Date() } = {}) {
@@ -46,6 +50,22 @@ describe.skipIf(!process.env.DATABASE_URL)('proving a tracker is installed', () 
     expect(byId.ignition.passed).toBe(true);
   });
 
+  // A tracker whose ignition wire was never connected reports element 239 as a
+  // perfectly well-formed 0, which this check used to accept — so a bad
+  // install was signed off as good, and every ordinary ride afterwards raised
+  // a towing alert.
+  it('fails the ignition check while that line has only ever read off', async () => {
+    const device = await addDevice({ bikeId: bike.id, lastSeen: new Date(), ignitionWired: false });
+    await addPing(bike.id);
+    const result = await commissioning.runChecks(device.id);
+    const ignition = result.checks.find((c) => c.id === 'ignition');
+    expect(ignition.passed).toBe(false);
+    expect(ignition.detail).toMatch(/turn the key/i);
+    // It is not a required check, so the install can still be signed off —
+    // the installer is told what it costs, not blocked.
+    expect(result.ready).toBe(true);
+  });
+
   it('fails the tracker that has never connected, and says what to check', async () => {
     const device = await addDevice({ imei: '352592576608251', bikeId: bike.id });
     const result = await commissioning.runChecks(device.id);
@@ -56,7 +76,8 @@ describe.skipIf(!process.env.DATABASE_URL)('proving a tracker is installed', () 
   });
 
   it('fails a tracker that is reporting but not wired to power', async () => {
-    const device = await addDevice({ bikeId: bike.id, lastSeen: new Date() });
+    // Nor is its ignition line wired — this one reports neither.
+    const device = await addDevice({ bikeId: bike.id, lastSeen: new Date(), ignitionWired: false });
     await addPing(bike.id, { io: JSON.stringify({ 21: 3, 67: 3900 }) });
     const result = await commissioning.runChecks(device.id);
     expect(result.ready).toBe(false);

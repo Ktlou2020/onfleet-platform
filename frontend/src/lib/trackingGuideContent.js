@@ -145,6 +145,7 @@ export const TRACKING_SECTIONS = [
       ['An alert keeps escalating', 'Nobody has acknowledged it', 'Acknowledge it. That is what stops the chase, and it records who stopped it.'],
       ['The engine will not restore', 'The command has not reached the tracker yet', 'It is re-sent when the tracker reconnects. The bike stays cut until it does — check the tracker is online.'],
       ['A theft case opened for nothing', 'A knock or a tow-truck set off a tamper alert', 'Close it as a false alarm. That keeps the recovery rate honest.'],
+      ['One bike keeps saying it is being towed', 'Its ignition wire was never connected, so every ride looks like ignition-off movement', 'The tracking dashboard counts these under "ignition line not wired". Towing and movement alerts stay off for that tracker until somebody turns the key with it connected — get the wire fixed at the next service.'],
       ['A rider is stranded after midnight', 'The overnight curfew cut their bike', 'Restore the engine from the tracker\u2019s Controls, then exempt that bike on the Alerts tab so it does not happen again tomorrow.'],
     ],
   },

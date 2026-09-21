@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell } from 'recharts';
-import { Radio, ShieldAlert, Bell, Zap, Route, Gauge, AlertTriangle, WifiOff, BatteryWarning, MapPinOff, RefreshCw } from 'lucide-react';
+import { Radio, ShieldAlert, Bell, Zap, ZapOff, Route, Gauge, AlertTriangle, WifiOff, BatteryWarning, MapPinOff, RefreshCw } from 'lucide-react';
 import api from '../../api';
 import { Stat, Loading } from '../../components/ui';
 import { ALERT_LABELS, ALERT_COLORS } from '../../lib/alertMeta';
@@ -109,6 +109,12 @@ export default function TrackingDashboard() {
           <Stat label="Installs not signed off" value={health.uncommissioned}
             delta={health.awaiting_install_proof ? `${health.awaiting_install_proof} overdue by more than a day` : 'All recent'}
             icon={<ShieldAlert size={16} />} accent={health.awaiting_install_proof ? 'var(--warn)' : undefined} />
+          {/* A tracker whose ignition line was never wired reports a dead 0 for
+              ever, so every ordinary ride reads as a tow. Towing and movement
+              alerts stay off for these until somebody turns a key. */}
+          <Stat label="Ignition line not wired" value={health.ignition_unwired ?? 0}
+            delta={health.ignition_unwired ? 'Never seen on — towing alerts off for these' : 'Every tracker has proved its ignition'}
+            icon={<ZapOff size={16} />} accent={health.ignition_unwired ? 'var(--warn)' : 'var(--success)'} />
         </div>
       )}
 

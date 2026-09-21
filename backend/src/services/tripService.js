@@ -5,6 +5,7 @@ const trackingEvents = require('../trackingEvents');
 const { sendNotification } = require('./notifierPg');
 const { ALERT_SEVERITY } = require('../constants/alertTypes');
 const nightCurfew = require('./nightCurfew');
+const ignitionTrust = require('./ignitionTrust');
 
 // In-memory trip state per bike
 const openTrips = new Map();
@@ -224,9 +225,18 @@ async function processPing(bikeId, deviceId, lat, lng, speed, ignition, recorded
   const ts = new Date(recordedAt).getTime();
   const moving = speed > 2;
   // ignition is the raw io[239] value: a number when the device reports it, null when it doesn't.
-  // Devices without a wired/configured ignition line can't gate trip start/end on it at all —
-  // fall back to movement for those instead of silently never recording a trip.
-  const hasIgnitionSignal = ignition !== null && ignition !== undefined;
+  //
+  // Reported is not the same as wired. A tracker whose ignition line was never
+  // connected reports a perfectly well-formed 0 for ever, which reads as "the
+  // bike is moving with the ignition off" on every single ordinary ride — a
+  // towing alert every afternoon, and an unauthorised-movement alert beside
+  // it. So the reading counts only once that tracker has been seen reporting
+  // the ignition ON at least once; until then it is treated as absent, and
+  // trips fall back to movement exactly as they do for a tracker that reports
+  // no ignition element at all.
+  ignitionTrust.note(deviceId, ignition);
+  const ignitionWired = ignitionTrust.isTrusted(deviceId);
+  const hasIgnitionSignal = ignition !== null && ignition !== undefined && ignitionWired;
   const ignitionOn = hasIgnitionSignal ? !!ignition : null;
 
   if (io) {
@@ -235,7 +245,9 @@ async function processPing(bikeId, deviceId, lat, lng, speed, ignition, recorded
     if (io[249]) await fireAlert(bikeId, deviceId, 'harsh_cornering', { lat, lng, value: io[249] }, recordedAt, ts);
     if (io[1])   await fireAlert(bikeId, deviceId, 'panic', { lat, lng }, recordedAt, ts);
     if (io[252]) await fireAlert(bikeId, deviceId, 'tamper', { lat, lng, value: io[252] }, recordedAt, ts);
-    if (io[240] && !ignition) await fireAlert(bikeId, deviceId, 'movement', { lat, lng }, recordedAt, ts);
+    // Same reasoning as towing: "moved without the ignition on" is only a
+    // statement about the bike if the ignition line actually works.
+    if (io[240] && hasIgnitionSignal && !ignition) await fireAlert(bikeId, deviceId, 'movement', { lat, lng }, recordedAt, ts);
 
     // Teltonika Permanent I/O elements: 66 = External Voltage (vehicle supply), 67 = Battery
     // Voltage (device's own internal backup cell) — these were swapped here until now, which
@@ -594,4 +606,15 @@ async function checkDormantBikes() {
   }
 }
 
-module.exports = { processPing, hydrateOpenTrips, reloadAlertSettings, checkOfflineDevices, checkDormantBikes, closeStaleTrips, emitAlert, fireAlert };
+// Everything this module remembers between pings, dropped. Only for tests:
+// they truncate with RESTART IDENTITY, so the next test's bike is handed the
+// same id as the last one's and inherits its open trip and alert cooldowns.
+function __resetForTests() {
+  openTrips.clear();
+  alertCooldowns.clear();
+  nightMovementCandidates.clear();
+  towingCandidates.clear();
+  prevExtVoltage.clear();
+}
+
+module.exports = { processPing, hydrateOpenTrips, reloadAlertSettings, checkOfflineDevices, checkDormantBikes, closeStaleTrips, emitAlert, fireAlert, __resetForTests };

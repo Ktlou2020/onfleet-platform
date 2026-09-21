@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import ServicePlan from '../../components/ServicePlan';
 import { useParams, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { ArrowLeft, Plus, Pencil, Trash2, Clock, ChevronDown, ChevronRight, Printer, FileText, Pause, Play, Camera, Image, CheckCircle } from 'lucide-react';
@@ -359,6 +360,27 @@ export default function WorkshopJobCard() {
     }
   };
 
+  // A part the manufacturer's schedule says is due goes onto the card with its
+  // number and price already filled in — that number is what gets ordered.
+  const addScheduledPart = async (part) => {
+    try {
+      setBusy(true);
+      const { data } = await api.post(`/workshop/job-cards/${id}/items`, {
+        item_type: 'part',
+        description: `${part.part_number} — ${part.catalogue_description || part.description}`,
+        quantity: part.qty || 1,
+        unit_cost: part.price_ex_vat || 0,
+        part_number: part.part_number,
+      });
+      setCard(data.job_card);
+      toast.success(`${part.description} added`);
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Could not add that part');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const saveItem = async () => {
     try {
       setBusy(true);
@@ -620,6 +642,19 @@ export default function WorkshopJobCard() {
             </div>
           )}
         </div>
+
+        {/* What the manufacturer's schedule says this bike needs at its
+            kilometres — the parts due, what is nearly due, and the check list. */}
+        {hasBike && card.status !== 'completed' && (
+          <div className="card" style={{ padding: 16 }}>
+            <h3 style={{ margin: '0 0 8px', fontSize: 15 }}>Service schedule</h3>
+            <ServicePlan
+              bikeId={card.bike_id}
+              odometerKm={completeForm.odometer_km || card.bike_odometer_km}
+              onAddPart={addScheduledPart}
+            />
+          </div>
+        )}
 
         {/* Job details card */}
         <div className="card" style={{ padding: 16 }}>

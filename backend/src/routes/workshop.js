@@ -488,8 +488,13 @@ router.post('/job-cards/:id/items', authRequired, workshopOnly, async (req, res)
     if (card.status === 'completed') return res.status(400).json({ error: 'Cannot add items to a completed job' });
     if (!req.body.description) return res.status(400).json({ error: 'Description is required' });
 
-    await pgDb.query(`INSERT INTO job_card_items (job_card_id, item_type, description, quantity, unit_cost) VALUES ($1,$2,$3,$4,$5)`,
-      [id, req.body.item_type || 'labor', req.body.description, Number(req.body.quantity) || 1, Number(req.body.unit_cost) || 0]);
+    // The catalogue part number travels with the line, so what was fitted can
+    // be matched to the price list — and ordered from it.
+    await pgDb.query(
+      `INSERT INTO job_card_items (job_card_id, item_type, description, quantity, unit_cost, part_number)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [id, req.body.item_type || 'labor', req.body.description, Number(req.body.quantity) || 1,
+        Number(req.body.unit_cost) || 0, String(req.body.part_number || '').trim() || null]);
 
     res.json({ ok: true, job_card: await getJobCard(id) });
   } catch (error) {

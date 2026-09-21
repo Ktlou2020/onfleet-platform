@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, ClipboardList, LogOut, Wrench } from 'lucide-react';
+import { LayoutDashboard, ClipboardList, LogOut, Wrench , Package } from 'lucide-react';
 import { useAuth } from '../../auth';
 import api from '../../api';
 
@@ -35,6 +35,9 @@ export default function WorkshopShell() {
               </span>
             )}
           </NavLink>
+          <NavLink to="/workshop/app/parts" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Package size={16} /> Parts
+          </NavLink>
         </nav>
         <div className="user-mini">
           <div className="avatar">{user?.full_name?.[0]}</div>
@@ -55,6 +58,10 @@ export default function WorkshopShell() {
         <NavLink to="/workshop/app/job-cards">
           <ClipboardList size={20} />
           <span>Jobs {openCount > 0 ? `(${openCount})` : ''}</span>
+        </NavLink>
+        <NavLink to="/workshop/app/parts">
+          <Package size={20} />
+          <span>Parts</span>
         </NavLink>
       </nav>
       <div className="main">

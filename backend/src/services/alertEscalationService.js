@@ -30,7 +30,7 @@ const { alertContact } = require('./alertContact');
 
 const { ROUNDS_AT_MINUTES, MAX_ROUNDS, WEBHOOK_FROM_ROUND } = require('../constants/alertEscalation');
 
-const CRITICAL_TYPES = ['panic', 'tamper', 'power_disconnect', 'movement', 'night_movement', 'towing'];
+const CRITICAL_TYPES = ['panic', 'tamper', 'power_disconnect', 'movement', 'night_movement', 'towing', 'danger_zone_enter'];
 
 const ALERT_LABELS = {
   panic:            'Panic / SOS',
@@ -40,6 +40,7 @@ const ALERT_LABELS = {
   night_movement:   'Movement during high-theft hours (00:00–04:00)',
   towing:           'Possible towing (ignition off, sustained movement)',
   theft_risk:       'AI theft/anomaly risk',
+  danger_zone_enter: 'Entered a no-go zone',
 };
 
 // Extra phones to chase, beyond whichever OnFleet line is on duty.

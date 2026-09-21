@@ -120,7 +120,7 @@ const DORMANT_BIKE_DAYS = 3;
 // Alert types that are OFF by default (no panic button wired on standard installs)
 const ALERT_DISABLED_BY_DEFAULT = new Set(['panic']);
 
-const CRITICAL_TYPES = new Set(['panic', 'tamper', 'power_disconnect', 'movement', 'night_movement', 'towing', 'engine_cut_auto']);
+const CRITICAL_TYPES = new Set(['panic', 'tamper', 'power_disconnect', 'movement', 'night_movement', 'towing', 'engine_cut_auto', 'danger_zone_enter']);
 
 const ALERT_LABELS = {
   geofence_enter:   'Entered geofence',
@@ -141,6 +141,8 @@ const ALERT_LABELS = {
   night_movement:   'Movement during high-theft hours (00:00–04:00)',
   towing:           'Possible towing (ignition off, sustained movement)',
   engine_cut_auto:  'Engine cut automatically — entered a no-go zone',
+  danger_zone_enter: 'Entered a no-go zone',
+  danger_zone_exit:  'Left a no-go zone',
 };
 
 function haversineKm(lat1, lng1, lat2, lng2) {
@@ -579,4 +581,4 @@ async function checkDormantBikes() {
   }
 }
 
-module.exports = { processPing, hydrateOpenTrips, reloadAlertSettings, checkOfflineDevices, checkDormantBikes, closeStaleTrips, emitAlert };
+module.exports = { processPing, hydrateOpenTrips, reloadAlertSettings, checkOfflineDevices, checkDormantBikes, closeStaleTrips, emitAlert, fireAlert };

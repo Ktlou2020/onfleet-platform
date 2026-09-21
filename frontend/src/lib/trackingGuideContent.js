@@ -103,7 +103,7 @@ export const TRACKING_SECTIONS = [
       ['draw', 'Draw a zone on the Geofences tab: a circle around a point, or an outline you click out.',
         'A depot, a suburb a fleet works, or a no-go area.'],
       ['type', 'Mark a no-go area as a danger zone.',
-        'Entering one raises a different alert from leaving a working area, and reads as such in the control room.'],
+        'A bike entering one raises "Entered a no-go zone" — its own critical alert, which escalates until somebody answers — and cuts the engine automatically. Riding back out raises "Left a no-go zone" instead, which is the quiet one.'],
       ['speed', 'Set a realistic speed limit per tracker.',
         'Every tracker shipped at 120 km/h, which is why no speeding alert ever fired despite 26,979 pings over 80 km/h in a month.'],
     ],
@@ -148,10 +148,10 @@ export const TRACKING_SECTIONS = [
 ];
 
 export const ALERT_SEVERITIES = [
-  ['Critical', 'Panic, tamper, power disconnect, unauthorised movement, theft risk, night movement, towing, automatic engine cut', 'Escalates until acknowledged; opens a theft case'],
+  ['Critical', 'Panic, tamper, power disconnect, unauthorised movement, theft risk, night movement, towing, automatic engine cut, entered a no-go zone', 'Escalates until acknowledged; opens a theft case'],
   ['High', 'Speeding, harsh braking, left a geofence', 'Answer the same shift'],
   ['Medium', 'Harsh acceleration or cornering, entered a geofence, low battery, long trip, battery declining', 'Worth a look'],
-  ['Low', 'Idling, tracker offline, bike dormant', 'Housekeeping — close in bulk'],
+  ['Low', 'Idling, tracker offline, bike dormant, left a no-go zone', 'Housekeeping — close in bulk'],
 ];
 
 export const ESCALATION_ROUNDS = [

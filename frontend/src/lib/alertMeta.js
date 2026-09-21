@@ -19,6 +19,8 @@ export const ALERT_LABELS = {
   night_movement:   'Movement during high-theft hours (00:00–04:00)',
   towing:           'Possible towing (ignition off, sustained movement)',
   battery_declining: 'Tracker battery declining',
+  danger_zone_enter: 'Entered a no-go zone',
+  danger_zone_exit:  'Left a no-go zone',
 };
 
 export const ALERT_COLORS = {
@@ -42,21 +44,23 @@ export const ALERT_COLORS = {
   night_movement:   '#dc2626',
   towing:           '#dc2626',
   battery_declining: '#f97316',
+  danger_zone_enter: '#dc2626',
+  danger_zone_exit:  '#22c55e',
 };
 
 export const ALERT_SEVERITY = {
-  panic: 'critical', tamper: 'critical', power_disconnect: 'critical', movement: 'critical', theft_risk: 'critical', night_movement: 'critical', towing: 'critical', engine_cut_auto: 'critical',
+  panic: 'critical', tamper: 'critical', power_disconnect: 'critical', movement: 'critical', theft_risk: 'critical', night_movement: 'critical', towing: 'critical', engine_cut_auto: 'critical', danger_zone_enter: 'critical',
   speeding: 'high', harsh_brake: 'high', geofence_exit: 'high',
   harsh_accel: 'medium', harsh_cornering: 'medium', geofence_enter: 'medium', low_battery: 'medium', long_trip: 'medium',
-  idle: 'low', device_offline: 'low', bike_dormant: 'low', battery_declining: 'medium',
+  idle: 'low', device_offline: 'low', bike_dormant: 'low', battery_declining: 'medium', danger_zone_exit: 'low',
 };
 
 export const ALERT_FILTER_GROUPS = [
   { id: '',         label: 'All' },
-  { id: 'critical', label: 'Critical', types: ['panic','tamper','power_disconnect','movement','theft_risk','night_movement','towing','engine_cut_auto'] },
+  { id: 'critical', label: 'Critical', types: ['panic','tamper','power_disconnect','movement','theft_risk','night_movement','towing','engine_cut_auto','danger_zone_enter'] },
   { id: 'driving',  label: 'Driving',  types: ['speeding','harsh_brake','harsh_accel','harsh_cornering','idle','long_trip'] },
-  { id: 'location', label: 'Location', types: ['geofence_enter','geofence_exit'] },
+  { id: 'location', label: 'Location', types: ['geofence_enter','geofence_exit','danger_zone_enter','danger_zone_exit'] },
   { id: 'vehicle',  label: 'Vehicle',  types: ['low_battery','device_offline','bike_dormant','battery_declining'] },
 ];
 
-export const CRITICAL_ALERT_TYPES = new Set(['panic','tamper','power_disconnect','movement','theft_risk','night_movement','towing','engine_cut_auto']);
+export const CRITICAL_ALERT_TYPES = new Set(['panic','tamper','power_disconnect','movement','theft_risk','night_movement','towing','engine_cut_auto','danger_zone_enter']);

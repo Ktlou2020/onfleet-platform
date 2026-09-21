@@ -1,9 +1,8 @@
 'use strict';
 
 const pgDb = require('../pgDb');
-const trackingEvents = require('../trackingEvents');
 const { cutCommandForModel } = require('./engineCommands');
-const { ALERT_SEVERITY } = require('../constants/alertTypes');
+const { ALERT_SEVERITY, zoneAlertType } = require('../constants/alertTypes');
 const { notifyRiderEngineState } = require('./engineCutNotifier');
 
 // Active geofences change only via admin CRUD (routes/tracking.js), not per
@@ -30,7 +29,7 @@ function reloadGeofences() {
 // Warm the cache at boot so the first real ping doesn't pay the query cost inline.
 setTimeout(() => loadGeofences().catch(() => {}), 2000);
 
-async function autoEngineCut(deviceId, bikeId, geofence, reg) {
+async function autoEngineCut(deviceId, bikeId, geofence) {
   try {
     const { rows } = await pgDb.query(
       'SELECT id, imei, model FROM tracking_devices WHERE id = $1',
@@ -117,17 +116,6 @@ async function checkGeofences(bikeId, deviceId, lat, lng, recordedAt) {
   );
   const stateByFence = new Map(stateRows.map((s) => [s.geofence_id, !!s.inside]));
 
-  // Only needed if a fence actually transitions this ping — most pings touch
-  // no boundary at all, so skip the round-trip unless it's actually required.
-  let reg; // undefined = not yet fetched (distinct from a bike with no registration, which resolves to null)
-  const getReg = async () => {
-    if (reg === undefined) {
-      const { rows: bikeRows } = await pgDb.query('SELECT registration FROM bikes WHERE id = $1', [bikeId]);
-      reg = bikeRows[0]?.registration || null;
-    }
-    return reg;
-  };
-
   for (const gf of fences) {
     let inside;
     const coords = gf.polygon_coords;
@@ -151,36 +139,31 @@ async function checkGeofences(bikeId, deviceId, lat, lng, recordedAt) {
     const wasInside = stateByFence.get(gf.id);
     if (inside === wasInside) continue;
 
-    const alertType = inside ? 'geofence_enter' : 'geofence_exit';
     const zoneType = gf.zone_type || 'standard';
-    const payload = JSON.stringify({ geofence_id: gf.id, geofence_name: gf.name, zone_type: zoneType, lat, lng });
+    const alertType = zoneAlertType(zoneType, inside);
+    const payload = { geofence_id: gf.id, geofence_name: gf.name, zone_type: zoneType, lat, lng };
 
-    const { rows: alertRows } = await pgDb.query(
-      'INSERT INTO tracking_alerts (bike_id, device_id, alert_type, severity, payload, created_at) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',
-      [bikeId, deviceId, alertType, ALERT_SEVERITY[alertType], payload, recordedAt]
-    );
+    // The crossing is recorded whatever happens to the alert: if the alert
+    // type is switched off we must still remember which side of the boundary
+    // the bike is on, or every later ping reads as the same fresh crossing.
     await pgDb.query(
       `INSERT INTO geofence_states (bike_id, geofence_id, inside, updated_at) VALUES ($1,$2,$3,$4)
        ON CONFLICT (bike_id, geofence_id) DO UPDATE SET inside=EXCLUDED.inside, updated_at=EXCLUDED.updated_at`,
       [bikeId, gf.id, inside, recordedAt]
     );
 
-    const regValue = await getReg();
-    trackingEvents.emit('alert', {
-      id: alertRows[0].id,
-      bike_id: bikeId,
-      device_id: deviceId,
-      alert_type: alertType,
-      severity: ALERT_SEVERITY[alertType],
-      payload,
-      bike_registration: regValue,
-      created_at: recordedAt,
-      acknowledged_at: null,
-    });
+    // Through tripService's fireAlert rather than a local INSERT, so a zone
+    // alert obeys the admin's on/off switch and actually emails the people
+    // named against it — neither of which happened while this inserted its
+    // own row and emitted straight to the live feed.
+    const { fireAlert } = require('./tripService');
+    await fireAlert(bikeId, deviceId, alertType, payload, recordedAt, new Date(recordedAt).getTime());
 
-    // Automatically cut the engine when a bike enters a no-go zone
-    if (alertType === 'geofence_enter' && zoneType === 'danger' && deviceId != null) {
-      autoEngineCut(deviceId, bikeId, gf, regValue);
+    // Entering a no-go zone cuts the engine. That is the zone's whole purpose,
+    // so it does not wait on the alert type being switched on — and it raises
+    // its own engine_cut_auto alert either way.
+    if (inside && zoneType === 'danger' && deviceId != null) {
+      autoEngineCut(deviceId, bikeId, gf);
     }
   }
 }

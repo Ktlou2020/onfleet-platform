@@ -76,6 +76,15 @@ export default function ServicePlan({ bikeId, odometerKm, onAddPart = null, comp
                   <td style={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
                     {part.part_number}
                     {!part.in_catalogue && <span className="text-xs muted"> · not in the price list</span>}
+                    {/* Two of the manufacturer's documents can disagree by a
+                        character. Say so and offer the nearest, rather than
+                        substituting: the supplier ships the number asked for. */}
+                    {!part.in_catalogue && part.did_you_mean?.length > 0 && (
+                      <div className="text-xs" style={{ color: 'var(--warn, #b45309)', whiteSpace: 'normal' }}>
+                        Closest in the price list: {part.did_you_mean[0].part_number} ({part.did_you_mean[0].description},
+                        {' '}{money(part.did_you_mean[0].price_ex_vat)}) — check which is right before ordering
+                      </div>
+                    )}
                   </td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{money(part.price_ex_vat)}</td>
                   {onAddPart && (

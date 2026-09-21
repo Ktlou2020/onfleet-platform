@@ -204,6 +204,20 @@ describe.skipIf(!process.env.DATABASE_URL)('the parts catalogue', () => {
       expect(results[0].part_number).toBe('K06431KTNA701S');
     });
 
+    // A technician types what the part is called on the floor; the book calls
+    // it something else. "brake pads" has to find "KIT, BRAKE SHOE".
+    it('finds a part when only some of the typed words match', async () => {
+      const { results } = await searchParts({ q: 'brake pads' });
+      expect(results[0].description).toBe('KIT, BRAKE SHOE');
+      expect(results[0].words_matched).toBe(1);
+    });
+
+    it('ranks the row that matches more of what was typed higher', async () => {
+      const { results } = await searchParts({ q: 'gasket head cover' });
+      expect(results[0].part_number).toBe('12391AAK900S');
+      expect(results[0].words_matched).toBe(3);
+    });
+
     it('says nothing on a one-letter search rather than returning the catalogue', async () => {
       expect((await searchParts({ q: 'g' })).results).toEqual([]);
     });
@@ -213,6 +227,26 @@ describe.skipIf(!process.env.DATABASE_URL)('the parts catalogue', () => {
       expect(res.status).toBe(200);
       expect(res.body.total).toBe(1);
       expect(res.body.results[0].description).toBe('KIT, BRAKE SHOE');
+    });
+
+    // The Eco 150's own documents disagree: the service schedule asks for spark
+    // plug 31916KRM4099S, the price list sells 31916KRM84099S. Offering the
+    // near match is right; substituting it is not, because the supplier ships
+    // the number asked for.
+    it('offers the closest catalogue entries to a number that is not in it', async () => {
+      const { nearestParts } = require('../src/services/partsImport.js');
+      await pgDb.query(
+        `INSERT INTO parts_catalog (make, model, group_code, group_name, part_number, description, price_ex_vat, source)
+         VALUES ('Hero','Eco 150','E','ENGINE','31916KRM84099S','SPARK PLUG', 37.13, 'dealer_list'),
+                ('Hero','Eco 150','E','ENGINE','38301AAE20099S','RELAY COMP., WINKER', 53.96, 'dealer_list')`);
+      const near = await nearestParts('31916KRM4099S');
+      expect(near[0]).toMatchObject({ part_number: '31916KRM84099S', description: 'SPARK PLUG' });
+      expect(near[0].closeness).toBeGreaterThan(near[1]?.closeness ?? 0);
+    });
+
+    it('offers nothing when the number is too short to judge', async () => {
+      const { nearestParts } = require('../src/services/partsImport.js');
+      expect(await nearestParts('123')).toEqual([]);
     });
 
     it('lists the models it holds', async () => {

@@ -147,7 +147,24 @@ async function servicePlanFor({ make, model, odometerKm, bikeId = null, db = pgD
   };
 
   const partsDue = due.map(withPrice).sort((a, z) => a.description.localeCompare(z.description));
-  const partsSoon = soon.map(withPrice).sort((a, z) => (a.km_until ?? 0) - (z.km_until ?? 0));
+
+  // A scheduled part number that isn't in the dealer price list can't be
+  // ordered or priced. That is usually a character's difference between two of
+  // the manufacturer's own documents — the Eco 150 schedule asks for spark plug
+  // 31916KRM4099S, the price list sells 31916KRM84099S. The nearest entries are
+  // offered so a person can confirm which is right; nothing is substituted,
+  // because Hero supply against the number asked for.
+  const { nearestParts } = require('./partsImport');
+  for (const part of partsDue) {
+    if (part.in_catalogue) continue;
+    part.did_you_mean = await nearestParts(part.part_number, { make, model, db });
+  }
+  const partsSoon = [];
+  for (const part of soon.map(withPrice)) {
+    if (!part.in_catalogue) part.did_you_mean = await nearestParts(part.part_number, { make, model, db });
+    partsSoon.push(part);
+  }
+  partsSoon.sort((a, z) => (a.km_until ?? 0) - (z.km_until ?? 0));
   const total = (list) => +list.reduce((sum, p) => sum + (p.price_ex_vat || 0) * (p.qty || 1), 0).toFixed(2);
 
   return {

@@ -162,37 +162,98 @@ async function importParts(buffer, { make, model, source = 'dealer_list', db = p
 async function searchParts({ q, make = null, model = null, limit = 50, offset = 0, db = pgDb }) {
   const text = String(q || '').trim();
   if (text.length < 2) return { results: [], total: 0 };
-  const plain = text.toUpperCase().replace(/[^A-Z0-9]/g, '');
-  const like = `%${text.toLowerCase()}%`;
 
-  const where = [`(
-      LOWER(description) LIKE $1
-      OR UPPER(REGEXP_REPLACE(part_number, '[^A-Za-z0-9]', '', 'g')) LIKE $2
-      OR UPPER(REGEXP_REPLACE(COALESCE(supersedes, ''), '[^A-Za-z0-9]', '', 'g')) LIKE $2
-      OR UPPER(REGEXP_REPLACE(COALESCE(alternate_part_number, ''), '[^A-Za-z0-9]', '', 'g')) LIKE $2
-      OR LOWER(group_name) LIKE $1
-    )`];
-  const params = [like, `%${plain}%`];
-  if (make) { params.push(make); where.push(`LOWER(make) = LOWER($${params.length})`); }
-  if (model) { params.push(model); where.push(`LOWER(model) = LOWER($${params.length})`); }
+  // A technician types what the part is called on the floor, which is rarely
+  // what the manufacturer calls it in the book: "brake pads" against "KIT,
+  // BRAKE SHOE". Each word is matched separately and rows are ranked by how
+  // many words they match, so a partly-right phrase still finds the part
+  // instead of returning nothing.
+  const words = text.toLowerCase().split(/[\s,]+/).filter((w) => w.length >= 2);
+  const plain = text.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const params = [];
+  const matches = [];
+
+  for (const word of words.length ? words : [text.toLowerCase()]) {
+    params.push(`%${word}%`);
+    const i = params.length;
+    matches.push(`(LOWER(p.description) LIKE $${i} OR LOWER(p.group_name) LIKE $${i}
+                  OR LOWER(COALESCE(sched.description, '')) LIKE $${i})`);
+  }
+  params.push(`%${plain}%`);
+  const numberMatch = `(UPPER(REGEXP_REPLACE(p.part_number, '[^A-Za-z0-9]', '', 'g')) LIKE $${params.length}
+      OR UPPER(REGEXP_REPLACE(COALESCE(p.supersedes, ''), '[^A-Za-z0-9]', '', 'g')) LIKE $${params.length}
+      OR UPPER(REGEXP_REPLACE(COALESCE(p.alternate_part_number, ''), '[^A-Za-z0-9]', '', 'g')) LIKE $${params.length})`;
+
+  // How many of the typed words this row matches — the ranking, and the filter.
+  const score = `(${matches.map((m) => `CASE WHEN ${m} THEN 1 ELSE 0 END`).join(' + ')})`;
+  const where = [`(${score} > 0 OR ${numberMatch})`];
+  if (make) { params.push(make); where.push(`LOWER(p.make) = LOWER($${params.length})`); }
+  if (model) { params.push(model); where.push(`LOWER(p.model) = LOWER($${params.length})`); }
+
+  // The service schedule's own wording for a part ("Brake Pads Front") is
+  // searchable too, and comes back so a technician sees the name they know.
+  const from = `parts_catalog p
+     LEFT JOIN LATERAL (
+       SELECT description FROM service_schedule_parts ssp
+        WHERE UPPER(REGEXP_REPLACE(ssp.part_number, '[^A-Za-z0-9]', '', 'g'))
+            = UPPER(REGEXP_REPLACE(p.part_number, '[^A-Za-z0-9]', '', 'g'))
+        LIMIT 1
+     ) sched ON TRUE`;
 
   const { rows: [count] } = await db.query(
-    `SELECT COUNT(*)::int AS total FROM parts_catalog WHERE ${where.join(' AND ')}`, params);
+    `SELECT COUNT(*)::int AS total FROM ${from} WHERE ${where.join(' AND ')}`, params);
+  params.push(plain, Math.min(Number(limit) || 50, 200), Math.max(Number(offset) || 0, 0));
   const { rows } = await db.query(
-    `SELECT id, make, model, group_code, group_name, ref_no, part_number, description, remark,
-            qty_required, diagram_image_path, price_ex_vat, status, supersedes,
-            alternate_part_number, is_kit, source
-       FROM parts_catalog
+    `SELECT p.id, p.make, p.model, p.group_code, p.group_name, p.ref_no, p.part_number, p.description,
+            p.remark, p.qty_required, p.diagram_image_path, p.price_ex_vat, p.status, p.supersedes,
+            p.alternate_part_number, p.is_kit, p.source, sched.description AS schedule_name,
+            ${score} AS words_matched
+       FROM ${from}
       WHERE ${where.join(' AND ')}
       ORDER BY
         -- an exact part number first; then the priced dealer list ahead of the
         -- older OCR'd catalogue, since the same part can be in both and only
-        -- the dealer list can be ordered against; then kits, then by name
-        (UPPER(REGEXP_REPLACE(part_number, '[^A-Za-z0-9]', '', 'g')) = $${params.length + 1}) DESC,
-        (price_ex_vat IS NOT NULL) DESC, is_kit DESC, description
-      LIMIT $${params.length + 2} OFFSET $${params.length + 3}`,
-    [...params, plain, Math.min(Number(limit) || 50, 200), Math.max(Number(offset) || 0, 0)]);
+        -- the dealer list can be ordered against; then by how much of what was
+        -- typed the row matches, then kits, then by name
+        (UPPER(REGEXP_REPLACE(p.part_number, '[^A-Za-z0-9]', '', 'g')) = $${params.length - 2}) DESC,
+        ${score} DESC, (p.price_ex_vat IS NOT NULL) DESC, p.is_kit DESC, p.description
+      LIMIT $${params.length - 1} OFFSET $${params.length}`, params);
   return { results: rows, total: count.total };
 }
 
-module.exports = { importParts, parseWorkbook, searchParts, parsePrice };
+// The catalogue entries closest to a part number that isn't in it — for the
+// case where a schedule and a price list disagree by a character (the Eco 150
+// schedule's spark plug 31916KRM4099S against the list's 31916KRM84099S).
+// Offered as a question, never applied: Hero supply against the number asked
+// for, so guessing would turn a typo into a rejected order.
+async function nearestParts(partNumber, { make = null, model = null, db = pgDb } = {}) {
+  const plain = String(partNumber || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (plain.length < 5) return [];
+  const params = [`${plain.slice(0, 5)}%`, `%${plain.slice(-4)}`];
+  const where = [`(UPPER(REGEXP_REPLACE(part_number, '[^A-Za-z0-9]', '', 'g')) LIKE $1
+                   OR UPPER(REGEXP_REPLACE(part_number, '[^A-Za-z0-9]', '', 'g')) LIKE $2)`,
+    `price_ex_vat IS NOT NULL`];
+  if (make) { params.push(make); where.push(`LOWER(make) = LOWER($${params.length})`); }
+  if (model) { params.push(model); where.push(`LOWER(model) = LOWER($${params.length})`); }
+  const { rows } = await db.query(
+    `SELECT part_number, description, price_ex_vat FROM parts_catalog
+      WHERE ${where.join(' AND ')} ORDER BY part_number LIMIT 25`, params);
+
+  // Closest first: how much of the number is shared, front and back.
+  const shared = (a, b, reverse) => {
+    const x = reverse ? [...a].reverse().join('') : a;
+    const y = reverse ? [...b].reverse().join('') : b;
+    let i = 0;
+    while (i < x.length && i < y.length && x[i] === y[i]) i += 1;
+    return i;
+  };
+  return rows
+    .map((row) => {
+      const candidate = row.part_number.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      return { ...row, closeness: shared(plain, candidate, false) + shared(plain, candidate, true) };
+    })
+    .sort((a, z) => z.closeness - a.closeness)
+    .slice(0, 3);
+}
+
+module.exports = { importParts, parseWorkbook, searchParts, nearestParts, parsePrice };

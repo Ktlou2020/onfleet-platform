@@ -1,0 +1,162 @@
+import { Map, Bell, Siren, Radio, Shield, Settings, LifeBuoy } from 'lucide-react';
+
+// What the GPS tracking guide says.
+//
+// Written from how the fleet is actually run: the map is watched, alerts are
+// answered, a theft becomes a case, and trackers have to be proved before they
+// can be trusted. Step keys are stable strings — progress is stored against
+// them, so renaming one loses someone's ticks.
+
+export const TRACKING_SECTIONS = [
+  {
+    id: 'map',
+    title: 'The live map',
+    icon: Map,
+    forRole: 'everyone',
+    summary: 'Where every tracked bike is, what it is doing, and where it has been.',
+    steps: [
+      ['open', 'Open GPS Tracking. Every tracker with a position is on the map.',
+        'Green means online with the ignition on, orange online and idle, indigo sleeping, grey offline. The key is behind the ⓘ button.'],
+      ['find', 'Find a bike by registration, IMEI or rider in the Devices list.',
+        'On a phone the map fills the screen — press Devices to open the list, and choosing a bike brings you back to the map.'],
+      ['select', 'Choose a bike to see its detail panel.',
+        'Its position and address, speed, ignition, battery and signal, today\'s trips, and its location pings for any day you pick.'],
+      ['trail', 'Read a trip by its trail: grey under 5 km/h, green to 30, orange to 70, red above.',
+        'Press a trip to replay it — the controls sit above the detail panel on a phone.'],
+      ['live', 'Check the LIVE light before you trust what you see.',
+        'It shows whether the live feed is connected. If it says offline, the map is still loading positions but not receiving them as they arrive.'],
+    ],
+    interactive: 'trackerHealth',
+    links: [{ label: 'Open the live map', to: '/admin/tracking', adminTo: '/admin/tracking' }],
+  },
+  {
+    id: 'alerts',
+    title: 'Answering alerts',
+    icon: Bell,
+    forRole: 'everyone',
+    summary: 'Acknowledge what you have seen, close it with what happened.',
+    steps: [
+      ['ack', 'Acknowledge an alert as soon as you have seen it.',
+        'This stops it escalating, and records that it was you. If nobody acknowledges a critical alert it is chased at 5, 15, 30 and 60 minutes — by WhatsApp or SMS to the duty phone, and to the control room\'s own systems.'],
+      ['close', 'Close it with what actually happened — one tap.',
+        'False alarm, authorised use, rider contacted, bike recovered, escalated to police, tracker fault, or other. A note is optional. Closing without an outcome is still possible, but then nobody can tell later which alerts were real.'],
+      ['bulk', 'Close a run of the same thing together.',
+        'Tick the alerts, press Close, choose one outcome for all of them. Idling alerts from one bike are the usual case.'],
+      ['critical', 'Treat panic, tamper, towing, power disconnect and night movement differently.',
+        'These are the ones that escalate, and the ones that open a theft case by themselves.'],
+      ['noise', 'Tell an admin when a bike is making noise rather than sense.',
+        'One paid-off bike raised 964 of 1,073 idle alerts in a month. Alert types can be turned off per bike, or for the fleet.'],
+    ],
+    interactive: 'openAlerts',
+    links: [{ label: 'Open the control room', to: '/admin/alerts', adminTo: '/admin/alerts' }],
+  },
+  {
+    id: 'theft',
+    title: 'When a bike is being taken',
+    icon: Siren,
+    forRole: 'everyone',
+    summary: 'A case opens itself, gathers the story, and closes with whether the bike came back.',
+    steps: [
+      ['opens', 'A tamper, towing, movement, night-movement, power-disconnect or critical theft-risk alert opens a case for that bike.',
+        'One case per bike, so a burst of alerts is one theft and not six. Every later alert joins its timeline.'],
+      ['follow', 'Use Follow live for an hour while you are working the case.',
+        'The tracker is asked where it is every minute instead of waiting for its own reporting interval. It costs SIM data, so it stops on its own — extend it if you still need it.'],
+      ['contact', 'Phone the rider before assuming the worst.',
+        'Their name and number are on the case. Most movement alerts are the rider.'],
+      ['cut', 'Cut the engine only when the bike is stationary or the rider is safe.',
+        'It asks you to confirm. The bike will not restart until it is restored, and a cut survives the power being pulled.'],
+      ['notes', 'Write what happens as it happens — calls, sightings, handovers.',
+        'The timeline is the case. "We phoned at 14:10, no answer" is worth more tomorrow than it seems now.'],
+      ['police', 'Record the police or recovery reference when you hand it over.'],
+      ['close', 'Close the case: recovered, false alarm, or written off.',
+        'This is where the recovery rate comes from — the number the whole playbook exists to move.'],
+    ],
+    links: [{ label: 'Open theft cases', to: '/admin/theft-cases', adminTo: '/admin/theft-cases' }],
+  },
+  {
+    id: 'trackers',
+    title: 'Trackers and installs',
+    icon: Radio,
+    forRole: 'everyone',
+    summary: 'A tracker is installed when it has proved it works — not when it has been fitted.',
+    steps: [
+      ['check', 'Run the install check at the bike: tracker detail panel → Controls → Install check.',
+        'It tests what the tracker itself reports: reached the server, reporting now, GPS fix, wired to power, ignition line, backup battery, signal, linked to a bike, recorded a trip.'],
+      ['signoff', 'Sign off the install once the required checks pass.',
+        'If something cannot pass — a basement, no sky — you can sign off with a reason, which is recorded against your name.'],
+      ['health', 'Watch the tracking dashboard for trackers that have gone quiet.',
+        'Reporting, quiet (over an hour), silent (over a day), never connected. Silence on a bike that is being ridden is the one to chase.'],
+      ['never', 'A tracker that has never connected is not installed, whatever it looks like.',
+        'Check power and ignition wiring, that the SIM has data and the right APN, and that the tracker points at hayabusa.proxy.rlwy.net port 52322 over TCP. Copying the settings from a working unit is the quickest fix.'],
+      ['coverage', 'Keep trackers on the bikes that are out with riders.',
+        'Coverage counts active bikes only. A tracker on a paid-off bike is doing nothing for the fleet — and tracking a bike its owner has paid off needs their consent.'],
+    ],
+    links: [{ label: 'Open the tracking dashboard', to: '/admin/tracking/dashboard', adminTo: '/admin/tracking/dashboard' }],
+  },
+  {
+    id: 'geofences',
+    title: 'Zones and speed',
+    icon: Shield,
+    forRole: 'admin',
+    summary: 'Where bikes should and should not go, and how fast.',
+    steps: [
+      ['draw', 'Draw a zone on the Geofences tab: a circle around a point, or an outline you click out.',
+        'A depot, a suburb a fleet works, or a no-go area.'],
+      ['type', 'Mark a no-go area as a danger zone.',
+        'Entering one raises a different alert from leaving a working area, and reads as such in the control room.'],
+      ['speed', 'Set a realistic speed limit per tracker.',
+        'Every tracker shipped at 120 km/h, which is why no speeding alert ever fired despite 26,979 pings over 80 km/h in a month.'],
+    ],
+    links: [{ label: 'Open geofences', to: '/admin/tracking', adminTo: '/admin/tracking' }],
+  },
+  {
+    id: 'who-hears',
+    title: 'Who gets told',
+    icon: Settings,
+    forRole: 'admin',
+    summary: 'Which alerts are raised, who they reach, and on what.',
+    steps: [
+      ['types', 'Turn alert types on and off in Alert settings, for the fleet or for one tracker.',
+        'An alert that is switched off is never raised at all — it cannot escalate, and it cannot open a theft case.'],
+      ['recipients', 'Name who should receive each type.',
+        'With nobody named, critical alerts go to superadmins. Everything else raises an alert in the control room without emailing anyone.'],
+      ['webhooks', 'Choose which alert types reach the control room\'s own systems.',
+        'Integrations → the webhook → Alerts sent. Sending everything means sending 1,073 idle alerts a month alongside the six that matter.'],
+      ['duty', 'Know which phone an escalation rings.',
+        'Weekdays 08:00–17:00 it uses the office line; outside that, and on weekends and South African public holidays, the after-hours line.'],
+      ['report', 'Read the 08:00 report.',
+        'Every morning, to every admin: the last 24 hours of alarms, trackers that have gone quiet or never connected, engine cuts, missed payments, and what needs attention.'],
+    ],
+    links: [{ label: 'Open integrations', to: '/admin/integrations', adminTo: '/admin/integrations' }],
+  },
+  {
+    id: 'trouble',
+    title: 'When something is wrong',
+    icon: LifeBuoy,
+    forRole: 'everyone',
+    summary: 'What you will actually meet, and what to do about each.',
+    trouble: [
+      ['A bike is not on the map', 'It has no tracker, or the tracker has never connected', 'Check the tracking dashboard: never connected means it is not reaching the server at all.'],
+      ['The map shows an old position', 'The tracker is asleep or out of coverage', 'The detail panel shows when it was last seen. Ask for a position with the locate button.'],
+      ['LIVE says offline', 'The live feed has dropped', 'Positions still load when you refresh. If it stays offline, tell an admin.'],
+      ['Dozens of idle alerts from one bike', 'That bike is parked with the ignition on, or is noisy by nature', 'Close them together with one outcome, then ask an admin to turn idle off for that tracker.'],
+      ['An alert keeps escalating', 'Nobody has acknowledged it', 'Acknowledge it. That is what stops the chase, and it records who stopped it.'],
+      ['The engine will not restore', 'The command has not reached the tracker yet', 'It is re-sent when the tracker reconnects. The bike stays cut until it does — check the tracker is online.'],
+      ['A theft case opened for nothing', 'A knock or a tow-truck set off a tamper alert', 'Close it as a false alarm. That keeps the recovery rate honest.'],
+    ],
+  },
+];
+
+export const ALERT_SEVERITIES = [
+  ['Critical', 'Panic, tamper, power disconnect, unauthorised movement, theft risk, night movement, towing, automatic engine cut', 'Escalates until acknowledged; opens a theft case'],
+  ['High', 'Speeding, harsh braking, left a geofence', 'Answer the same shift'],
+  ['Medium', 'Harsh acceleration or cornering, entered a geofence, low battery, long trip, battery declining', 'Worth a look'],
+  ['Low', 'Idling, tracker offline, bike dormant', 'Housekeeping — close in bulk'],
+];
+
+export const ESCALATION_ROUNDS = [
+  ['5 minutes', 'Email and push to the recipients, WhatsApp or SMS to the duty phone'],
+  ['15 minutes', 'The same again, and the control room\'s webhook fires'],
+  ['30 minutes', 'The same again'],
+  ['60 minutes', 'The same again, then it stops chasing'],
+];

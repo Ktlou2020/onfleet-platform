@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PartsTab, PartsOrdersTab } from './workshopParts';
-import WorkshopGuide from '../../components/WorkshopGuide';
+import WorkshopGuidePage from '../../components/WorkshopGuidePage';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Trophy, Medal, Award, Copy, Check, Clock, FileText, Image, Trash2, Upload, ChevronUp, ChevronDown as ChevronDownIcon, ArrowUpDown } from 'lucide-react';
@@ -1359,7 +1359,7 @@ export default function AdminWorkshop() {
       {tab === 'Fleet Health' && <FleetHealthTab />}
       {tab === 'Parts' && <PartsTab />}
       {tab === 'Parts orders' && <PartsOrdersTab />}
-      {tab === 'Guide' && <WorkshopGuide portal="admin" />}
+      {tab === 'Guide' && <WorkshopGuidePage portal="admin" />}
       {tab === 'Rates' && <RatesTab />}
       {tab === 'Staff' && <StaffTab />}
 

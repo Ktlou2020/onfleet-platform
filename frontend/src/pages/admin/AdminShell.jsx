@@ -4,7 +4,7 @@ import { useAuth } from '../../auth';
 import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
 import NotificationBell from '../../components/NotificationBell';
-import { LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell, Briefcase, ShieldCheck, PiggyBank, MapPin, UserCheck, Wrench, ShieldAlert, Gauge, Star, TrendingUp, Plug, Inbox, Repeat, MoreHorizontal, X, Siren } from 'lucide-react';
+import { LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell, Briefcase, ShieldCheck, PiggyBank, MapPin, UserCheck, Wrench, ShieldAlert, Gauge, Star, TrendingUp, Plug, Inbox, Repeat, MoreHorizontal, X, Siren, BookOpen } from 'lucide-react';
 
 const navItems = [
   { section: 'Operations', mobileOnly: true },
@@ -15,6 +15,7 @@ const navItems = [
   { to: '/admin/bikes', label: 'Bikes Fleet', icon: Bike },
   { to: '/admin/tracking', label: 'GPS Tracking', icon: MapPin, end: true },
   { to: '/admin/tracking/dashboard', label: 'Tracking Dashboard', icon: Gauge },
+  { to: '/admin/tracking/guide', label: 'Tracking Guide', icon: BookOpen },
   { to: '/admin/riders', label: 'Riders', icon: Star },
   { to: '/admin/theft-cases', label: 'Theft cases', icon: Siren },
   { to: '/admin/claims', label: 'Insurance Claims', icon: ShieldAlert },

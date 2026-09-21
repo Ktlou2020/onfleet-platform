@@ -1,5 +1,5 @@
 'use strict';
-import { LogOut, Radio, Map, Bell } from 'lucide-react';
+import { LogOut, Radio, Map, Bell , BookOpen } from 'lucide-react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../auth';
 
@@ -34,6 +34,7 @@ export default function ControlRoom() {
         <div style={{ display: 'flex', gap: 4, marginLeft: 18 }}>
           <NavLink to="/control-room" end style={tabStyle}><Map size={13} /> Live Map</NavLink>
           <NavLink to="/control-room/alerts" style={tabStyle}><Bell size={13} /> Alerts Feed</NavLink>
+          <NavLink to="/control-room/guide" style={tabStyle}><BookOpen size={13} /> Guide</NavLink>
         </div>
 
         <div style={{ flex: 1 }} />

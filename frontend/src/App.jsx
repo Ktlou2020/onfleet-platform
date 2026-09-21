@@ -83,6 +83,7 @@ const Privacy = lazy(() => import('./pages/Privacy'));
 const Terms = lazy(() => import('./pages/Terms'));
 const ControlRoom = lazy(() => import('./pages/ControlRoom'));
 const ControlRoomAlerts = lazy(() => import('./pages/ControlRoomAlerts'));
+const TrackingGuide = lazy(() => import('./components/TrackingGuidePage'));
 
 const WORKSHOP_ROLES = ['technician', 'admin', 'superadmin'];
 
@@ -199,6 +200,7 @@ export default function App() {
             <Route path="leads" element={<AdminLeads />} />
             <Route path="tracking" element={<AdminTracking />} />
             <Route path="tracking/dashboard" element={<AdminTrackingDashboard />} />
+            <Route path="tracking/guide" element={<TrackingGuide portal="admin" />} />
             <Route path="claims" element={<AdminClaims />} />
             <Route path="riders" element={<AdminRiders />} />
             <Route path="signup-stats" element={<AdminSignupStats />} />
@@ -211,6 +213,7 @@ export default function App() {
           <Route path="/control-room" element={<PrivateRoute role="control_room"><ControlRoom /></PrivateRoute>}>
             <Route index element={<AdminTracking readOnly />} />
             <Route path="alerts" element={<ControlRoomAlerts />} />
+            <Route path="guide" element={<TrackingGuide portal="control-room" />} />
           </Route>
 
           <Route path="/workshop/login" element={<WorkshopLogin />} />

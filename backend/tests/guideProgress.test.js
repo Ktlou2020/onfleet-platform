@@ -11,8 +11,8 @@ const app = buildApp();
 describe.skipIf(!process.env.DATABASE_URL)('the workshop guide\'s progress', () => {
   let technician;
   let admin;
-  const tick = (user, body) => request(app).put('/api/workshop/guide/progress').set(authHeader(user)).send(body);
-  const read = (user) => request(app).get('/api/workshop/guide/progress').set(authHeader(user));
+  const tick = (user, body) => request(app).put('/api/guide/progress').set(authHeader(user)).send(body);
+  const read = (user, guide = 'workshop') => request(app).get(`/api/guide/progress?guide=${guide}`).set(authHeader(user));
 
   beforeEach(async () => {
     await resetAllPgTables();
@@ -51,7 +51,7 @@ describe.skipIf(!process.env.DATABASE_URL)('the workshop guide\'s progress', () 
   it('shows an admin who has worked through it, including people who have not started', async () => {
     await tick(technician, { step_key: 'job-card.open' });
     await tick(technician, { step_key: 'job-card.start' });
-    const res = await request(app).get('/api/workshop/guide/progress/team').set(authHeader(admin));
+    const res = await request(app).get('/api/guide/progress/team?guide=workshop').set(authHeader(admin));
     expect(res.status).toBe(200);
     const sipho = res.body.find((p) => p.full_name === 'Sipho N');
     const kagiso = res.body.find((p) => p.full_name === 'Kagiso T');
@@ -61,7 +61,7 @@ describe.skipIf(!process.env.DATABASE_URL)('the workshop guide\'s progress', () 
   });
 
   it('keeps the team view to admins', async () => {
-    expect((await request(app).get('/api/workshop/guide/progress/team').set(authHeader(technician))).status).toBe(403);
+    expect((await request(app).get('/api/guide/progress/team?guide=workshop').set(authHeader(technician))).status).toBe(403);
   });
 
   it('is not open to riders', async () => {
@@ -69,12 +69,27 @@ describe.skipIf(!process.env.DATABASE_URL)('the workshop guide\'s progress', () 
     expect((await read(rider)).status).toBe(403);
   });
 
-  it('keeps separate guides apart', async () => {
+  it('keeps the workshop guide and the tracking guide apart', async () => {
     await tick(technician, { guide: 'workshop', step_key: 'parts.name' });
     await tick(technician, { guide: 'tracking', step_key: 'alerts.close' });
-    const workshop = await request(app).get('/api/workshop/guide/progress?guide=workshop').set(authHeader(technician));
-    const tracking = await request(app).get('/api/workshop/guide/progress?guide=tracking').set(authHeader(technician));
-    expect(workshop.body.done).toEqual(['parts.name']);
-    expect(tracking.body.done).toEqual(['alerts.close']);
+    expect((await read(technician, 'workshop')).body.done).toEqual(['parts.name']);
+    expect((await read(technician, 'tracking')).body.done).toEqual(['alerts.close']);
+  });
+
+  // The tracking guide is read by the control room, who are not workshop staff
+  // and have no business in a job card.
+  it('lets the control room keep its own progress', async () => {
+    const controlRoom = (await createPgUser({ role: 'control_room', full_name: 'Night Desk' })).user;
+    const ticked = await tick(controlRoom, { guide: 'tracking', step_key: 'theft.follow' });
+    expect(ticked.status).toBe(200);
+    expect((await read(controlRoom, 'tracking')).body.done).toEqual(['theft.follow']);
+
+    const team = await request(app).get('/api/guide/progress/team?guide=tracking').set(authHeader(admin));
+    expect(team.body.find((p) => p.full_name === 'Night Desk')).toMatchObject({ steps_done: 1 });
+  });
+
+  it('refuses a guide it does not have', async () => {
+    expect((await tick(technician, { guide: 'nonsense', step_key: 'a.b' })).status).toBe(400);
+    expect((await read(technician, 'nonsense')).status).toBe(400);
   });
 });

@@ -588,9 +588,6 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   gap: 10px;
   min-height: 42px;
 }
-.fleet-pilot-checkbox input {
-  width: auto;
-}
 .fleet-pilot-price {
   font-size: 28px;
   font-weight: 700;

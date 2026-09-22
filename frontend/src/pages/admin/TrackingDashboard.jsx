@@ -117,7 +117,7 @@ export default function TrackingDashboard() {
           <Stat label="Never connected" value={health.never_connected}
             delta="Registered but never reached the server" icon={<WifiOff size={16} />}
             accent={health.never_connected ? 'var(--danger)' : 'var(--success)'}
-            onClick={() => openDrill('Never connected', 'Registered but never reached us at all — not installed, whatever it looks like. Check power, the SIM\u2019s data and APN, and that it points at hayabusa.proxy.rlwy.net port 52322 over TCP.', (d) => d.state === 'never_connected')} />
+            onClick={() => openDrill('Never connected', 'Registered but never reached us at all — not installed, whatever it looks like. Check power, the SIM\u2019s data and APN, and that it points at the server address shown in the tracking guide, over TCP.', (d) => d.state === 'never_connected')} />
           <Stat label="Installs not signed off" value={health.uncommissioned}
             delta={health.awaiting_install_proof ? `${health.awaiting_install_proof} overdue by more than a day` : 'All recent'}
             icon={<ShieldAlert size={16} />} accent={health.awaiting_install_proof ? 'var(--warn)' : undefined}

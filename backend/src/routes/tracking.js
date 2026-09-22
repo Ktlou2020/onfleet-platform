@@ -1247,6 +1247,15 @@ router.put('/night-curfew/bike/:bike_id', authRequired, adminOnly, async (req, r
   res.json({ ok: true, bike: rows[0], exempt });
 });
 
+// Where to point a tracker. Read from live configuration rather than repeated
+// in a runbook, because a device sent to the wrong address cannot be fixed
+// from here — it needs SMS to its SIM or a cable at the bike.
+router.get('/endpoint', authRequired, trackingReadOnly, async (req, res) => {
+  const { trackerEndpoint, endpointDrift } = require('../config/trackerEndpoint');
+  const endpoint = trackerEndpoint();
+  res.json({ ...endpoint, drift: endpointDrift(endpoint) });
+});
+
 router.get('/notification-users', authRequired, trackingReadOnly, async (req, res) => {
   const { rows: users } = await pgDb.query(
     `SELECT id, full_name, email, role FROM users WHERE role IN ('superadmin','admin') AND deleted_at IS NULL ORDER BY full_name`

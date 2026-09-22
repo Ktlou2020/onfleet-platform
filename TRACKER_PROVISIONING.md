@@ -12,27 +12,68 @@ serves the HTTPS admin console and API on port 4000. Trackers speak a raw TCP
 protocol (Teltonika Codec 8) to a completely different address — Railway's TCP
 proxy for the tracking service.
 
-**Get the current values before every install** — do not hardcode the ones
-below into a device and reuse them for months, since Railway's TCP proxy
-host/port is not guaranteed permanent unless a static proxy add-on is
-configured (it isn't, today):
+**Do not read the address off this page.** The platform reports it live, from
+its own configuration, at **GPS Tracking → Guide → "A tracker that never
+connects"** — or `GET /api/tracking/endpoint` for staff. That page is right by
+construction; a document is only right until something moves.
 
-```bash
-railway variables --service onfleet-platform --environment production | grep -i "tcp"
-```
+### Why there is a hostname of our own
 
-Look for `RAILWAY_TCP_PROXY_DOMAIN` and `RAILWAY_TCP_PROXY_PORT`. As of this
-writing:
+Railway's TCP proxy host is not guaranteed permanent, and a tracker pointed at
+a host that has moved cannot be fixed from here — it needs an SMS to its SIM or
+a cable at the bike. With hundreds of devices that is not a recovery, it is an
+outage with a van involved.
+
+So devices are given **a hostname we own**, pointed at Railway's proxy by a
+CNAME. If the proxy moves, the CNAME follows it and every tracker in the field
+keeps working without anybody touching a bike.
 
 | Setting  | Value |
 |----------|-------|
-| Domain   | `hayabusa.proxy.rlwy.net` |
-| Port     | `52322` |
+| Domain   | `gps.onfleet.africa` (CNAME → Railway's proxy host) |
+| Port     | whatever `GET /api/tracking/endpoint` reports |
 | Protocol | TCP |
 
+The DNS record that makes this work, at the `onfleet.africa` nameservers
+(ns.otherdns.net / ns.dns1.co.za):
+
+```
+gps.onfleet.africa.   CNAME   hayabusa.proxy.rlwy.net.
+```
+
+If using Cloudflare, the record must be DNS-only (grey cloud) — a proxied
+record breaks raw TCP.
+
+### The half a CNAME cannot fix
+
+Railway sets the proxy **port**, and a custom domain does not change it. If
+Railway ever reassigns the port, DNS cannot save the devices already in the
+field: they would all need an SMS `setparam`.
+
+The platform watches for this. When `TRACKER_PUBLIC_HOST` is set and the port
+it advertises no longer matches `RAILWAY_TCP_PROXY_PORT`, the guide shows the
+mismatch in red. Treat that as an incident, not a warning.
+
+Two things follow from that:
+
+- **Never delete and recreate the TCP proxy.** A new proxy means a new port,
+  and every tracker goes dark at once.
+- If this platform is ever sold to somebody else to run, a fixed port of our
+  own — a small TCP forwarder in front of Railway — stops being a nicety.
+
+### Configuration
+
+| Variable | Meaning |
+|----------|---------|
+| `TRACKER_PUBLIC_HOST` | The hostname devices are given. Set once the CNAME resolves. |
+| `TRACKER_PUBLIC_PORT` | The port devices are given. Matches Railway's proxy port. |
+
+With neither set, the platform reports Railway's own proxy values and says so —
+correct, but it is the provider's address and it can move.
+
 (`TELTONIKA_TCP_PORT` / `RAILWAY_TCP_APPLICATION_PORT`, currently `50150`, is
-the port the app listens on *inside* Railway's network — never give this one
-to a physical device, only the proxy port above.)
+the port the app listens on *inside* Railway's network — never give this one to
+a physical device. The endpoint API will never report it.)
 
 ## 1. Register the device in the admin console first
 
@@ -51,8 +92,8 @@ Using Teltonika Configurator (USB) or an SMS config command, set on the
   to OnFleet and varies by network; a SIM with no active data plan or the
   wrong APN will never reach any server, and looks identical from our side to
   a wrong server address — rule this out early, see Troubleshooting)
-- **Domain/IP**: the `RAILWAY_TCP_PROXY_DOMAIN` value above
-- **Port**: the `RAILWAY_TCP_PROXY_PORT` value above
+- **Domain/IP**: the host from `GET /api/tracking/endpoint` (`gps.onfleet.africa`)
+- **Port**: the port from that same response
 - **Protocol**: TCP
 - **Data Sending**: enabled, with a reasonable send period (the app's default
   active/sleeping thresholds assume pings at least every few minutes — an
@@ -97,9 +138,8 @@ CSV):
 setparam 2004:<domain>;2005:<port>
 ```
 
-e.g. `setparam 2004:hayabusa.proxy.rlwy.net;2005:52322` (using the current
-values from `railway variables | grep -i tcp`, per the top of this doc — get
-them fresh, don't reuse an old value). Only set what's actually wrong — leave
+e.g. `setparam 2004:gps.onfleet.africa;2005:52322` — take both from
+`GET /api/tracking/endpoint` rather than from this page. Only set what's actually wrong — leave
 the APN (param `2001`) alone unless you have specific reason to believe it's
 misconfigured, since a bad APN value sent blind can do more harm than good.
 
@@ -162,7 +202,7 @@ to the next:
    is healthy and the problem is specific to this tracker.
 
 2. **Server address.** Re-check the device's configured domain/port against
-   `railway variables | grep -i tcp` (see above) — not from memory, in case
+   `GET /api/tracking/endpoint` (see above) — not from memory, in case
    the proxy address has changed since the last install. If the device is
    already installed on a bike and you can't get it on USB, don't assume a
    FOTA config push actually applied just because it was sent — see

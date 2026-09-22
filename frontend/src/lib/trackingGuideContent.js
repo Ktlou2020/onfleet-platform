@@ -87,7 +87,7 @@ export const TRACKING_SECTIONS = [
       ['health', 'Watch the tracking dashboard for trackers that have gone quiet.',
         'Reporting, quiet (over an hour), silent (over a day), never connected. Silence on a bike that is being ridden is the one to chase.'],
       ['never', 'A tracker that has never connected is not installed, whatever it looks like.',
-        'Check power and ignition wiring, that the SIM has data and the right APN, and that the tracker points at hayabusa.proxy.rlwy.net port 52322 over TCP. Copying the settings from a working unit is the quickest fix.'],
+        'Check power and ignition wiring, that the SIM has data and the right APN, and that the tracker points at the server address below over TCP. Copying the settings from a working unit is the quickest fix.'],
       ['coverage', 'Keep trackers on the bikes that are out with riders.',
         'Coverage counts active bikes only. A tracker on a paid-off bike is doing nothing for the fleet — and tracking a bike its owner has paid off needs their consent.'],
     ],

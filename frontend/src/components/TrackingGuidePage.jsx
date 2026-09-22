@@ -101,6 +101,37 @@ function OpenAlertsNow() {
   );
 }
 
+// The address a tracker has to be given. Asked for rather than written down:
+// a device sent to the wrong one cannot be fixed from here, and this is the
+// only place that knows what the server is actually answering on today.
+function TrackerEndpointLine() {
+  const [endpoint, setEndpoint] = useState(null);
+
+  useEffect(() => {
+    api.get('/tracking/endpoint').then(({ data }) => setEndpoint(data)).catch(() => {});
+  }, []);
+
+  if (!endpoint) return <div className="text-sm muted">Checking the server address…</div>;
+
+  return (
+    <>
+      <div className="text-sm">
+        Server <strong>{endpoint.host}</strong>, port <strong>{endpoint.port}</strong>, {endpoint.protocol}
+      </div>
+      {endpoint.drift && (
+        <div className="text-xs" style={{ color: 'var(--danger)', marginTop: 4 }}>
+          {endpoint.drift} Trackers already in the field cannot reach us until this is put right.
+        </div>
+      )}
+      {!endpoint.own_hostname && (
+        <div className="text-xs muted" style={{ marginTop: 4 }}>
+          This is the hosting provider's own address. It can change.
+        </div>
+      )}
+    </>
+  );
+}
+
 export default function TrackingGuidePage({ portal = 'admin' }) {
   return (
     <Guide
@@ -144,7 +175,7 @@ export default function TrackingGuidePage({ portal = 'admin' }) {
             </div>
             <div className="card">
               <h3 style={{ marginTop: 0, fontSize: 15 }}><WifiOff size={14} /> A tracker that never connects</h3>
-              <div className="text-sm">Server <strong>hayabusa.proxy.rlwy.net</strong>, port <strong>52322</strong>, TCP</div>
+              <TrackerEndpointLine />
               <div className="text-sm muted">SIM active with data, and the network's APN set</div>
               <div className="text-sm muted">Wired to power and ignition</div>
               <div className="text-xs muted" style={{ marginTop: 6 }}>

@@ -63,12 +63,21 @@ function looksUsable(key, prefix) {
   return k.startsWith(prefix) && !k.includes('xxxx') && k.length > prefix.length + 10;
 }
 
-// The account a payment for this organisation should go to.
-// `own` is false when it falls back to the platform's keys, which is what
-// decides whether a wallet credit and our fee apply at all.
+// How a payment for this organisation should be routed. Three ways, in order:
+//
+//   1. `own`         — the fleet's own Paystack keys. The money goes straight
+//                      to them; we never see it.
+//   2. `subaccount`  — our keys, with the fleet's subaccount code attached, so
+//                      Paystack settles their share directly to their bank.
+//                      They never needed a merchant account of their own.
+//   3. neither       — our keys alone, which is OnFleet Africa's own operation.
+//
+// Only the first two mean the money is the fleet's. Both of them mean no
+// wallet credit and no fee of ours, because we were never paid.
 async function accountForOrganization(organizationId, db = pgDb) {
   const platform = {
     own: false,
+    subaccount: null,
     organization_id: organizationId || null,
     secret: process.env.PAYSTACK_SECRET_KEY || null,
     public_key: process.env.PAYSTACK_PUBLIC_KEY || null,
@@ -76,10 +85,16 @@ async function accountForOrganization(organizationId, db = pgDb) {
   if (!organizationId) return platform;
 
   const { rows } = await db.query(
-    `SELECT id, paystack_public_key, paystack_secret_key_encrypted
+    `SELECT id, paystack_public_key, paystack_secret_key_encrypted, paystack_subaccount_code
        FROM organizations WHERE id = $1`, [organizationId]);
   const org = rows[0];
-  if (!org || !org.paystack_secret_key_encrypted) return platform;
+  if (!org) return platform;
+
+  // A fleet with its own keys is already paid directly; a subaccount would be
+  // meaningless there, and on their account our code would not resolve anyway.
+  if (!org.paystack_secret_key_encrypted) {
+    return { ...platform, subaccount: org.paystack_subaccount_code || null };
+  }
 
   const secret = decryptSecret(org.paystack_secret_key_encrypted);
   // Undecryptable means the encryption key changed or the row was tampered
@@ -90,7 +105,9 @@ async function accountForOrganization(organizationId, db = pgDb) {
     e.code = 'PAYSTACK_KEY_UNREADABLE';
     throw e;
   }
-  return { own: true, organization_id: org.id, secret, public_key: org.paystack_public_key || null };
+  // subaccount is explicitly null, not absent: every caller reads the same
+  // shape, and a missing key reads as 'not set' exactly like a set one.
+  return { own: true, subaccount: null, organization_id: org.id, secret, public_key: org.paystack_public_key || null };
 }
 
 // The organisation a rider's agreement belongs to — whose account collects.
@@ -134,6 +151,44 @@ async function disconnectAccount({ organizationId, db = pgDb }) {
   return rows[0] || null;
 }
 
+// Paystack subaccount codes look like ACCT_xxxxxxxx. Storing something that
+// is not one fails later, inside a payment attempt, where it reads as
+// "transaction could not be initialised" and tells nobody why.
+function looksLikeSubaccount(code) {
+  return /^ACCT_[A-Za-z0-9]{6,}$/.test(String(code || '').trim());
+}
+
+async function linkSubaccount({ organizationId, code, name = null, bank = null, actorId = null, db = pgDb }) {
+  const trimmed = String(code || '').trim();
+  if (!looksLikeSubaccount(trimmed)) {
+    throw new Error('That does not look like a Paystack subaccount code (it should start with ACCT_)');
+  }
+  const { rows } = await db.query(
+    `UPDATE organizations
+        SET paystack_subaccount_code = $1,
+            paystack_subaccount_name = $2,
+            paystack_subaccount_bank = $3,
+            paystack_subaccount_linked_at = NOW(),
+            paystack_subaccount_linked_by = $4,
+            updated_at = NOW()
+      WHERE id = $5 RETURNING id, name`,
+    [trimmed, name || null, bank || null, actorId, organizationId]);
+  return rows[0] || null;
+}
+
+async function unlinkSubaccount({ organizationId, db = pgDb }) {
+  const { rows } = await db.query(
+    `UPDATE organizations
+        SET paystack_subaccount_code = NULL,
+            paystack_subaccount_name = NULL,
+            paystack_subaccount_bank = NULL,
+            paystack_subaccount_linked_at = NULL,
+            paystack_subaccount_linked_by = NULL,
+            updated_at = NOW()
+      WHERE id = $1 RETURNING id, name`, [organizationId]);
+  return rows[0] || null;
+}
+
 async function organizationByWebhookToken(token, db = pgDb) {
   if (!token) return null;
   const { rows } = await db.query(
@@ -146,23 +201,37 @@ async function organizationByWebhookToken(token, db = pgDb) {
 async function connectionStatus(organizationId, db = pgDb) {
   const { rows } = await db.query(
     `SELECT paystack_public_key, paystack_webhook_token, paystack_connected_at,
+            paystack_subaccount_code, paystack_subaccount_name,
+            paystack_subaccount_bank, paystack_subaccount_linked_at,
             (paystack_secret_key_encrypted IS NOT NULL) AS connected
        FROM organizations WHERE id = $1`, [organizationId]);
   const org = rows[0];
   if (!org) return null;
   const base = (process.env.FRONTEND_URL || '').replace(/\/$/, '');
   return {
+    // How this fleet is actually being paid right now. Own keys win: a
+    // subaccount on our account would never see those payments.
+    method: org.connected ? 'own_account' : (org.paystack_subaccount_code ? 'subaccount' : 'none'),
     connected: !!org.connected,
     public_key: org.paystack_public_key || null,
     connected_at: org.paystack_connected_at || null,
-    webhook_url: org.paystack_webhook_token
+    // A fleet on its own account signs its own webhooks, so it needs its own
+    // URL. A subaccount's payments arrive on ours and need nothing from them.
+    webhook_url: org.connected && org.paystack_webhook_token
       ? `${base}/api/payments/paystack/webhook/${org.paystack_webhook_token}`
       : null,
+    subaccount: org.paystack_subaccount_code ? {
+      code: org.paystack_subaccount_code,
+      name: org.paystack_subaccount_name || null,
+      bank: org.paystack_subaccount_bank || null,
+      linked_at: org.paystack_subaccount_linked_at || null,
+    } : null,
   };
 }
 
 module.exports = {
   accountForOrganization, organizationForAgreement, organizationByWebhookToken,
   connectAccount, disconnectAccount, connectionStatus,
+  linkSubaccount, unlinkSubaccount, looksLikeSubaccount,
   encryptSecret, decryptSecret, newWebhookToken, looksUsable,
 };

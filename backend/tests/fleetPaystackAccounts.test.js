@@ -161,4 +161,64 @@ describe('whose Paystack account takes a rider payment', () => {
       expect(await accounts.connectionStatus(org.id)).toMatchObject({ connected: false, public_key: null });
     });
   });
+
+  // The lighter route: the fleet gives Paystack its bank details and gives us
+  // the resulting code. It never opens a merchant account of its own, and the
+  // money still never sits with us — Paystack settles its share directly.
+  describe.skipIf(!process.env.DATABASE_URL)('paying a fleet through a subaccount', () => {
+    let org;
+
+    beforeEach(async () => {
+      await resetAllPgTables();
+      org = await createPgOrg({ name: 'Blue Sky Deliveries' });
+    });
+
+    it('routes on our keys, with the fleet\'s subaccount attached', async () => {
+      await accounts.linkSubaccount({ organizationId: org.id, code: 'ACCT_8f4k2m9xq1' });
+      const account = await accounts.accountForOrganization(org.id);
+      expect(account).toMatchObject({
+        own: false,                              // our merchant account
+        subaccount: 'ACCT_8f4k2m9xq1',           // their share, settled to them
+        secret: 'sk_test_platform_key_0000000',
+      });
+    });
+
+    it('turns away something that is not a subaccount code', async () => {
+      for (const bad of ['sk_live_notasubaccount', 'ACCT_', 'blue-sky', '']) {
+        await expect(accounts.linkSubaccount({ organizationId: org.id, code: bad }))
+          .rejects.toThrow(/subaccount code/i);
+      }
+    });
+
+    it('stops routing there once unlinked', async () => {
+      await accounts.linkSubaccount({ organizationId: org.id, code: 'ACCT_8f4k2m9xq1' });
+      await accounts.unlinkSubaccount({ organizationId: org.id });
+      expect((await accounts.accountForOrganization(org.id)).subaccount).toBeNull();
+    });
+
+    // Own keys mean the fleet is already paid directly on its own account. A
+    // subaccount belongs to OUR account, so sending one there would point at
+    // something that does not exist on theirs.
+    it('ignores a subaccount when the fleet has its own account', async () => {
+      await accounts.linkSubaccount({ organizationId: org.id, code: 'ACCT_8f4k2m9xq1' });
+      await accounts.connectAccount({ organizationId: org.id, secretKey: 'sk_live_fleetsownkey12345' });
+      const account = await accounts.accountForOrganization(org.id);
+      expect(account).toMatchObject({ own: true, subaccount: null });
+    });
+
+    it('needs no webhook URL of its own — those arrive on ours', async () => {
+      await accounts.linkSubaccount({ organizationId: org.id, code: 'ACCT_8f4k2m9xq1' });
+      const status = await accounts.connectionStatus(org.id);
+      expect(status).toMatchObject({ method: 'subaccount', webhook_url: null });
+      expect(status.subaccount.code).toBe('ACCT_8f4k2m9xq1');
+    });
+
+    it('says which of the three ways a fleet is being paid', async () => {
+      expect((await accounts.connectionStatus(org.id)).method).toBe('none');
+      await accounts.linkSubaccount({ organizationId: org.id, code: 'ACCT_8f4k2m9xq1' });
+      expect((await accounts.connectionStatus(org.id)).method).toBe('subaccount');
+      await accounts.connectAccount({ organizationId: org.id, secretKey: 'sk_live_fleetsownkey12345' });
+      expect((await accounts.connectionStatus(org.id)).method).toBe('own_account');
+    });
+  });
 });

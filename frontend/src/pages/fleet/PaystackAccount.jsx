@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { CheckCircle2, Copy, Check, ExternalLink, Link2, Unlink, AlertTriangle } from 'lucide-react';
+import { CheckCircle2, Copy, Check, ExternalLink, Link2, Unlink, AlertTriangle, Banknote } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../api';
 import { ConfirmModal, Loading, fmtDate } from '../../components/ui';
@@ -53,6 +53,8 @@ export default function PaystackAccount() {
   const [publicKey, setPublicKey] = useState('');
   const [saving, setSaving] = useState(false);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  const [subaccount, setSubaccount] = useState('');
+  const [savingSub, setSavingSub] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -87,6 +89,32 @@ export default function PaystackAccount() {
     }
   };
 
+  const saveSubaccount = async (e) => {
+    e.preventDefault();
+    if (!subaccount.trim()) return toast.error('Paste the payout account code from Paystack');
+    setSavingSub(true);
+    try {
+      const { data } = await api.put('/fleet/payments/subaccount', { code: subaccount.trim() });
+      setStatus(data);
+      setSubaccount('');
+      toast.success('Payout account linked');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Could not link that code');
+    } finally {
+      setSavingSub(false);
+    }
+  };
+
+  const unlinkSubaccount = async () => {
+    try {
+      const { data } = await api.delete('/fleet/payments/subaccount');
+      setStatus(data);
+      toast.success('Payout account removed');
+    } catch {
+      toast.error('Could not remove it');
+    }
+  };
+
   const disconnect = async () => {
     try {
       const { data } = await api.delete('/fleet/payments/account');
@@ -105,9 +133,23 @@ export default function PaystackAccount() {
     <div>
       <h1>Collecting rider payments</h1>
       <p className="muted" style={{ marginTop: 4 }}>
-        Connect your own Paystack account and your riders pay you directly. The money goes to your
-        account, not ours — we never hold it and take nothing from it.
+        Your riders' money goes to you, not to us. We never hold it and take nothing from it — you pay
+        us a monthly subscription and nothing per transaction.
       </p>
+
+      <div className="card mt-3" style={{ background: 'var(--surface-2)' }}>
+        <div className="text-sm"><strong>There are two ways to set this up.</strong></div>
+        <div className="text-sm muted" style={{ marginTop: 6 }}>
+          <strong>A payout account</strong> is the quicker one: give Paystack your bank details, give us the
+          code they hand back, and your share is paid straight into your bank. You do not need a Paystack
+          merchant account of your own.
+        </div>
+        <div className="text-sm muted" style={{ marginTop: 6 }}>
+          <strong>Your own Paystack account</strong> suits you if you already have one. Payments go directly
+          to it and never touch our systems at all — but you have to open and be approved for the account
+          first, and then paste a webhook URL into it.
+        </div>
+      </div>
 
       {status?.connected ? (
         <div className="card mt-3">
@@ -163,9 +205,43 @@ export default function PaystackAccount() {
         </div>
       )}
 
+      <form className="card mt-3" onSubmit={saveSubaccount}>
+        <h3 style={{ marginTop: 0, fontSize: 15 }}>
+          <Banknote size={14} /> Payout account {status?.method === 'subaccount' && <span style={{ fontSize: 11, color: 'var(--success)' }}>· in use</span>}
+        </h3>
+        <p className="text-sm muted">
+          Create a payout account in Paystack with your bank details, then paste the code it gives you
+          (it starts with <code>ACCT_</code>). Your share is settled straight to that bank account.
+        </p>
+
+        {status?.subaccount && (
+          <div className="text-sm" style={{ marginTop: 10 }}>
+            Linked to <strong>{status.subaccount.code}</strong>
+            {status.subaccount.bank ? <> · {status.subaccount.bank}</> : null}
+            <button type="button" className="btn btn-sm btn-secondary" style={{ marginLeft: 10 }}
+              onClick={unlinkSubaccount}>Remove</button>
+          </div>
+        )}
+
+        <div style={{ marginTop: 14 }}>
+          <label className="label" htmlFor="paystack-subaccount">Payout account code</label>
+          <input id="paystack-subaccount" type="text" autoComplete="off" placeholder="ACCT_…"
+            value={subaccount} onChange={(e) => setSubaccount(e.target.value)} />
+          <div className="text-xs muted" style={{ marginTop: 5 }}>
+            The split between you and us is whatever you set in Paystack when you create the account. We
+            do not change it from here.
+          </div>
+        </div>
+
+        <button className="btn mt-3" type="submit" disabled={savingSub}>
+          {savingSub ? 'Linking…' : status?.subaccount ? 'Replace code' : 'Link payout account'}
+        </button>
+      </form>
+
       <form className="card mt-3" onSubmit={save}>
         <h3 style={{ marginTop: 0, fontSize: 15 }}>
-          <Link2 size={14} /> {status?.connected ? 'Replace your keys' : 'Connect your account'}
+          <Link2 size={14} /> {status?.connected ? 'Replace your keys' : 'Or connect your own Paystack account'}
+          {status?.method === 'own_account' && <span style={{ fontSize: 11, color: 'var(--success)' }}> · in use</span>}
         </h3>
         <p className="text-sm muted">
           Find these in Paystack under <strong>Settings → API Keys &amp; Webhooks</strong>. Use your live

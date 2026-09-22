@@ -210,12 +210,18 @@ router.post('/paystack/init', authRequired, async (req, res) => {
       currency: 'ZAR',
       reference,
       callback_url: process.env.PAYSTACK_CALLBACK_URL,
-      metadata: { agreement_id, user_id: req.user.id, organization_id: orgId || null }
+      metadata: { agreement_id, user_id: req.user.id, organization_id: orgId || null },
+      // With a subaccount, Paystack settles the fleet's share straight to
+      // their bank. The split itself is whatever they configured at Paystack —
+      // we deliberately do not set it here, because Paystack's own docs
+      // disagree about which way percentage_charge runs.
+      ...(account.subaccount ? { subaccount: account.subaccount } : {}),
     }, { headers: { Authorization: `Bearer ${account.secret}` } });
 
-    await pgDb.query(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, paystack_reference, status, fee_amount, net_amount, collected_by_organization_id)
-      VALUES ($1,$2,$3,$4, 'paystack', $5, $6, 'pending', $7, $8, $9)`,
-      [agreement_id, req.user.id, grossAmount, 'ZAR', reference, reference, fee, netAmount, account.own ? orgId : null]);
+    await pgDb.query(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, paystack_reference, status, fee_amount, net_amount, collected_by_organization_id, paystack_subaccount_code)
+      VALUES ($1,$2,$3,$4, 'paystack', $5, $6, 'pending', $7, $8, $9, $10)`,
+      [agreement_id, req.user.id, grossAmount, 'ZAR', reference, reference, fee, netAmount,
+       account.own ? orgId : null, account.subaccount || null]);
 
     res.json({
       authorization_url: resp.data.data.authorization_url,
@@ -645,8 +651,11 @@ async function ensureFleetWallet(organizationId, db = pgDb) {
 async function fleetCollectsForItself(organizationId, db = pgDb) {
   if (!organizationId) return false;
   const { rows } = await db.query(
-    'SELECT (paystack_secret_key_encrypted IS NOT NULL) AS own FROM organizations WHERE id = $1', [organizationId]);
-  return !!rows[0]?.own;
+    `SELECT (paystack_secret_key_encrypted IS NOT NULL) AS own,
+            (paystack_subaccount_code IS NOT NULL) AS via_subaccount
+       FROM organizations WHERE id = $1`, [organizationId]);
+  // Either route means Paystack paid the fleet, not us.
+  return !!(rows[0]?.own || rows[0]?.via_subaccount);
 }
 
 async function creditFleetWalletFromWebhook(organizationId, grossAmountZAR, riderId, reference) {

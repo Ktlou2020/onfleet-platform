@@ -2525,6 +2525,36 @@ router.put('/payments/account', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing
   }
 });
 
+// Linking a Paystack subaccount: the lighter of the two routes. The fleet
+// gives Paystack its bank details and gives us the resulting code; it never
+// needs a merchant account of its own.
+router.put('/payments/subaccount', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
+  const paystackAccounts = require('../services/paystackAccounts');
+  try {
+    const saved = await paystackAccounts.linkSubaccount({
+      organizationId: req.user.organization_id,
+      code: req.body.code,
+      name: req.body.name,
+      bank: req.body.bank,
+      actorId: req.user.id,
+    });
+    if (!saved) return res.status(404).json({ error: 'Organisation not found' });
+    await logAudit(req.user.id, 'fleet.paystack_subaccount_linked', 'organizations', req.user.organization_id,
+      { code: String(req.body.code || '').trim() });
+    res.json(await paystackAccounts.connectionStatus(req.user.organization_id));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.delete('/payments/subaccount', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
+  const paystackAccounts = require('../services/paystackAccounts');
+  const removed = await paystackAccounts.unlinkSubaccount({ organizationId: req.user.organization_id });
+  if (!removed) return res.status(404).json({ error: 'Organisation not found' });
+  await logAudit(req.user.id, 'fleet.paystack_subaccount_unlinked', 'organizations', req.user.organization_id, null);
+  res.json(await paystackAccounts.connectionStatus(req.user.organization_id));
+});
+
 router.delete('/payments/account', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
   const paystackAccounts = require('../services/paystackAccounts');
   const removed = await paystackAccounts.disconnectAccount({ organizationId: req.user.organization_id });

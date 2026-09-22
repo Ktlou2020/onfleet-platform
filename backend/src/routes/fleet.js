@@ -2335,7 +2335,7 @@ router.post('/payments/import/preview', companyRoleAllowed(FLEET_RESOURCE_ACCESS
       if (!ext.endsWith('.csv')) return res.status(400).json({ error: 'Please upload a CSV file' });
     }
     const organization = await getOrganizationOrThrow(req);
-    const text = req.file.buffer.toString('utf8').replace(/^﻿/, '');
+    const text = req.file.buffer.toString('utf8').replace(/^\uFEFF/, '');
     const lines = text.split(/\r?\n/).filter((l) => l.trim());
     if (lines.length < 2) return res.status(400).json({ error: 'CSV must have a header row and at least one data row' });
     const headers = lines[0].split(',').map((h) => h.replace(/^"|"$/g, '').trim());
@@ -2373,7 +2373,7 @@ router.post('/payments/import', companyRoleAllowed(FLEET_RESOURCE_ACCESS.payment
 
     function parseCsvRows(text) {
       const rows = [];
-      const lines = String(text || '').replace(/^﻿/, '').split(/\r?\n/).filter((l) => l.trim());
+      const lines = String(text || '').replace(/^\uFEFF/, '').split(/\r?\n/).filter((l) => l.trim());
       if (!lines.length) return rows;
       const hdrs = lines.shift().split(',').map((h) => h.replace(/^"|"$/g, '').trim());
       for (const line of lines) {

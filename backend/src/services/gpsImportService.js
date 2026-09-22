@@ -49,7 +49,7 @@ function findHeaderRowIndex(lines) {
 }
 
 function parseGpsCsv(text) {
-  const clean = String(text || '').replace(/^﻿/, '');
+  const clean = String(text || '').replace(/^\uFEFF/, '');
   const lines = clean.split(/\r?\n/).filter((l) => l.trim().length);
   const headerIdx = findHeaderRowIndex(lines);
   if (headerIdx === -1) throw new Error('Could not find a header row — expected columns like "Vehicle" and "Start" or a coordinates link');

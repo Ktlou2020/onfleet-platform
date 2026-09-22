@@ -45,6 +45,10 @@ jobs:
           node -e "require('./src/migrations/trackingPgSchema').runTrackingSchema().then(() => process.exit(0))"
           npx node-pg-migrate up
 
+      - name: Lint
+        working-directory: backend
+        run: npm run lint
+
       - name: Run tests
         working-directory: backend
         run: npm test
@@ -63,6 +67,13 @@ jobs:
       - name: Install dependencies
         working-directory: frontend
         run: npm ci
+
+      # Before the build, because the build cannot see these. A bare
+      # identifier bundles cleanly and only throws in a browser, which is how
+      # the admin Workshop tab shipped blank.
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
 
       - name: Build
         working-directory: frontend

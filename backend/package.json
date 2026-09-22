@@ -14,7 +14,8 @@
     "reset-admin": "node src/reset-admin.js",
     "campaign:password-reset-special": "node src/scripts/password-reset-special-audience.js",
     "bike:update-status": "node src/scripts/update-bike-status.js",
-    "bike:update-statuses-csv": "node src/scripts/update-bike-statuses-from-csv.js"
+    "bike:update-statuses-csv": "node src/scripts/update-bike-statuses-from-csv.js",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",
@@ -43,6 +44,9 @@
     "web-push": "^3.6.7"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "globals": "^17.12.0",
     "nodemon": "^3.0.2",
     "supertest": "^7.2.2",
     "vitest": "^4.1.10"

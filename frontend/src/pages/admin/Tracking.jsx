@@ -139,7 +139,6 @@ function FitBounds({ trigger, positions }) {
   useEffect(() => {
     if (!trigger || !posRef.current.length) return;
     map.fitBounds(L.latLngBounds(posRef.current), { padding: [50, 50], maxZoom: 14 });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trigger, map]);
   return null;
 }
@@ -427,9 +426,9 @@ function parseCommandResponse(command, raw) {
 
   // getgps — "Lat:XX.XXXXXX Long:YY.YYYYYY Alt:ZZZ Speed:0 Dir:0 Sat:N Fix:1 UTC:YYYY/MM/DD HH:MM:SS"
   if (/^Lat:/i.test(r)) {
-    const lat  = r.match(/Lat:([\d.\-]+)/i)?.[1];
-    const lng  = r.match(/Long:([\d.\-]+)/i)?.[1];
-    const alt  = r.match(/Alt:([\d.\-]+)/i)?.[1];
+    const lat  = r.match(/Lat:([\d.-]+)/i)?.[1];
+    const lng  = r.match(/Long:([\d.-]+)/i)?.[1];
+    const alt  = r.match(/Alt:([\d.-]+)/i)?.[1];
     const spd  = r.match(/Speed:([\d.]+)/i)?.[1];
     const sat  = r.match(/Sat:(\d+)/i)?.[1];
     const fix  = r.match(/Fix:(\d+)/i)?.[1];

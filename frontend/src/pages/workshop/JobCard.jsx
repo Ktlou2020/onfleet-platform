@@ -1,3 +1,7 @@
+/* eslint-disable no-useless-escape */
+// The printable job card builds an HTML document as a string. Inside it,
+// `<\/script>` must keep its backslash: without it the browser's HTML parser
+// ends the surrounding <script> tag at that point and the print JS breaks.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import ServicePlan from '../../components/ServicePlan';
 import { useParams, useNavigate } from 'react-router-dom';

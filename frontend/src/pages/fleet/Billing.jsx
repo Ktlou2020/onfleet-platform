@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, Link } from 'react-router-dom';
 import { AlertTriangle, CheckCircle2, Clock3, CreditCard, RefreshCw, XCircle, Wrench, TrendingUp } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../api';
@@ -215,6 +215,19 @@ export default function FleetBilling() {
 
   return (
     <>
+      {/* The two are easily confused, and the difference is whose money it is. */}
+      <div className="card mb-2" style={{ background: 'var(--surface-2)' }}>
+        <div className="flex-between" style={{ gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div className="text-sm">
+            <strong>This page is what you pay us.</strong> To set up how your <em>riders</em> pay <em>you</em>,
+            connect your own Paystack account.
+          </div>
+          <Link className="btn btn-secondary" to="/fleet/app/payment-account" style={{ flexShrink: 0 }}>
+            Rider payments
+          </Link>
+        </div>
+      </div>
+
       <div className="flex-between mb-2" style={{ gap: 16, flexWrap: 'wrap' }}>
         <div>
           <h1 className="page-title">Billing &amp; subscription</h1>

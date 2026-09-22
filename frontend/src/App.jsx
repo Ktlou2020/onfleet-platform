@@ -24,6 +24,7 @@ const FleetOwnerPayments = lazy(() => import('./pages/fleet/Payments'));
 const FleetOwnerRiders = lazy(() => import('./pages/fleet/Riders'));
 const FleetOwnerHelp = lazy(() => import('./pages/fleet/Help'));
 const FleetBilling = lazy(() => import('./pages/fleet/Billing'));
+const FleetPaystackAccount = lazy(() => import('./pages/fleet/PaystackAccount'));
 const FleetWallet = lazy(() => import('./pages/fleet/Wallet'));
 const FleetCollections = lazy(() => import('./pages/fleet/Collections'));
 const FleetHubs = lazy(() => import('./pages/fleet/Hubs'));
@@ -158,6 +159,7 @@ export default function App() {
             <Route path="riders" element={<FleetRouteGate section="riders"><FleetOwnerRiders /></FleetRouteGate>} />
             <Route path="wallet" element={<FleetRouteGate section="wallet"><FleetWallet /></FleetRouteGate>} />
             <Route path="billing" element={<FleetRouteGate section="billing"><FleetBilling /></FleetRouteGate>} />
+            <Route path="payment-account" element={<FleetRouteGate section="billing"><FleetPaystackAccount /></FleetRouteGate>} />
             <Route path="collections" element={<FleetRouteGate section="collections"><FleetCollections /></FleetRouteGate>} />
             <Route path="hubs" element={<FleetRouteGate section="hubs"><FleetHubs /></FleetRouteGate>} />
             <Route path="api-keys" element={<FleetRouteGate section="api_keys"><FleetApiKeys /></FleetRouteGate>} />

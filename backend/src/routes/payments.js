@@ -22,7 +22,7 @@ function creditedAmount(payment) {
   return Number(payment?.net_amount) || Number(payment?.amount) || 0;
 }
 
-function adminVisibleAgreementClause(aAlias = 'a', bAlias = 'b', uAlias = 'u') {
+function adminVisibleAgreementClause(_aAlias = 'a', bAlias = 'b', uAlias = 'u') {
   return `${bAlias}.organization_id IS NULL AND ${uAlias}.organization_id IS NULL`;
 }
 
@@ -306,7 +306,7 @@ router.post('/paystack/webhook', async (req, res) => {
   const expected = crypto.createHmac('sha512', secretKey).update(req.body).digest('hex');
   const expectedBuf = Buffer.from(expected, 'hex');
   let sigBuf;
-  try { sigBuf = Buffer.from(sig, 'hex'); } catch (_) { return res.sendStatus(401); }
+  try { sigBuf = Buffer.from(sig, 'hex'); } catch { return res.sendStatus(401); }
   if (expectedBuf.length !== sigBuf.length || !crypto.timingSafeEqual(expectedBuf, sigBuf)) {
     return res.sendStatus(401);
   }
@@ -564,7 +564,7 @@ router.post('/paystack/webhook', async (req, res) => {
           await pgDb.query(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, paystack_reference, status, fee_amount, net_amount, paid_at, notes)
             VALUES ($1,$2,$3,'ZAR','paystack',$4,$5,'success',$6,$7,NOW(),'Paystack payment')`,
             [metaAgreementId, metaRiderId || agreement.user_id, grossAmountZAR, ref, ref, fee, net]);
-          try { await applyPaymentToSchedule(metaAgreementId, grossAmountZAR); } catch (_) {}
+          try { await applyPaymentToSchedule(metaAgreementId, grossAmountZAR); } catch {}
           await creditFleetWalletFromWebhook(metaOrgId, grossAmountZAR, metaRiderId || agreement.user_id, ref);
         }
       }

@@ -257,7 +257,7 @@ function ensureUserRoleSchema() {
     `);
   } catch (e) {
     console.error('[ensureUserRoleSchema] migration failed, rolling back:', e.message);
-    try { db.exec('ROLLBACK; PRAGMA foreign_keys = ON;'); } catch (_) {}
+    try { db.exec('ROLLBACK; PRAGMA foreign_keys = ON;'); } catch {}
   }
 }
 
@@ -1115,7 +1115,7 @@ function ensureJobCardQuotedStatus() {
     `);
   } catch (e) {
     console.error('[ensureJobCardQuotedStatus] migration failed:', e.message);
-    try { db.exec('ROLLBACK; PRAGMA foreign_keys = ON;'); } catch (_) {}
+    try { db.exec('ROLLBACK; PRAGMA foreign_keys = ON;'); } catch {}
   }
 }
 ensureJobCardQuotedStatus();
@@ -1161,7 +1161,7 @@ function ensureFleetWalletAdjustmentType() {
     db.exec(`CREATE INDEX IF NOT EXISTS idx_fleet_wallet_txns_org ON fleet_wallet_transactions(organization_id, created_at DESC);`);
   } catch (e) {
     console.error('[ensureFleetWalletAdjustmentType] migration failed:', e.message);
-    try { db.exec('ROLLBACK; PRAGMA foreign_keys = ON;'); } catch (_) {}
+    try { db.exec('ROLLBACK; PRAGMA foreign_keys = ON;'); } catch {}
   }
 }
 ensureFleetWalletAdjustmentType();
@@ -1211,7 +1211,7 @@ function ensurePaymentsReversedStatus() {
     db.exec(`CREATE INDEX IF NOT EXISTS idx_payments_agreement ON payments(agreement_id);`);
   } catch (e) {
     console.error('[ensurePaymentsReversedStatus] migration failed:', e.message);
-    try { db.exec('ROLLBACK; PRAGMA foreign_keys = ON;'); } catch (_) {}
+    try { db.exec('ROLLBACK; PRAGMA foreign_keys = ON;'); } catch {}
   }
 }
 ensurePaymentsReversedStatus();

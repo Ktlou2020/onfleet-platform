@@ -13,7 +13,7 @@ export default function FleetImpersonate() {
 
     sessionStorage.setItem('of_imp_token', token);
     if (userRaw) {
-      try { sessionStorage.setItem('of_imp_user', decodeURIComponent(userRaw)); } catch (_) {}
+      try { sessionStorage.setItem('of_imp_user', decodeURIComponent(userRaw)); } catch {}
     }
 
     window.location.href = '/fleet/app';

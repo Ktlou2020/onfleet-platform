@@ -61,7 +61,7 @@ async function withTransaction(fn) {
     await client.query('COMMIT');
     return result;
   } catch (err) {
-    try { await client.query('ROLLBACK'); } catch (_) { /* connection may already be dead */ }
+    try { await client.query('ROLLBACK'); } catch { /* connection may already be dead */ }
     throw err;
   } finally {
     client.release();

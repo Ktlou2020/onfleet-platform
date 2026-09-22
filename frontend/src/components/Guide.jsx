@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import {
-  BookOpen, ClipboardList, CalendarClock, Search, FileSpreadsheet, Upload,
-  LifeBuoy, CheckCircle2, Circle, ChevronRight, Wrench, AlertTriangle, Users,
-} from 'lucide-react';
+import { BookOpen, CheckCircle2, Circle, ChevronRight, Wrench, AlertTriangle, Users } from 'lucide-react';
 import api from '../api';
 import { fmt } from './ui';
 

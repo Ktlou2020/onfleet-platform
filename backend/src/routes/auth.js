@@ -4,7 +4,6 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
 const { body, validationResult } = require('express-validator');
 const rateLimit = require('express-rate-limit');
 const pgDb = require('../pgDb');

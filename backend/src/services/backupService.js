@@ -11,7 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const UPLOAD_DIRS = require('../uploadPaths');
-const { backupPostgres, fileInfo } = require('../../scripts/backup');
+const { backupPostgres } = require('../../scripts/backup');
 
 const BACKUP_ROOT = path.join(UPLOAD_DIRS.base, '..', 'backups');
 const RETENTION_COUNT = 14; // ~2 weeks of daily backups

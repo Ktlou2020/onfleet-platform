@@ -22,7 +22,7 @@ async function authRequired(req, res, next) {
       req.user = { ...user, is_impersonated: true, impersonated_by: payload.impersonated_by };
     }
     next();
-  } catch (e) {
+  } catch {
     return res.status(401).json({ error: 'Invalid token' });
   }
 }

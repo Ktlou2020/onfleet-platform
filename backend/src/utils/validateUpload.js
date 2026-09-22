@@ -8,7 +8,6 @@ const MAGIC = {
   webp: { bytes: [0x57, 0x45, 0x42, 0x50], offset: 8 }            // WEBP (after RIFF)
 };
 
-const ALLOWED_EXTENSIONS = new Set(['.pdf', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif']);
 
 // HEIC/HEIF is ISO-BMFF: a box length, then 'ftyp', then a 4-char brand.
 // iPhones write 'heic' by default; the rest appear on burst shots, edited

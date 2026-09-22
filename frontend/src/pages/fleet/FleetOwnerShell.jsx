@@ -34,7 +34,7 @@ const PLAN_ACCENT = {
   empire: '#f59e0b',
 };
 
-function SubscriptionGate({ billingData, onSubscribed }) {
+function SubscriptionGate({ billingData }) {
   const { logout } = useAuth();
   const nav = useNavigate();
   const [busy, setBusy] = useState('');
@@ -189,7 +189,6 @@ export default function FleetOwnerShell() {
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
 
-  const canOpenBilling = canAccessFleetRoute(user?.role, 'billing');
   const onBillingPage = location.pathname.endsWith('/billing');
 
   const loadBilling = useCallback(() => {
@@ -223,7 +222,7 @@ export default function FleetOwnerShell() {
   const isBlocked = statusLoaded && BLOCKED_STATUSES.includes(orgStatus) && !onBillingPage && !isImpersonating;
 
   if (isBlocked) {
-    return <SubscriptionGate billingData={billingData} onSubscribed={loadBilling} />;
+    return <SubscriptionGate billingData={billingData} />;
   }
 
   return (

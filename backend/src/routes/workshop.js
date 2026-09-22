@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const pgDb = require('../pgDb');
-const { authRequired, adminOnly } = require('../middleware/auth');
+const { authRequired } = require('../middleware/auth');
 const { sendEmail } = require('../services/notifier');
 const { sendNotification } = require('../services/notifierPg');
 const UPLOAD_DIRS = require('../uploadPaths');
@@ -450,6 +450,9 @@ router.post('/job-cards/:id/complete', authRequired, workshopOnly, async (req, r
       const { rows: orgRows } = await pgDb.query(`SELECT o.contact_email, o.name FROM bikes b JOIN organizations o ON o.id = b.organization_id WHERE b.id = $1`, [card.bike_id]);
       const orgRow = orgRows[0];
       if (orgRow?.contact_email) {
+        // Built but never placed in emailBody below. Adding it changes what
+        // customers are sent, so it is a decision rather than a tidy-up.
+        // eslint-disable-next-line no-unused-vars
         const itemLines = completeItems.map((i, idx) => `${idx + 1}. ${i.quantity}x item = R${(Number(i.quantity) * Number(i.unit_cost)).toFixed(2)}`).join('\n') || 'No line items recorded.';
         const emailBody = `Hi ${orgRow.name},\n\nYour vehicle ${completeReg} has been serviced and is ready.\n\nJob #${id} — ${card.job_type}\nTechnician: ${completeTech}\nTotal: R${completeCost.toFixed(2)}\n\n${completion_notes ? `Notes: ${completion_notes}\n\n` : ''}Thank you for using OnFleet Africa Workshop.`;
         sendEmail(orgRow.contact_email, completeTitle, emailBody).catch(() => {});

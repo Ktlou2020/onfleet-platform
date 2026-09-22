@@ -584,7 +584,7 @@ router.get('/live', authRequired, trackingReadOnly, (req, res) => {
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
 
-  const onPing         = (p) => { try { res.write(`event: ping\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
+  const onPing         = (p) => { try { res.write(`event: ping\ndata: ${JSON.stringify(p)}\n\n`); } catch {} };
   // The control room's stream carries only what its list would show, so an
   // alert can't arrive live that the page then can't find.
   let hidden = new Set();
@@ -592,16 +592,16 @@ router.get('/live', authRequired, trackingReadOnly, (req, res) => {
     controlRoomHiddenTypes().then((set) => { hidden = set; }).catch(() => {});
   }
   const visible = (p) => !p?.alert_type || !hidden.has(p.alert_type);
-  const onAlert         = (p) => { try { if (visible(p)) res.write(`event: alert\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
-  const onAlertResolved = (p) => { try { if (visible(p)) res.write(`event: alert_resolved\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
-  const onDeviceStatus = (p) => { try { res.write(`event: device_status\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
-  const onRiskUpdate   = (p) => { try { res.write(`event: risk_update\ndata: ${JSON.stringify(p)}\n\n`); } catch (_) {} };
+  const onAlert         = (p) => { try { if (visible(p)) res.write(`event: alert\ndata: ${JSON.stringify(p)}\n\n`); } catch {} };
+  const onAlertResolved = (p) => { try { if (visible(p)) res.write(`event: alert_resolved\ndata: ${JSON.stringify(p)}\n\n`); } catch {} };
+  const onDeviceStatus = (p) => { try { res.write(`event: device_status\ndata: ${JSON.stringify(p)}\n\n`); } catch {} };
+  const onRiskUpdate   = (p) => { try { res.write(`event: risk_update\ndata: ${JSON.stringify(p)}\n\n`); } catch {} };
   trackingEvents.on('ping', onPing);
   trackingEvents.on('alert', onAlert);
   trackingEvents.on('alert_resolved', onAlertResolved);
   trackingEvents.on('device_status', onDeviceStatus);
   trackingEvents.on('risk_update', onRiskUpdate);
-  const hb = setInterval(() => { try { res.write(': heartbeat\n\n'); } catch (_) {} }, 25_000);
+  const hb = setInterval(() => { try { res.write(': heartbeat\n\n'); } catch {} }, 25_000);
   req.on('close', () => {
     trackingEvents.off('ping', onPing);
     trackingEvents.off('alert', onAlert);

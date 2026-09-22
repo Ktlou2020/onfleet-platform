@@ -56,9 +56,7 @@ export default function FleetOwnerAgreements() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(12);
   const [actionBusy, setActionBusy] = useState('');
-  const [editingRemainingId, setEditingRemainingId] = useState(null);
   const [savingRemainingId, setSavingRemainingId] = useState(null);
-  const [remainingDrafts, setRemainingDrafts] = useState({});
   const [showCreate, setShowCreate] = useState(false);
   const [showReassign, setShowReassign] = useState(false);
   const [showBalanceModal, setShowBalanceModal] = useState(null);
@@ -76,7 +74,6 @@ export default function FleetOwnerAgreements() {
     const { data } = await api.get('/fleet/portal-data');
     const nextPortal = { ...emptyPortal, ...data };
     setPortal(nextPortal);
-    setRemainingDrafts(Object.fromEntries((nextPortal.agreements || []).map((a) => [a.id, String(Number(a.remaining_balance || 0).toFixed(2))])));
     if (!silent) setLoading(false);
   };
 
@@ -207,6 +204,10 @@ export default function FleetOwnerAgreements() {
 
   const PAY_LINK_AMOUNTS = [600, 650, 700, 850];
 
+  // Nothing calls this yet, so the payment-link modal below is currently
+  // unreachable. Kept rather than deleted: the modal and sendPayLink() are
+  // complete and only need a button wired to this.
+  // eslint-disable-next-line no-unused-vars
   const openPayLink = (agreement) => {
     setPayLinkAgreement(agreement);
     const defaultAmt = PAY_LINK_AMOUNTS.includes(Number(agreement.weekly_amount))

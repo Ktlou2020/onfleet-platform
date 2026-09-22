@@ -7,7 +7,7 @@ import { pgDb, resetAllPgTables, createPgUser, authHeader } from './helpers/test
 const require = createRequire(import.meta.url);
 const { readWorkbook, rowsAsObjects } = require('../src/services/xlsxReader.js');
 const { fillTemplate, zip } = require('../src/services/xlsxWriter.js');
-const { parseWorkbook, importParts, searchParts } = require('../src/services/partsImport.js');
+const { parseWorkbook, searchParts } = require('../src/services/partsImport.js');
 const app = buildApp();
 
 // Build a small .xlsx in memory so the reader and writer are tested against a

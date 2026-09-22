@@ -2,8 +2,8 @@ const fs = require('fs');
 let pdfParse = null;
 let Tesseract = null;
 
-try { pdfParse = require('pdf-parse'); } catch (_) {}
-try { Tesseract = require('tesseract.js'); } catch (_) {}
+try { pdfParse = require('pdf-parse'); } catch {}
+try { Tesseract = require('tesseract.js'); } catch {}
 
 function normalizeAmount(raw) {
   if (!raw) return null;
@@ -63,7 +63,7 @@ async function readDocumentText(filePath, mimeType = '') {
       if (size < 1024) return '';
       const result = await Tesseract.recognize(filePath, 'eng');
       return result?.data?.text || '';
-    } catch (_) {
+    } catch {
       return '';
     }
   }

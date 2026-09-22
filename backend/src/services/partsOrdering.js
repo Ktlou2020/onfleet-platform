@@ -320,7 +320,7 @@ async function markSent({ orderId, actorId, sentTo, db = pgDb }) {
   return rows[0] || null;
 }
 
-async function setStatus({ orderId, status, quoteReference = null, quotedTotal = null, actorId = null, db = pgDb }) {
+async function setStatus({ orderId, status, quoteReference = null, quotedTotal = null, db = pgDb }) {
   const allowed = ['draft', 'sent', 'quoted', 'ordered', 'received', 'cancelled'];
   if (!allowed.includes(status)) throw new Error(`"${status}" is not a status an order can take`);
   const { rows } = await db.query(

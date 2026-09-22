@@ -4,7 +4,6 @@ const crypto = require('crypto');
 const axios = require('axios');
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
 const pgDb = require('../pgDb');
 const { authRequired, fleetOwnerOnly, companyRoleAllowed } = require('../middleware/auth');
 const { requireValidMime } = require('../utils/validateUpload');
@@ -880,10 +879,6 @@ async function getScopedPayment(org, paymentId) {
     JOIN users u ON u.id = p.user_id
     WHERE p.id = $1 AND ${scope.clause}`, [paymentId, ...scope.params]);
   return rows[0];
-}
-
-function creditedAmount(payment) {
-  return Number(payment?.net_amount) || Number(payment?.amount) || 0;
 }
 
 async function applyPaymentToSchedule(agreementId, amountZAR) {
@@ -2369,7 +2364,7 @@ router.post('/payments/import', companyRoleAllowed(FLEET_RESOURCE_ACCESS.payment
     const organization = await getOrganizationOrThrow(req);
 
     let mapping = {};
-    try { mapping = req.body.mapping ? JSON.parse(req.body.mapping) : {}; } catch (_) {}
+    try { mapping = req.body.mapping ? JSON.parse(req.body.mapping) : {}; } catch {}
 
     function parseCsvRows(text) {
       const rows = [];
@@ -2641,20 +2636,6 @@ function getRiderPlanCode(weeklyAmount) {
 
 async function ensureFleetWallet(organizationId) {
   await pgDb.query(`INSERT INTO fleet_wallets (organization_id) VALUES ($1) ON CONFLICT (organization_id) DO NOTHING`, [organizationId]);
-}
-
-async function creditFleetWallet(organizationId, grossAmountZAR, riderId, reference) {
-  const fee = +(grossAmountZAR * 0.035 + 1).toFixed(2);
-  const net = +(grossAmountZAR - fee).toFixed(2);
-  await ensureFleetWallet(organizationId);
-  await pgDb.withTransaction(async (client) => {
-    await client.query(`UPDATE fleet_wallets SET balance = balance + $1, total_collected = total_collected + $2, updated_at = NOW() WHERE organization_id = $3`,
-      [net, net, organizationId]);
-    await client.query(`INSERT INTO fleet_wallet_transactions (organization_id, type, amount, fee_amount, net_amount, description, paystack_reference, rider_user_id, available_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8, NOW() + INTERVAL '48 hours')`,
-      [organizationId, 'credit', grossAmountZAR, fee, net, 'Weekly rider rental payment', reference || null, riderId || null]);
-  });
-  return { gross: grossAmountZAR, fee, net };
 }
 
 // `db` lets the payout path run this inside its transaction, against the
@@ -3393,16 +3374,16 @@ router.get('/tracking/live', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.v
 
   const onPing = (payload) => {
     if (!bikeIds.has(payload.bike_id)) return;
-    try { res.write(`event: ping\ndata: ${JSON.stringify(payload)}\n\n`); } catch (_) {}
+    try { res.write(`event: ping\ndata: ${JSON.stringify(payload)}\n\n`); } catch {}
   };
   const onAlert = (payload) => {
     if (!bikeIds.has(payload.bike_id)) return;
-    try { res.write(`event: alert\ndata: ${JSON.stringify(payload)}\n\n`); } catch (_) {}
+    try { res.write(`event: alert\ndata: ${JSON.stringify(payload)}\n\n`); } catch {}
   };
 
   trackingEvents.on('ping', onPing);
   trackingEvents.on('alert', onAlert);
-  const hb = setInterval(() => { try { res.write(': heartbeat\n\n'); } catch (_) {} }, 25_000);
+  const hb = setInterval(() => { try { res.write(': heartbeat\n\n'); } catch {} }, 25_000);
 
   req.on('close', () => {
     trackingEvents.off('ping', onPing);

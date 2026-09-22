@@ -30,7 +30,7 @@ describe.skipIf(!process.env.DATABASE_URL)('backupService', () => {
   });
 
   it('lists backups newest-first', async () => {
-    const before = await runScheduledBackup();
+    await runScheduledBackup();
     await new Promise((r) => setTimeout(r, 1100)); // ensure a distinct timestamp-named directory
     const after = await runScheduledBackup();
 

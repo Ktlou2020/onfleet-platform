@@ -85,7 +85,7 @@ router.get('/rider-portal/:token', async (req, res) => {
       payments,
       summary: { total_paid: totalPaid, remaining, overdue: overdueAmount, weeks_paid: weeksPaid, weeks_total: schedule.length, progress_pct: progressPct }
     });
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Could not load portal data' });
   }
 });

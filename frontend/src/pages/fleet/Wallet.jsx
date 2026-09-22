@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { PiggyBank, ArrowDownCircle, Clock, CheckCircle2, XCircle, AlertTriangle, Banknote, RefreshCw, Hourglass } from 'lucide-react';
+import { PiggyBank, ArrowDownCircle, CheckCircle2, AlertTriangle, Banknote, RefreshCw, Hourglass } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../api';
 import { Badge, Loading, fmt, fmtDate } from '../../components/ui';
@@ -7,7 +7,6 @@ import { canManageFleetSection } from './access';
 import { useAuth } from '../../auth';
 
 const TX_TYPE_LABEL = { credit: 'Payment received', withdrawal: 'Payout requested', withdrawal_fee: 'Withdrawal fee' };
-const TX_TYPE_BADGE = { credit: 'active', withdrawal: 'pending', withdrawal_fee: 'overdue' };
 const PAYOUT_STATUS_BADGE = { pending: 'pending', approved: 'active', paid: 'active', rejected: 'cancelled' };
 const PAYOUT_STATUS_LABEL = { pending: 'Pending', approved: 'Approved', paid: 'Paid', rejected: 'Rejected' };
 
@@ -195,7 +194,7 @@ export default function FleetWallet() {
       ]);
       setData(walletRes.data);
       setBankDetails(bankRes.data);
-    } catch (e) {
+    } catch {
       toast.error('Could not load wallet data');
     } finally {
       setLoading(false);

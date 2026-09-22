@@ -22,7 +22,7 @@ server.on('request', app);
 
 // Prevent unhandled rejections and uncaught exceptions from crashing the process.
 // Log them so they're visible in Railway logs, but keep the server up.
-process.on('unhandledRejection', (reason, promise) => {
+process.on('unhandledRejection', (reason) => {
   console.error('[unhandledRejection]', reason);
 });
 process.on('uncaughtException', (err) => {

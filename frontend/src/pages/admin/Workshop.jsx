@@ -3,7 +3,7 @@ import { PartsTab, PartsOrdersTab } from './workshopParts';
 import WorkshopGuidePage from '../../components/WorkshopGuidePage';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Trophy, Medal, Award, Copy, Check, Clock, FileText, Image, Trash2, Upload, ChevronUp, ChevronDown as ChevronDownIcon, ArrowUpDown } from 'lucide-react';
+import { Trophy, Medal, Award, Copy, Check, Image, Trash2, Upload, ChevronUp, ChevronDown as ChevronDownIcon, ArrowUpDown } from 'lucide-react';
 import api from '../../api';
 import { Badge, ConfirmModal, Loading, Modal, SearchInput, fmt, fmtDate, fmtDateTime, matchesSearch } from '../../components/ui';
 

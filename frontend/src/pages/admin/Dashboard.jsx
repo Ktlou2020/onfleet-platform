@@ -152,7 +152,6 @@ export default function AdminDashboard() {
   const {
     pending_applications = 0,
     pending_kyc = 0,
-    overdue_count = 0,
     default_action_count = 0,
     upcoming_services = 0,
     expiring_license_disc = 0,

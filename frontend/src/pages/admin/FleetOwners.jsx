@@ -5,7 +5,7 @@ import api from '../../api';
 import { useAuth } from '../../auth';
 import { Badge, ConfirmModal, CopyableContactValue, EmptyState, Loading, Modal, Pagination, SearchInput, Stat, fmt, fmtDate, matchesSearch, paginateItems } from '../../components/ui';
 import { getFleetRoleLabel } from '../fleet/access';
-import { Building2, ShieldCheck, Users, Wallet, Settings, ChevronDown, ChevronRight, Mail, MapPin, Bike, CreditCard, KeyRound, Trash2, Send, Eye, Phone, TrendingUp, AlertTriangle, CheckCircle2, Circle, Zap, Clock, RefreshCw } from 'lucide-react';
+import { Building2, ShieldCheck, Users, Wallet, Settings, ChevronDown, ChevronRight, Mail, MapPin, CreditCard, KeyRound, Trash2, Send, Eye, Phone, TrendingUp, AlertTriangle, CheckCircle2, Circle, Zap, RefreshCw } from 'lucide-react';
 
 const EMAIL_TEMPLATES = [
   { key: 'demo_invite',     label: 'Demo / call invite' },

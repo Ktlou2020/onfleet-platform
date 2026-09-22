@@ -36,7 +36,7 @@ export default function FleetSignup() {
     setBusy(true);
     try {
       trackAnalyticsEvent('fleet_signup_submit_attempt', { fleet_size: Number(form.fleet_size || 0) || 0 });
-      const user = await signupFleet({ ...form, fleet_size: Number(form.fleet_size || 0) || 0 });
+      await signupFleet({ ...form, fleet_size: Number(form.fleet_size || 0) || 0 });
       toast.success(`Welcome to OnFleet! Your 14-day trial has started.`);
       nav('/fleet/app');
     } catch (error) {

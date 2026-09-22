@@ -54,7 +54,7 @@ function getRiderPlanCode(weeklyAmount) {
 }
 const AGREEMENT_STATUS_VALUES = ['active', 'completed', 'defaulted', 'cancelled', 'paused', 'discontinued'];
 
-function adminVisibleAgreementClause(aAlias = 'a', bAlias = 'b', uAlias = 'u') {
+function adminVisibleAgreementClause(_aAlias = 'a', bAlias = 'b', uAlias = 'u') {
   return `${bAlias}.organization_id IS NULL AND ${uAlias}.organization_id IS NULL`;
 }
 

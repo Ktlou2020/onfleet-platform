@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import request from 'supertest';
 import buildApp from '../src/app.js';
-import { pgDb, resetAllPgTables, createPgUser, authHeader } from './helpers/testPgDb.js';
+import { resetAllPgTables, createPgUser, authHeader } from './helpers/testPgDb.js';
 
 const app = buildApp();
 

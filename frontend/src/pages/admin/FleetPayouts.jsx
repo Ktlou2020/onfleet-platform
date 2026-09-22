@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { PiggyBank, CheckCircle2, XCircle, Clock, RefreshCw, Banknote } from 'lucide-react';
+import { PiggyBank, RefreshCw, Banknote } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../api';
 import { Badge, Loading, Modal, fmt, fmtDate } from '../../components/ui';
@@ -85,7 +85,7 @@ export default function AdminFleetPayouts() {
     try {
       const { data } = await api.get('/admin/fleet-payouts');
       setRequests(data.requests || []);
-    } catch (e) {
+    } catch {
       toast.error('Could not load payout requests');
     } finally {
       setLoading(false);

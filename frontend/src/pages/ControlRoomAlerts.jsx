@@ -230,10 +230,8 @@ export default function ControlRoomAlerts() {
     return next;
   });
 
-  const toggleSelectAllVisible = () => setSelected(prev => {
-    if (allOpenVisibleSelected) return new Set();
-    return new Set(openVisible.map(a => a.id));
-  });
+  const toggleSelectAllVisible = () => setSelected(
+    allOpenVisibleSelected ? new Set() : new Set(openVisible.map((a) => a.id)));
 
   const openBulkResolve = () => { if (selected.size) { setBulkComment(''); setBulkResolving(true); } };
   const closeBulkResolve = () => { if (!bulkSubmitting) { setBulkResolving(false); setBulkComment(''); } };

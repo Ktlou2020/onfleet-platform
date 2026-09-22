@@ -141,11 +141,11 @@ function superadminVisibleBikeScope(alias = 'b') {
   )`;
 }
 
-function superadminPortalAgreementScope(aAlias = 'a', bAlias = 'b', uAlias = 'u') {
+function superadminPortalAgreementScope(_aAlias = 'a', bAlias = 'b', uAlias = 'u') {
   return `${superadminVisibleBikeScope(bAlias)} AND ${uAlias}.organization_id IS NULL`;
 }
 
-function superadminPortalApplicationScope(aAlias = 'a', uAlias = 'u', bAlias = 'b') {
+function superadminPortalApplicationScope(_aAlias = 'a', uAlias = 'u', bAlias = 'b') {
   return `${uAlias}.organization_id IS NULL AND (${bAlias}.id IS NULL OR ${superadminVisibleBikeScope(bAlias)})`;
 }
 

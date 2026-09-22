@@ -38,10 +38,6 @@ function parseMoneyAmount(value) {
   return +amount.toFixed(2);
 }
 
-function isPayslipImageMime(mimeType) {
-  return ['image/heic', 'image/heif', 'image/jpeg', 'image/jpg'].includes(String(mimeType || '').toLowerCase());
-}
-
 async function createApplication(payload, actor, userId) {
   const totalPaid = Number(payload.total_paid_last_3 || 0);
   const averageWeekly = Number(payload.average_weekly_earnings || 0);
@@ -144,7 +140,7 @@ async function hydrateDocuments(applicationId) {
   return rows;
 }
 
-function adminVisibleApplicationClause(aAlias = 'a', uAlias = 'u', bAlias = 'b') {
+function adminVisibleApplicationClause(_aAlias = 'a', uAlias = 'u', bAlias = 'b') {
   return `${uAlias}.organization_id IS NULL AND (${bAlias}.id IS NULL OR ${bAlias}.organization_id IS NULL)`;
 }
 

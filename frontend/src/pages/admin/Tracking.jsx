@@ -10,14 +10,11 @@ import 'leaflet/dist/leaflet.css';
 import 'leaflet.markercluster/dist/MarkerCluster.css';
 import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
 import {
-  Wifi, WifiOff, Zap, ZapOff, Radio, Info, RefreshCw, Plus, Trash2,
-  CheckCircle, Clock, XCircle, AlertCircle, X, Search, Layers,
-  Maximize2, Navigation, Gauge, Mountain, MapPin, Activity,
-  Shield, Bell, Route, BellOff, Pencil, Settings, Mail, Users, Moon,
-  Battery, BatteryLow, BatteryMedium, BatteryFull, BatteryCharging,
-  Signal, SignalZero, SignalLow, SignalMedium, SignalHigh, Satellite,
-  Play, Pause, SkipBack, ChevronsRight, LayoutDashboard,
-  List as ListIcon, Map as MapIcon, Eye,
+  Wifi, WifiOff, Zap, ZapOff, Radio, Info, RefreshCw, Plus, Trash2, CheckCircle, Clock, XCircle,
+  AlertCircle, X, Search, Layers, Maximize2, Navigation, Gauge, Mountain, MapPin, Activity,
+  Shield, Bell, Route, BellOff, Pencil, Settings, Mail, Moon, Battery, BatteryLow, BatteryMedium,
+  BatteryFull, Satellite, Play, Pause, SkipBack, LayoutDashboard, List as ListIcon,
+  Map as MapIcon, Eye,
 } from 'lucide-react';
 import api from '../../api';
 import toast from 'react-hot-toast';
@@ -246,7 +243,6 @@ const ZONE_TYPES = [
   { value: 'danger',   label: 'No-Go',     badge: 'NO-GO',   color: '#E53935', bg: 'rgba(229,57,53,.12)'  },
 ];
 const ZONE_COLOR = Object.fromEntries(ZONE_TYPES.map(z => [z.value, z.color]));
-const ZONE_BG    = Object.fromEntries(ZONE_TYPES.map(z => [z.value, z.bg]));
 
 function BikeCombobox({ bikes, value, onChange }) {
   const [query, setQuery] = useState('');
@@ -539,7 +535,6 @@ export default function Tracking({ readOnly = false }) {
   const [detailTab, setDetailTab] = useState('activity');
   const [trips,        setTrips]        = useState([]);
   const [activityStats, setActivityStats] = useState(null); // { today: {trips,km,sec}, week: {trips,km,sec,top_speed_kmh} }
-  const [pings,        setPings]        = useState([]);  // newest-first, trail pings from SSE
   const [dayPings,     setDayPings]     = useState([]);  // newest-first, pings for pingDate
   const [pingDate,     setPingDate]     = useState(() => todayInSAST());
   const [pingDateLoading, setPingDateLoading] = useState(false);
@@ -852,10 +847,6 @@ export default function Tracking({ readOnly = false }) {
                     return [...t, pt];
                   });
                   const pingObj = { lat: p.lat, lng: p.lng, speed_kmh: p.speed, recorded_at: new Date(p.ts).toISOString(), ignition: p.ignition };
-                  setPings(prev => {
-                    if (prev.length && prev[0].lat === pingObj.lat && prev[0].lng === pingObj.lng) return prev;
-                    return [pingObj, ...prev].slice(0, 1000); // newest-first, cap at 1000
-                  });
                   // Add to day pings if the ping falls on the currently viewed day
                   const pingDay = new Date(p.ts).toLocaleDateString('en-CA', SAST);
                   if (pingDay === pingDateRef.current) {
@@ -959,7 +950,6 @@ export default function Tracking({ readOnly = false }) {
       const { data } = await api.get(`/tracking/devices/${deviceId}/positions?limit=500&from=${encodeURIComponent(from)}`);
       if (version === undefined || selectVersionRef.current === version) {
         setTrail(data.map(p => ({ lat: p.lat, lng: p.lng, speed_kmh: p.speed_kmh })));
-        setPings([...data].reverse()); // newest-first for SSE dedup
       }
     } catch { /* silent */ }
   }, []);
@@ -1040,7 +1030,6 @@ export default function Tracking({ readOnly = false }) {
     setDetailTab('activity');
     setTrips([]);
     setActivityStats(null);
-    setPings([]);
     setDayPings([]);
     setPingDate(todayStr);
     pingDateRef.current = todayStr;
@@ -1179,7 +1168,7 @@ export default function Tracking({ readOnly = false }) {
     if (!window.confirm(`Remove ${dev?.label || dev?.imei}?`)) return;
     try {
       await api.delete(`/tracking/devices/${id}`);
-      if (selected === id) { setSelected(null); setTrail([]); setCommands([]); setAddress(null); setTrips([]); setPings([]); setDayPings([]); }
+      if (selected === id) { setSelected(null); setTrail([]); setCommands([]); setAddress(null); setTrips([]); setDayPings([]); }
       await loadDevices();
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed');
@@ -2119,7 +2108,7 @@ export default function Tracking({ readOnly = false }) {
                 </button>
               </>}
               <button className="btn btn-sm btn-secondary" style={{ padding: '3px 6px', flexShrink: 0 }}
-                onClick={() => { setSelected(null); setTrail([]); setCommands([]); setAddress(null); setTrips([]); setPings([]); setDayPings([]); }} title="Close">
+                onClick={() => { setSelected(null); setTrail([]); setCommands([]); setAddress(null); setTrips([]); setDayPings([]); }} title="Close">
                 <X size={12} />
               </button>
             </div>

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, ArrowRight, BarChart3, Bike, CheckCircle2, Clock3, CreditCard, FileText, ShieldCheck, Users, Wrench } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Bike, CheckCircle2, Clock3, CreditCard, FileText, ShieldCheck, Users, Wrench } from 'lucide-react';
 import Logo from '../components/Logo';
 import { Badge, SearchInput, fmt, fmtDate, matchesSearch } from '../components/ui';
 

@@ -44,7 +44,7 @@ api.interceptors.response.use(
         if (location.pathname.startsWith('/fleet') || String(storedUser?.role || '').startsWith('fleet_owner_')) {
           redirectTo = '/fleet/login';
         }
-      } catch (_) {
+      } catch {
         if (location.pathname.startsWith('/fleet')) redirectTo = '/fleet/login';
       }
 

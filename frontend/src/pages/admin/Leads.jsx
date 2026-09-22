@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { CheckCircle, Clock, Calendar, UserCheck, Archive, Mail, Phone, Building2, Users, ChevronRight, RefreshCw, X, Loader2 } from 'lucide-react';
+import { CheckCircle, Calendar, UserCheck, Archive, Mail, ChevronRight, RefreshCw, X, Loader2 } from 'lucide-react';
 import api from '../../api';
 
 const STATUS_META = {

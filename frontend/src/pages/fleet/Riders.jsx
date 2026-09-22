@@ -359,10 +359,7 @@ export default function FleetOwnerRiders() {
   const reloadDetail = async (applicationId, preserveReason = '') => {
     const { data } = await api.get(`/fleet/riders/${applicationId}`);
     setDetail(data);
-    setDecisionForm((current) => ({
-      ...buildDecisionForm(data.application, bikes),
-      reason: preserveReason || ''
-    }));
+    setDecisionForm({ ...buildDecisionForm(data.application, bikes), reason: preserveReason || '' });
   };
 
   const submitApproval = async () => {

@@ -6,11 +6,9 @@ import SheetHandle, { sheetStyle } from '../../components/SheetHandle';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
-  Wifi, WifiOff, Zap, ZapOff, Bell, BellOff, RefreshCw,
-  Navigation, Gauge, Satellite, AlertCircle, Layers, Maximize2,
-  Signal, SignalZero, SignalLow, SignalMedium, SignalHigh,
-  Battery, BatteryLow, BatteryMedium, BatteryFull, X,
-  CheckCircle, Clock, Route, Activity, List as ListIcon, Map as MapIcon,
+  Wifi, WifiOff, Zap, ZapOff, Bell, BellOff, RefreshCw, Navigation, Gauge, Satellite, Layers,
+  SignalZero, SignalLow, SignalMedium, SignalHigh, Battery, BatteryLow, BatteryMedium,
+  BatteryFull, X, CheckCircle, Clock, Activity, List as ListIcon, Map as MapIcon,
 } from 'lucide-react';
 import api from '../../api';
 import toast from 'react-hot-toast';
@@ -173,10 +171,10 @@ export default function FleetTracking() {
           const p = JSON.parse(e.data);
           setDevices(prev => prev.map(d => d.bike_id === p.bike_id ? { ...d, lat: p.lat, lng: p.lng, speed_kmh: p.speed_kmh, heading: p.heading, ignition: p.ignition, satellites: p.satellites, altitude: p.altitude, io_data: p.io_data, connected: 1, last_location_at: p.recorded_at } : d));
           setTrail(prev => prev.length > 0 && prev[0].bike_id === p.bike_id ? [...prev, p] : prev);
-        } catch (_) {}
+        } catch {}
       });
       es.addEventListener('alert', (e) => {
-        try { setAlerts(prev => [JSON.parse(e.data), ...prev].slice(0, 100)); } catch (_) {}
+        try { setAlerts(prev => [JSON.parse(e.data), ...prev].slice(0, 100)); } catch {}
       });
       es.onerror = () => { es.close(); setTimeout(connect, 5000); };
     };
@@ -195,7 +193,7 @@ export default function FleetTracking() {
       if (!device) return;
       const { data } = await api.get(`/fleet/tracking/devices/${device.id}/positions?limit=500&from=${encodeURIComponent(from)}`);
       setTrail(data.map(p => ({ ...p, bike_id: bikeId })));
-    } catch (_) {}
+    } catch {}
   }
 
   async function loadCommands(deviceId) {

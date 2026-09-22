@@ -37,7 +37,6 @@ export default function FleetOwnerPayments() {
 
   const [payments, setPayments] = useState(null);
   const [total, setTotal] = useState(0);
-  const [pages, setPages] = useState(1);
   const [aggregates, setAggregates] = useState({ credited: 0, paystack_credited: 0, manual_credited: 0, fees: 0, gross: 0 });
   const [agreements, setAgreements] = useState([]);
 
@@ -67,7 +66,6 @@ export default function FleetOwnerPayments() {
       const { data } = await api.get(`/fleet/payments?${qs}`);
       setPayments(data.payments);
       setTotal(data.total || 0);
-      setPages(data.pages || 1);
       setAggregates(data.aggregates || { credited: 0, fees: 0, gross: 0 });
     } catch {
       toast.error('Could not load payments');

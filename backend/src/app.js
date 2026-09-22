@@ -254,7 +254,7 @@ function buildApp() {
     LIMIT_PART_COUNT: 'That upload had too many parts. Please try again with a single file.',
   };
 
-  app.use((err, req, res, next) => {
+  app.use((err, req, res, _next) => {
     if (err && MULTER_MESSAGES[err.code]) {
       // Logged at warn: expected user error, not a fault worth alerting on.
       console.warn(`[upload] ${err.code} on ${req.method} ${req.path}`);

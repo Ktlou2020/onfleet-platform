@@ -43,11 +43,6 @@ async function addEvent(caseId, kind, summary, detail = null, actorId = null, db
   return rows[0];
 }
 
-async function openCaseIds() {
-  const { rows } = await pgDb.query(`SELECT id, bike_id, device_id, follow_until FROM theft_cases WHERE status = ANY($1)`, [OPEN_STATUSES]);
-  return rows;
-}
-
 // Opens a case for a bike, or attaches to the one already open. Returns
 // { theftCase, created }.
 async function openCase({ bikeId, deviceId = null, alertId = null, reason, actorId = null, follow = true }) {

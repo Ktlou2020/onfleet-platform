@@ -4,6 +4,7 @@ const multer = require('multer');
 const axios = require('axios');
 const { v4: uuid } = require('uuid');
 const pgDb = require('../pgDb');
+const paystackAccounts = require('../services/paystackAccounts');
 const { authRequired, adminOnly } = require('../middleware/auth');
 const { logAudit, recalcScheduleStatuses, rebuildScheduleAllocations } = require('../utils/helpersPg');
 const { sendNotification } = require('../services/notifierPg');
@@ -195,18 +196,26 @@ router.post('/paystack/init', authRequired, async (req, res) => {
   const amountKobo = Math.round(grossAmount * 100);
 
   try {
+    // The fleet that owns this bike collects the money. A fleet with its own
+    // Paystack account is paid directly and we never touch the funds; one
+    // without falls back to the platform's account, which is how OnFleet
+    // Africa's own operation works.
+    const orgId = await paystackAccounts.organizationForAgreement(agreement_id);
+    const account = await paystackAccounts.accountForOrganization(orgId);
+    if (!account.secret) return res.status(503).json({ error: 'This fleet has not connected a payment account yet.' });
+
     const resp = await axios.post(`${PAYSTACK_BASE}/transaction/initialize`, {
       email: req.user.email,
       amount: amountKobo,
       currency: 'ZAR',
       reference,
       callback_url: process.env.PAYSTACK_CALLBACK_URL,
-      metadata: { agreement_id, user_id: req.user.id }
-    }, { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } });
+      metadata: { agreement_id, user_id: req.user.id, organization_id: orgId || null }
+    }, { headers: { Authorization: `Bearer ${account.secret}` } });
 
-    await pgDb.query(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, paystack_reference, status, fee_amount, net_amount)
-      VALUES ($1,$2,$3,$4, 'paystack', $5, $6, 'pending', $7, $8)`,
-      [agreement_id, req.user.id, grossAmount, 'ZAR', reference, reference, fee, netAmount]);
+    await pgDb.query(`INSERT INTO payments (agreement_id, user_id, amount, currency, method, reference, paystack_reference, status, fee_amount, net_amount, collected_by_organization_id)
+      VALUES ($1,$2,$3,$4, 'paystack', $5, $6, 'pending', $7, $8, $9)`,
+      [agreement_id, req.user.id, grossAmount, 'ZAR', reference, reference, fee, netAmount, account.own ? orgId : null]);
 
     res.json({
       authorization_url: resp.data.data.authorization_url,
@@ -224,11 +233,16 @@ router.post('/paystack/init', authRequired, async (req, res) => {
 
 router.get('/paystack/verify/:reference', authRequired, async (req, res) => {
   try {
-    const resp = await axios.get(`${PAYSTACK_BASE}/transaction/verify/${req.params.reference}`, { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } });
-    const data = resp.data.data;
+    // Look the payment up first: only the account that took it can verify it,
+    // and asking the wrong one returns "transaction not found" rather than
+    // anything that says why.
     const { rows: paymentRows } = await pgDb.query('SELECT * FROM payments WHERE reference = $1', [req.params.reference]);
     const payment = paymentRows[0];
     if (!payment) return res.status(404).json({ error: 'Payment not found' });
+
+    const verifyAccount = await paystackAccounts.accountForOrganization(payment.collected_by_organization_id);
+    const resp = await axios.get(`${PAYSTACK_BASE}/transaction/verify/${req.params.reference}`, { headers: { Authorization: `Bearer ${verifyAccount.secret}` } });
+    const data = resp.data.data;
 
     // Ensure the payment belongs to the requesting user's agreement (or admin)
     const isAdmin = ['admin', 'superadmin'].includes(req.user.role);
@@ -298,10 +312,29 @@ router.get('/paystack/verify/:reference', authRequired, async (req, res) => {
   }
 });
 
-router.post('/paystack/webhook', async (req, res) => {
+// A fleet collecting into its own Paystack account gets its own webhook URL,
+// because Paystack signs each webhook with the sending account's secret and we
+// cannot know which secret to check until we know which fleet sent it. The
+// token in the path answers that, so exactly one signature is ever computed
+// and a forged webhook is never checked against another fleet's key.
+//
+// The unsuffixed route below stays for the platform's own account.
+router.post('/paystack/webhook/:token', async (req, res, next) => {
+  const org = await paystackAccounts.organizationByWebhookToken(req.params.token);
+  if (!org) return res.sendStatus(404);
+  const secret = paystackAccounts.decryptSecret(org.paystack_secret_key_encrypted);
+  if (!secret) return res.sendStatus(503);
+  req.paystackWebhookSecret = secret;
+  req.paystackWebhookOrganizationId = org.id;
+  return handlePaystackWebhook(req, res, next);
+});
+
+router.post('/paystack/webhook', async (req, res, next) => handlePaystackWebhook(req, res, next));
+
+async function handlePaystackWebhook(req, res) {
   // Always validate Paystack HMAC signature — reject if missing or invalid
   const sig = req.headers['x-paystack-signature'];
-  const secretKey = process.env.PAYSTACK_SECRET_KEY;
+  const secretKey = req.paystackWebhookSecret || process.env.PAYSTACK_SECRET_KEY;
   if (!sig || !secretKey) return res.sendStatus(401);
   const expected = crypto.createHmac('sha512', secretKey).update(req.body).digest('hex');
   const expectedBuf = Buffer.from(expected, 'hex');
@@ -572,7 +605,7 @@ router.post('/paystack/webhook', async (req, res) => {
   }
 
   res.sendStatus(200);
-});
+}
 
 // Shared plan lookup used by webhook — must stay in sync with FLEET_BILLING_PLANS in fleet.js
 const FLEET_BILLING_PLAN_ENTITLEMENTS = {
@@ -604,7 +637,23 @@ async function ensureFleetWallet(organizationId, db = pgDb) {
   await db.query(`INSERT INTO fleet_wallets (organization_id) VALUES ($1) ON CONFLICT (organization_id) DO NOTHING`, [organizationId]);
 }
 
+// A fleet collecting into its own Paystack account has already been paid
+// directly: the money never passed through us. Crediting its wallet would
+// invent a balance we do not hold, minus a fee we never earned, and promise a
+// payout of funds we were never sent. Only the platform's own account leads
+// to a wallet credit.
+async function fleetCollectsForItself(organizationId, db = pgDb) {
+  if (!organizationId) return false;
+  const { rows } = await db.query(
+    'SELECT (paystack_secret_key_encrypted IS NOT NULL) AS own FROM organizations WHERE id = $1', [organizationId]);
+  return !!rows[0]?.own;
+}
+
 async function creditFleetWalletFromWebhook(organizationId, grossAmountZAR, riderId, reference) {
+  if (await fleetCollectsForItself(organizationId)) {
+    console.log(`[wallet] skipped credit for org ${organizationId} — it collects into its own Paystack account`);
+    return;
+  }
   const fee = +(grossAmountZAR * 0.035 + 1).toFixed(2);
   const net = +(grossAmountZAR - fee).toFixed(2);
   await ensureFleetWallet(organizationId);

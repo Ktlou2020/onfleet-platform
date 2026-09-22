@@ -2495,6 +2495,44 @@ router.get('/billing/diagnose', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing
 });
 
 // GET /fleet/billing/status
+// A fleet's own Paystack account: where its riders' money lands.
+//
+// This is separate from the subscription the fleet pays us, which stays on the
+// platform's account — these routes never touch that.
+router.get('/payments/account', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.view), async (req, res) => {
+  const paystackAccounts = require('../services/paystackAccounts');
+  const status = await paystackAccounts.connectionStatus(req.user.organization_id);
+  if (!status) return res.status(404).json({ error: 'Organisation not found' });
+  res.json(status);
+});
+
+router.put('/payments/account', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
+  const paystackAccounts = require('../services/paystackAccounts');
+  try {
+    const saved = await paystackAccounts.connectAccount({
+      organizationId: req.user.organization_id,
+      secretKey: req.body.secret_key,
+      publicKey: req.body.public_key,
+      actorId: req.user.id,
+    });
+    if (!saved) return res.status(404).json({ error: 'Organisation not found' });
+    await logAudit(req.user.id, 'fleet.paystack_connected', 'organizations', req.user.organization_id, { public_key: saved.paystack_public_key });
+    // The secret is never echoed back — they have it from Paystack, and once
+    // stored it is not ours to hand out again.
+    res.json(await paystackAccounts.connectionStatus(req.user.organization_id));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.delete('/payments/account', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
+  const paystackAccounts = require('../services/paystackAccounts');
+  const removed = await paystackAccounts.disconnectAccount({ organizationId: req.user.organization_id });
+  if (!removed) return res.status(404).json({ error: 'Organisation not found' });
+  await logAudit(req.user.id, 'fleet.paystack_disconnected', 'organizations', req.user.organization_id, null);
+  res.json(await paystackAccounts.connectionStatus(req.user.organization_id));
+});
+
 router.get('/billing/status', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.view), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req, { allowExpired: true });

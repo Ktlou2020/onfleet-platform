@@ -202,7 +202,7 @@ async function storeRecords(imei, device, records) {
 
     await tripService.processPing(device.bike_id, device.id, rec.lat, rec.lng, rec.speed,
       ignition, recAt, rec.io, device.speed_limit_kmh || 120);
-    await geofenceService.checkGeofences(device.bike_id, device.id, rec.lat, rec.lng, recAt);
+    await geofenceService.checkGeofences(device.bike_id, device.id, rec.lat, rec.lng, recAt, rec.satellites);
     try {
       await riskService.evaluatePing(device.bike_id, device.id, rec.lat, rec.lng, rec.speed,
         !!ignition, recAt, rec.io);

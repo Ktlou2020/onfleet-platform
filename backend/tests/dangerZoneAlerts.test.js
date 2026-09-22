@@ -39,6 +39,17 @@ describe.skipIf(!process.env.DATABASE_URL)('entering a no-go zone', () => {
   const ping = ([lat, lng], at = new Date().toISOString()) =>
     geofenceService.checkGeofences(bike.id, deviceId, lat, lng, at);
 
+  // Entering raises the alert at once; the engine is cut only once the bike is
+  // still inside a minute later. These two pings are that minute, and because
+  // the window is judged on the ping's own timestamp the test does not wait.
+  const rideInAndStay = async () => {
+    const t0 = Date.now();
+    await ping(OUTSIDE, new Date(t0).toISOString());
+    await ping(INSIDE, new Date(t0 + 10_000).toISOString());
+    await ping(INSIDE, new Date(t0 + 80_000).toISOString());
+    await new Promise((r) => setTimeout(r, 140)); // the cut is fired, not awaited
+  };
+
   const alerts = async () => {
     const { rows } = await pgDb.query(
       'SELECT alert_type, severity, payload FROM tracking_alerts WHERE bike_id = $1 ORDER BY id', [bike.id]);
@@ -117,9 +128,7 @@ describe.skipIf(!process.env.DATABASE_URL)('entering a no-go zone', () => {
   // alert type being switched on.
   it('still cuts the engine, and says why', async () => {
     await makeZone('danger', 'Chop-shop road');
-    await ping(OUTSIDE);
-    await ping(INSIDE);
-    await new Promise((r) => setTimeout(r, 120)); // the cut is fired and not awaited
+    await rideInAndStay();
 
     const { rows } = await pgDb.query(
       'SELECT engine_cut_active, engine_cut_reason FROM tracking_devices WHERE id = $1', [deviceId]);
@@ -165,9 +174,7 @@ describe.skipIf(!process.env.DATABASE_URL)('entering a no-go zone', () => {
     it('still cuts the engine — the zone does not stop working', async () => {
       await makeZone('danger');
       await disable('danger_zone_enter');
-      await ping(OUTSIDE);
-      await ping(INSIDE);
-      await new Promise((r) => setTimeout(r, 120));
+      await rideInAndStay();
 
       const { rows } = await pgDb.query('SELECT engine_cut_active FROM tracking_devices WHERE id = $1', [deviceId]);
       expect(rows[0].engine_cut_active).toBe(true);
@@ -179,5 +186,31 @@ describe.skipIf(!process.env.DATABASE_URL)('entering a no-go zone', () => {
     expect(ALL_ALERT_TYPES).toContain('danger_zone_enter');
     expect(ALL_ALERT_TYPES).toContain('danger_zone_exit');
     expect(ALERT_SEVERITY.danger_zone_enter).toBe('critical');
+  });
+
+  // MS23NMGP clipped the edge of a zone on a road that runs along it and had
+  // its engine cut twice in four minutes. Crossing the line raises the alert;
+  // stranding a rider needs more than a moment's presence.
+  describe('a bike that only clips the edge', () => {
+    it('raises the alert but does not cut the engine', async () => {
+      await makeZone('danger', 'Edge road');
+      const t0 = Date.now();
+      await ping(OUTSIDE, new Date(t0).toISOString());
+      await ping(INSIDE, new Date(t0 + 5_000).toISOString());
+      await ping(OUTSIDE, new Date(t0 + 20_000).toISOString());
+      await new Promise((r) => setTimeout(r, 140));
+
+      expect(await types()).toContain('danger_zone_enter');
+      const { rows } = await pgDb.query('SELECT engine_cut_active FROM tracking_devices WHERE id = $1', [deviceId]);
+      expect(rows[0].engine_cut_active).toBe(false);
+    });
+
+    // A fix from three satellites can be a kilometre out.
+    it('ignores a position too weak to trust', async () => {
+      await makeZone('danger', 'Edge road');
+      await ping(OUTSIDE);
+      await geofenceService.checkGeofences(bike.id, deviceId, INSIDE[0], INSIDE[1], new Date().toISOString(), 3);
+      expect(await types()).not.toContain('danger_zone_enter');
+    });
   });
 });

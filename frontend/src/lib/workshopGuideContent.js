@@ -1,3 +1,5 @@
+import { ClipboardList, CalendarClock, FileSpreadsheet, LifeBuoy, Search, Upload } from 'lucide-react';
+
 // What the workshop guide says. Kept apart from the guide shell so the tracking
 // guide can use the same shell with its own content.
 

@@ -30,15 +30,17 @@ keeps working without anybody touching a bike.
 
 | Setting  | Value |
 |----------|-------|
-| Domain   | `gps.onfleet.africa` (CNAME → Railway's proxy host) |
+| Domain   | `tracker.onfleet.africa` (CNAME → Railway's proxy host) |
 | Port     | whatever `GET /api/tracking/endpoint` reports |
 | Protocol | TCP |
 
 The DNS record that makes this work, at the `onfleet.africa` nameservers
-(ns.otherdns.net / ns.dns1.co.za):
+(Afrihost, ns.otherdns.net / ns.dns1.co.za). The name is `tracker` rather
+than `gps` because Afrihost's DNS editor will not accept a record name under
+five characters:
 
 ```
-gps.onfleet.africa.   CNAME   hayabusa.proxy.rlwy.net.
+tracker.onfleet.africa.   CNAME   hayabusa.proxy.rlwy.net.
 ```
 
 If using Cloudflare, the record must be DNS-only (grey cloud) — a proxied
@@ -92,7 +94,7 @@ Using Teltonika Configurator (USB) or an SMS config command, set on the
   to OnFleet and varies by network; a SIM with no active data plan or the
   wrong APN will never reach any server, and looks identical from our side to
   a wrong server address — rule this out early, see Troubleshooting)
-- **Domain/IP**: the host from `GET /api/tracking/endpoint` (`gps.onfleet.africa`)
+- **Domain/IP**: the host from `GET /api/tracking/endpoint` (`tracker.onfleet.africa`)
 - **Port**: the port from that same response
 - **Protocol**: TCP
 - **Data Sending**: enabled, with a reasonable send period (the app's default
@@ -138,7 +140,7 @@ CSV):
 setparam 2004:<domain>;2005:<port>
 ```
 
-e.g. `setparam 2004:gps.onfleet.africa;2005:52322` — take both from
+e.g. `setparam 2004:tracker.onfleet.africa;2005:52322` — take both from
 `GET /api/tracking/endpoint` rather than from this page. Only set what's actually wrong — leave
 the APN (param `2001`) alone unless you have specific reason to believe it's
 misconfigured, since a bad APN value sent blind can do more harm than good.

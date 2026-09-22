@@ -21,8 +21,8 @@ describe('where a tracker should be told to connect', () => {
   // The point of the whole exercise: devices are given a name we own, so if
   // the proxy moves, a DNS change follows it and nobody touches a bike.
   it('prefers a hostname we own', () => {
-    const e = trackerEndpoint({ ...RAILWAY, TRACKER_PUBLIC_HOST: 'gps.onfleet.africa', TRACKER_PUBLIC_PORT: '52322' });
-    expect(e).toMatchObject({ host: 'gps.onfleet.africa', port: 52322, own_hostname: true });
+    const e = trackerEndpoint({ ...RAILWAY, TRACKER_PUBLIC_HOST: 'tracker.onfleet.africa', TRACKER_PUBLIC_PORT: '52322' });
+    expect(e).toMatchObject({ host: 'tracker.onfleet.africa', port: 52322, own_hostname: true });
   });
 
   it('keeps reporting the truth if Railway reassigns the proxy', () => {
@@ -51,14 +51,14 @@ describe('where a tracker should be told to connect', () => {
     // moves ports strands every tracker in the field — worth saying loudly.
     it('flags a port that has drifted away from the proxy', () => {
       const e = trackerEndpoint({
-        TRACKER_PUBLIC_HOST: 'gps.onfleet.africa', TRACKER_PUBLIC_PORT: '52322',
+        TRACKER_PUBLIC_HOST: 'tracker.onfleet.africa', TRACKER_PUBLIC_PORT: '52322',
         RAILWAY_TCP_PROXY_DOMAIN: 'other.proxy.rlwy.net', RAILWAY_TCP_PROXY_PORT: '41999',
       });
       expect(endpointDrift(e)).toMatch(/52322.*41999/);
     });
 
     it('says nothing while the two agree', () => {
-      const e = trackerEndpoint({ ...RAILWAY, TRACKER_PUBLIC_HOST: 'gps.onfleet.africa', TRACKER_PUBLIC_PORT: '52322' });
+      const e = trackerEndpoint({ ...RAILWAY, TRACKER_PUBLIC_HOST: 'tracker.onfleet.africa', TRACKER_PUBLIC_PORT: '52322' });
       expect(endpointDrift(e)).toBeNull();
     });
 

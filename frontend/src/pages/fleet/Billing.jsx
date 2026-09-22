@@ -222,9 +222,10 @@ export default function FleetBilling() {
             <strong>This page is what you pay us.</strong> To set up how your <em>riders</em> pay <em>you</em>,
             connect your own Paystack account.
           </div>
-          <Link className="btn btn-secondary" to="/fleet/app/payment-account" style={{ flexShrink: 0 }}>
-            Rider payments
-          </Link>
+          <div className="row" style={{ gap: 8, flexShrink: 0 }}>
+            <Link className="btn btn-secondary" to="/fleet/app/subscription">Your plan</Link>
+            <Link className="btn btn-secondary" to="/fleet/app/payment-account">Rider payments</Link>
+          </div>
         </div>
       </div>
 

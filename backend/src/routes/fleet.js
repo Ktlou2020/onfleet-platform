@@ -2495,6 +2495,160 @@ router.get('/billing/diagnose', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing
 });
 
 // GET /fleet/billing/status
+// Subscribing to Pillion: what the fleet pays us.
+//
+// Priced per bike, so the amount is worked out from their own bike count
+// rather than read off a plan. The first payment does double duty — it takes
+// the first month and saves the card, so later months can be charged without
+// sending anybody back to a checkout page.
+router.get('/subscription', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.view), async (req, res) => {
+  const pricing = require('../services/subscriptionPricing');
+  const orgId = req.user.organization_id;
+  const { rows } = await pgDb.query(
+    `SELECT subscription_tier, subscription_cycle, subscription_status, next_billing_date,
+            billing_card_last4, billing_card_brand, billing_card_expiry, billing_failure_count,
+            (billing_authorization_encrypted IS NOT NULL) AS has_card
+       FROM organizations WHERE id = $1`, [orgId]);
+  const org = rows[0];
+  if (!org) return res.status(404).json({ error: 'Organisation not found' });
+
+  const { rows: invoices } = await pgDb.query(
+    `SELECT reference, tier, cycle, bikes, charged_bikes, per_bike_monthly, amount,
+            description, status, failure_reason, period_start, charged_at, created_at
+       FROM subscription_invoices WHERE organization_id = $1
+      ORDER BY created_at DESC LIMIT 24`, [orgId]);
+
+  res.json({
+    tier: org.subscription_tier,
+    cycle: org.subscription_cycle,
+    status: org.subscription_status,
+    next_billing_date: org.next_billing_date,
+    failure_count: org.billing_failure_count,
+    card: org.has_card ? {
+      last4: org.billing_card_last4, brand: org.billing_card_brand, expiry: org.billing_card_expiry,
+    } : null,
+    tiers: pricing.allTiers(),
+    minimum_bikes: pricing.MINIMUM_BILLABLE_BIKES,
+    // What they would pay on each tier, at their real bike count — so the
+    // choice is made against their own number rather than an example.
+    quotes: await Promise.all(pricing.allTiers().map(async (t) => ({
+      ...(await pricing.quoteForOrganization(orgId, { tierKey: t.key, cycle: org.subscription_cycle || 'monthly' })),
+    }))),
+    invoices,
+  });
+});
+
+router.get('/subscription/quote', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.view), async (req, res) => {
+  const pricing = require('../services/subscriptionPricing');
+  try {
+    res.json(await pricing.quoteForOrganization(req.user.organization_id, {
+      tierKey: req.query.tier, cycle: req.query.cycle,
+    }));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Begins a subscription: claims this month so the monthly run cannot charge
+// for it again, then sends the fleet to Paystack to pay it and save the card.
+router.post('/subscription/start', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
+  const pricing = require('../services/subscriptionPricing');
+  const billingSvc = require('../services/subscriptionBilling');
+  const orgId = req.user.organization_id;
+  const tierKey = String(req.body.tier || '').toLowerCase();
+  const cycle = req.body.cycle === 'annual' ? 'annual' : 'monthly';
+
+  if (!pricing.tier(tierKey)) return res.status(400).json({ error: 'Choose one of the plans we sell' });
+  if (!process.env.PAYSTACK_SECRET_KEY) return res.status(503).json({ error: 'Card payments are not configured yet' });
+
+  try {
+    const quote = await pricing.quoteForOrganization(orgId, { tierKey, cycle });
+    const period = billingSvc.periodFor(cycle);
+    const invoice = await billingSvc.claimPeriod({ organizationId: orgId, quote, period });
+    if (!invoice) return res.status(409).json({ error: 'This period has already been invoiced' });
+
+    const { rows } = await pgDb.query('SELECT contact_email FROM organizations WHERE id = $1', [orgId]);
+    const email = req.user.email || rows[0]?.contact_email;
+
+    const resp = await axios.post('https://api.paystack.co/transaction/initialize', {
+      email,
+      amount: quote.amount_kobo,
+      currency: 'ZAR',
+      reference: invoice.reference,
+      callback_url: `${(process.env.FRONTEND_URL || '').replace(/\/$/, '')}/fleet/app/subscription?ref=${invoice.reference}`,
+      metadata: { organization_id: orgId, subscription_invoice_id: invoice.id, tier: tierKey, cycle },
+    }, { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } });
+
+    await pgDb.query(
+      `UPDATE organizations SET subscription_tier = $1, subscription_cycle = $2, updated_at = NOW() WHERE id = $3`,
+      [tierKey, cycle, orgId]);
+    await logAudit(req.user.id, 'fleet.subscription_started', 'organizations', orgId, { tier: tierKey, cycle, amount: quote.total });
+
+    res.json({ authorization_url: resp.data.data.authorization_url, reference: invoice.reference, quote });
+  } catch (e) {
+    res.status(500).json({ error: e.response?.data?.message || e.message });
+  }
+});
+
+// Called when Paystack sends the fleet back. Verifies the payment on our own
+// account and keeps the authorisation, which is what makes every later month
+// chargeable without another checkout.
+router.get('/subscription/confirm/:reference', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
+  const billingSvc = require('../services/subscriptionBilling');
+  const orgId = req.user.organization_id;
+  try {
+    const { rows } = await pgDb.query(
+      'SELECT * FROM subscription_invoices WHERE reference = $1 AND organization_id = $2',
+      [req.params.reference, orgId]);
+    const invoice = rows[0];
+    if (!invoice) return res.status(404).json({ error: 'No such invoice' });
+    if (invoice.status === 'paid') return res.json({ status: 'paid', invoice });
+
+    const resp = await axios.get(`https://api.paystack.co/transaction/verify/${req.params.reference}`,
+      { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } });
+    const data = resp.data?.data;
+
+    if (data?.status !== 'success') {
+      await billingSvc.markInvoice(invoice.id, { status: 'failed', failureReason: data?.gateway_response || 'Payment not completed' });
+      return res.json({ status: 'failed', reason: data?.gateway_response || 'Payment not completed' });
+    }
+
+    await billingSvc.rememberAuthorization({ organizationId: orgId, authorization: data.authorization, email: data.customer?.email });
+    await billingSvc.markInvoice(invoice.id, { status: 'paid', paystackReference: data.reference });
+    await pgDb.query(
+      `UPDATE organizations SET subscription_status = 'active', next_billing_date = $2, updated_at = NOW() WHERE id = $1`,
+      [orgId, invoice.period_end]);
+    await logAudit(req.user.id, 'fleet.subscription_activated', 'organizations', orgId, { reference: invoice.reference });
+
+    res.json({ status: 'paid', invoice });
+  } catch (e) {
+    res.status(500).json({ error: e.response?.data?.message || e.message });
+  }
+});
+
+// Changing plan takes effect on the next charge. No pro-rata: the fleet keeps
+// what it is already paying for until the month it paid for runs out.
+router.put('/subscription', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
+  const pricing = require('../services/subscriptionPricing');
+  const tierKey = String(req.body.tier || '').toLowerCase();
+  const cycle = req.body.cycle === 'annual' ? 'annual' : 'monthly';
+  if (!pricing.tier(tierKey)) return res.status(400).json({ error: 'Choose one of the plans we sell' });
+
+  await pgDb.query(
+    `UPDATE organizations SET subscription_tier = $1, subscription_cycle = $2, updated_at = NOW() WHERE id = $3`,
+    [tierKey, cycle, req.user.organization_id]);
+  await logAudit(req.user.id, 'fleet.subscription_changed', 'organizations', req.user.organization_id, { tier: tierKey, cycle });
+  res.json(await pricing.quoteForOrganization(req.user.organization_id, { tierKey, cycle }));
+});
+
+router.delete('/subscription', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
+  await pgDb.query(
+    `UPDATE organizations SET subscription_status = 'cancelled', next_billing_date = NULL, updated_at = NOW() WHERE id = $1`,
+    [req.user.organization_id]);
+  await logAudit(req.user.id, 'fleet.subscription_cancelled', 'organizations', req.user.organization_id, null);
+  res.json({ status: 'cancelled' });
+});
+
 // A fleet's own Paystack account: where its riders' money lands.
 //
 // This is separate from the subscription the fleet pays us, which stays on the

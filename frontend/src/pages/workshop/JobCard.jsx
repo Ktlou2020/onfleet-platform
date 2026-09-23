@@ -906,11 +906,12 @@ export default function WorkshopJobCard() {
                     <img src={p.url} alt={p.original_name || 'photo'} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     {isOpen && (
                       <button
+                        className="icon-btn"
                         onClick={() => deletePhoto(p.id)}
-                        style={{ position: 'absolute', top: 4, right: 4, background: 'rgba(0,0,0,0.55)', border: 'none', borderRadius: 4, color: '#fff', cursor: 'pointer', padding: '3px 5px', lineHeight: 1 }}
+                        style={{ position: 'absolute', top: 2, right: 2, background: 'rgba(0,0,0,0.55)', border: 'none', borderRadius: 6, color: '#fff', cursor: 'pointer', lineHeight: 1 }}
                         title="Delete photo"
                       >
-                        <Trash2 size={12} />
+                        <Trash2 size={14} />
                       </button>
                     )}
                   </div>

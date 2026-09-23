@@ -62,11 +62,11 @@ export default function ServicePlan({ bikeId, odometerKm, onAddPart = null, comp
           <div className="text-xs" style={{ fontWeight: 700, color: 'var(--danger)', textTransform: 'uppercase', letterSpacing: '.4px' }}>
             <AlertTriangle size={11} /> Replace now — {due.length} part{due.length === 1 ? '' : 's'} · {money(plan.parts_due_total_ex_vat)} excl. VAT
           </div>
-          <table className="table" style={{ marginTop: 4 }}>
+          <table className="table table-stack" style={{ marginTop: 4 }}>
             <tbody>
               {due.map((part) => (
                 <tr key={`${part.part_number}-${part.description}`}>
-                  <td style={{ width: 24 }}><Wrench size={12} /></td>
+                  <td className="col-mobile-hide" style={{ width: 24 }}><Wrench size={12} /></td>
                   <td>
                     {part.description}
                     {part.last_fitted_km != null && (
@@ -88,7 +88,7 @@ export default function ServicePlan({ bikeId, odometerKm, onAddPart = null, comp
                   </td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{money(part.price_ex_vat)}</td>
                   {onAddPart && (
-                    <td style={{ textAlign: 'right' }}>
+                    <td data-cell="action" style={{ textAlign: 'right' }}>
                       <button className="btn btn-sm btn-secondary" style={{ padding: '2px 7px' }}
                         onClick={() => onAddPart(part)} title="Add to this job card">
                         <Plus size={11} /> Add
@@ -107,7 +107,7 @@ export default function ServicePlan({ bikeId, odometerKm, onAddPart = null, comp
           <div className="text-xs" style={{ fontWeight: 700, color: 'var(--warn, #b45309)', textTransform: 'uppercase', letterSpacing: '.4px' }}>
             <Clock size={11} /> Worth doing while it is here
           </div>
-          <table className="table" style={{ marginTop: 4 }}>
+          <table className="table table-stack" style={{ marginTop: 4 }}>
             <tbody>
               {soon.map((part) => (
                 <tr key={`${part.part_number}-soon`}>
@@ -116,7 +116,7 @@ export default function ServicePlan({ bikeId, odometerKm, onAddPart = null, comp
                   <td style={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{part.part_number}</td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{money(part.price_ex_vat)}</td>
                   {onAddPart && (
-                    <td style={{ textAlign: 'right' }}>
+                    <td data-cell="action" style={{ textAlign: 'right' }}>
                       <button className="btn btn-sm btn-secondary" style={{ padding: '2px 7px' }} onClick={() => onAddPart(part)}>
                         <Plus size={11} /> Add
                       </button>

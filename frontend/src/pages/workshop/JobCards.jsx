@@ -202,7 +202,10 @@ export default function WorkshopJobCards() {
           >
             <LayoutList size={15} />
           </button>
+          {/* Four 220px columns need 900px of width. On a phone the board is
+              hidden rather than offered and then fought with. */}
           <button
+            className="hide-mobile"
             onClick={() => setViewMode('kanban')}
             title="Kanban view"
             style={{ background: viewMode === 'kanban' ? 'var(--accent)' : 'transparent', color: viewMode === 'kanban' ? '#fff' : 'var(--muted)', border: 'none', borderRadius: 4, padding: '4px 8px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}

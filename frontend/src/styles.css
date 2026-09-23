@@ -129,6 +129,11 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   border: 0;
 }
 
+/* Shown only on phones; the counterpart to .hide-mobile. !important because
+   utilities like this are declared early and lose to any component rule that
+   sets display later in the file — .icon-btn did exactly that. */
+.show-mobile { display: none !important; }
+
 /* ---------- Brand Logo ---------- */
 .brand-logo {
   display: inline-flex; align-items: center; gap: 10px;
@@ -1389,8 +1394,33 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   /* Remove forced min-width so hidden-column tables can reflow */
   .table-wrap .table { min-width: 0; }
   .table th, .table td { padding: 10px 8px; font-size: 13px; }
+  .show-mobile { display: inline-flex !important; }
+
   /* Column visibility utility — add className="col-mobile-hide" to th/td */
   .col-mobile-hide { display: none !important; }
+
+  /* ── Tables that stop being tables on a phone ──
+     Some tables carry too much per row to survive five columns at 375px —
+     a parts list is the example: the description, the part number and the
+     price are all needed at the shelf, and two of them must not wrap. Hiding
+     columns would hide the part number, and scrolling sideways to read a
+     price is not something anyone does with oily hands. So below 640px the
+     row becomes a block and the cells stack. Add className="table-stack". */
+  .table-stack, .table-stack tbody, .table-stack tr, .table-stack td {
+    display: block; width: 100%;
+  }
+  .table-stack tr {
+    border-bottom: 1px solid var(--border);
+    padding: 10px 0;
+  }
+  .table-stack tr:last-child { border-bottom: 0; }
+  .table-stack td {
+    border: none; padding: 1px 0;
+    text-align: left !important; white-space: normal !important;
+  }
+  /* The action sits under the detail it acts on, full width and thumb-sized. */
+  .table-stack td[data-cell="action"] { margin-top: 8px; }
+  .table-stack td[data-cell="action"] .btn { width: 100%; min-height: 44px; }
 
   /* ── Touch targets: ensure all interactive elements are at least 44px tall ── */
   .btn:not(.btn-sm) { min-height: 44px; }

@@ -76,6 +76,17 @@ export default function WorkshopShell() {
         <div className="topbar" style={{ gap: 16 }}>
           <div className="text-sm muted">Workshop · {brandFullName}</div>
           <div className="text-xs muted hide-mobile" style={{ marginLeft: 'auto' }}>Logged in as <strong>{user?.email}</strong></div>
+          {/* The only way out used to be the button in the sidebar, which is
+              hidden below 640px — so a technician on a phone could not log
+              out of a shared workshop handset at all. */}
+          <button
+            className="icon-btn show-mobile"
+            onClick={() => { logout(); nav('/workshop/login'); }}
+            title="Log out"
+            style={{ marginLeft: 'auto', background: 'transparent', color: 'var(--muted)', border: 'none' }}
+          >
+            <LogOut size={18} />
+          </button>
         </div>
         <div className="content">
           <Outlet />

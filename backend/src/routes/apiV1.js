@@ -35,8 +35,10 @@ router.use(apiKeyAuth);
 // organization key sees only its own, exactly as before.
 function bikeScope(req, alias = 'b') {
   return req.isPlatformKey
-    ? { clause: 'TRUE', params: [] }
-    : { clause: `${alias}.organization_id = $1`, params: [req.orgId] };
+    // A walk-in bike registered by the workshop is not an OnFleet asset and
+    // is never exported, whatever key is asking.
+    ? { clause: `${alias}.workshop_only = FALSE`, params: [] }
+    : { clause: `${alias}.workshop_only = FALSE AND ${alias}.organization_id = $1`, params: [req.orgId] };
 }
 
 function platformOnly(req, res) {

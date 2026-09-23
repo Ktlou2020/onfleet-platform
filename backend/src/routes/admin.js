@@ -346,9 +346,9 @@ router.get('/dashboard', async (req, res) => {
       JOIN bikes b ON b.id = a.bike_id
       JOIN users u ON u.id = a.user_id
       WHERE a.status = 'completed' AND ${agreementScope}`),
-    q(`SELECT COUNT(*) c FROM bikes WHERE status = 'ready_to_go' AND organization_id IS NULL`),
-    q(`SELECT COUNT(*) c FROM bikes WHERE status = 'active' AND organization_id IS NULL`),
-    q(`SELECT COUNT(*) c FROM bikes WHERE status = 'repairs' AND organization_id IS NULL`),
+    q(`SELECT COUNT(*) c FROM bikes WHERE status = 'ready_to_go' AND organization_id IS NULL AND workshop_only = FALSE`),
+    q(`SELECT COUNT(*) c FROM bikes WHERE status = 'active' AND organization_id IS NULL AND workshop_only = FALSE`),
+    q(`SELECT COUNT(*) c FROM bikes WHERE status = 'repairs' AND organization_id IS NULL AND workshop_only = FALSE`),
     q(`SELECT COUNT(*) c
       FROM applications a
       JOIN users u ON u.id = a.user_id
@@ -391,9 +391,9 @@ router.get('/dashboard', async (req, res) => {
       WHERE a.status = 'defaulted'
         AND b.status NOT IN ('stolen','written_off','sold')
         AND ${agreementScope}`),
-    q(`SELECT COUNT(*) c FROM bikes WHERE next_service_date IS NOT NULL AND next_service_date <= (CURRENT_DATE + 14) AND status = 'active' AND organization_id IS NULL`),
-    q(`SELECT COUNT(*) c FROM bikes WHERE insurance_expiry IS NOT NULL AND insurance_expiry <= (CURRENT_DATE + 30) AND organization_id IS NULL`),
-    q(`SELECT COUNT(*) c FROM bikes WHERE license_disc_expiry IS NOT NULL AND license_disc_expiry <= (CURRENT_DATE + 30) AND organization_id IS NULL`),
+    q(`SELECT COUNT(*) c FROM bikes WHERE next_service_date IS NOT NULL AND next_service_date <= (CURRENT_DATE + 14) AND status = 'active' AND organization_id IS NULL AND workshop_only = FALSE`),
+    q(`SELECT COUNT(*) c FROM bikes WHERE insurance_expiry IS NOT NULL AND insurance_expiry <= (CURRENT_DATE + 30) AND organization_id IS NULL AND workshop_only = FALSE`),
+    q(`SELECT COUNT(*) c FROM bikes WHERE license_disc_expiry IS NOT NULL AND license_disc_expiry <= (CURRENT_DATE + 30) AND organization_id IS NULL AND workshop_only = FALSE`),
     pgDb.query(`SELECT TO_CHAR(COALESCE(p.paid_at, p.created_at), 'IYYY-IW') week, COALESCE(SUM(COALESCE(NULLIF(p.net_amount,0), p.amount)),0) total
     FROM payments p
     JOIN agreements a ON a.id = p.agreement_id

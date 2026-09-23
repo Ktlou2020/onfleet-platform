@@ -775,8 +775,8 @@ router.post('/bikes', authRequired, workshopOnly, async (req, res) => {
     if (existing) return res.status(409).json({ error: `A bike with VIN ${vin} already exists`, existing_id: existing.id });
 
     const { rows: insertedRows } = await pgDb.query(`
-      INSERT INTO bikes (vin, registration, make, model, year, color, engine_cc, fleet, rental_weekly, total_weeks, status, notes)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8, 0, 0, 'not_available', $9) RETURNING id
+      INSERT INTO bikes (vin, registration, make, model, year, color, engine_cc, fleet, rental_weekly, total_weeks, status, notes, workshop_only)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8, 0, 0, 'not_available', $9, TRUE) RETURNING id
     `, [
       vin, registration || null, make, model,
       year ? Number(year) : null, color || null,

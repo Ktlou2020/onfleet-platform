@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Zap, LayoutList, LayoutGrid } from 'lucide-react';
 import api from '../../api';
 import { Badge, Loading, Modal, SearchInput, fmt, fmtDateTime, matchesSearch } from '../../components/ui';
+import { todayInSAST } from '../../lib/trackingHelpers';
 import { useAuth } from '../../auth';
 
 const STATUS_PILLS = ['all', 'open', 'in_progress', 'completed', 'cancelled'];
@@ -70,8 +71,14 @@ export default function WorkshopJobCards() {
   const nav = useNavigate();
   const [jobs, setJobs] = useState(null);
   const [technicians, setTechnicians] = useState([]);
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [myJobsOnly, setMyJobsOnly] = useState(false);
+  // The dashboard tiles link straight into a filtered list, so the filter has
+  // to live in the URL — that is also what makes a filtered view something a
+  // technician can go back to, or send to someone.
+  const [params, setParams] = useSearchParams();
+  const [statusFilter, setStatusFilter] = useState(params.get('status') || 'all');
+  const [myJobsOnly, setMyJobsOnly] = useState(params.get('mine') === '1');
+  const [stalledOnly, setStalledOnly] = useState(params.get('stalled') === '1');
+  const [doneToday, setDoneToday] = useState(params.get('today') === '1');
   const [search, setSearch] = useState('');
   const [viewMode, setViewMode] = useState('list');
   const [showCreate, setShowCreate] = useState(false);
@@ -107,8 +114,23 @@ export default function WorkshopJobCards() {
   const filtered = useMemo(() => (jobs || []).filter((j) => {
     if (statusFilter !== 'all' && j.status !== statusFilter) return false;
     if (myJobsOnly && j.technician_id !== user?.id) return false;
+    // Stalled is the dashboard's own definition: open, never started, and
+    // sitting for a week. Kept identical here so the tile and the list cannot
+    // disagree about what they are counting.
+    if (stalledOnly && !(j.status === 'open' && !j.started_at && (j.days_open ?? 0) >= 7)) return false;
+    if (doneToday && String(j.completed_at || '').slice(0, 10) !== todayInSAST()) return false;
     return matchesSearch(search, j.display_registration, j.display_make, j.display_model, j.display_vin, j.technician_name, j.fleet_org_name, j.fleet_owner_name, j.description);
-  }), [jobs, statusFilter, myJobsOnly, search, user?.id]);
+  }), [jobs, statusFilter, myJobsOnly, stalledOnly, doneToday, search, user?.id]);
+
+  // Keep the address bar honest as the filters are changed by hand.
+  useEffect(() => {
+    const next = new URLSearchParams();
+    if (statusFilter !== 'all') next.set('status', statusFilter);
+    if (myJobsOnly) next.set('mine', '1');
+    if (stalledOnly) next.set('stalled', '1');
+    if (doneToday) next.set('today', '1');
+    setParams(next, { replace: true });
+  }, [statusFilter, myJobsOnly, stalledOnly, doneToday, setParams]);
 
   const kanbanFiltered = useMemo(() => (jobs || []).filter((j) => {
     if (myJobsOnly && j.technician_id !== user?.id) return false;
@@ -131,6 +153,37 @@ export default function WorkshopJobCards() {
     try {
       setBusy(true);
       const payload = { ...form };
+
+      // "Register new bike instead" now actually registers it.
+      //
+      // These details used to be written onto the job card as loose text and
+      // nowhere else — no bike record was created, so the bike never appeared
+      // in the search and a technician typed it in again at every visit, with
+      // nothing linking the visits. Worse, a card with no bike_id has no
+      // service history, no odometer and no tracker check, because all of
+      // those hang off the bike.
+      //
+      // The route that creates one already existed. It simply was not called.
+      if (!form.bike_id && form.vin && form.make && form.model) {
+        try {
+          const { data: created } = await api.post('/workshop/bikes', {
+            vin: form.vin, registration: form.registration, make: form.make, model: form.model,
+            year: form.year, color: form.color, engine_cc: form.engine_cc,
+            fleet_owner_name: form.fleet_owner_name,
+          });
+          payload.bike_id = created.bike.id;
+        } catch (e) {
+          // Already on the system under that VIN — link to it rather than
+          // refusing. A technician typing a VIN that already exists has found
+          // the bike, not made a mistake.
+          const existing = e.response?.data?.existing_id;
+          if (!existing) throw e;
+          payload.bike_id = existing;
+          toast(`That VIN is already registered — this job is on the existing bike`);
+        }
+        ['vin', 'registration', 'make', 'model', 'year', 'color', 'engine_cc'].forEach((k) => delete payload[k]);
+      }
+
       if (form.bike_id) {
         ['vin', 'registration', 'make', 'model', 'year', 'color', 'engine_cc'].forEach((k) => delete payload[k]);
       }
@@ -180,6 +233,15 @@ export default function WorkshopJobCards() {
         <SearchInput value={search} onChange={setSearch} placeholder="Search bike, VIN, technician, description…" style={{ flex: '1 1 260px', maxWidth: 360 }} />
         {viewMode === 'list' && (
           <div className="filter-pills">
+            {(stalledOnly || doneToday) && (
+              <button
+                className="filter-pill active"
+                onClick={() => { setStalledOnly(false); setDoneToday(false); }}
+                title="Clear this filter"
+              >
+                {stalledOnly ? 'Stalled 7+ days' : 'Finished today'} ×
+              </button>
+            )}
             {STATUS_PILLS.map((s) => (
               <button key={s} className={`filter-pill ${statusFilter === s ? 'active' : ''}`} onClick={() => setStatusFilter(s)}>
                 {s === 'all' ? 'All' : s.replace('_', ' ')}

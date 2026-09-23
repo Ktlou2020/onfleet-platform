@@ -190,7 +190,11 @@ async function listCatalogValues(column, whereClauses = [], params = []) {
 }
 
 function adminVisibleBikeClause(alias = 'b') {
-  return `${alias}.organization_id IS NULL AND NOT EXISTS (
+  // workshop_only keeps walk-in bikes a technician registered out of the
+  // fleet entirely. They exist so a walk-in's service history survives
+  // between visits; they are not OnFleet assets and must not be counted,
+  // listed or exported as though they were.
+  return `${alias}.workshop_only = FALSE AND ${alias}.organization_id IS NULL AND NOT EXISTS (
     SELECT 1
     FROM organizations o
     WHERE LOWER(TRIM(COALESCE(${alias}.fleet, ''))) <> ''

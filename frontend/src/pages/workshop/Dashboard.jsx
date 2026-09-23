@@ -20,9 +20,22 @@ function elapsed(startedAt) {
   return `${Math.floor(hrs / 24)}d ${hrs % 24}h`;
 }
 
-function KPI({ label, value, icon: Icon, accent }) {
+// Every tile counts something, so every tile is a way into the jobs behind it.
+// A number with no route to what it is made of leaves a technician to rebuild
+// the filter by hand and hope it matches.
+function KPI({ label, value, icon: Icon, accent, to }) {
+  const nav = useNavigate();
+  const clickable = !!to;
   return (
-    <div className="stat" style={{ borderTop: `3px solid ${accent || 'var(--accent)'}` }}>
+    <div
+      className="stat"
+      style={{ borderTop: `3px solid ${accent || 'var(--accent)'}`, cursor: clickable ? 'pointer' : 'default' }}
+      onClick={clickable ? () => nav(to) : undefined}
+      onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); nav(to); } } : undefined}
+      role={clickable ? 'button' : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      title={clickable ? `Show these ${label.toLowerCase()}` : undefined}
+    >
       <div className="flex-between mb-1">
         <div className="stat-label">{label}</div>
         {Icon && <Icon size={16} style={{ color: accent || 'var(--accent)', opacity: 0.7 }} />}
@@ -174,11 +187,11 @@ export default function WorkshopDashboard() {
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 14, marginBottom: 32 }}>
-        <KPI label="Open jobs" value={stats.open_count ?? 0} icon={AlertTriangle} accent="#f97316" />
-        <KPI label="In progress" value={stats.in_progress_count ?? 0} icon={Clock} accent="#eab308" />
-        <KPI label="Done today" value={stats.completed_today ?? 0} icon={CheckCircle} accent="#22c55e" />
-        <KPI label="Revenue today" value={fmt(stats.revenue_today ?? 0)} icon={TrendingUp} accent="#6366f1" />
-        <KPI label="Total revenue" value={fmt(stats.total_revenue ?? 0)} icon={TrendingUp} accent="#8b5cf6" />
+        <KPI label="Open jobs" value={stats.open_count ?? 0} icon={AlertTriangle} accent="#f97316" to="/workshop/app/job-cards?status=open" />
+        <KPI label="In progress" value={stats.in_progress_count ?? 0} icon={Clock} accent="#eab308" to="/workshop/app/job-cards?status=in_progress" />
+        <KPI label="Done today" value={stats.completed_today ?? 0} icon={CheckCircle} accent="#22c55e" to="/workshop/app/job-cards?status=completed&today=1" />
+        <KPI label="Revenue today" value={fmt(stats.revenue_today ?? 0)} icon={TrendingUp} accent="#6366f1" to="/workshop/app/job-cards?status=completed&today=1" />
+        <KPI label="Total revenue" value={fmt(stats.total_revenue ?? 0)} icon={TrendingUp} accent="#8b5cf6" to="/workshop/app/job-cards?status=completed" />
         {/* Nothing on this dashboard previously counted work that had stopped
             moving, so 15 open jobs with none of them started drew no attention
             at all. */}
@@ -187,6 +200,7 @@ export default function WorkshopDashboard() {
           value={stats.stalled_count ?? 0}
           icon={AlertTriangle}
           accent={stats.stalled_count ? '#ef4444' : '#94a3b8'}
+          to="/workshop/app/job-cards?stalled=1"
         />
       </div>
 

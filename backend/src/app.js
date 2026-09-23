@@ -9,6 +9,7 @@ const fs = require('fs');
 const rateLimit = require('express-rate-limit');
 
 const UPLOAD_DIRS = require('./uploadPaths');
+const { brand, isDefault, manifestFor } = require('./brand');
 const uploadRoots = [
   UPLOAD_DIRS.base,
   path.join(__dirname, '../uploads'),
@@ -49,18 +50,21 @@ function getShareMeta(req) {
   const url = `${origin}${req.originalUrl || req.path || '/'}`;
   const pathName = String(req.path || '/');
 
+  // The words come from the brand this deployment is running as. For OnFleet
+  // these are the same strings that were written here before, so nothing
+  // about its responses moves.
   const defaults = {
-    title: 'OnFleet Africa — Rent to Own. Ride. Earn. Own.',
-    description: 'OnFleet Africa — Rent-to-own delivery bikes for South African riders. No deposit. Free monthly servicing. Own in 18 months.',
-    image: `${origin}/logo.png`,
+    title: brand.title,
+    description: brand.description,
+    image: `${origin}${brand.icon}`,
     url
   };
 
   if (pathName === '/fleet' || pathName === '/fleet/') {
     return {
-      title: 'OnFleet Africa Fleet Owner Platform — Launch and manage your fleet',
-      description: 'The OnFleet fleet-owner platform is live. Create a company account, manage bikes and agreements, capture payments, and run daily fleet operations from one workspace.',
-      image: `${origin}/logo.png`,
+      title: brand.fleetTitle,
+      description: brand.fleetDescription,
+      image: `${origin}${brand.icon}`,
       url
     };
   }
@@ -79,6 +83,22 @@ function injectShareMeta(template, meta) {
     .replace(/<meta name="twitter:title" content="[^"]*"\s*\/>/i, `<meta name="twitter:title" content="${escapeHtml(meta.title)}" />`)
     .replace(/<meta name="twitter:description" content="[^"]*"\s*\/>/i, `<meta name="twitter:description" content="${escapeHtml(meta.description)}" />`)
     .replace(/<meta name="twitter:image" content="[^"]*"\s*\/>/i, `<meta name="twitter:image" content="${escapeHtml(meta.image)}" />`);
+}
+
+/**
+ * The tags that carry the mark rather than the words: the tab icon, the
+ * home-screen icon and name, and the colour the browser paints its chrome.
+ *
+ * Only applied when this deployment has asked to be rebranded — OnFleet's
+ * head is left exactly as the build produced it.
+ */
+function injectBrandHead(html) {
+  if (isDefault) return html;
+  return String(html || '')
+    .replace(/<link rel="icon"[^>]*>/i, `<link rel="icon" type="image/png" href="${escapeHtml(brand.icon)}" />`)
+    .replace(/<link rel="apple-touch-icon"[^>]*>/i, `<link rel="apple-touch-icon" href="${escapeHtml(brand.icon180 || brand.icon)}" />`)
+    .replace(/<meta name="apple-mobile-web-app-title" content="[^"]*"\s*\/>/i, `<meta name="apple-mobile-web-app-title" content="${escapeHtml(brand.name)}" />`)
+    .replace(/<meta name="theme-color" content="[^"]*"\s*\/>/i, `<meta name="theme-color" content="${escapeHtml(brand.themeColor)}" />`);
 }
 
 // Builds a fully-wired Express app (all middleware + routes), but never binds a
@@ -231,12 +251,29 @@ function buildApp() {
   const frontendDist = path.join(__dirname, '../../frontend/dist');
   const frontendIndexPath = path.join(frontendDist, 'index.html');
   if (fs.existsSync(frontendDist)) {
-    app.use(express.static(frontendDist));
+    // A rebranded deployment answers for the three files that carry the mark
+    // before express.static can hand over the built-in ones. The frontend asks
+    // for /logo.png either way, so nothing in it has to know about this.
+    if (!isDefault) {
+      const sendBrandFile = (relative) => (req, res, next) => {
+        res.sendFile(path.join(frontendDist, relative.replace(/^\//, '')), (error) => {
+          if (error) next(error);
+        });
+      };
+      app.get('/logo.png', sendBrandFile(brand.logo));
+      app.get('/manifest.webmanifest', (req, res) => res.json(manifestFor()));
+    }
+
+    // With a brand in play the root has to be rewritten too, so `index: false`
+    // hands `/` to the catch-all below. OnFleet keeps the default, where
+    // express.static answers `/` straight off disk exactly as it always has.
+    app.use(express.static(frontendDist, isDefault ? undefined : { index: false }));
+
     app.get(/^\/(?!api|uploads).*/, (req, res, next) => {
       fs.readFile(frontendIndexPath, 'utf8', (error, html) => {
         if (error) return next(error);
         const meta = getShareMeta(req);
-        res.type('html').send(injectShareMeta(html, meta));
+        res.type('html').send(injectBrandHead(injectShareMeta(html, meta)));
       });
     });
   }

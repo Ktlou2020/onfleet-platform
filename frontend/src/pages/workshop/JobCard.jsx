@@ -6,6 +6,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import ServicePlan from '../../components/ServicePlan';
 import TrackerCheck from '../../components/TrackerCheck';
 import PartPhoto from '../../components/PartPhoto';
+import PendingWrites from '../../components/PendingWrites';
+import { fmtSASTshort } from '../../lib/trackingHelpers';
+import { sendOrQueue } from '../../lib/offlineQueue';
+import { resizeImage } from '../../lib/resizeImage';
 
 // The same normalisation the catalogue and the photo table both use, so a
 // number typed with or without its dashes finds the same picture.
@@ -67,6 +71,7 @@ function CatalogueStatus({ make, model }) {
 
 function PartsSuggestions({ query, onSelect }) {
   const [suggestions, setSuggestions] = useState([]);
+  const [chosen, setChosen] = useState(null);
   useEffect(() => {
     if (!query || query.length < 2) { setSuggestions([]); return; }
     const t = setTimeout(() => {
@@ -77,11 +82,12 @@ function PartsSuggestions({ query, onSelect }) {
     return () => clearTimeout(t);
   }, [query]);
 
-  if (!suggestions.length) return null;
+  if (!suggestions.length || query === chosen) return null;
   return (
     <div className="card" style={{ position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 40, padding: 6, maxHeight: 180, overflowY: 'auto' }}>
       {suggestions.map((s, i) => (
-        <button key={i} className="btn btn-secondary btn-sm" style={{ width: '100%', justifyContent: 'space-between', marginBottom: 3 }} onClick={() => onSelect(s)}>
+        <button key={i} className="btn btn-secondary btn-sm" style={{ width: '100%', justifyContent: 'space-between', marginBottom: 3 }}
+          onClick={() => { setChosen(s.description); onSelect(s); }}>
           <span>{s.description} <span className="muted text-xs">({s.item_type})</span></span>
           <span className="muted text-xs">{fmt(s.avg_unit_cost)} avg</span>
         </button>
@@ -99,6 +105,8 @@ function PartsSuggestions({ query, onSelect }) {
 function CatalogPartsSuggestions({ query, make, model, onSelect, onResults }) {
   const [results, setResults] = useState([]);
   const [photos, setPhotos] = useState({});
+  // What was last picked from this list, so choosing it does not reopen it.
+  const [chosen, setChosen] = useState(null);
 
   useEffect(() => {
     if (!query || query.length < 2 || !make || !model) { setResults([]); onResults?.(0); return; }
@@ -120,7 +128,11 @@ function CatalogPartsSuggestions({ query, make, model, onSelect, onResults }) {
     return () => clearTimeout(t);
   }, [query, make, model, onResults]);
 
-  if (!results.length) return null;
+  // Once a part has been picked, the description becomes the part's own name
+  // and number — which still matches the search, so the list reopened over the
+  // form and sat there. The technician could not reach the fields underneath
+  // and had no way to dismiss it. It stays shut until they type something new.
+  if (!results.length || query === chosen) return null;
   return (
     <div className="card" style={{ position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 41, padding: 6, maxHeight: 260, overflowY: 'auto', border: '1px solid var(--primary)' }}>
       <div className="text-xs muted" style={{ padding: '2px 6px 6px' }}>OEM catalogue — {make} {model}</div>
@@ -140,7 +152,10 @@ function CatalogPartsSuggestions({ query, make, model, onSelect, onResults }) {
           <button
             className="btn btn-secondary btn-sm"
             style={{ flex: 1, justifyContent: 'space-between', textAlign: 'left' }}
-            onClick={() => onSelect(r)}
+            onClick={() => {
+              setChosen(`${r.part_number} — ${r.description}`);
+              onSelect(r);
+            }}
           >
             <span>
               <strong>{r.part_number}</strong> — {r.description}
@@ -398,15 +413,23 @@ export default function WorkshopJobCard() {
   const addScheduledPart = async (part) => {
     try {
       setBusy(true);
-      const { data } = await api.post(`/workshop/job-cards/${id}/items`, {
-        item_type: 'part',
-        description: `${part.part_number} — ${part.catalogue_description || part.description}`,
-        quantity: part.qty || 1,
-        unit_cost: part.price_ex_vat || 0,
-        part_number: part.part_number,
+      const { queued, response } = await sendOrQueue(api, {
+        url: `/workshop/job-cards/${id}/items`,
+        label: `${part.description} on job #${id}`,
+        body: {
+          item_type: 'part',
+          description: `${part.part_number} — ${part.catalogue_description || part.description}`,
+          quantity: part.qty || 1,
+          unit_cost: part.price_ex_vat || 0,
+          part_number: part.part_number,
+        },
       });
-      setCard(data.job_card);
-      toast.success(`${part.description} added`);
+      if (queued) {
+        toast.success(`${part.description} saved on this phone — it will send when the signal is back`);
+      } else {
+        setCard(response.data.job_card);
+        toast.success(`${part.description} added`);
+      }
     } catch (error) {
       toast.error(error.response?.data?.error || 'Could not add that part');
     } finally {
@@ -417,10 +440,20 @@ export default function WorkshopJobCard() {
   const saveItem = async () => {
     try {
       setBusy(true);
-      const { data } = editItem
-        ? await api.put(`/workshop/job-cards/${id}/items/${editItem.id}`, itemForm)
-        : await api.post(`/workshop/job-cards/${id}/items`, itemForm);
-      setCard(data.job_card);
+      // An edit changes a line somebody else may also be changing, so it is
+      // not queued — only the addition is.
+      if (editItem) {
+        const { data } = await api.put(`/workshop/job-cards/${id}/items/${editItem.id}`, itemForm);
+        setCard(data.job_card);
+      } else {
+        const { queued, response } = await sendOrQueue(api, {
+          url: `/workshop/job-cards/${id}/items`,
+          label: `${itemForm.description || 'Line item'} on job #${id}`,
+          body: itemForm,
+        });
+        if (queued) toast.success('Saved on this phone — it will send when the signal is back');
+        else setCard(response.data.job_card);
+      }
       setShowAddItem(false);
       setEditItem(null);
       setItemForm(EMPTY_ITEM);
@@ -489,10 +522,14 @@ export default function WorkshopJobCard() {
     if (!techNote.trim()) return;
     try {
       setSavingNote(true);
-      const { data } = await api.post(`/workshop/job-cards/${id}/notes`, { note: techNote.trim() });
-      setCard(data.job_card);
+      const { queued, response } = await sendOrQueue(api, {
+        url: `/workshop/job-cards/${id}/notes`,
+        label: `Note on job #${id}: ${techNote.trim().slice(0, 40)}`,
+        body: { note: techNote.trim() },
+      });
+      if (queued) toast.success('Note saved on this phone — it will send when the signal is back');
+      else { setCard(response.data.job_card); toast.success('Note saved'); }
       setTechNote('');
-      toast.success('Note saved');
     } catch (error) {
       toast.error(error.response?.data?.error || 'Could not save note');
     } finally {
@@ -502,13 +539,24 @@ export default function WorkshopJobCard() {
 
   const uploadPhoto = async (file) => {
     if (!file) return;
-    const formData = new FormData();
-    formData.append('photo', file);
     try {
       setPhotoUploading(true);
-      await api.post(`/workshop/job-cards/${id}/photos`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
-      await loadPhotos();
-      toast.success('Photo added');
+      // Shrunk before it goes anywhere: a 4 MB photo on workshop signal is the
+      // difference between a feature and a feature nobody uses, and a queued
+      // one has to sit on the phone until the signal is back.
+      const shrunk = await resizeImage(file);
+      const { queued } = await sendOrQueue(api, {
+        url: `/workshop/job-cards/${id}/photos`,
+        file: shrunk,
+        fileField: 'photo',
+        label: `Photo on job #${id}`,
+      });
+      if (queued) {
+        toast.success('Photo saved on this phone — it will send when the signal is back');
+      } else {
+        await loadPhotos();
+        toast.success('Photo added');
+      }
     } catch (error) {
       toast.error(error.response?.data?.error || 'Upload failed');
     } finally {
@@ -596,6 +644,10 @@ export default function WorkshopJobCard() {
       <button className="btn btn-sm btn-secondary" style={{ marginBottom: 16 }} onClick={() => nav('/workshop/app/job-cards')}>
         <ArrowLeft size={14} /> Back
       </button>
+
+      {/* Anything still waiting to reach the server. At the top because a
+          queue nobody can see is a slower way of losing work. */}
+      <PendingWrites />
 
       {/* Header */}
       <div className="flex-between mb-3" style={{ flexWrap: 'wrap', gap: 12 }}>
@@ -886,6 +938,16 @@ export default function WorkshopJobCard() {
             {card.technician_notes}
           </div>
         )}
+        {/* One entry per note, with who wrote it — several people work a job
+            and a single text field meant the last one overwrote the rest. */}
+        {(card.notes || []).map((n) => (
+          <div key={n.id} className="text-sm" style={{ whiteSpace: 'pre-wrap', marginBottom: 8, padding: '10px 12px', background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)' }}>
+            {n.note}
+            <div className="text-xs muted" style={{ marginTop: 4 }}>
+              {n.author || 'Unknown'} · {fmtSASTshort(n.created_at)}
+            </div>
+          </div>
+        ))}
         {isOpen && (
           <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
             <textarea
@@ -1062,6 +1124,13 @@ export default function WorkshopJobCard() {
                   ...f,
                   item_type: 'part',
                   description: `${r.part_number} — ${r.description}`,
+                  // The dealer list's price comes with the part. It was left
+                  // at zero, so a technician had to know a price the
+                  // catalogue was already holding — and a line at R0 makes
+                  // the quote wrong rather than merely incomplete. Still
+                  // editable: what was paid can differ from the list.
+                  unit_cost: r.price_ex_vat != null ? Number(r.price_ex_vat) : f.unit_cost,
+                  part_number: r.part_number,
                 }))}
               />
               {/* Only one popover at a time, or they stack. */}

@@ -71,15 +71,34 @@ async function photosForPart({ make, model, partNumber, db = pgDb }) {
   return byKey[partKey(partNumber)] || [];
 }
 
-async function addPhoto({ make, model, partNumber, filePath, originalName, caption, userId, db = pgDb }) {
+/**
+ * File a photograph against a part.
+ *
+ * `clientRequestId` is set by a phone replaying an upload it queued while
+ * offline. The same id twice stores one photograph: a request that reached
+ * the server and lost its reply looks exactly like one that never arrived,
+ * and the unique index is what tells them apart rather than a check that
+ * somebody has to remember to write.
+ */
+async function addPhoto({ make, model, partNumber, filePath, originalName, caption, userId, clientRequestId = null, db = pgDb }) {
   const key = partKey(partNumber);
   if (!key) throw new Error('A part number is needed to file a photograph against');
 
   const { rows } = await db.query(
-    `INSERT INTO part_photos (make, model, part_number, part_number_key, file_path, original_name, caption, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-    [make, model, String(partNumber).toUpperCase(), key, filePath, originalName || null, caption || null, userId || null]);
-  return shape(rows[0]);
+    `INSERT INTO part_photos (make, model, part_number, part_number_key, file_path, original_name, caption, created_by, client_request_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+     ON CONFLICT (client_request_id) WHERE client_request_id IS NOT NULL DO NOTHING
+     RETURNING *`,
+    [make, model, String(partNumber).toUpperCase(), key, filePath, originalName || null, caption || null, userId || null, clientRequestId]);
+
+  if (rows[0]) return shape(rows[0]);
+
+  // Nothing inserted means this exact upload is already stored. Hand back what
+  // is there, so the phone sees the success it actually got.
+  const { rows: existing } = await db.query(
+    'SELECT * FROM part_photos WHERE client_request_id = $1', [clientRequestId]);
+  if (!existing[0]) throw new Error('Could not store that photograph');
+  return shape(existing[0]);
 }
 
 async function deletePhoto(id, db = pgDb) {

@@ -82,6 +82,14 @@ function workshopOnly(req, res, next) {
   next();
 }
 
+// The id a phone generates before its first attempt and keeps across every
+// retry, so a replayed write is recognisable as the same write. Absent on
+// anything typed at a desk, which is why the unique indexes are partial.
+function clientRequestId(req) {
+  const raw = String(req.body?.client_request_id || req.get('X-Client-Request-Id') || '').trim();
+  return raw.slice(0, 100) || null;
+}
+
 function toInt(value) {
   const n = parseInt(value, 10);
   return Number.isFinite(n) && n > 0 ? n : null;
@@ -118,8 +126,12 @@ async function getJobCard(id) {
   if (!card) return null;
 
   const { rows: items } = await pgDb.query(`SELECT * FROM job_card_items WHERE job_card_id = $1 ORDER BY id ASC`, [id]);
+  const { rows: notes } = await pgDb.query(
+    `SELECT n.id, n.note, n.created_at, u.full_name AS author
+       FROM job_card_notes n LEFT JOIN users u ON u.id = n.created_by
+      WHERE n.job_card_id = $1 ORDER BY n.created_at ASC`, [id]);
   const total_cost = items.reduce((sum, item) => sum + Number(item.quantity) * Number(item.unit_cost), 0);
-  return { ...card, items, total_cost: +total_cost.toFixed(2) };
+  return { ...card, items, notes, total_cost: +total_cost.toFixed(2) };
 }
 
 // Dashboard
@@ -387,6 +399,7 @@ router.post('/part-photos', authRequired, workshopOnly, partPhotoUpload.single('
       originalName: req.file.originalname,
       caption: String(req.body.caption || '').trim() || null,
       userId: req.user.id,
+      clientRequestId: clientRequestId(req),
     });
     res.json({ photo });
   } catch (error) {
@@ -639,11 +652,19 @@ router.post('/job-cards/:id/items', authRequired, workshopOnly, async (req, res)
 
     // The catalogue part number travels with the line, so what was fitted can
     // be matched to the price list — and ordered from it.
+    //
+    // client_request_id is set by a phone replaying a write it queued while
+    // offline. ON CONFLICT DO NOTHING makes the second attempt a no-op rather
+    // than a second oil filter: a request that reached the server and lost its
+    // reply is indistinguishable from one that never arrived, and only the
+    // database can tell them apart.
     await pgDb.query(
-      `INSERT INTO job_card_items (job_card_id, item_type, description, quantity, unit_cost, part_number)
-       VALUES ($1,$2,$3,$4,$5,$6)`,
+      `INSERT INTO job_card_items (job_card_id, item_type, description, quantity, unit_cost, part_number, client_request_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT (client_request_id) WHERE client_request_id IS NOT NULL DO NOTHING`,
       [id, req.body.item_type || 'labor', req.body.description, Number(req.body.quantity) || 1,
-        Number(req.body.unit_cost) || 0, String(req.body.part_number || '').trim() || null]);
+        Number(req.body.unit_cost) || 0, String(req.body.part_number || '').trim() || null,
+        clientRequestId(req)]);
 
     res.json({ ok: true, job_card: await getJobCard(id) });
   } catch (error) {
@@ -1356,8 +1377,21 @@ router.post('/job-cards/:id/notes', authRequired, workshopOnly, async (req, res)
     if (!cardRows[0]) return res.status(404).json({ error: 'Job card not found' });
     const note = String(req.body.note || '').trim();
     if (!note) return res.status(400).json({ error: 'Note is required' });
+
+    // The note is stored, which it previously was not: this wrote an audit
+    // line and nothing else, so what a technician typed never reached the job
+    // card. The audit entry is kept — it is still the record of who said what
+    // — but the note itself now lives on the card where it was meant to.
+    await pgDb.query(
+      `INSERT INTO job_card_notes (job_card_id, note, created_by, client_request_id)
+       VALUES ($1,$2,$3,$4)
+       ON CONFLICT (client_request_id) WHERE client_request_id IS NOT NULL DO NOTHING`,
+      [id, note, req.user.id, clientRequestId(req)]);
     await logAudit(req.user.id, 'job_card.technician_note', id, { note, actor: req.user.full_name || req.user.email });
-    res.json({ ok: true });
+
+    // And the card comes back, because the browser replaces its copy with
+    // whatever this returns — answering {ok:true} blanked the page.
+    res.json({ ok: true, job_card: await getJobCard(id) });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -1406,9 +1440,21 @@ router.post('/job-cards/:id/photos', authRequired, workshopOnly, photoUpload.sin
     if (!cardRows[0]) { await cleanupUploadedPhoto(req.file); return res.status(404).json({ error: 'Job card not found' }); }
     if (!req.file) return res.status(400).json({ error: 'No photo uploaded' });
     const caption = String(req.body.caption || '').trim();
-    const { rows: insertedRows } = await pgDb.query(`INSERT INTO job_card_photos (job_card_id, file_path, original_name, caption, created_by) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-      [id, req.file.filename, req.file.originalname, caption || null, req.user.id]);
-    const { rows: photoRows } = await pgDb.query('SELECT * FROM job_card_photos WHERE id = $1', [insertedRows[0].id]);
+    const requestId = clientRequestId(req);
+    const { rows: insertedRows } = await pgDb.query(
+      `INSERT INTO job_card_photos (job_card_id, file_path, original_name, caption, created_by, client_request_id)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (client_request_id) WHERE client_request_id IS NOT NULL DO NOTHING
+       RETURNING id`,
+      [id, req.file.filename, req.file.originalname, caption || null, req.user.id, requestId]);
+
+    // No row back means this photo was already stored under the same request
+    // id — a replay. Answer with what is there rather than an error: as far as
+    // the phone is concerned the upload succeeded, which it did, once.
+    const photoId = insertedRows[0]?.id
+      ?? (await pgDb.query('SELECT id FROM job_card_photos WHERE client_request_id = $1', [requestId])).rows[0]?.id;
+    if (!photoId) return res.status(500).json({ error: 'Could not store that photo' });
+    const { rows: photoRows } = await pgDb.query('SELECT * FROM job_card_photos WHERE id = $1', [photoId]);
     const photo = photoRows[0];
     res.json({ ok: true, photo: { ...photo, url: photoUrl(photo.file_path) } });
   } catch (error) {

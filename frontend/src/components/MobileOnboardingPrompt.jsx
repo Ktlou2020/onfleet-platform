@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { Download, PlusSquare, Smartphone, Bell, BellOff, X } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -11,6 +11,10 @@ const INSTALL_DISMISS_KEY = 'of_install_prompt_dismissed_at';
 const INSTALLED_KEY = 'of_app_installed';
 const PUSH_DISMISS_KEY = 'of_push_prompt_dismissed_at';
 const DISMISS_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+// Long enough that the page they asked for is on screen and read, short
+// enough that the prompt still gets seen in a normal session.
+const SETTLE_MS = 8000;
 
 function isStandaloneMode() {
   if (typeof window === 'undefined') return false;
@@ -39,6 +43,9 @@ export default function MobileOnboardingPrompt() {
   const [pushBusy, setPushBusy] = useState(false);
   const [pushState, setPushState] = useState({ supported: false, subscribed: false, permission: 'default' });
   const [dismissTick, setDismissTick] = useState(0);
+  // Whether the person has had a chance to do what they opened the app for.
+  const [settled, setSettled] = useState(false);
+  const [moved, setMoved] = useState(false);
 
   const mobile = useMemo(() => isMobileDevice(), []);
   const iosMode = useMemo(() => isIosSafari(), []);
@@ -67,7 +74,29 @@ export default function MobileOnboardingPrompt() {
     getPushSubscriptionState().then(setPushState).catch(() => {});
   }, [user, dismissTick]);
 
+  // Do not interrupt the first thing somebody does.
+  //
+  // This is a full-screen sheet, and it used to appear the moment a mobile
+  // user was authenticated — so a technician opening a job card at the bike
+  // got "Add to your Home Screen" over the top of the job card. Asking is
+  // fine; asking before they have reached what they came for is not.
+  //
+  // So it waits for both: a few seconds settled, and one deliberate
+  // navigation. Together those mean the app is in use rather than loading.
+  useEffect(() => {
+    const t = setTimeout(() => setSettled(true), SETTLE_MS);
+    return () => clearTimeout(t);
+  }, []);
+
+  // A ref rather than state: this is the path the session started on and must
+  // never change, which is exactly what a ref says and a memo only implies.
+  const firstPath = useRef(location.pathname);
+  useEffect(() => {
+    if (location.pathname !== firstPath.current) setMoved(true);
+  }, [location.pathname]);
+
   if (!user || !mobile) return null;
+  if (!settled || !moved) return null;
 
   if (standalone) localStorage.setItem(INSTALLED_KEY, '1');
 

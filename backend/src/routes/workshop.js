@@ -11,6 +11,7 @@ const UPLOAD_DIRS = require('../uploadPaths');
 const asyncRouter = require('../utils/asyncRouter');
 const { hybridStorage } = require('../utils/hybridStorage');
 const storageService = require('../services/storageService');
+const deviceCommissioning = require('../services/deviceCommissioning');
 const router = asyncRouter(express.Router());
 
 // job_card_photos.file_path holds an absolute disk path for photos uploaded
@@ -308,6 +309,68 @@ router.post('/job-cards', authRequired, workshopOnly, async (req, res) => {
 });
 
 // Get job card detail
+// Is the tracker on this bike actually working?
+//
+// A technician fits a tracker and has no way to find out whether it reached
+// the server, got a fix, or picked up the ignition wire — the commissioning
+// checks exist, but they live behind the tracking routes, and technicians are
+// deliberately barred from those. Finding out a unit was dead is not supposed
+// to happen weeks later when a bike goes missing.
+//
+// So this is a deliberately narrow hole in that wall, and the shape of it is
+// the point: the technician names a JOB CARD, not a device. They can only ask
+// about a bike that is in front of them with work open on it, which is the
+// only case where they have any business asking. There is no way to walk this
+// route to an arbitrary bike, and it answers with the checks alone — not the
+// trip history, not the live map, not the commissioning sign-off, which is
+// somebody else's decision to record.
+router.get('/job-cards/:id/tracker-check', authRequired, workshopOnly, async (req, res) => {
+  try {
+    const id = toInt(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Job card not found' });
+
+    const { rows: cardRows } = await pgDb.query(
+      'SELECT id, bike_id, registration, status FROM job_cards WHERE id = $1', [id]);
+    const card = cardRows[0];
+    if (!card) return res.status(404).json({ error: 'Job card not found' });
+
+    // A finished job is no longer a reason to be looking at a bike's tracker.
+    if (['completed', 'cancelled'].includes(card.status)) {
+      return res.status(403).json({ error: 'This job card is closed' });
+    }
+    if (!card.bike_id) {
+      return res.status(400).json({ error: 'This job card is not linked to a bike on the system yet' });
+    }
+
+    const { rows: deviceRows } = await pgDb.query(
+      'SELECT id FROM tracking_devices WHERE bike_id = $1 ORDER BY id LIMIT 1', [card.bike_id]);
+    if (!deviceRows[0]) {
+      return res.json({
+        has_device: false,
+        message: `No tracker is registered against ${card.registration || 'this bike'} yet. An admin registers the unit before it can be checked.`,
+      });
+    }
+
+    const result = await deviceCommissioning.runChecks(deviceRows[0].id);
+    if (!result) return res.json({ has_device: false, message: 'No tracker is registered against this bike yet.' });
+
+    res.json({
+      has_device: true,
+      ready: result.ready,
+      checks: result.checks,
+      // Enough to be sure it is the unit in their hand, and no more.
+      device: {
+        imei: result.device.imei,
+        model: result.device.model,
+        registration: result.device.registration,
+        last_seen_at: result.device.last_seen_at,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.get('/job-cards/:id', authRequired, workshopOnly, async (req, res) => {
   try {
     const card = await getJobCard(toInt(req.params.id));

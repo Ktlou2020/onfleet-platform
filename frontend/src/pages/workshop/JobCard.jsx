@@ -4,6 +4,7 @@
 // ends the surrounding <script> tag at that point and the print JS breaks.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import ServicePlan from '../../components/ServicePlan';
+import TrackerCheck from '../../components/TrackerCheck';
 import { useParams, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { ArrowLeft, Plus, Pencil, Trash2, Clock, ChevronDown, ChevronRight, Printer, FileText, Pause, Play, Camera, Image, CheckCircle } from 'lucide-react';
@@ -658,6 +659,13 @@ export default function WorkshopJobCard() {
               onAddPart={addScheduledPart}
             />
           </div>
+        )}
+
+        {/* Whether the tracker on this bike is reporting. Asked on demand from
+            the job card, which is also the only thing that entitles a
+            technician to ask — see the route's own comment. */}
+        {hasBike && card.status !== 'completed' && card.status !== 'cancelled' && (
+          <TrackerCheck jobCardId={card.id} />
         )}
 
         {/* Job details card */}

@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../auth';
 import { isMobileDevice } from '../deviceDetect';
 import { enablePush, getPushSubscriptionState, isPushSupported } from '../pushSubscribe';
+import { brandName } from '../brand';
 
 const INSTALL_DISMISS_KEY = 'of_install_prompt_dismissed_at';
 const INSTALLED_KEY = 'of_app_installed';
@@ -139,7 +140,7 @@ export default function MobileOnboardingPrompt() {
             <div className="badge badge-info">Recommended</div>
           </div>
 
-          <h2 id="install-prompt-title">Add OnFleet to your Home Screen</h2>
+          <h2 id="install-prompt-title">Add {brandName} to your Home Screen</h2>
           <p className="muted">
             Get faster access, an app-like full-screen experience, and a shortcut you can open in one tap after login.
           </p>
@@ -148,7 +149,7 @@ export default function MobileOnboardingPrompt() {
             <div className="install-prompt-steps">
               <div className="install-step"><span>1</span> Tap <strong>Share</strong> in Safari.</div>
               <div className="install-step"><span>2</span> Choose <strong>Add to Home Screen</strong>.</div>
-              <div className="install-step"><span>3</span> Tap <strong>Add</strong> to save OnFleet on your phone.</div>
+              <div className="install-step"><span>3</span> Tap <strong>Add</strong> to save {brandName} on your phone.</div>
             </div>
           ) : (
             <button type="button" className="btn btn-block install-prompt-action" onClick={handleInstall} disabled={installing || !deferredPrompt}>

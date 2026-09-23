@@ -29,6 +29,7 @@ const { sendSms, detectSmsProvider, toE164 } = require('./smsProvider');
 const { alertContact } = require('./alertContact');
 
 const { ROUNDS_AT_MINUTES, MAX_ROUNDS, WEBHOOK_FROM_ROUND } = require('../constants/alertEscalation');
+const { brand } = require('../brand');
 
 const CRITICAL_TYPES = ['panic', 'tamper', 'power_disconnect', 'movement', 'night_movement', 'towing', 'danger_zone_enter'];
 
@@ -105,7 +106,7 @@ async function escalateOnce(alert) {
   const title = `⏰ Still unacknowledged (${round}): ${label} — ${reg}`;
   const message = `${label} on ${reg} was raised ${minutesAgo} minutes ago (${alert.created_at}) and nobody has acknowledged it.\n\n`
     + `Open the control room to acknowledge or close it. This is escalation ${round} of ${MAX_ROUNDS}.`;
-  const sms = `OnFleet ALERT ${round}/${MAX_ROUNDS}: ${label} on ${reg}, ${minutesAgo} min unacknowledged. Open the control room.`;
+  const sms = `${brand.name} ALERT ${round}/${MAX_ROUNDS}: ${label} on ${reg}, ${minutesAgo} min unacknowledged. Open the control room.`;
 
   // Claim the round before sending, so two instances can't both page everyone.
   const { rowCount } = await pgDb.query(

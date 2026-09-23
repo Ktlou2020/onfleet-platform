@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import api from '../api';
 import Logo from '../components/Logo';
 import { trackAnalyticsEvent } from '../analytics';
+import { brandName } from '../brand';
 
 export default function ForgotPassword() {
   const [email, setEmail] = useState('');
@@ -34,7 +35,7 @@ export default function ForgotPassword() {
       <div className="auth-hero">
         <Logo size="lg" />
         <div>
-          <div className="auth-tagline">Reset your<br /><span>OnFleet password.</span></div>
+          <div className="auth-tagline">Reset your<br /><span>{brandName} password.</span></div>
           <p className="muted" style={{ maxWidth: 420 }}>Enter the email address linked to your account and we will send you a secure reset link.</p>
         </div>
         <div className="muted text-sm">Secure password recovery</div>
@@ -52,7 +53,7 @@ export default function ForgotPassword() {
         </form>
         {sent && (
           <div className="card mt-6" style={{ background: 'var(--surface-2)' }}>
-            <div className="text-sm"><strong>Check your email.</strong> If the address exists in OnFleet, a reset link is on its way.</div>
+            <div className="text-sm"><strong>Check your email.</strong> If the address exists in {brandName}, a reset link is on its way.</div>
           </div>
         )}
         <div className="mt-4 muted text-sm" style={{ textAlign: 'center' }}>

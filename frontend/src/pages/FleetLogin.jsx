@@ -5,6 +5,7 @@ import { Briefcase, CreditCard, ShieldCheck, Users } from 'lucide-react';
 import Logo from '../components/Logo';
 import { useAuth } from '../auth';
 import { trackAnalyticsEvent } from '../analytics';
+import { brandFullName, brandName } from '../brand';
 
 export default function FleetLogin() {
   const { login, logout } = useAuth();
@@ -50,12 +51,12 @@ export default function FleetLogin() {
             <div className="feat"><div className="ico"><CreditCard size={16} /></div><div><strong>Trial and billing</strong><div className="muted text-sm">14-day trial with Paystack-ready billing status</div></div></div>
           </div>
         </div>
-        <div className="muted text-sm">© OnFleet Africa · Fleet Owner Portal</div>
+        <div className="muted text-sm">© {brandFullName} · Fleet Owner Portal</div>
       </div>
 
       <div className="auth-form">
         <h1>Fleet-owner sign in</h1>
-        <div className="sub">Use your company account to access the OnFleet fleet-owner workspace.</div>
+        <div className="sub">Use your company account to access the {brandName} fleet-owner workspace.</div>
         <form onSubmit={submit}>
           <div className="field"><label className="label">Work email</label><input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="ops@company.com" /></div>
           <div className="field"><label className="label">Password</label><input type="password" required value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" /></div>

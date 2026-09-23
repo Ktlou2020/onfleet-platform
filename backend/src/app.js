@@ -9,7 +9,7 @@ const fs = require('fs');
 const rateLimit = require('express-rate-limit');
 
 const UPLOAD_DIRS = require('./uploadPaths');
-const { brand, isDefault, manifestFor } = require('./brand');
+const { brand, isDefault, manifestFor, brandScriptTag } = require('./brand');
 const uploadRoots = [
   UPLOAD_DIRS.base,
   path.join(__dirname, '../uploads'),
@@ -98,7 +98,10 @@ function injectBrandHead(html) {
     .replace(/<link rel="icon"[^>]*>/i, `<link rel="icon" type="image/png" href="${escapeHtml(brand.icon)}" />`)
     .replace(/<link rel="apple-touch-icon"[^>]*>/i, `<link rel="apple-touch-icon" href="${escapeHtml(brand.icon180 || brand.icon)}" />`)
     .replace(/<meta name="apple-mobile-web-app-title" content="[^"]*"\s*\/>/i, `<meta name="apple-mobile-web-app-title" content="${escapeHtml(brand.name)}" />`)
-    .replace(/<meta name="theme-color" content="[^"]*"\s*\/>/i, `<meta name="theme-color" content="${escapeHtml(brand.themeColor)}" />`);
+    .replace(/<meta name="theme-color" content="[^"]*"\s*\/>/i, `<meta name="theme-color" content="${escapeHtml(brand.themeColor)}" />`)
+    // Carried in the page rather than fetched, so the first paint already has
+    // the right name and nothing flashes "OnFleet" on the way to "Pillion".
+    .replace(/<\/head>/i, `${brandScriptTag()}</head>`);
 }
 
 // Builds a fully-wired Express app (all middleware + routes), but never binds a

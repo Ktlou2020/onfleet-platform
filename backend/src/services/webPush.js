@@ -9,6 +9,7 @@
 
 const webpush = require('web-push');
 const pgDb = require('../pgDb');
+const { brand } = require('../brand');
 
 const publicKey = process.env.PUSH_VAPID_PUBLIC_KEY || '';
 const privateKey = process.env.PUSH_VAPID_PRIVATE_KEY || '';
@@ -31,7 +32,7 @@ async function sendPushToUser(userId, { title, body, url }) {
   const { rows: subs } = await pgDb.query('SELECT * FROM push_subscriptions WHERE user_id = $1', [userId]);
   if (!subs.length) return;
 
-  const payload = JSON.stringify({ title: title || 'OnFleet', body: body || '', url: url || '/' });
+  const payload = JSON.stringify({ title: title || brand.name, body: body || '', url: url || '/' });
 
   await Promise.all(subs.map(async (sub) => {
     try {

@@ -3,6 +3,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { LayoutDashboard, ClipboardList, LogOut, Wrench , Package , BookOpen } from 'lucide-react';
 import { useAuth } from '../../auth';
 import api from '../../api';
+import { brandFullName } from '../../brand';
 
 export default function WorkshopShell() {
   const { user, logout } = useAuth();
@@ -73,7 +74,7 @@ export default function WorkshopShell() {
       </nav>
       <div className="main">
         <div className="topbar" style={{ gap: 16 }}>
-          <div className="text-sm muted">Workshop · OnFleet Africa</div>
+          <div className="text-sm muted">Workshop · {brandFullName}</div>
           <div className="text-xs muted hide-mobile" style={{ marginLeft: 'auto' }}>Logged in as <strong>{user?.email}</strong></div>
         </div>
         <div className="content">

@@ -14,6 +14,7 @@
 
 const pgDb = require('../pgDb');
 const { sendNotification } = require('./notifierPg');
+const { brand } = require('../brand');
 
 // The rider on the bike's active agreement. Returns null for unallocated stock
 // (no agreement) — nobody to tell, which is a normal case, not an error.
@@ -48,8 +49,8 @@ async function notifyRiderEngineState(bikeId, state, { reason = null, automatic 
     : 'This was done by the fleet team.';
 
   const message = cut
-    ? `Your bike ${bikeLabel} has been immobilised and will not start.\n\n${why}\n\nPlease do not attempt to restart or tamper with the bike. Contact your fleet manager to resolve this — you can reach them from the Dashboard in your OnFleet app.`
-    : `Good news — your bike ${bikeLabel} has been re-enabled and can be started again.\n\n${why}\n\nIf it still won't start, contact your fleet manager from the Dashboard in your OnFleet app.`;
+    ? `Your bike ${bikeLabel} has been immobilised and will not start.\n\n${why}\n\nPlease do not attempt to restart or tamper with the bike. Contact your fleet manager to resolve this — you can reach them from the Dashboard in your ${brand.name} app.`
+    : `Good news — your bike ${bikeLabel} has been re-enabled and can be started again.\n\n${why}\n\nIf it still won't start, contact your fleet manager from the Dashboard in your ${brand.name} app.`;
 
   return sendNotification({
     userId: rider.user_id,

@@ -5,6 +5,7 @@ const pgDb = require('../pgDb');
 // still depend on those).
 const { sendNotification } = require('./notifierPg');
 const { recalcScheduleStatuses } = require('../utils/helpersPg');
+const { brand } = require('../brand');
 
 function creditedAmount(payment) {
   return Number(payment?.amount ?? payment?.net_amount ?? 0);
@@ -125,7 +126,7 @@ async function runMonthlyStatements(statementMonth = previousMonthKey()) {
     const message = [
       `Hi ${firstName},`,
       '',
-      `Your OnFleet monthly statement for ${statementMonth} is ready.`,
+      `Your ${brand.name} monthly statement for ${statementMonth} is ready.`,
       `Bike: ${bikeName} (${bikeRef})`,
       `Agreement: ${snapshot.agreement.agreement_no}`,
       `Paid this month: R${snapshot.paidThisMonth.toFixed(2)} (${snapshot.paymentCount} payment${snapshot.paymentCount === 1 ? '' : 's'})`,
@@ -215,7 +216,7 @@ async function runDailyReminders() {
     if (!d.amount_due || !Number.isFinite(Number(d.amount_due))) continue;
     const title = `Payment due tomorrow · ${d.agreement_no}`;
     if (await notificationExistsToday(d.user_id, 'payment_reminder', title)) continue;
-    const msg = `Hi ${d.full_name.split(' ')[0]}, your weekly OnFleet payment of R${Number(d.amount_due).toFixed(2)} for agreement ${d.agreement_no} is due tomorrow (${d.due_date}). Pay via the app to keep your rent-to-own on track.`;
+    const msg = `Hi ${d.full_name.split(' ')[0]}, your weekly ${brand.name} payment of R${Number(d.amount_due).toFixed(2)} for agreement ${d.agreement_no} is due tomorrow (${d.due_date}). Pay via the app to keep your rent-to-own on track.`;
     try {
       await sendNotification({
         userId: d.user_id, channel: 'whatsapp', type: 'payment_reminder', title, message: msg,
@@ -227,7 +228,7 @@ async function runDailyReminders() {
         },
       });
       await sendNotification({ userId: d.user_id, channel: 'sms', type: 'payment_reminder', message: msg });
-      await sendNotification({ userId: d.user_id, channel: 'email', type: 'payment_reminder', title: 'OnFleet payment due tomorrow', message: msg });
+      await sendNotification({ userId: d.user_id, channel: 'email', type: 'payment_reminder', title: `${brand.name} payment due tomorrow`, message: msg });
     } catch (err) {
       console.error(`[daily-reminder] due-tomorrow failed for ${d.agreement_no}:`, err.message);
     }
@@ -261,7 +262,7 @@ async function runDailyReminders() {
     if (await notificationExistsToday(entry.user_id, 'payment_overdue', title)) continue;
     const owed = Number(entry.totalOwed).toFixed(2);
     const weeksText = entry.overdueWeeks > 1 ? ` (${entry.overdueWeeks} weeks overdue)` : '';
-    const msg = `URGENT: OnFleet payment of R${owed}${weeksText} for ${entry.agreement_no} is overdue. Please pay immediately to avoid agreement default.`;
+    const msg = `URGENT: ${brand.name} payment of R${owed}${weeksText} for ${entry.agreement_no} is overdue. Please pay immediately to avoid agreement default.`;
     try {
       await sendNotification({
         userId: entry.user_id, channel: 'whatsapp', type: 'payment_overdue', title, message: msg,
@@ -341,7 +342,7 @@ async function runFleetServiceReminders() {
       return `  • ${label} (${b.make} ${b.model}) — ${describe(b)}${flag}`;
     }).join('\n');
 
-    const body = `Hi [name],\n\n${orgName} has ${orgBikes.length} bike${orgBikes.length !== 1 ? 's' : ''} due for service${overdue.length ? ` (${overdue.length} overdue)` : ''}:\n\n${bikeLines}\n\nBasic service is R275 per bike. Please contact us to book your service appointments.\n\nOnFleet Africa Workshop`;
+    const body = `Hi [name],\n\n${orgName} has ${orgBikes.length} bike${orgBikes.length !== 1 ? 's' : ''} due for service${overdue.length ? ` (${overdue.length} overdue)` : ''}:\n\n${bikeLines}\n\nBasic service is R275 per bike. Please contact us to book your service appointments.\n\n${brand.fullName} Workshop`;
 
     for (const admin of admins) {
       if (await notificationExistsToday(admin.id, 'fleet_service_reminder', title)) continue;

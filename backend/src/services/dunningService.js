@@ -14,6 +14,7 @@
 const pgDb = require('../pgDb');
 const { sendNotification } = require('./notifierPg');
 const { logAudit } = require('../utils/helpersPg');
+const { brand } = require('../brand');
 
 const STAGE_ORDER = ['pending', 'contacted', 'notice_sent', 'recovery', 'resolved'];
 
@@ -84,8 +85,8 @@ async function runAutomatedDunning() {
         const { rows: riderRows } = await pgDb.query(`SELECT full_name FROM users WHERE id = $1`, [row.user_id]);
         const firstName = (riderRows[0]?.full_name || 'there').split(' ')[0];
         const message = targetStage === 'notice_sent'
-          ? `URGENT NOTICE: Hi ${firstName}, your OnFleet agreement ${row.agreement_no} is ${daysOverdue} days overdue (R${owed} owed). Please settle immediately to avoid further action.`
-          : `Hi ${firstName}, your OnFleet agreement ${row.agreement_no} is ${daysOverdue} days overdue (R${owed} owed). Please make payment as soon as possible.`;
+          ? `URGENT NOTICE: Hi ${firstName}, your ${brand.name} agreement ${row.agreement_no} is ${daysOverdue} days overdue (R${owed} owed). Please settle immediately to avoid further action.`
+          : `Hi ${firstName}, your ${brand.name} agreement ${row.agreement_no} is ${daysOverdue} days overdue (R${owed} owed). Please make payment as soon as possible.`;
         await sendNotification({ userId: row.user_id, channel: 'whatsapp', type: 'collections_escalation', message }).catch(() => {});
       }
 

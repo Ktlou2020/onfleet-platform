@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import api from '../api';
 import Logo from '../components/Logo';
 import { trackAnalyticsEvent } from '../analytics';
+import { brandName } from '../brand';
 
 export default function ResetPassword() {
   const [params] = useSearchParams();
@@ -52,7 +53,7 @@ export default function ResetPassword() {
         <Logo size="lg" />
         <div>
           <div className="auth-tagline">Choose a new<br /><span>secure password.</span></div>
-          <p className="muted" style={{ maxWidth: 420 }}>This reset link lets you create a fresh password for your OnFleet account.</p>
+          <p className="muted" style={{ maxWidth: 420 }}>This reset link lets you create a fresh password for your {brandName} account.</p>
         </div>
         <div className="muted text-sm">Password reset</div>
       </div>

@@ -4,6 +4,7 @@ import { useAuth } from '../auth';
 import toast from 'react-hot-toast';
 import Logo from '../components/Logo';
 import { Bike, ShieldCheck, MapPin } from 'lucide-react';
+import { brandFullName, brandName } from '../brand';
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -39,19 +40,19 @@ export default function Login() {
             <div className="feat"><div className="ico"><MapPin size={16} /></div><div><strong>Live bike tracking</strong><div className="muted text-sm">GPS on every bike</div></div></div>
           </div>
         </div>
-        <div className="muted text-sm">© OnFleet Africa</div>
+        <div className="muted text-sm">© {brandFullName}</div>
       </div>
 
       <div className="auth-form">
         <h1>Welcome back</h1>
-        <div className="sub">Sign in to access your secure OnFleet workspace.</div>
+        <div className="sub">Sign in to access your secure {brandName} workspace.</div>
         <form onSubmit={submit}>
           <div className="field"><label className="label">Email</label><input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" /></div>
           <div className="field"><label className="label">Password</label><input type="password" required value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" /></div>
           <button className="btn btn-block" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
         </form>
         <div className="mt-3 text-sm" style={{ textAlign: 'right' }}><Link to="/forgot-password">Forgot password?</Link></div>
-        <div className="mt-4 muted text-sm" style={{ textAlign: 'center' }}>New to OnFleet? <Link to="/signup">Create an account</Link></div>
+        <div className="mt-4 muted text-sm" style={{ textAlign: 'center' }}>New to {brandName}? <Link to="/signup">Create an account</Link></div>
         <div className="card mt-6" style={{ background: 'var(--surface-2)' }}>
           <div className="text-sm"><strong>Secure access only.</strong> Rider and admin credentials are no longer displayed on the login screen.</div>
           <div className="muted text-sm mt-2">If you need admin access, contact the platform owner to provision your account.</div>

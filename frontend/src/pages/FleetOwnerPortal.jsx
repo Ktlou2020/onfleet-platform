@@ -6,6 +6,7 @@ import Logo from '../components/Logo';
 import api from '../api';
 import { useAuth } from '../auth';
 import { Badge, EmptyState, Loading, Modal, SearchInput, Stat, fmt, fmtDate, fmtDateTime, matchesSearch } from '../components/ui';
+import { brandFullName } from '../brand';
 
 const ROLE_LABELS = {
   fleet_owner_admin: 'Company admin',
@@ -352,7 +353,7 @@ export default function FleetOwnerPortal() {
 
       <div className="main">
         <div className="topbar" style={{ gap: 16 }}>
-          <div className="text-sm muted">Fleet management console · OnFleet Africa</div>
+          <div className="text-sm muted">Fleet management console · {brandFullName}</div>
           <div style={{ position: 'relative', width: 'min(520px, 100%)', marginLeft: 'auto' }}>
             <SearchInput value={navSearch} onChange={setNavSearch} placeholder="Search fleet tabs and press Enter" inputProps={{ onKeyDown: goToFirstNavMatch }} style={{ width: '100%' }} />
             {!!navSearch && (

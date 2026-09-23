@@ -25,6 +25,13 @@ const BRANDS = {
     name: 'OnFleet',
     fullName: 'OnFleet Africa',
     themeColor: '#1E88D1',
+    domain: 'portal.onfleet.africa',
+    portalUrl: 'https://portal.onfleet.africa',
+    // The words the emails sign off with. Kept beside the name so a brand is
+    // one object rather than a name here and a sign-off three files away.
+    emailAccent: '#93c5fd',
+    emailHeaderBg: '#1E3A5F',
+    emailKicker: 'Fleet Management',
     // The logo route is left alone for OnFleet, so this is the file the
     // frontend already ships and already asks for.
     logo: '/logo.png',
@@ -45,6 +52,11 @@ const BRANDS = {
     name: 'Pillion',
     fullName: 'Pillion',
     themeColor: '#0C4A5A',
+    domain: 'portal.pillion.co.za',
+    portalUrl: 'https://portal.pillion.co.za',
+    emailAccent: '#9BDCEE',
+    emailHeaderBg: '#0C4A5A',
+    emailKicker: 'Fleet Management',
     // Served by the brand routes out of frontend/public/brand, which Vite
     // copies into dist, so no Dockerfile or build change is involved.
     logo: '/brand/pillion-logo.png',
@@ -91,4 +103,26 @@ function manifestFor(b = brand) {
   };
 }
 
-module.exports = { brand, isDefault, BRANDS, manifestFor };
+/**
+ * What the frontend is allowed to know about the brand.
+ *
+ * Inlined into the page rather than fetched, so the first paint already has
+ * the right name — a logo that is correct and a sentence beside it that says
+ * OnFleet for one frame is worse than either.
+ */
+function publicBrand(b = brand) {
+  return { key: b.key, name: b.name, fullName: b.fullName, portalUrl: b.portalUrl, domain: b.domain };
+}
+
+/**
+ * The script tag that carries it. Empty for OnFleet, because the default
+ * deployment's HTML is not touched at all and the frontend already falls back
+ * to these values when the global is absent.
+ */
+function brandScriptTag() {
+  if (isDefault) return '';
+  return `<script>window.__BRAND__=${JSON.stringify(publicBrand())
+    .replace(/</g, '\\u003c')};</script>`;
+}
+
+module.exports = { brand, isDefault, BRANDS, manifestFor, publicBrand, brandScriptTag };

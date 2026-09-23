@@ -5,6 +5,7 @@ import { CheckCircle2, Clock } from 'lucide-react';
 import Logo from '../components/Logo';
 import { useAuth } from '../auth';
 import { trackAnalyticsEvent } from '../analytics';
+import { brandFullName, brandName } from '../brand';
 
 const TRIAL_PERKS = [
   '14 days free — no card required to start',
@@ -37,7 +38,7 @@ export default function FleetSignup() {
     try {
       trackAnalyticsEvent('fleet_signup_submit_attempt', { fleet_size: Number(form.fleet_size || 0) || 0 });
       await signupFleet({ ...form, fleet_size: Number(form.fleet_size || 0) || 0 });
-      toast.success(`Welcome to OnFleet! Your 14-day trial has started.`);
+      toast.success(`Welcome to ${brandName}! Your 14-day trial has started.`);
       nav('/fleet/app');
     } catch (error) {
       toast.error(error.response?.data?.error || 'Could not create account — please try again.');
@@ -68,7 +69,7 @@ export default function FleetSignup() {
             <div className="text-sm">After your 14-day trial, choose a plan starting from <strong>R200/month</strong> to keep your fleet running.</div>
           </div>
         </div>
-        <div className="muted text-sm">© OnFleet Africa · Fleet Owner Portal</div>
+        <div className="muted text-sm">© {brandFullName} · Fleet Owner Portal</div>
       </div>
 
       <div className="auth-form">
@@ -115,7 +116,7 @@ export default function FleetSignup() {
           Already have an account? <Link to="/fleet/login">Sign in</Link>
         </div>
         <div className="muted text-xs mt-4" style={{ textAlign: 'center' }}>
-          By signing up you agree to OnFleet's <Link to="/terms">Terms</Link> and <Link to="/privacy">Privacy Policy</Link>.
+          By signing up you agree to the <Link to="/terms">Terms</Link> and <Link to="/privacy">Privacy Policy</Link>.
         </div>
       </div>
     </div>

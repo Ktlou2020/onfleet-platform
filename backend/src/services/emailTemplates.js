@@ -1,13 +1,18 @@
 'use strict';
 
+const { brand } = require('../brand');
+
 // ── Shared layout wrapper ─────────────────────────────────────────────────────
+//
+// The header, the footer and every sign-off read the brand rather than naming
+// it, so a deployment that is not OnFleet does not sign its emails OnFleet.
 function layout({ preheader = '', body }) {
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>OnFleet</title>
+  <title>${brand.name}</title>
   <!--[if mso]><style>td,th,div,p,a,h1,h2,h3,h4,h5,h6{font-family:Arial,sans-serif!important}</style><![endif]-->
 </head>
 <body style="margin:0;padding:0;background:#f4f6f9;font-family:Arial,Helvetica,sans-serif;-webkit-text-size-adjust:100%">
@@ -17,9 +22,9 @@ function layout({ preheader = '', body }) {
       <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 16px rgba(0,0,0,.08)">
         <!-- Header -->
         <tr>
-          <td style="background:#1E3A5F;padding:24px 32px">
-            <span style="font-size:22px;font-weight:700;color:#ffffff;letter-spacing:-.3px">OnFleet</span>
-            <span style="font-size:13px;color:#93c5fd;margin-left:8px">Fleet Management</span>
+          <td style="background:${brand.emailHeaderBg};padding:24px 32px">
+            <span style="font-size:22px;font-weight:700;color:#ffffff;letter-spacing:-.3px">${brand.name}</span>
+            <span style="font-size:13px;color:${brand.emailAccent};margin-left:8px">${brand.emailKicker}</span>
           </td>
         </tr>
         <!-- Body -->
@@ -31,8 +36,8 @@ function layout({ preheader = '', body }) {
         <!-- Footer -->
         <tr>
           <td style="background:#f4f6f9;padding:20px 32px;border-top:1px solid #e5e7eb;font-size:12px;color:#6b7280;line-height:1.6">
-            OnFleet Africa &nbsp;·&nbsp; <a href="https://portal.onfleet.africa" style="color:#1E3A5F;text-decoration:none">portal.onfleet.africa</a>
-            <br />You're receiving this because you registered for an OnFleet trial.
+            ${brand.fullName} &nbsp;·&nbsp; <a href="${brand.portalUrl}" style="color:${brand.emailHeaderBg};text-decoration:none">${brand.domain}</a>
+            <br />You're receiving this because you registered for a ${brand.name} trial.
             If this email reached you in error, please ignore it.
           </td>
         </tr>
@@ -58,19 +63,19 @@ function divider() {
 // ── Templates ─────────────────────────────────────────────────────────────────
 
 const BOOKING_URL = 'https://calendar.app.google/gL1v9a5bj7rxgbHV8';
-const PORTAL_URL  = 'https://portal.onfleet.africa/fleet/login';
-const PRICING_URL = 'https://portal.onfleet.africa/#pricing';
+const PORTAL_URL  = `${brand.portalUrl}/fleet/login`;
+const PRICING_URL = `${brand.portalUrl}/#pricing`;
 
 const TEMPLATES = {
 
   demo_invite: {
     label: 'Demo / call invite',
-    subject: (org) => `Quick 15-min call about your OnFleet account, ${org.name}?`,
+    subject: (org) => `Quick 15-min call about your ${brand.name} account, ${org.name}?`,
     html: (org) => layout({
-      preheader: "We'd love to show you what OnFleet can do for your fleet in 15 minutes.",
+      preheader: `We'd love to show you what ${brand.name} can do for your fleet in 15 minutes.`,
       body: `
         <p style="margin:0 0 16px">Hi ${org.contact_name || org.name},</p>
-        <p style="margin:0 0 16px">I noticed you've been exploring OnFleet — thank you for giving it a shot!</p>
+        <p style="margin:0 0 16px">I noticed you've been exploring ${brand.name} — thank you for giving it a shot!</p>
         <p style="margin:0 0 16px">I'd love to jump on a quick 15-minute call to walk you through the platform, answer any questions, and make sure you're getting the most out of it for your fleet.</p>
         <p style="margin:0 0 24px">No sales pressure — just a real conversation to see if we can help.</p>
         ${btn('Book a 15-min call →', BOOKING_URL)}
@@ -84,24 +89,24 @@ const TEMPLATES = {
           <li style="margin-bottom:6px">Collections queue and overdue management</li>
           <li>Reporting and wallet payouts</li>
         </ul>
-        <p style="margin:0">Looking forward to connecting!<br /><br /><strong>The OnFleet Team</strong></p>
+        <p style="margin:0">Looking forward to connecting!<br /><br /><strong>The ${brand.name} Team</strong></p>
       `
     })
   },
 
   trial_ending: {
     label: 'Trial ending soon',
-    subject: (org) => `Your OnFleet trial ends soon — don't lose access, ${org.name}`,
+    subject: (org) => `Your ${brand.name} trial ends soon — don't lose access, ${org.name}`,
     html: (org) => {
       const days = org.trial_ends_at
         ? Math.max(0, Math.round((new Date(org.trial_ends_at) - Date.now()) / 86400000))
         : null;
       const dayLabel = days !== null ? `in <strong>${days} day${days !== 1 ? 's' : ''}</strong>` : 'soon';
       return layout({
-        preheader: `Your OnFleet trial ends ${dayLabel}. Upgrade now to keep your fleet running.`,
+        preheader: `Your ${brand.name} trial ends ${dayLabel}. Upgrade now to keep your fleet running.`,
         body: `
           <p style="margin:0 0 16px">Hi ${org.contact_name || org.name},</p>
-          <p style="margin:0 0 16px">Just a heads-up — your OnFleet trial ends ${dayLabel}.</p>
+          <p style="margin:0 0 16px">Just a heads-up — your ${brand.name} trial ends ${dayLabel}.</p>
           <p style="margin:0 0 16px">After that, your fleet portal will become read-only and you won't be able to record payments or manage agreements. Upgrading takes less than 2 minutes.</p>
           ${btn('Upgrade my plan →', PRICING_URL)}
           <p style="margin:0 0 24px">Not sure which plan is right for you? <a href="${BOOKING_URL}" style="color:#2563EB">Let's chat</a> — we'll help you choose.</p>
@@ -128,7 +133,7 @@ const TEMPLATES = {
               </td>
             </tr>
           </table>
-          <p style="margin:24px 0 0">Best,<br /><strong>The OnFleet Team</strong></p>
+          <p style="margin:24px 0 0">Best,<br /><strong>The ${brand.name} Team</strong></p>
         `
       });
     }
@@ -136,12 +141,12 @@ const TEMPLATES = {
 
   trial_expired: {
     label: 'Trial expired — re-engage',
-    subject: (org) => `Your OnFleet trial has ended — come back, ${org.name}`,
+    subject: (org) => `Your ${brand.name} trial has ended — come back, ${org.name}`,
     html: (org) => layout({
       preheader: 'Your trial period ended. Reactivate your account and get back to managing your fleet.',
       body: `
         <p style="margin:0 0 16px">Hi ${org.contact_name || org.name},</p>
-        <p style="margin:0 0 16px">Your OnFleet trial has come to an end. We hope you got to see what the platform can do for your fleet!</p>
+        <p style="margin:0 0 16px">Your ${brand.name} trial has come to an end. We hope you got to see what the platform can do for your fleet!</p>
         <p style="margin:0 0 16px">If you're ready to continue, upgrading your plan will restore full access immediately — your bikes, riders, agreements and payment history are all still there.</p>
         ${btn('Reactivate my account →', PRICING_URL)}
         <p style="margin:0 0 16px">If timing wasn't right or you ran into any issues during the trial, <a href="${BOOKING_URL}" style="color:#2563EB">let's schedule a quick call</a> — we'd love to understand what held you back and see if we can help.</p>
@@ -154,36 +159,36 @@ const TEMPLATES = {
           <li style="margin-bottom:6px">Collections queue and defaulted rider management</li>
           <li>Fleet wallet with bank payout requests</li>
         </ul>
-        <p style="margin:0">We're here to help,<br /><strong>The OnFleet Team</strong></p>
+        <p style="margin:0">We're here to help,<br /><strong>The ${brand.name} Team</strong></p>
       `
     })
   },
 
   check_in: {
     label: 'Check-in / how is it going?',
-    subject: (org) => `How's OnFleet working for ${org.name}?`,
+    subject: (org) => `How's ${brand.name} working for ${org.name}?`,
     html: (org) => layout({
-      preheader: 'A quick check-in from the OnFleet team.',
+      preheader: `A quick check-in from the ${brand.name} team.`,
       body: `
         <p style="margin:0 0 16px">Hi ${org.contact_name || org.name},</p>
-        <p style="margin:0 0 16px">Just checking in to see how things are going with OnFleet.</p>
+        <p style="margin:0 0 16px">Just checking in to see how things are going with ${brand.name}.</p>
         <p style="margin:0 0 16px">Is the platform working well for your team? Are there any features you'd like help setting up, or anything that isn't quite clicking yet?</p>
         <p style="margin:0 0 24px">We're always improving the platform based on feedback from fleet owners, so any thoughts — good or bad — are genuinely welcome.</p>
         ${btn('Log in to your portal →', PORTAL_URL)}
         <p style="margin:0 0 16px">Or if it's easier, just hit reply and let us know what's on your mind.</p>
-        <p style="margin:0">Thanks for being part of OnFleet!<br /><strong>The OnFleet Team</strong></p>
+        <p style="margin:0">Thanks for being part of ${brand.name}!<br /><strong>The ${brand.name} Team</strong></p>
       `
     })
   },
 
   upgrade_prompt: {
     label: 'Upgrade prompt',
-    subject: (org) => `Take ${org.name}'s fleet to the next level with OnFleet Pro`,
+    subject: (org) => `Take ${org.name}'s fleet to the next level with ${brand.name} Pro`,
     html: (org) => layout({
-      preheader: 'Unlock the full power of OnFleet — automated payments, live GPS, and fleet analytics.',
+      preheader: `Unlock the full power of ${brand.name} — automated payments, live GPS, and fleet analytics.`,
       body: `
         <p style="margin:0 0 16px">Hi ${org.contact_name || org.name},</p>
-        <p style="margin:0 0 16px">You've been using OnFleet during your trial — now it's time to unlock everything.</p>
+        <p style="margin:0 0 16px">You've been using ${brand.name} during your trial — now it's time to unlock everything.</p>
         <p style="margin:0 0 16px">Fleet owners on paid plans collect payments faster, reduce defaults, and spend less time chasing riders because the platform handles the recurring billing automatically every week.</p>
         ${divider()}
         <p style="margin:0 0 12px;font-weight:700">What's included on every paid plan:</p>
@@ -203,7 +208,7 @@ const TEMPLATES = {
         </table>
         ${btn('View plans and upgrade →', PRICING_URL)}
         <p style="margin:0 0 16px;font-size:13px;color:#6b7280">Plans start at <strong>R200/month</strong> for up to 20 bikes. Cancel anytime.</p>
-        <p style="margin:0">Best,<br /><strong>The OnFleet Team</strong></p>
+        <p style="margin:0">Best,<br /><strong>The ${brand.name} Team</strong></p>
       `
     })
   },

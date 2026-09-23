@@ -1,10 +1,11 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth';
 import MobileOnboardingPrompt from './components/MobileOnboardingPrompt';
 import OfflineBanner from './components/OfflineBanner';
 import AnalyticsTracker from './analytics';
 import { canViewFleetSection, getDefaultFleetRoute, isAdminPortalRole } from './pages/fleet/access';
+import brand from './brand';
 
 const Landing = lazy(() => import('./pages/Landing'));
 const Login = lazy(() => import('./pages/Login'));
@@ -118,10 +119,20 @@ function FleetRouteGate({ section, children }) {
   return children;
 }
 
+// A deployment whose marketing lives on another domain sends signed-out
+// visitors there instead of showing them the landing page of a product it
+// does not sell. Signed-out only, deliberately: this sits inside HomeRoute
+// rather than being a redirect on the route itself, so a fleet owner whose
+// bookmark is the bare domain still lands on their own dashboard.
+function MarketingRedirect() {
+  useEffect(() => { window.location.replace(brand.marketingUrl); }, []);
+  return null;
+}
+
 function HomeRoute() {
   const { user, loading } = useAuth();
   if (loading) return null;
-  if (!user) return <Landing />;
+  if (!user) return brand.marketingUrl ? <MarketingRedirect /> : <Landing />;
   if (user.role === 'technician') return <Navigate to="/workshop/app" replace />;
   if (user.role === 'control_room') return <Navigate to="/control-room" replace />;
   if (isAdminPortalRole(user.role)) return <Navigate to="/admin" replace />;

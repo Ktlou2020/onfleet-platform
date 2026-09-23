@@ -54,6 +54,10 @@ const BRANDS = {
     themeColor: '#0C4A5A',
     domain: 'portal.pillion.co.za',
     portalUrl: 'https://portal.pillion.co.za',
+    // Pillion's marketing lives on its own domain, so a signed-out visitor
+    // who lands on the app's front door is sent there rather than shown
+    // OnFleet's rider pitch, which is for a different product entirely.
+    marketingUrl: 'https://pillion.co.za',
     emailAccent: '#9BDCEE',
     emailHeaderBg: '#0C4A5A',
     emailKicker: 'Fleet Management',
@@ -111,7 +115,15 @@ function manifestFor(b = brand) {
  * OnFleet for one frame is worse than either.
  */
 function publicBrand(b = brand) {
-  return { key: b.key, name: b.name, fullName: b.fullName, portalUrl: b.portalUrl, domain: b.domain };
+  return {
+    key: b.key, name: b.name, fullName: b.fullName,
+    portalUrl: b.portalUrl, domain: b.domain,
+    // MARKETING_URL wins, and an explicit empty value turns the redirect off
+    // — which is what you want if the marketing domain is not live yet.
+    marketingUrl: process.env.MARKETING_URL !== undefined
+      ? (process.env.MARKETING_URL.trim() || null)
+      : (b.marketingUrl || null),
+  };
 }
 
 /**

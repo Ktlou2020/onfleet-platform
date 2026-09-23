@@ -2507,6 +2507,7 @@ router.get('/subscription', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.vie
   const { rows } = await pgDb.query(
     `SELECT subscription_tier, subscription_cycle, subscription_status, next_billing_date,
             billing_card_last4, billing_card_brand, billing_card_expiry, billing_failure_count,
+            billing_retry_at, billing_grace_until, status,
             (billing_authorization_encrypted IS NOT NULL) AS has_card
        FROM organizations WHERE id = $1`, [orgId]);
   const org = rows[0];
@@ -2524,6 +2525,13 @@ router.get('/subscription', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.vie
     status: org.subscription_status,
     next_billing_date: org.next_billing_date,
     failure_count: org.billing_failure_count,
+    // A fleet being chased is owed the two dates that decide what happens to
+    // it: when we try the card again, and the day access stops if we never
+    // succeed. Showing the second only in an email it may not have opened is
+    // how a suspension comes as a surprise.
+    retry_at: org.billing_retry_at,
+    grace_until: org.billing_grace_until,
+    suspended: org.status === 'suspended',
     card: org.has_card ? {
       last4: org.billing_card_last4, brand: org.billing_card_brand, expiry: org.billing_card_expiry,
     } : null,
@@ -2615,9 +2623,12 @@ router.get('/subscription/confirm/:reference', companyRoleAllowed(FLEET_RESOURCE
 
     await billingSvc.rememberAuthorization({ organizationId: orgId, authorization: data.authorization, email: data.customer?.email });
     await billingSvc.markInvoice(invoice.id, { status: 'paid', paystackReference: data.reference });
-    await pgDb.query(
-      `UPDATE organizations SET subscription_status = 'active', next_billing_date = $2, updated_at = NOW() WHERE id = $1`,
-      [orgId, invoice.period_end]);
+    // Lifts the paywall as well as marking the subscription paid. These are
+    // two different columns — `status` is what getOrganizationOrThrow reads —
+    // and writing only the second is why a fleet could pay us and still be
+    // locked out the day its trial expired.
+    await require('../services/subscriptionDunning')
+      .recordSuccess({ organizationId: orgId, nextBillingDate: invoice.period_end });
     await logAudit(req.user.id, 'fleet.subscription_activated', 'organizations', orgId, { reference: invoice.reference });
 
     res.json({ status: 'paid', invoice });
@@ -2643,7 +2654,11 @@ router.put('/subscription', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.man
 
 router.delete('/subscription', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
   await pgDb.query(
-    `UPDATE organizations SET subscription_status = 'cancelled', next_billing_date = NULL, updated_at = NOW() WHERE id = $1`,
+    `UPDATE organizations
+        SET subscription_status = 'cancelled', next_billing_date = NULL,
+            billing_retry_at = NULL, billing_grace_until = NULL, billing_last_notice = NULL,
+            updated_at = NOW()
+      WHERE id = $1`,
     [req.user.organization_id]);
   await logAudit(req.user.id, 'fleet.subscription_cancelled', 'organizations', req.user.organization_id, null);
   res.json({ status: 'cancelled' });

@@ -437,19 +437,23 @@ function start() {
     .then((r) => console.log('[daily-report]', r.skipped || `sent to ${r.sent.length}, failed ${r.failed.length}`))
     .catch(e => console.error('[daily-report]', e.message)), { timezone: 'Africa/Johannesburg' });
 
-  // Subscription billing — 06:00 on the 1st, Johannesburg time. Per-bike
+  // Subscription billing — 06:00 every morning, Johannesburg time. Per-bike
   // pricing means the amount is worked out at charge time rather than being a
   // fixed Paystack plan, so this is the thing that actually takes the money.
   //
-  // Running it twice would not double-charge — a period is claimed in the
-  // database before any card is touched — but it is scheduled once a month all
-  // the same, and retried by hand if a run is missed.
+  // Daily rather than monthly, because a card declined on the 1st used to wait
+  // until the 1st of the following month for its next attempt — a whole month
+  // of unpaid service, and the fleet was never told. The run itself decides
+  // who is actually due: a fleet is charged on its billing date, a fleet being
+  // chased only on the retry days its schedule sets, and nobody twice for one
+  // period — that is claimed in the database before any card is touched.
   const { runBillingRun } = require('./subscriptionBilling');
-  cron.schedule('0 6 1 * *', () => runBillingRun()
-    .then((r) => {
-      const paid = r.filter((x) => x.charged).length;
-      const failed = r.filter((x) => x.charged === false).length;
-      console.log(`[billing] ${paid} charged, ${failed} failed, ${r.length - paid - failed} skipped`);
+  cron.schedule('0 6 * * *', () => runBillingRun()
+    .then(({ charges, suspended }) => {
+      const paid = charges.filter((x) => x.charged).length;
+      const failed = charges.filter((x) => x.charged === false).length;
+      console.log(`[billing] ${paid} charged, ${failed} failed, ${charges.length - paid - failed} skipped`
+        + `${suspended.length ? `, ${suspended.length} suspended` : ''}`);
     })
     .catch(e => console.error('[billing]', e.message)), { timezone: 'Africa/Johannesburg' });
 

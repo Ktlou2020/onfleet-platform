@@ -4,6 +4,7 @@ const axios = require('axios');
 const { v4: uuid } = require('uuid');
 const pgDb = require('../pgDb');
 const pricing = require('./subscriptionPricing');
+const dunning = require('./subscriptionDunning');
 const { encryptSecret, decryptSecret } = require('./paystackAccounts');
 
 // Charging a fleet for the bikes it has.
@@ -176,56 +177,77 @@ async function chargeOrganization(organizationId, { when = new Date(), db = pgDb
     const data = resp.data?.data;
     if (data?.status === 'success') {
       await markInvoice(invoice.id, { status: 'paid', paystackReference: data.reference }, db);
-      await db.query(
-        `UPDATE organizations
-            SET subscription_status = 'active', billing_failure_count = 0,
-                next_billing_date = $2, updated_at = NOW()
-          WHERE id = $1`, [organizationId, period.end]);
+      await dunning.recordSuccess({ organizationId, nextBillingDate: period.end, db });
       return { invoice, charged: true, amount: quote.total };
     }
 
     const reason = data?.gateway_response || 'The card was declined';
-    await markInvoice(invoice.id, { status: 'failed', failureReason: reason, paystackReference: data?.reference }, db);
-    await db.query(
-      `UPDATE organizations SET billing_failure_count = billing_failure_count + 1, updated_at = NOW() WHERE id = $1`,
-      [organizationId]);
-    return { invoice, charged: false, reason };
+    const failed = await markInvoice(invoice.id, { status: 'failed', failureReason: reason, paystackReference: data?.reference }, db);
+    const chase = await dunning.recordFailure({ organizationId, invoice: failed || invoice, reason, when, db });
+    return { invoice, charged: false, reason, chase };
   } catch (e) {
     const reason = e.response?.data?.message || e.message;
-    await markInvoice(invoice.id, { status: 'failed', failureReason: reason }, db);
-    await db.query(
-      `UPDATE organizations SET billing_failure_count = billing_failure_count + 1, updated_at = NOW() WHERE id = $1`,
-      [organizationId]);
-    return { invoice, charged: false, reason };
+    const failed = await markInvoice(invoice.id, { status: 'failed', failureReason: reason }, db);
+    const chase = await dunning.recordFailure({ organizationId, invoice: failed || invoice, reason, when, db });
+    return { invoice, charged: false, reason, chase };
   }
 }
 
-/** Every fleet due a charge today. */
+/**
+ * Every fleet due a charge today.
+ *
+ * This runs daily, so the thing it has to get right is not charging a card
+ * that was declined this morning. A fleet being chased is due only on the day
+ * its schedule says, and once the attempts are used up it is not due at all —
+ * it is waiting to be suspended, or for someone to come and fix the card.
+ */
 async function organizationsDue({ when = new Date(), db = pgDb } = {}) {
   const today = asDate(when);
   const { rows } = await db.query(
     `SELECT id FROM organizations
       WHERE subscription_tier IS NOT NULL
-        AND subscription_status IN ('active', 'past_due')
         AND billing_authorization_encrypted IS NOT NULL
-        AND (next_billing_date IS NULL OR next_billing_date <= $1)
+        AND (
+          (subscription_status = 'active'
+             AND (next_billing_date IS NULL OR next_billing_date <= $1))
+          OR
+          (subscription_status = 'past_due'
+             AND billing_retry_at IS NOT NULL AND billing_retry_at <= $1)
+        )
       ORDER BY id`, [today]);
   return rows.map((r) => r.id);
 }
 
+/**
+ * The daily pass: charge what is due, then pause anyone whose grace period
+ * ran out without the money arriving.
+ *
+ * Suspension comes after charging, so a fleet whose retry succeeds on the
+ * last morning is not paused an hour later by the same run.
+ */
 async function runBillingRun({ when = new Date(), db = pgDb } = {}) {
   const ids = await organizationsDue({ when, db });
-  const results = [];
+  const charges = [];
   for (const id of ids) {
     // One fleet's failure must not stop the rest of the run.
     try {
-      results.push({ organizationId: id, ...(await chargeOrganization(id, { when, db })) });
+      charges.push({ organizationId: id, ...(await chargeOrganization(id, { when, db })) });
     } catch (e) {
       console.error('[billing] charge failed for organisation', id, e.message);
-      results.push({ organizationId: id, charged: false, reason: e.message });
+      charges.push({ organizationId: id, charged: false, reason: e.message });
     }
   }
-  return results;
+
+  let suspended = [];
+  try {
+    suspended = await dunning.suspendExpired({ when, db });
+  } catch (e) {
+    // A suspension that fails must not make the run look like it never
+    // charged anyone — the money it took is still the important part.
+    console.error('[billing] suspension pass failed:', e.message);
+  }
+
+  return { charges, suspended };
 }
 
 module.exports = {

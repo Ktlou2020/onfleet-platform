@@ -260,9 +260,9 @@ describe.skipIf(!process.env.DATABASE_URL)('charging the card on file', () => {
         return { data: { status: true, data: { status: 'success', reference: 'ref_ok' } } };
       });
 
-      const results = await billing.runBillingRun();
-      expect(results).toHaveLength(2);
-      expect(results.filter((r) => r.charged)).toHaveLength(1);
+      const { charges } = await billing.runBillingRun();
+      expect(charges).toHaveLength(2);
+      expect(charges.filter((r) => r.charged)).toHaveLength(1);
     });
   });
 });

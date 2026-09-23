@@ -183,8 +183,24 @@ export default function Subscription() {
 
         {state.failure_count > 0 && (
           <div className="text-sm" style={{ marginTop: 12, color: 'var(--danger)' }}>
-            The last charge did not go through ({state.failure_count} {state.failure_count === 1 ? 'attempt' : 'attempts'}).
-            Update your card below and we will try again.
+            {state.suspended ? (
+              <>
+                Your account is paused because we could not collect payment after {state.failure_count}{' '}
+                {state.failure_count === 1 ? 'attempt' : 'attempts'}. Nothing has been deleted — update your card
+                below and access comes back as soon as the payment goes through.
+              </>
+            ) : (
+              <>
+                The last charge did not go through ({state.failure_count}{' '}
+                {state.failure_count === 1 ? 'attempt' : 'attempts'}).
+                {/* The deadline is the thing that actually matters to them, so
+                    it is said here and not only in the email. */}
+                {state.grace_until && <> Access pauses on <strong>{fmtDate(state.grace_until)}</strong> if it has not gone through by then.</>}
+                {state.retry_at
+                  ? <> We try again on {fmtDate(state.retry_at)}, or you can update your card below now.</>
+                  : <> Update your card below to pay it now.</>}
+              </>
+            )}
           </div>
         )}
       </div>

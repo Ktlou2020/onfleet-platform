@@ -5,6 +5,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import ServicePlan from '../../components/ServicePlan';
 import TrackerCheck from '../../components/TrackerCheck';
+import PartPhoto from '../../components/PartPhoto';
+
+// The same normalisation the catalogue and the photo table both use, so a
+// number typed with or without its dashes finds the same picture.
+const partKey = (n) => String(n || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 import { useParams, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { ArrowLeft, Plus, Pencil, Trash2, Clock, ChevronDown, ChevronRight, Printer, FileText, Pause, Play, Camera, Image, CheckCircle } from 'lucide-react';
@@ -93,11 +98,23 @@ function PartsSuggestions({ query, onSelect }) {
 // not exist or the book was never loaded.
 function CatalogPartsSuggestions({ query, make, model, onSelect, onResults }) {
   const [results, setResults] = useState([]);
+  const [photos, setPhotos] = useState({});
+
   useEffect(() => {
     if (!query || query.length < 2 || !make || !model) { setResults([]); onResults?.(0); return; }
     const t = setTimeout(() => {
       api.get('/workshop/parts-catalog/search', { params: { q: query, make, model } })
-        .then((r) => { setResults(r.data.results); onResults?.(r.data.results.length); })
+        .then((r) => {
+          setResults(r.data.results);
+          onResults?.(r.data.results.length);
+          // Photos for the whole page at once. Sixty round trips to decorate a
+          // search is how a picker becomes unusable on a phone.
+          const numbers = r.data.results.map((x) => x.part_number).filter(Boolean);
+          if (!numbers.length) return;
+          api.get('/workshop/part-photos', { params: { make, model, part_numbers: numbers.join(',') } })
+            .then((pr) => setPhotos(pr.data || {}))
+            .catch(() => {});
+        })
         .catch(() => {});
     }, 250);
     return () => clearTimeout(t);
@@ -109,6 +126,17 @@ function CatalogPartsSuggestions({ query, make, model, onSelect, onResults }) {
       <div className="text-xs muted" style={{ padding: '2px 6px 6px' }}>OEM catalogue — {make} {model}</div>
       {results.map((r) => (
         <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          {/* What the part looks like — or the camera that fills it in. */}
+          <PartPhoto
+            photos={photos[partKey(r.part_number)] || []}
+            partNumber={r.part_number}
+            make={make}
+            model={model}
+            onAdded={(photo) => setPhotos((prev) => ({
+              ...prev,
+              [partKey(r.part_number)]: [photo, ...(prev[partKey(r.part_number)] || [])],
+            }))}
+          />
           <button
             className="btn btn-secondary btn-sm"
             style={{ flex: 1, justifyContent: 'space-between', textAlign: 'left' }}

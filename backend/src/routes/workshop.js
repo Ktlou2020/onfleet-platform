@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const pgDb = require('../pgDb');
-const { authRequired } = require('../middleware/auth');
+const { authRequired, adminOnly } = require('../middleware/auth');
 const { sendEmail } = require('../services/notifier');
 const { sendNotification } = require('../services/notifierPg');
 const UPLOAD_DIRS = require('../uploadPaths');
@@ -12,6 +12,7 @@ const asyncRouter = require('../utils/asyncRouter');
 const { hybridStorage } = require('../utils/hybridStorage');
 const storageService = require('../services/storageService');
 const deviceCommissioning = require('../services/deviceCommissioning');
+const partPhotos = require('../services/partPhotos');
 const router = asyncRouter(express.Router());
 
 // job_card_photos.file_path holds an absolute disk path for photos uploaded
@@ -37,6 +38,22 @@ async function cleanupUploadedPhoto(file) {
     try { fs.unlinkSync(file.path); } catch { /* best-effort */ }
   }
 }
+
+// Part photographs. The phone resizes before it uploads, so anything arriving
+// near this limit is a client that did not — accepted rather than rejected,
+// because a technician at the bike should never be told to try a smaller
+// photograph.
+const partPhotoUpload = multer({
+  storage: hybridStorage(UPLOAD_DIRS.partPhotos, 'part-photos', (req, file) => {
+    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+    return `part-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) cb(null, true);
+    else cb(new Error('Only image files are allowed'));
+  }
+});
 
 const photoUpload = multer({
   storage: hybridStorage(UPLOAD_DIRS.jobPhotos, 'job-photos', (req, file) => {
@@ -324,6 +341,72 @@ router.post('/job-cards', authRequired, workshopOnly, async (req, res) => {
 // route to an arbitrary bike, and it answers with the checks alone — not the
 // trip history, not the live map, not the commissioning sign-off, which is
 // somebody else's decision to record.
+// ── Part photographs ────────────────────────────────────────────────────────
+//
+// A technician does not know the part number — it is not written on the part.
+// So the catalogue answers "which one is this" with a picture, and the picture
+// is taken by whoever fits the part first.
+
+// Photos for a set of part numbers, asked once for a whole result page rather
+// than per row: sixty round trips to decorate a search is how a picker becomes
+// unusable on a phone.
+router.get('/part-photos', authRequired, workshopOnly, async (req, res) => {
+  try {
+    const numbers = String(req.query.part_numbers || '').split(',').map((n) => n.trim()).filter(Boolean);
+    res.json(await partPhotos.photosForParts({
+      make: req.query.make, model: req.query.model, partNumbers: numbers,
+    }));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// The parts this workshop actually fits, most-used first — the shortcut that
+// matters when the book has thousands of rows and the one wanted is almost
+// always one fitted last week.
+router.get('/parts-most-fitted', authRequired, workshopOnly, async (req, res) => {
+  try {
+    res.json(await partPhotos.mostFitted({ make: req.query.make, model: req.query.model }));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/part-photos', authRequired, workshopOnly, partPhotoUpload.single('photo'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No photo uploaded' });
+    const partNumber = String(req.body.part_number || '').trim();
+    const make = String(req.body.make || '').trim();
+    const model = String(req.body.model || '').trim();
+    if (!partNumber || !make || !model) {
+      return res.status(400).json({ error: 'A part number, make and model are needed to file a photograph' });
+    }
+    const photo = await partPhotos.addPhoto({
+      make, model, partNumber,
+      filePath: req.file.filename,
+      originalName: req.file.originalname,
+      caption: String(req.body.caption || '').trim() || null,
+      userId: req.user.id,
+    });
+    res.json({ photo });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Deleting is an admin's call. A wrong photograph misleads every technician
+// after it, but so does one removed by somebody who was simply looking at a
+// different part — and the person who took it is rarely the one who notices.
+router.delete('/part-photos/:id', authRequired, adminOnly, async (req, res) => {
+  try {
+    const removed = await partPhotos.deletePhoto(toInt(req.params.id));
+    if (!removed) return res.status(404).json({ error: 'Photo not found' });
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.get('/job-cards/:id/tracker-check', authRequired, workshopOnly, async (req, res) => {
   try {
     const id = toInt(req.params.id);

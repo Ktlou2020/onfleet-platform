@@ -20,6 +20,9 @@ const UPLOAD_DIRS = {
   contracts:       path.join(UPLOAD_BASE, 'contracts'),
   jobPhotos:       path.join(UPLOAD_BASE, 'job-photos'),
   partsCatalog:    path.join(UPLOAD_BASE, 'parts-catalog'),
+  // Photographs of parts taken by technicians, as distinct from the OCR'd
+  // exploded diagrams that live in parts-catalog.
+  partPhotos:      path.join(UPLOAD_BASE, 'part-photos'),
   claimPhotos:     path.join(UPLOAD_BASE, 'claim-photos'),
 };
 

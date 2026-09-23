@@ -22,8 +22,7 @@ import { Modal, ConfirmModal } from '../../components/ui';
 import { ALERT_LABELS, ALERT_COLORS, ALERT_SEVERITY, ALERT_FILTER_GROUPS, CRITICAL_ALERT_TYPES } from '../../lib/alertMeta';
 import {
   SAST, fmtSASTtime, fmtSAST, fmtSASTshort, todayInSAST,
-  parseIo, battPct, extBattPct, DeviceBatteryIcon, DeviceSignalIcon, SEVERITY_RANK, computeDeviceHealth,
-} from '../../lib/trackingHelpers';
+  parseIo, battPct, extBattPct, DeviceBatteryIcon, DeviceSignalIcon, SEVERITY_RANK, computeDeviceHealth, healthReasonText } from '../../lib/trackingHelpers';
 
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -1639,7 +1638,7 @@ export default function Tracking({ readOnly = false }) {
                         fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 8,
                         color: r.severity === 'high' ? '#ef4444' : r.severity === 'medium' ? '#f97316' : 'var(--muted)',
                         background: r.severity === 'high' ? 'rgba(239,68,68,0.1)' : r.severity === 'medium' ? 'rgba(249,115,22,0.1)' : 'rgba(148,163,184,0.1)',
-                      }}>{r.text}</span>
+                      }}>{healthReasonText(r)}</span>
                     ))}
                   </div>
                 </div>

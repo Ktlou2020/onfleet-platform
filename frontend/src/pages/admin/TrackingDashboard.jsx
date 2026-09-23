@@ -5,7 +5,7 @@ import { Radio, ShieldAlert, Bell, Zap, ZapOff, Route, Gauge, AlertTriangle, Wif
 import api from '../../api';
 import { Stat, Loading, Modal } from '../../components/ui';
 import { ALERT_LABELS, ALERT_COLORS } from '../../lib/alertMeta';
-import { computeDeviceHealth } from '../../lib/trackingHelpers';
+import { computeDeviceHealth, healthReasonText } from '../../lib/trackingHelpers';
 
 const RISK_LEVEL_COLOR = { critical: '#dc2626', elevated: '#f97316', watch: '#eab308', normal: '#94a3b8' };
 const HEALTH_SEVERITY_COLOR = { high: '#ef4444', medium: '#f97316', low: '#94a3b8' };
@@ -206,7 +206,7 @@ export default function TrackingDashboard() {
                   key={h.device.id}
                   to={h.device.bike_id ? `/admin/tracking?bike=${h.device.bike_id}` : '/admin/tracking'}
                   title={h.device.registration || h.device.label || h.device.imei}
-                  subtitle={h.reasons.map((r) => r.text).join(' · ')}
+                  subtitle={h.reasons.map(healthReasonText).join(' · ')}
                   dotColor={HEALTH_SEVERITY_COLOR[h.reasons[0]?.severity] || '#94a3b8'}
                 />
               ))}

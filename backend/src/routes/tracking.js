@@ -109,9 +109,29 @@ router.get('/devices', authRequired, trackingReadOnly, async (req, res) => {
   const connected = teltonikaServer.getConnectedIMEIs();
   const bikeIds = [...new Set(devices.map(d => d.bike_id).filter(Boolean))];
   const bikeMap = await getBikeMap(bikeIds);
-  const result = devices.map(d => ({
+
+  // Health is worked out here rather than in the browser because it needs the
+  // last dozen pings, not the last one — a single ping cannot tell you whether
+  // a tracker is broken or the bike is simply parked with its GPS asleep.
+  const quality = new Map();
+  try {
+    for (const row of await deviceHealth.recentQuality()) quality.set(row.device_id, row);
+  } catch (e) {
+    // A failure here must not take the device list down with it; the map and
+    // the list are what the control room actually needs.
+    console.error('[tracking] could not compute device health:', e.message);
+  }
+
+  const result = devices.map(d => {
+    const status = deviceStatus(d.imei, d.last_seen_at, connected);
+    const row = quality.get(d.id)
+      || { bike_id: d.bike_id, last_seen_at: d.last_seen_at, newest: null, pings: 0 };
+    const { reasons, signature } = deviceHealth.reasonsFor(row, { status });
+    return {
     ...d,
-    device_status: deviceStatus(d.imei, d.last_seen_at, connected),
+    health: reasons,
+    health_signature: signature,
+    device_status: status,
     connected: isOnline(d.imei, d.last_seen_at, connected),
     ...(d.bike_id && bikeMap[d.bike_id] ? {
       registration: bikeMap[d.bike_id].registration,
@@ -131,7 +151,8 @@ router.get('/devices', authRequired, trackingReadOnly, async (req, res) => {
       rider_city: bikeMap[d.bike_id].rider_city,
       rider_address_match_status: bikeMap[d.bike_id].rider_address_match_status,
     } : {}),
-  }));
+    };
+  });
   res.json(result);
 });
 
@@ -922,6 +943,7 @@ router.post('/devices/:id/commission', authRequired, adminOnly, async (req, res)
 // open, and closes with an outcome. That is where the recovery rate comes from.
 
 const theftCases = require('../services/theftCaseService');
+const deviceHealth = require('../services/deviceHealth');
 
 router.get('/theft-cases', authRequired, trackingReadOnly, async (req, res) => {
   const status = String(req.query.status || 'open');

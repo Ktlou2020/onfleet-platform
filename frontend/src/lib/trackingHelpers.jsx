@@ -52,26 +52,27 @@ export function DeviceSignalIcon({ gsm, size = 12 }) {
 
 export const SEVERITY_RANK = { high: 0, medium: 1, low: 2 };
 
-// Devices worth a second look, derived from already-fetched /tracking/devices
-// + /tracking/map rows (no extra request). Shared by the Health tab in the
-// live console and the tracking dashboard's "Needs attention" panel.
+// Devices worth a second look. The verdict comes from the backend, which
+// judges each tracker on its last dozen pings rather than its most recent one
+// — the difference between "this tracker cannot get a fix" and "this bike is
+// parked and its GPS has gone to sleep", which look identical in a single row
+// and are not remotely the same thing.
+//
+// Shared by the Health tab in the live console and the tracking dashboard's
+// "Needs attention" panel.
+/** A reason as a sentence, with any timestamp in the reader's own timezone. */
+export function healthReasonText(reason) {
+  if (!reason) return '';
+  return reason.since ? `${reason.text} since ${fmtSASTshort(reason.since)}` : reason.text;
+}
+
 export function computeDeviceHealth(devices, mapDevices) {
-  return devices.map(d => {
-    const mapD = mapDevices.find(m => m.id === d.id);
-    const io = parseIo(mapD?.io_data);
-    const battMv = mapD?.battery_mv ?? io.battMv;
-    const gsm = mapD?.gsm_signal ?? io.gsm;
-    const sats = mapD?.satellites;
-    const pct = battMv != null ? battPct(battMv) : null;
-    const reasons = [];
-    if (d.device_status === 'offline') reasons.push({ key: 'offline', text: `Offline${d.last_seen_at ? ` since ${fmtSASTshort(d.last_seen_at)}` : ''}`, severity: 'high' });
-    if (pct != null && pct <= 20) reasons.push({ key: 'battery_critical', text: `Internal battery ${pct}%`, severity: 'high' });
-    if (gsm != null && gsm <= 1) reasons.push({ key: 'poor_signal', text: 'Poor GSM signal', severity: 'medium' });
-    if (d.device_status === 'active' && sats != null && sats < 4) reasons.push({ key: 'weak_gps', text: `Weak GPS fix (${sats} sats)`, severity: 'medium' });
-    if (!d.bike_id) reasons.push({ key: 'no_bike', text: 'No bike linked', severity: 'low' });
-    const signature = reasons.map(r => r.key).sort().join(',');
-    return { device: d, mapD, reasons, signature };
-  }).filter(h => h.reasons.length > 0 && h.signature !== h.device.health_ack_signature)
+  return devices.map(d => ({
+    device: d,
+    mapD: mapDevices.find(m => m.id === d.id),
+    reasons: Array.isArray(d.health) ? d.health : [],
+    signature: d.health_signature || '',
+  })).filter(h => h.reasons.length > 0 && h.signature !== h.device.health_ack_signature)
     .sort((a, b) => {
       const rankOf = (h) => Math.min(...h.reasons.map(r => SEVERITY_RANK[r.severity]));
       return rankOf(a) - rankOf(b);

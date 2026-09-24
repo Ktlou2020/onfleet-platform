@@ -8,6 +8,7 @@ import { canViewFleetSection, getDefaultFleetRoute, isAdminPortalRole } from './
 import brand from './brand';
 
 const Landing = lazy(() => import('./pages/Landing'));
+const PortalDoor = lazy(() => import('./pages/PortalDoor'));
 const Login = lazy(() => import('./pages/Login'));
 const Signup = lazy(() => import('./pages/Signup'));
 const ForgotPassword = lazy(() => import('./pages/ForgotPassword'));
@@ -132,7 +133,13 @@ function MarketingRedirect() {
 function HomeRoute() {
   const { user, loading } = useAuth();
   if (loading) return null;
-  if (!user) return brand.marketingUrl ? <MarketingRedirect /> : <Landing />;
+  // OnFleet keeps its own landing page. Any other brand gets a front door
+  // rather than OnFleet's rider pitch — and once that brand has a marketing
+  // site live, signed-out visitors are sent there instead.
+  if (!user) {
+    if (brand.marketingUrl) return <MarketingRedirect />;
+    return brand.key === 'onfleet' ? <Landing /> : <PortalDoor />;
+  }
   if (user.role === 'technician') return <Navigate to="/workshop/app" replace />;
   if (user.role === 'control_room') return <Navigate to="/control-room" replace />;
   if (isAdminPortalRole(user.role)) return <Navigate to="/admin" replace />;

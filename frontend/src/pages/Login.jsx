@@ -97,8 +97,12 @@ export default function Login() {
         <div className="card mt-6" style={{ background: 'var(--surface-2)' }}>
           {brand.key === 'onfleet' ? (
             <>
-              <div className="text-sm"><strong>Secure access only.</strong> Rider and admin credentials are no longer displayed on the login screen.</div>
-              <div className="muted text-sm mt-2">If you need admin access, contact the platform owner to provision your account.</div>
+              {/* What stood here announced that demo credentials had been taken
+                  off this screen — a note about a change, addressed to nobody
+                  who reads it, and an odd thing to advertise besides. Someone
+                  stuck on a login wants the one fact that gets them in. */}
+              <div className="text-sm"><strong>Trouble signing in?</strong> Use the email address on your application. That is where your agreement and payment reminders go.</div>
+              <div className="muted text-sm mt-2">Staff accounts are not created here — an administrator adds them for you.</div>
             </>
           ) : (
             <>

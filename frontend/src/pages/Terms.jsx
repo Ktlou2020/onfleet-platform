@@ -1,11 +1,37 @@
 import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import Logo from '../components/Logo';
+import { brandName, brandFullName, brandLegal } from '../brand';
+
+// The subscription terms, as the billing code actually charges them.
+//
+// These numbers are the contract, so they are written out rather than fetched:
+// a terms page that says something different depending on what an endpoint
+// returns today is not a document anyone can hold us to. They are the same
+// numbers as backend/src/services/subscriptionPricing.js (TIERS,
+// MINIMUM_BILLABLE_BIKES, ANNUAL_MONTHS_CHARGED), the 14-day trial set in
+// backend/src/routes/auth.js, and GRACE_DAYS in subscriptionDunning.js — change
+// a rate there and this clause has to be changed with it.
+//
+// The previous version of this clause said R750 per bike and a free first
+// month. That was the pilot pricing in routes/pilot.js, which nothing serves
+// any more, so every fleet on the platform had agreed to a rate we do not
+// charge and a trial we do not give.
+const PLANS = [
+  { name: 'Track', perBikeMonthly: 199 },
+  { name: 'Manage', perBikeMonthly: 299 },
+  { name: 'Complete', perBikeMonthly: 379 },
+];
+const TRIAL_DAYS = 14;
+const MINIMUM_BILLABLE_BIKES = 10;
+const ANNUAL_MONTHS_CHARGED = 10;
+const GRACE_DAYS = 14;
+const MAX_PAYMENT_ATTEMPTS = 4;
 
 export default function Terms() {
   useEffect(() => {
-    document.title = 'Terms of Service — OnFleet Africa';
-    return () => { document.title = 'OnFleet Africa'; };
+    document.title = `Terms of Service — ${brandFullName}`;
+    return () => { document.title = brandFullName; };
   }, []);
 
   return (
@@ -22,14 +48,14 @@ export default function Terms() {
 
       <main style={{ maxWidth: 720, margin: '0 auto', padding: '56px 24px 80px' }}>
         <h1 style={{ marginBottom: 8, fontSize: 'clamp(24px, 4vw, 36px)' }}>Terms of Service</h1>
-        <p style={{ color: 'var(--muted)', fontSize: 14, marginBottom: 48 }}>Last updated: July 2026</p>
+        <p style={{ color: 'var(--muted)', fontSize: 14, marginBottom: 48 }}>Last updated: September 2026</p>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 40 }}>
           <section>
             <h2 style={{ fontSize: 18, marginBottom: 12 }}>Who these terms apply to</h2>
             <p style={{ color: 'var(--muted)', lineHeight: 1.75, fontSize: 15 }}>
               These terms apply to fleet owners ("you") who register a company account on the
-              OnFleet platform operated by OnFleet Africa (Pty) Ltd ("we", "us", "OnFleet").
+              {' '}{brandName} platform operated by {brandLegal.provider} ("we", "us", "{brandName}").
               By creating an account you agree to these terms.
             </p>
           </section>
@@ -37,7 +63,7 @@ export default function Terms() {
           <section>
             <h2 style={{ fontSize: 18, marginBottom: 12 }}>What the platform does</h2>
             <p style={{ color: 'var(--muted)', lineHeight: 1.75, fontSize: 15 }}>
-              OnFleet provides software for managing motorcycle fleets, recording rider agreements,
+              {brandName} provides software for managing motorcycle fleets, recording rider agreements,
               collecting weekly rental payments via Paystack, and remotely immobilising bikes fitted
               with compatible GPS trackers. We are a software platform — we are not a party to the
               rental agreement between you and your riders.
@@ -57,13 +83,28 @@ export default function Terms() {
           <section>
             <h2 style={{ fontSize: 18, marginBottom: 12 }}>Billing</h2>
             <p style={{ color: 'var(--muted)', lineHeight: 1.75, fontSize: 15, marginBottom: 12 }}>
-              The platform subscription is charged at R750 per bike per month, billed monthly
-              via Paystack. Your first month is free. After the trial, billing begins automatically.
+              Your first {TRIAL_DAYS} days are free. After the trial, the subscription is charged
+              via Paystack at your plan's rate per bike per month:{' '}
+              {PLANS.map((p, i) => (
+                <span key={p.name}>
+                  {i === 0 ? '' : i === PLANS.length - 1 ? ' or ' : ', '}
+                  {p.name} at R{p.perBikeMonthly}
+                </span>
+              ))}. Billing begins automatically when the trial ends.
+            </p>
+            <p style={{ color: 'var(--muted)', lineHeight: 1.75, fontSize: 15, marginBottom: 12 }}>
+              A fleet with fewer than {MINIMUM_BILLABLE_BIKES} bikes on the platform is charged as
+              though it had {MINIMUM_BILLABLE_BIKES}. Bikes you have marked sold, paid off or
+              written off are not counted. Choosing to pay annually is charged as{' '}
+              {ANNUAL_MONTHS_CHARGED} months rather than twelve. Every invoice shows the rate, the
+              number of bikes charged for, and the bikes that were excluded.
             </p>
             <p style={{ color: 'var(--muted)', lineHeight: 1.75, fontSize: 15 }}>
-              If a payment fails, we will notify you and allow a grace period before restricting
-              access. During a billing failure, you retain access to billing screens only.
-              There is no contract — you can cancel at any time from the billing screen.
+              If a payment fails we will tell you and present the card again, up to{' '}
+              {MAX_PAYMENT_ATTEMPTS} attempts in total. You keep full access for {GRACE_DAYS} days
+              from the start of the billing period; after that the account is paused until the
+              payment goes through, and while it is paused you retain access to the billing screens
+              only. There is no contract — you can cancel at any time from the billing screen.
             </p>
           </section>
 
@@ -83,7 +124,7 @@ export default function Terms() {
               The remote immobilisation feature is provided as a debt-recovery tool. You are
               solely responsible for ensuring that your use of it complies with applicable
               South African law, including the National Credit Act and any applicable consumer
-              protection legislation. OnFleet is not liable for any loss or damage arising from
+              protection legislation. {brandName} is not liable for any loss or damage arising from
               the use or misuse of the immobilisation feature.
             </p>
           </section>
@@ -111,7 +152,7 @@ export default function Terms() {
           <section>
             <h2 style={{ fontSize: 18, marginBottom: 12 }}>Limitation of liability</h2>
             <p style={{ color: 'var(--muted)', lineHeight: 1.75, fontSize: 15 }}>
-              To the maximum extent permitted by law, OnFleet Africa's liability to you is
+              To the maximum extent permitted by law, {brandLegal.provider}'s liability to you is
               limited to the amount you paid us in the three months before the relevant claim.
               We are not liable for indirect, consequential, or special damages, including
               lost revenue, unpaid rider debts, or stolen or damaged bikes.
@@ -148,8 +189,8 @@ export default function Terms() {
             <h2 style={{ fontSize: 18, marginBottom: 12 }}>Contact</h2>
             <p style={{ color: 'var(--muted)', lineHeight: 1.75, fontSize: 15 }}>
               Questions about these terms:{' '}
-              <a href="mailto:legal@onfleetafrica.co.za" style={{ color: 'var(--primary-light)' }}>
-                legal@onfleetafrica.co.za
+              <a href={`mailto:${brandLegal.legalEmail}`} style={{ color: 'var(--primary-light)' }}>
+                {brandLegal.legalEmail}
               </a>
             </p>
           </section>
@@ -157,7 +198,7 @@ export default function Terms() {
       </main>
 
       <footer style={{ borderTop: '1px solid var(--border)', padding: '24px', textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>
-        <Link to="/fleet" style={{ color: 'var(--muted)', textDecoration: 'none' }}>← Back to OnFleet Fleet</Link>
+        <Link to="/fleet" style={{ color: 'var(--muted)', textDecoration: 'none' }}>← Back to {brandName} Fleet</Link>
       </footer>
     </div>
   );

@@ -13,6 +13,7 @@ const health = load('../src/services/deviceHealth.js');
 
 const NOW = new Date('2026-09-23T10:00:00Z');
 const minutesAgo = (n) => new Date(NOW.getTime() - n * 60 * 1000);
+const hoursAgo = (n) => new Date(NOW.getTime() - n * 60 * 60 * 1000);
 
 /** A device reporting normally: fresh pings, good fix, good signal. */
 function healthy(over = {}) {
@@ -72,20 +73,58 @@ describe('a stale ping describes the past, not the present', () => {
   // nothing else. Its last satellite count is history.
   it('does not report GPS or signal from readings older than the freshness window', () => {
     const stale = healthy({
-      newest: minutesAgo(120), navigating: 10, weak_fix_navigating: 10,
+      last_seen_at: hoursAgo(12), newest: hoursAgo(12), navigating: 10, weak_fix_navigating: 10,
       weak_gsm: 12, latest_batt_mv: 3200,
     });
     expect(keys(stale, 'offline')).toEqual(['offline']);
   });
 
   it('still reports the device as offline', () => {
-    expect(keys(healthy({ newest: minutesAgo(120) }), 'offline')).toContain('offline');
+    expect(keys(healthy({ last_seen_at: hoursAgo(12), newest: hoursAgo(12) }), 'offline')).toContain('offline');
   });
 
   it('reports a device that has never connected', () => {
     const never = healthy({ last_seen_at: null, newest: null, pings: 0 });
     const { reasons } = health.reasonsFor(never, { status: 'offline', now: NOW });
     expect(reasons[0]).toMatchObject({ key: 'offline', text: 'Never connected' });
+  });
+});
+
+describe('an hour of silence is not news', () => {
+  // These units connect, push their data and drop the link, so a bike in a
+  // basement, under a carport or out of coverage is offline on the map well
+  // before anything is wrong with it. The health list is for the ones that do
+  // not come back on their own.
+  const quietFor = (h) => healthy({ last_seen_at: hoursAgo(h), newest: hoursAgo(h) });
+
+  it('says nothing about a device silent for two hours', () => {
+    expect(keys(quietFor(2), 'offline')).toEqual([]);
+  });
+
+  it('says nothing a minute before the six-hour mark', () => {
+    const almost = healthy({ last_seen_at: minutesAgo(359), newest: minutesAgo(359) });
+    expect(keys(almost, 'offline')).toEqual([]);
+  });
+
+  it('reports it once the silence reaches six hours', () => {
+    expect(keys(quietFor(6), 'offline')).toEqual(['offline']);
+  });
+
+  it('reports a device silent since yesterday', () => {
+    expect(keys(quietFor(24), 'offline')).toEqual(['offline']);
+  });
+
+  // No silence to measure, and an install that never reported at all is a
+  // different problem from a bike that rode out of coverage.
+  it('still reports a device that has never connected, whatever the clock says', () => {
+    expect(keys(healthy({ last_seen_at: null, newest: null, pings: 0 }), 'offline')).toEqual(['offline']);
+  });
+
+  // The gate is on the caller's status too: `connected` in the database can be
+  // stale, and a device the caller still calls active is not reported offline
+  // however old its last ping is.
+  it('says nothing about a device the caller still calls active', () => {
+    expect(keys(quietFor(24), 'active')).toEqual([]);
   });
 });
 

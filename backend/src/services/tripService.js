@@ -558,8 +558,25 @@ async function closeStaleTrips() {
   }
 }
 
+// How long a tracker stays quiet before anyone is told about it.
+//
+// Marking a device disconnected and telling somebody it is broken are two
+// different statements, and they were being made at the same moment. Fifteen
+// minutes is right for the first: the map should stop drawing a bike as live
+// long before that bike's silence means anything. It is far too quick for the
+// second. These units connect, push and drop the link, so a bike in a basement
+// or out of coverage crosses fifteen minutes routinely and is back well before
+// anyone opens the alert — which is how the alert list filled up with devices
+// that had already fixed themselves.
+//
+// This matches the health list's own threshold in deviceHealth.js; the two are
+// answering the same question and should not disagree.
+const OFFLINE_ALERT_HOURS = 6;
+
 async function checkOfflineDevices() {
   try {
+    // 1. Keep the connected flag honest. This is what the map and the device
+    //    list read, and it must still turn over within the quarter hour.
     const { rows } = await pgDb.query(`
       UPDATE tracking_devices
       SET connected = FALSE
@@ -570,7 +587,32 @@ async function checkOfflineDevices() {
     for (const device of rows) {
       console.log(`[Offline] ${device.imei} marked offline (last seen ${device.last_seen_at})`);
       trackingEvents.emit('device_status', { device_id: device.id, connected: false });
-      if (!device.bike_id) continue;
+    }
+
+    // 2. Alert on the ones that have stayed quiet.
+    //
+    //    The flag above flips once, so the alert cannot ride along with it and
+    //    still wait six hours. It is driven off last_seen_at instead, and the
+    //    NOT EXISTS is what keeps it to one alert per episode: this sweep runs
+    //    every five minutes, and an alert already raised since the device's
+    //    last ping means this silence has been reported. When the tracker comes
+    //    back, last_seen_at moves past that alert and the next silence is a new
+    //    episode. It is also the one offline guard that survives a restart,
+    //    unlike the in-memory cooldown.
+    const { rows: quiet } = await pgDb.query(`
+      SELECT d.id, d.bike_id, d.last_seen_at, d.imei
+        FROM tracking_devices d
+       WHERE d.bike_id IS NOT NULL
+         AND d.last_seen_at IS NOT NULL
+         AND d.last_seen_at < NOW() - INTERVAL '${OFFLINE_ALERT_HOURS} hours'
+         AND NOT EXISTS (
+           SELECT 1 FROM tracking_alerts a
+            WHERE a.device_id = d.id
+              AND a.alert_type = 'device_offline'
+              AND a.created_at > d.last_seen_at
+         )
+    `);
+    for (const device of quiet) {
       const recordedAt = new Date().toISOString();
       await fireAlert(device.bike_id, device.id, 'device_offline', {
         imei: device.imei,

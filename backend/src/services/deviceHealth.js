@@ -45,6 +45,22 @@ const MIN_BAD_PINGS = 6;
 // complaint about its GPS.
 const READING_FRESH_MINUTES = 30;
 
+// How long a tracker must stay silent before that is worth reporting.
+//
+// `deviceStatus` calls a device offline after an hour, which is the right line
+// for the map: a bike nobody has heard from in an hour should not be drawn as
+// live. It is the wrong line for this list. These units connect, push, and drop
+// the link, and a bike parked in a basement, under a carport or simply out of
+// coverage goes quiet for a couple of hours as a matter of routine. Reporting
+// every one of them filled the health list with devices that came back on their
+// own before anybody read the row.
+//
+// Six hours is long enough that the silence is no longer routine. Below it the
+// device is left off the list entirely — the map still shows it offline, which
+// is where that belongs.
+const OFFLINE_ALERT_HOURS = 6;
+const OFFLINE_ALERT_MS = OFFLINE_ALERT_HOURS * 60 * 60 * 1000;
+
 const BATTERY_CRITICAL_PCT = 20;
 
 /** The tracker's own backup cell: 3200 mV empty, 4200 mV full. */
@@ -101,7 +117,12 @@ async function recentQuality({ db = pgDb, windowPings = WINDOW_PINGS } = {}) {
 function reasonsFor(row, { status, now = new Date() } = {}) {
   const reasons = [];
 
-  if (status === 'offline') {
+  // A device that has never reported has no silence to measure, so it is said
+  // straight away: that is an installation that did not finish, not a bike out
+  // of coverage.
+  const silentFor = row.last_seen_at ? now - new Date(row.last_seen_at) : Infinity;
+
+  if (status === 'offline' && silentFor >= OFFLINE_ALERT_MS) {
     // The timestamp travels as a value rather than inside the sentence, so the
     // browser renders it in South African time like every other time on the
     // page instead of showing a UTC ISO string.
@@ -190,6 +211,6 @@ async function unhealthyDevices({ statusFor, db = pgDb, now = new Date() } = {})
 
 module.exports = {
   MIN_SATELLITES, POOR_GSM, MOVING_KMH, WINDOW_PINGS, MIN_BAD_PINGS,
-  READING_FRESH_MINUTES, BATTERY_CRITICAL_PCT,
+  READING_FRESH_MINUTES, OFFLINE_ALERT_HOURS, BATTERY_CRITICAL_PCT,
   battPct, recentQuality, reasonsFor, signatureOf, unhealthyDevices,
 };

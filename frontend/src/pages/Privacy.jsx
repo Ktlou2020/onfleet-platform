@@ -1,11 +1,12 @@
 import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import Logo from '../components/Logo';
+import { brandName, brandFullName, brandLegal } from '../brand';
 
 export default function Privacy() {
   useEffect(() => {
-    document.title = 'Privacy Policy — OnFleet Africa';
-    return () => { document.title = 'OnFleet Africa'; };
+    document.title = `Privacy Policy — ${brandFullName}`;
+    return () => { document.title = brandFullName; };
   }, []);
 
   return (
@@ -22,17 +23,17 @@ export default function Privacy() {
 
       <main style={{ maxWidth: 720, margin: '0 auto', padding: '56px 24px 80px' }}>
         <h1 style={{ marginBottom: 8, fontSize: 'clamp(24px, 4vw, 36px)' }}>Privacy Policy</h1>
-        <p style={{ color: 'var(--muted)', fontSize: 14, marginBottom: 48 }}>Last updated: July 2026</p>
+        <p style={{ color: 'var(--muted)', fontSize: 14, marginBottom: 48 }}>Last updated: September 2026</p>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 40 }}>
           <section>
             <h2 style={{ fontSize: 18, marginBottom: 12 }}>Who we are</h2>
             <p style={{ color: 'var(--muted)', lineHeight: 1.75, fontSize: 15 }}>
-              OnFleet Africa (Pty) Ltd operates the OnFleet platform, a fleet management and rider
-              payment system for South African delivery motorcycle operators. Our offices are at
-              Kya Sand, Johannesburg. If you have questions about this policy, contact us at{' '}
-              <a href="mailto:privacy@onfleetafrica.co.za" style={{ color: 'var(--primary-light)' }}>
-                privacy@onfleetafrica.co.za
+              {brandLegal.provider} operates the {brandName} platform, a fleet management and rider
+              payment system for South African delivery motorcycle operators. Our offices are at{' '}
+              {brandLegal.address}. If you have questions about this policy, contact us at{' '}
+              <a href={`mailto:${brandLegal.privacyEmail}`} style={{ color: 'var(--primary-light)' }}>
+                {brandLegal.privacyEmail}
               </a>.
             </p>
           </section>
@@ -90,7 +91,7 @@ export default function Privacy() {
             <p style={{ color: 'var(--muted)', lineHeight: 1.75, fontSize: 15 }}>
               Bikes on our platform are fitted with GPS trackers. Location data is recorded
               continuously while the bike is active and is accessible to the fleet owner and
-              to OnFleet Africa staff. By signing an agreement, riders acknowledge and consent
+              to {brandName} support staff. By signing an agreement, riders acknowledge and consent
               to this tracking. Location data is retained for a maximum of 12 months.
             </p>
           </section>
@@ -121,8 +122,8 @@ export default function Privacy() {
             </ul>
             <p style={{ color: 'var(--muted)', lineHeight: 1.75, fontSize: 15, marginTop: 16 }}>
               To exercise any of these rights, email{' '}
-              <a href="mailto:privacy@onfleetafrica.co.za" style={{ color: 'var(--primary-light)' }}>
-                privacy@onfleetafrica.co.za
+              <a href={`mailto:${brandLegal.privacyEmail}`} style={{ color: 'var(--primary-light)' }}>
+                {brandLegal.privacyEmail}
               </a>.
             </p>
           </section>
@@ -157,7 +158,7 @@ export default function Privacy() {
       </main>
 
       <footer style={{ borderTop: '1px solid var(--border)', padding: '24px', textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>
-        <Link to="/fleet" style={{ color: 'var(--muted)', textDecoration: 'none' }}>← Back to OnFleet Fleet</Link>
+        <Link to="/fleet" style={{ color: 'var(--muted)', textDecoration: 'none' }}>← Back to {brandName} Fleet</Link>
       </footer>
     </div>
   );

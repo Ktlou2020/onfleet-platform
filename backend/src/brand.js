@@ -43,6 +43,23 @@ const BRANDS = {
       phone: '081 539 5612',
       signatory: 'OnFleet Authorised Representative',
     },
+    // The company a fleet operator contracts with for the software, and the
+    // addresses that reach it about the contract or about personal
+    // information. Deliberately not the same field as `legalEntity` above:
+    // that is whose motorcycle it is, this is whose platform it is. A brand
+    // always has one — somebody is party to the terms a customer accepts, and
+    // a terms page that names nobody is not a contract.
+    //
+    // Both products are sold by the same registered company, so `provider`
+    // does not change between them. What changes is the name the terms define
+    // for it and the inbox that answers, which is why this is read from the
+    // brand rather than written into the page.
+    legal: {
+      provider: 'OnFleet Africa (Pty) Ltd',
+      address: 'Unit E20, 472 Spionkop Avenue, Kya Sand, Johannesburg',
+      legalEmail: 'legal@onfleetafrica.co.za',
+      privacyEmail: 'privacy@onfleetafrica.co.za',
+    },
     // The logo route is left alone for OnFleet, so this is the file the
     // frontend already ships and already asks for.
     logo: '/logo.png',
@@ -75,6 +92,16 @@ const BRANDS = {
     // purpose: a contract with a blank lessor is a bug somebody fixes, and a
     // contract naming the wrong company is one nobody notices.
     legalEntity: null,
+    // Pillion owns no bikes, but it is still sold by a company, and that
+    // company is the one a Pillion customer's terms bind. Same provider as
+    // OnFleet's; its own inboxes, so a Pillion customer writing about their
+    // contract is not answered from a brand they have never heard of.
+    legal: {
+      provider: 'OnFleet Africa (Pty) Ltd',
+      address: 'Unit E20, 472 Spionkop Avenue, Kya Sand, Johannesburg',
+      legalEmail: 'legal@pillion.co.za',
+      privacyEmail: 'privacy@pillion.co.za',
+    },
     emailAccent: '#9BDCEE',
     emailHeaderBg: '#0C4A5A',
     emailKicker: 'Fleet Management',
@@ -135,6 +162,10 @@ function publicBrand(b = brand) {
   return {
     key: b.key, name: b.name, fullName: b.fullName,
     portalUrl: b.portalUrl, domain: b.domain,
+    // The terms and privacy pages are public and render before anyone signs
+    // in, so the company they name has to travel with the page rather than be
+    // fetched behind a token.
+    legal: b.legal,
     // MARKETING_URL wins, and an explicit empty value turns the redirect off
     // — which is what you want if the marketing domain is not live yet.
     marketingUrl: process.env.MARKETING_URL !== undefined

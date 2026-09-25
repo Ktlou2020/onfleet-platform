@@ -29,6 +29,10 @@ const BRANDS = {
     portalUrl: 'https://portal.onfleet.africa',
     // The words the emails sign off with. Kept beside the name so a brand is
     // one object rather than a name here and a sign-off three files away.
+    // Who the emails come from. A brand that is not OnFleet must not fall back
+    // to an onfleet.africa address, which is what every notification did
+    // before this existed — the sender is part of the brand, not a default.
+    email: { from: 'no-reply@onfleet.africa', name: 'OnFleet Africa' },
     emailAccent: '#93c5fd',
     emailHeaderBg: '#1E3A5F',
     emailKicker: 'Fleet Management',
@@ -75,6 +79,7 @@ const BRANDS = {
     // purpose: a contract with a blank lessor is a bug somebody fixes, and a
     // contract naming the wrong company is one nobody notices.
     legalEntity: null,
+    email: { from: 'support@pillion.co.za', name: 'Pillion' },
     emailAccent: '#9BDCEE',
     emailHeaderBg: '#0C4A5A',
     emailKicker: 'Fleet Management',

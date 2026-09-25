@@ -1,5 +1,6 @@
 const axios = require('axios');
 const nodemailer = require('nodemailer');
+const { brand } = require('../brand');
 
 let transporter;
 
@@ -13,7 +14,7 @@ function readEnv(name, fallback = '') {
   return value;
 }
 
-function parseIdentity(rawValue, fallbackEmail = 'no-reply@onfleet.africa', fallbackName = 'OnFleet Africa') {
+function parseIdentity(rawValue, fallbackEmail = brand.email.from, fallbackName = brand.email.name) {
   const raw = String(rawValue || '').trim();
   const match = raw.match(/^(.*)<([^>]+)>$/);
   if (match) {
@@ -28,12 +29,16 @@ function parseIdentity(rawValue, fallbackEmail = 'no-reply@onfleet.africa', fall
   return { name: raw || fallbackName, email: fallbackEmail };
 }
 
+// EMAIL_FROM is the explicit override; BREVO_SENDER_EMAIL is next because a
+// provider will only send from an address it has verified; the brand's own
+// address is the floor. Nothing falls through to another brand's domain.
 function getSenderIdentity() {
-  const fallbackEmail = readEnv('BREVO_SENDER_EMAIL', readEnv('SMTP_USER', 'no-reply@onfleet.africa')) || 'no-reply@onfleet.africa';
-  const base = parseIdentity(readEnv('EMAIL_FROM', ''), fallbackEmail, readEnv('EMAIL_FROM_NAME', 'OnFleet Africa'));
+  const fallbackEmail = readEnv('BREVO_SENDER_EMAIL', readEnv('SMTP_USER', brand.email.from)) || brand.email.from;
+  const base = parseIdentity(readEnv('EMAIL_FROM', ''), fallbackEmail, readEnv('EMAIL_FROM_NAME', brand.email.name));
+  const explicit = parseIdentity(readEnv('EMAIL_FROM', ''), '', '').email;
   return {
-    name: readEnv('EMAIL_FROM_NAME', base.name || 'OnFleet Africa').trim(),
-    email: readEnv('BREVO_SENDER_EMAIL', base.email || fallbackEmail).trim()
+    name: readEnv('EMAIL_FROM_NAME', base.name || brand.email.name).trim(),
+    email: (explicit || readEnv('BREVO_SENDER_EMAIL', base.email || fallbackEmail)).trim()
   };
 }
 

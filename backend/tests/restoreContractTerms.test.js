@@ -157,3 +157,49 @@ describe.skipIf(!process.env.DATABASE_URL)('what it refuses to do on its own', (
     expect(repair.refusalFor(agreement, FACE, 23135.87)).toBeNull();
   });
 });
+
+// The way this corruption hides from its own detector.
+//
+// The importer used to set total_weeks to ceil(total_amount / weekly_amount),
+// so on a damaged agreement the face value is inflated in step with the total
+// and the ratio between them comes out near 1. Measured against its own
+// inflated term, 556 weeks x R850 = R472,600 against a R495,838 total is 1.05
+// — nowhere near the 1.5x threshold. Capping the term at the bike's is what
+// makes it visible again.
+describe.skipIf(!process.env.DATABASE_URL)('an agreement whose term was inflated too', () => {
+  beforeEach(async () => { await resetAllPgTables(); });
+
+  async function inflatedTermAgreement() {
+    const agreement = await createPgAgreement({
+      agreement_no: `LEG-INFLATED-${Date.now()}`,
+      weekly_amount: WEEKLY, total_weeks: 556, total_amount: 495838.93,
+    });
+    await pgDb.query('UPDATE bikes SET total_weeks = $1 WHERE id = $2', [WEEKS, agreement.bike_id]);
+    const { rows } = await pgDb.query(
+      `SELECT a.*, b.total_weeks AS bike_total_weeks FROM agreements a
+         LEFT JOIN bikes b ON b.id = a.bike_id WHERE a.id = $1`, [agreement.id]);
+    return rows[0];
+  }
+
+  it('is found, even though its own face value vouches for it', async () => {
+    const agreement = await inflatedTermAgreement();
+    const found = await repair.candidates({ agreementNo: null });
+    expect(found.map((r) => r.id)).toContain(agreement.id);
+  });
+
+  // Restoring 556 x R850 would hand the rider a R472,600 contract and call it
+  // repaired. The term is as suspect as the total.
+  it('is reported but never repaired, because its term is suspect too', async () => {
+    const agreement = await inflatedTermAgreement();
+    const refusal = repair.refusalFor(agreement, WEEKLY * 556, 23135.87);
+    expect(refusal).toMatch(/term of 556 weeks is more than twice/);
+  });
+
+  it('still repairs an agreement whose term is sane', async () => {
+    const agreement = await damagedAgreement();
+    const { rows } = await pgDb.query(
+      `SELECT a.*, b.total_weeks AS bike_total_weeks FROM agreements a
+         LEFT JOIN bikes b ON b.id = a.bike_id WHERE a.id = $1`, [agreement.id]);
+    expect(repair.refusalFor(rows[0], FACE, 23135.87)).toBeNull();
+  });
+});

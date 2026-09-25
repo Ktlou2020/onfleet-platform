@@ -12,11 +12,16 @@
 // damaged beforehand were never repaired.
 //
 // The repair is not a better guess at the balance. It is the contract:
-// total_weeks instalments of weekly_amount, which are the two figures the
-// corruption never touched, with the final week settling the remainder as
-// buildPaymentSchedule always does. Every payment is then replayed against
-// that schedule in order, so what the rider has actually paid decides what is
-// left rather than anything typed in.
+// total_weeks instalments of weekly_amount, with the final week settling the
+// remainder as buildPaymentSchedule always does. Every payment is then
+// replayed against that schedule in order, so what the rider has actually paid
+// decides what is left rather than anything typed in.
+//
+// That rests on total_weeks and weekly_amount having survived, and for a
+// CSV-imported agreement total_weeks may not have: the importer derived it
+// from the money, so a money error could become a term. Such an agreement is
+// found and reported but never repaired, because restoring to a corrupted term
+// would bless it as the contract.
 //
 //   node src/scripts/restore-contract-terms.js                      # dry run, all damaged
 //   node src/scripts/restore-contract-terms.js --agreement LEG-...   # dry run, just that one
@@ -43,6 +48,10 @@ const DAMAGE_THRESHOLD = 1.5;
 // different and riskier act than fixing a live one.
 const REPAIRABLE_STATUSES = ['active', 'paused', 'defaulted'];
 
+// Stands in when a bike carries no term of its own. Only ever bounds a sanity
+// check; it never decides what anybody owes.
+const DEFAULT_TERM_WEEKS = 78;
+
 const money = (n) => `R${Number(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
 
 function parseArgs(argv) {
@@ -58,17 +67,32 @@ function parseArgs(argv) {
 async function candidates({ agreementNo }) {
   if (agreementNo) {
     const { rows } = await pgDb.query(
-      `SELECT a.*, u.full_name FROM agreements a JOIN users u ON u.id = a.user_id WHERE a.agreement_no = $1`,
+      `SELECT a.*, u.full_name, b.total_weeks AS bike_total_weeks
+         FROM agreements a
+         JOIN users u ON u.id = a.user_id
+         LEFT JOIN bikes b ON b.id = a.bike_id
+        WHERE a.agreement_no = $1`,
       [agreementNo]);
     return rows;
   }
+  // The reference has to be bounded by the bike's term, for the same reason
+  // updateAgreementBalance's guard is: the importer used to set total_weeks to
+  // ceil(total_amount / weekly_amount), so on a damaged agreement the face
+  // value is inflated in step with the total and the ratio comes out near 1.
+  // Measured against its own inflated term, 556 weeks x R850 = R472,600
+  // against a R495,838 total is 1.05 — invisible to a 1.5x threshold. The
+  // damage hides inside its own detector unless the term is capped.
   const { rows } = await pgDb.query(
-    `SELECT a.*, u.full_name
-       FROM agreements a JOIN users u ON u.id = a.user_id
+    `SELECT a.*, u.full_name, b.total_weeks AS bike_total_weeks
+       FROM agreements a
+       JOIN users u ON u.id = a.user_id
+       LEFT JOIN bikes b ON b.id = a.bike_id
       WHERE a.weekly_amount > 0 AND a.total_weeks > 0
-        AND a.total_amount > a.weekly_amount * a.total_weeks * $1
-      ORDER BY a.total_amount / (a.weekly_amount * a.total_weeks) DESC`,
-    [DAMAGE_THRESHOLD]);
+        AND a.total_amount > a.weekly_amount * LEAST(
+              a.total_weeks, COALESCE(NULLIF(b.total_weeks, 0), $2) * 2) * $1
+      ORDER BY a.total_amount / NULLIF(a.weekly_amount * LEAST(
+              a.total_weeks, COALESCE(NULLIF(b.total_weeks, 0), $2) * 2), 0) DESC`,
+    [DAMAGE_THRESHOLD, DEFAULT_TERM_WEEKS]);
   return rows;
 }
 
@@ -100,6 +124,16 @@ function refusalFor(agreement, faceValue, paidTotal) {
   // money.
   if (paidTotal > faceValue + 0.01) {
     return `payments received (${money(paidTotal)}) exceed the contract's face value (${money(faceValue)}) — needs a person`;
+  }
+  // The repair restores total_weeks x weekly_amount on the premise that those
+  // two survived the corruption. For a CSV-imported agreement that premise can
+  // fail: the importer derived the term from the money, so a term far longer
+  // than the bike's is itself suspect, and restoring to it would bless a
+  // corrupted term as the contract. Report it and leave it for a person.
+  const standardWeeks = Number(agreement.bike_total_weeks) || DEFAULT_TERM_WEEKS;
+  const statedWeeks = Number(agreement.total_weeks || 0);
+  if (statedWeeks > standardWeeks * 2) {
+    return `term of ${statedWeeks} weeks is more than twice this bike's ${standardWeeks} — the term itself looks derived from a bad total, so restoring to it would bless it`;
   }
   return null;
 }

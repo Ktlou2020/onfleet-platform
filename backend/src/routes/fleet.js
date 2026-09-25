@@ -17,6 +17,7 @@ const { discontinueAgreementForStolenBike, discontinueAgreement, reinstateDiscon
 const { extractPayslipInsights } = require('../services/documentInsights');
 const { sendNotification, sendEmail } = require('../services/notifierPg');
 const { writeContractSnapshot } = require('../services/contracts');
+const { lessorOrgForAgreement } = require('../services/contractsPg');
 const { writeFleetOwnerContractSnapshot } = require('../services/contractsPg');
 const { insertImportedPaymentForFleet } = require('../services/csvImportsFleet');
 const asyncRouter = require('../utils/asyncRouter');
@@ -209,7 +210,8 @@ async function approveFleetApplication({ organization, applicationId, bikeId, we
   const agreement = agreementRows[0];
   const { rows: refreshedAppRows } = await pgDb.query('SELECT * FROM applications WHERE id = $1', [application.id]);
   const refreshedApplication = refreshedAppRows[0];
-  const contractPath = writeContractSnapshot({ agreement, rider, bike, application: refreshedApplication, kind: 'unsigned' });
+  const org = await lessorOrgForAgreement(agreement);
+  const contractPath = writeContractSnapshot({ agreement, rider, bike, application: refreshedApplication, org, kind: 'unsigned' });
   await pgDb.query(`UPDATE agreements SET contract_file_path = $1, contract_pdf_path = $2 WHERE id = $3`, [contractPath, contractPath, agreementId]);
   await pgDb.query(`INSERT INTO application_documents
     (application_id, user_id, doc_type, file_path, original_name, mime_type, status, uploaded_by)

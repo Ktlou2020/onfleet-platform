@@ -7,6 +7,7 @@ const { authRequired, adminOnly } = require('../middleware/auth');
 // still depend on those).
 const { logAudit, addDays, recalcScheduleStatuses, rebuildScheduleAllocations, updateAgreementBalance } = require('../utils/helpersPg');
 const { writeContractSnapshot } = require('../services/contracts');
+const { lessorOrgForAgreement } = require('../services/contractsPg');
 const { discontinueAgreement, reinstateDiscontinuedAgreement } = require('../services/agreementLifecyclePg');
 const asyncRouter = require('../utils/asyncRouter');
 
@@ -244,6 +245,7 @@ router.post('/:id/sign', authRequired, async (req, res) => {
   if (!bundle || bundle.agreement.user_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
   const signature = req.body.signature || `${req.user.full_name} · ${new Date().toLocaleString('en-ZA')}`;
   const signedContractPath = writeContractSnapshot({
+    org: await lessorOrgForAgreement(bundle.agreement),
     agreement: bundle.agreement,
     rider: { ...bundle.agreement },
     bike: { ...bundle.agreement },

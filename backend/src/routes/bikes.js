@@ -14,6 +14,7 @@ const { extractLicenseDiscInsights } = require('../services/documentInsights');
 const { requireValidMime } = require('../utils/validateUpload');
 const { convertHeicUploads } = require('../utils/heicToJpeg');
 const { writeContractSnapshot } = require('../services/contracts');
+const { lessorOrgForAgreement } = require('../services/contractsPg');
 const asyncRouter = require('../utils/asyncRouter');
 const { hybridStorage } = require('../utils/hybridStorage');
 
@@ -506,7 +507,8 @@ router.post('/:id/allocate', authRequired, adminOnly, async (req, res) => {
 
     const { rows: agreementRows } = await pgDb.query('SELECT * FROM agreements WHERE id = $1', [agreementId]);
     const agreement = agreementRows[0];
-    const contractPath = writeContractSnapshot({ agreement, rider, bike, application: matchingApplication || null, kind: 'unsigned' });
+    const org = await lessorOrgForAgreement(agreement);
+    const contractPath = writeContractSnapshot({ agreement, rider, bike, application: matchingApplication || null, org, kind: 'unsigned' });
     await pgDb.query(`UPDATE agreements SET contract_file_path = $1, contract_pdf_path = $2 WHERE id = $3`, [contractPath, contractPath, agreementId]);
 
     if (matchingApplication?.id) {

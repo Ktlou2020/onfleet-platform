@@ -32,6 +32,17 @@ const BRANDS = {
     emailAccent: '#93c5fd',
     emailHeaderBg: '#1E3A5F',
     emailKicker: 'Fleet Management',
+    // The company that lets bikes out under its own name, for agreements on
+    // bikes that belong to no fleet operator — which on this deployment means
+    // OnFleet Africa's own fleet. It is deliberately not the same thing as the
+    // brand: the brand is whose software this is, and this is whose motorcycle
+    // it is. Only a company that actually owns bikes has one.
+    legalEntity: {
+      name: 'OnFleet Africa',
+      address: 'Unit E20, 472 Spionkop Avenue, Kya Sand, Johannesburg',
+      phone: '081 539 5612',
+      signatory: 'OnFleet Authorised Representative',
+    },
     // The logo route is left alone for OnFleet, so this is the file the
     // frontend already ships and already asks for.
     logo: '/logo.png',
@@ -58,6 +69,12 @@ const BRANDS = {
     // who lands on the app's front door is sent there rather than shown
     // OnFleet's rider pitch, which is for a different product entirely.
     marketingUrl: 'https://pillion.co.za',
+    // Pillion owns no motorcycles and lets none out, so it can never be the
+    // lessor on an agreement. Every bike here belongs to the operator who put
+    // it on the platform, and the agreement has to say so. Left absent on
+    // purpose: a contract with a blank lessor is a bug somebody fixes, and a
+    // contract naming the wrong company is one nobody notices.
+    legalEntity: null,
     emailAccent: '#9BDCEE',
     emailHeaderBg: '#0C4A5A',
     emailKicker: 'Fleet Management',

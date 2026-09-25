@@ -180,8 +180,9 @@ async function main() {
     const { rows: [bike] } = await pgDb.query('SELECT * FROM bikes WHERE id = $1', [bikeId]);
     const { rows: [agreement] } = await pgDb.query('SELECT * FROM agreements WHERE id = $1', [agreementInfo.id]);
     const { rows: [application] } = await pgDb.query('SELECT * FROM applications WHERE id = $1', [applicationInfo.id]);
-    const unsignedPath = writeContractSnapshot({ agreement, rider, bike, application, kind: 'unsigned' });
-    const signedPath = writeContractSnapshot({ agreement, rider, bike, application, signatureData: agreement.signature_data, kind: 'signed' });
+    // Seed data is the deployment's own fleet, so no operator sits behind it.
+    const unsignedPath = writeContractSnapshot({ agreement, rider, bike, application, org: null, kind: 'unsigned' });
+    const signedPath = writeContractSnapshot({ agreement, rider, bike, application, org: null, signatureData: agreement.signature_data, kind: 'signed' });
     await pgDb.query(
       `UPDATE agreements SET contract_file_path = $1, contract_pdf_path = $2, signed_contract_path = $3 WHERE id = $4`,
       [unsignedPath, unsignedPath, signedPath, agreementInfo.id]

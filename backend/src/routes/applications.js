@@ -11,6 +11,7 @@ const { logAudit, generateAgreementNo, buildPaymentSchedule, addDays } = require
 const { sendNotification } = require('../services/notifierPg');
 const { extractPayslipInsights } = require('../services/documentInsights');
 const { writeContractSnapshot } = require('../services/contracts');
+const { lessorOrgForAgreement } = require('../services/contractsPg');
 const { requireValidMime } = require('../utils/validateUpload');
 const { convertHeicUploads } = require('../utils/heicToJpeg');
 const asyncRouter = require('../utils/asyncRouter');
@@ -201,7 +202,8 @@ async function approveApplication({ applicationId, bikeId, weeklyAmount, totalWe
 
   const { rows: agreementRows } = await pgDb.query('SELECT * FROM agreements WHERE id = $1', [agreementId]);
   const agreement = agreementRows[0];
-  const contractPath = writeContractSnapshot({ agreement, rider, bike, application: app, kind: 'unsigned' });
+  const org = await lessorOrgForAgreement(agreement);
+  const contractPath = writeContractSnapshot({ agreement, rider, bike, application: app, org, kind: 'unsigned' });
   await pgDb.query(`UPDATE agreements SET contract_file_path = $1, contract_pdf_path = $2 WHERE id = $3`, [contractPath, contractPath, agreementId]);
   await pgDb.query(`INSERT INTO application_documents
     (application_id, user_id, doc_type, file_path, original_name, mime_type, status, uploaded_by)

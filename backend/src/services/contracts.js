@@ -1,6 +1,58 @@
 const fs = require('fs');
 const path = require('path');
 const { contracts: contractDir } = require('../uploadPaths');
+const { brand } = require('../brand');
+
+// Who is letting the motorcycle out, as against whose software wrote the page.
+//
+// These are two different parties and every clause below used to collapse them
+// into one. The wording said OnFleet throughout, so an agreement drawn up by a
+// fleet operator for their own rider asserted that OnFleet owned that
+// operator's bike, that the rider owed the weekly rental to OnFleet, and that
+// legal process was served on OnFleet's address in Kya Sand. None of it was
+// true of that agreement, and a contract naming the wrong owner and the wrong
+// payee is not one the operator could enforce against their own rider.
+//
+// The lessor is therefore the organisation the bike belongs to. A bike that
+// belongs to no organisation is let out by the deployment's own company, which
+// is what OnFleet Africa does with its own fleet. A deployment that owns no
+// bikes — Pillion sells the software and owns nothing — has no such company,
+// and then the document says so plainly instead of borrowing a name. A blank
+// lessor is a bug somebody fixes; the wrong lessor is one nobody notices.
+function lessorFrom(org) {
+  if (org) {
+    const name = org.name || null;
+    return {
+      name: name || 'Lessor name not recorded',
+      address: [org.address, org.city].filter(Boolean).join(', ') || 'Address not recorded',
+      phone: org.contact_phone || '',
+      registration: org.registration_number || null,
+      vat: org.vat_number || null,
+      signatory: name ? `${name} — authorised representative` : 'Authorised representative',
+    };
+  }
+
+  const own = brand.legalEntity;
+  if (own) {
+    return {
+      name: own.name,
+      address: own.address,
+      phone: own.phone || '',
+      registration: null,
+      vat: null,
+      signatory: own.signatory,
+    };
+  }
+
+  return {
+    name: 'Lessor not recorded',
+    address: 'Address not recorded',
+    phone: '',
+    registration: null,
+    vat: null,
+    signatory: 'Not recorded',
+  };
+}
 
 function publicPath(filename) {
   return `/uploads/contracts/${filename}`;
@@ -31,20 +83,21 @@ function money(value) {
   return `R${Number(value || 0).toFixed(2)}`;
 }
 
-function contractTemplate({ agreement, rider, bike, application, signatureData }) {
+function contractTemplate({ agreement, rider, bike, application, signatureData, org = null }) {
+  const lessor = lessorFrom(org);
   const riderAddress = [rider.address, rider.city, rider.province, rider.postal_code].filter(Boolean).join(', ');
   const payoutDetail = application?.payout_preference === 'eft'
     ? [application.bank_name, application.account_holder, application.account_number].filter(Boolean).join(' · ')
     : (application?.payout_preference === 'ewallet' ? (application.ewallet_number || 'E-wallet number pending') : 'Not specified');
   const signedLabel = signatureData
-    ? `<div class="signature-box"><div class="signature-mark">${escapeHtml(signatureData)}</div><div>Electronic signature recorded by OnFleet platform</div></div>`
+    ? `<div class="signature-box"><div class="signature-mark">${escapeHtml(signatureData)}</div><div>Electronic signature recorded by the ${escapeHtml(brand.name)} platform</div></div>`
     : '<div class="signature-box">Pending rider electronic signature</div>';
 
   return `<!doctype html>
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>OnFleet Agreement ${escapeHtml(agreement.agreement_no)}</title>
+  <title>Delivery Bike Rental Agreement ${escapeHtml(agreement.agreement_no)}</title>
   <style>
     :root{--primary:#1E88D1;--primary-soft:#eaf4fb;--text:#112233;--muted:#64748b;--border:#dbe7f1;--danger:#c62828}
     *{box-sizing:border-box}
@@ -76,9 +129,10 @@ function contractTemplate({ agreement, rider, bike, application, signatureData }
   <div class="wrap">
     <div class="brand">
       <div>
-        <div class="small">ONFLEET (PTY) LTD</div>
+        <div class="small">${escapeHtml(lessor.name)}</div>
         <h1>Delivery Bike Rental Agreement</h1>
-        <div class="small">Unit E20, 472 Spionkop Avenue, Kya Sand, Johannesburg · 081 539 5612</div>
+        <div class="small">${escapeHtml(lessor.address)}${lessor.phone ? ` · ${escapeHtml(lessor.phone)}` : ''}</div>
+        ${lessor.registration ? `<div class="small">Reg. No: ${escapeHtml(lessor.registration)}${lessor.vat ? ` · VAT: ${escapeHtml(lessor.vat)}` : ''}</div>` : ''}
         <div class="small">Agreement number: ${escapeHtml(agreement.agreement_no)}</div>
       </div>
       <div class="badge">${signatureData ? 'SIGNED' : 'PENDING SIGNATURE'}</div>
@@ -113,7 +167,7 @@ function contractTemplate({ agreement, rider, bike, application, signatureData }
 
     <div class="clause">
       <h2>1. RENTAL OF PRODUCTS AND OWNERSHIP</h2>
-      <p>Each Product is owned by OnFleet and will at all times remain the property of OnFleet until all amounts due under this Agreement have been paid in full and ownership is formally transferred in terms of the platform process.</p>
+      <p>Each Product is owned by ${escapeHtml(lessor.name)} and will at all times remain the property of ${escapeHtml(lessor.name)} until all amounts due under this Agreement have been paid in full and ownership is formally transferred in terms of the platform process.</p>
       <p>The Client acknowledges that possession and use of the Product do not transfer ownership until completion of the full rent-to-own payment cycle and any other contractual obligations.</p>
     </div>
 
@@ -125,28 +179,28 @@ function contractTemplate({ agreement, rider, bike, application, signatureData }
 
     <div class="clause">
       <h2>3. RENTAL PAYMENTS AND PAYMENT GENERALLY</h2>
-      <p>The Client shall make payment of the Weekly Rental to OnFleet, weekly in advance, on or before the last day of each week. The rental amount credited to the Agreement is the contractual weekly rental shown above.</p>
+      <p>The Client shall make payment of the Weekly Rental to ${escapeHtml(lessor.name)}, weekly in advance, on or before the last day of each week. The rental amount credited to the Agreement is the contractual weekly rental shown above.</p>
       <p>Where card or gateway fees are charged separately for a transaction, those fees are disclosed transparently on the payment screen and transaction history and do not reduce the rental amount credited to the Agreement.</p>
       <p>All amounts shown on the platform are payable in South African Rand. Where applicable, amounts are inclusive of value-added tax (VAT).</p>
     </div>
 
     <div class="clause">
       <h2>4. INITIATION FEE</h2>
-      <p>Any initiation fee, onboarding cost, or once-off setup fee calculated at the date of entering into this Agreement is non-refundable unless OnFleet agrees otherwise in writing.</p>
+      <p>Any initiation fee, onboarding cost, or once-off setup fee calculated at the date of entering into this Agreement is non-refundable unless ${escapeHtml(lessor.name)} agrees otherwise in writing.</p>
     </div>
 
     <div class="clause">
       <h2>7. INSURANCE, RISK AND LIABILITY</h2>
       <p>The Client accepts all risk and liability in respect of the Product immediately upon the Client taking possession of the Product.</p>
-      <p>The Client shall keep the Product fully insured to the full amount of its replacement value whenever required by OnFleet or any insurer appointed by OnFleet. The Client remains liable for any excess, uninsured loss, negligence, misuse, traffic fines, impoundment costs, towing, storage, and third-party claims to the extent permitted by law.</p>
+      <p>The Client shall keep the Product fully insured to the full amount of its replacement value whenever required by ${escapeHtml(lessor.name)} or any insurer appointed by ${escapeHtml(lessor.name)}. The Client remains liable for any excess, uninsured loss, negligence, misuse, traffic fines, impoundment costs, towing, storage, and third-party claims to the extent permitted by law.</p>
     </div>
 
     <div class="clause">
       <h2>9. CLIENT&apos;S OBLIGATIONS</h2>
       <ul>
         <li>The Client must keep the motorcycle in good order, condition, and repair, fair wear and tear excepted.</li>
-        <li>Basic service items such as oil and chain service may be provided once per month where included by OnFleet, but all other maintenance and repairs remain the Client&apos;s responsibility unless the platform records otherwise.</li>
-        <li>The Client may not use the Product for any unlawful purpose, racing, carrying passengers for reward, or operating outside the borders of the Republic of South Africa without OnFleet&apos;s prior written consent.</li>
+        <li>Basic service items such as oil and chain service may be provided once per month where included by ${escapeHtml(lessor.name)}, but all other maintenance and repairs remain the Client&apos;s responsibility unless the platform records otherwise.</li>
+        <li>The Client may not use the Product for any unlawful purpose, racing, carrying passengers for reward, or operating outside the borders of the Republic of South Africa without ${escapeHtml(lessor.name)}&apos;s prior written consent.</li>
         <li>The Client must immediately report theft, seizure, accident, damage, licence expiry, insurance events, and any change in address, phone number, or domicilium email address.</li>
         <li>The Client must keep all licences, permits, and identity documents valid for the full duration of the Agreement.</li>
       </ul>
@@ -154,7 +208,7 @@ function contractTemplate({ agreement, rider, bike, application, signatureData }
 
     <div class="clause">
       <h2>13. BREACH</h2>
-      <p>If the Client fails to make any payment when due, breaches any material term, or provides false or misleading information, OnFleet shall be entitled, after any applicable notice period, to suspend the Client, uplift possession of the Product, cancel this Agreement, and claim immediate payment of all amounts payable for the unexpired portion of the Initial Term, together with any reasonable recovery costs permitted by law.</p>
+      <p>If the Client fails to make any payment when due, breaches any material term, or provides false or misleading information, ${escapeHtml(lessor.name)} shall be entitled, after any applicable notice period, to suspend the Client, uplift possession of the Product, cancel this Agreement, and claim immediate payment of all amounts payable for the unexpired portion of the Initial Term, together with any reasonable recovery costs permitted by law.</p>
       <p>On termination or cancellation, the Client shall immediately return the Product, together with all tyres, tools, accessories, keys, tracking devices, and other equipment in the same condition as at the Commencement Date, fair wear and tear excepted.</p>
     </div>
 
@@ -162,7 +216,7 @@ function contractTemplate({ agreement, rider, bike, application, signatureData }
       <h2>14. DOMICILIUM CITANDI ET EXECUTANDI</h2>
       <p>The Parties choose the following address as their respective domicilium citandi et executandi for all purposes under this Agreement, including the giving of notices and the service of legal process:</p>
       <table>
-        <tr><td>OnFleet domicilium</td><td>Unit E20, 472 Spionkop Avenue, Kya Sand, Johannesburg</td></tr>
+        <tr><td>${escapeHtml(lessor.name)} domicilium</td><td>${escapeHtml(lessor.address)}</td></tr>
         <tr><td>Client physical domicilium</td><td>${escapeHtml(riderAddress || 'Not recorded')}</td></tr>
         <tr><td>Client e-mail domicilium</td><td>${escapeHtml(rider.email || 'Not recorded')}</td></tr>
       </table>
@@ -170,14 +224,14 @@ function contractTemplate({ agreement, rider, bike, application, signatureData }
     </div>
 
     <div class="legal-note">
-      <strong>Electronic acceptance.</strong> By signing electronically, the Client confirms that the Agreement was presented in readable form on the OnFleet platform, that the Client had the opportunity to review the terms, and that the electronic signature and audit trail may be used as proof of acceptance.
+      <strong>Electronic acceptance.</strong> By signing electronically, the Client confirms that the Agreement was presented in readable form on the ${escapeHtml(brand.name)} platform, that the Client had the opportunity to review the terms, and that the electronic signature and audit trail may be used as proof of acceptance.
     </div>
 
     <div class="signature-grid">
       <div class="card">
-        <h3>OnFleet&apos;s signature (duly authorised)</h3>
+        <h3>${escapeHtml(lessor.name)}&apos;s signature (duly authorised)</h3>
         <table>
-          <tr><td>Full name</td><td>OnFleet Authorised Representative</td></tr>
+          <tr><td>Full name</td><td>${escapeHtml(lessor.signatory)}</td></tr>
           <tr><td>Capacity</td><td>Duly authorised</td></tr>
           <tr><td>Place</td><td>Johannesburg</td></tr>
           <tr><td>Date</td><td>${escapeHtml(new Date().toISOString().slice(0, 10))}</td></tr>
@@ -195,16 +249,24 @@ function contractTemplate({ agreement, rider, bike, application, signatureData }
       </div>
     </div>
 
-    <div class="small" style="margin-top:22px">Generated by OnFleet Africa platform from the active agreement record and the platform&apos;s electronic contract wording set.</div>
+    <div class="small" style="margin-top:22px">Generated by the ${escapeHtml(brand.fullName)} platform from the active agreement record and the platform&apos;s electronic contract wording set.</div>
   </div>
 </body>
 </html>`;
 }
 
-function writeContractSnapshot({ agreement, rider, bike, application, signatureData, kind }) {
+function writeContractSnapshot({ agreement, rider, bike, application, signatureData, kind, org }) {
+  // Deliberately not defaulted. Omitting the lessor used to be invisible —
+  // the document simply said OnFleet — so a new call site could put the wrong
+  // company on a signed contract without anything going wrong at the time.
+  // `null` is a real answer here, meaning the deployment lets this bike out
+  // itself; leaving it out is not.
+  if (org === undefined) {
+    throw new Error('writeContractSnapshot: pass org — the bike\'s organisation, or null when the deployment owns the bike');
+  }
   const filename = buildContractFilename(agreement.agreement_no, kind);
   const filePath = path.join(contractDir, filename);
-  fs.writeFileSync(filePath, contractTemplate({ agreement, rider, bike, application, signatureData }));
+  fs.writeFileSync(filePath, contractTemplate({ agreement, rider, bike, application, signatureData, org }));
   return publicPath(filename);
 }
 
@@ -463,7 +525,7 @@ function rentToOwnContractTemplate({ org, agreement, rider, bike }) {
     </div>
 
     <div class="footer-note">
-      Generated by the OnFleet platform on ${escapeHtml(today)} from the active agreement record. This document constitutes a legally binding agreement between the Lessor and Lessee named above. Each party should retain a signed copy.
+      Generated by the ${escapeHtml(brand.fullName)} platform on ${escapeHtml(today)} from the active agreement record. This document constitutes a legally binding agreement between the Lessor and Lessee named above. Each party should retain a signed copy.
     </div>
   </div>
 </body>
@@ -472,6 +534,11 @@ function rentToOwnContractTemplate({ org, agreement, rider, bike }) {
 
 module.exports = {
   writeContractSnapshot,
+  // Pure, and the one place the lessor is decided — exercised directly by
+  // tests/contractLessor.test.js so the wording can be asserted without a
+  // database or a file write.
+  contractTemplate,
+  lessorFrom,
   // Pure (no DB access) — reused by services/contractsPg.js
   buildContractFilename,
   buildContractAbsolutePath,

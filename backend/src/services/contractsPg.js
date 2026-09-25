@@ -18,6 +18,24 @@ const {
   writeContractSnapshot
 } = require('./contracts');
 
+/**
+ * The company that lets this agreement's bike out, or null when it belongs to
+ * no fleet operator.
+ *
+ * Looked up from the bike rather than read off whatever the caller is holding:
+ * several call sites pass a flattened agreement row built from a join that
+ * never selected organization_id, so trusting the object would quietly say
+ * "no operator" for bikes that have one — which is the whole bug.
+ */
+async function lessorOrgForAgreement(agreement, db = pgDb) {
+  const bikeId = agreement?.bike_id;
+  if (!bikeId) return null;
+  const { rows } = await db.query(
+    `SELECT o.* FROM bikes b JOIN organizations o ON o.id = b.organization_id WHERE b.id = $1`,
+    [bikeId]);
+  return rows[0] || null;
+}
+
 async function getAgreementContractContext(agreementId) {
   const { rows } = await pgDb.query(`SELECT a.*, b.make, b.model, b.registration, b.image_url, b.vin,
       b.year, b.engine_cc, b.color,
@@ -68,6 +86,7 @@ async function ensureContractSnapshotForAgreement({ agreementId, kind }) {
   if (!fs.existsSync(absolutePath)) {
     writeContractSnapshot({
       ...context,
+      org: await lessorOrgForAgreement(context.agreement),
       signatureData: kind === 'signed' ? context.agreement.signature_data : null,
       kind
     });
@@ -108,4 +127,5 @@ module.exports = {
   writeFleetOwnerContractSnapshot,
   ensureContractSnapshotForAgreement,
   ensureContractSnapshotForRelativePath,
+  lessorOrgForAgreement,
 };

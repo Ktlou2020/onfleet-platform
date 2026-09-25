@@ -453,6 +453,28 @@ async function upsertAgreementFromFleetRow(row) {
     ? +(totalReceived + outstandingBalance).toFixed(2)
     : +(weeklyAmount * Number(bike.total_weeks || 78)).toFixed(2);
   const totalWeeks = Math.max(1, Math.ceil(totalAmount / Math.max(weeklyAmount, 1)));
+
+  // A term derived from money turns a money error into a term, and from then
+  // on nothing can tell the two apart. R472,703 mistyped into "Outstanding
+  // Balance" on an R850 week produces a 556-week agreement, and after that
+  // weekly_amount x total_weeks agrees with the wrong total — which is exactly
+  // the reference updateAgreementBalance uses to catch a mistyped balance, so
+  // the guard stops firing on the agreements that need it most.
+  //
+  // The bike's term comes from the fleet's own term column rather than from a
+  // money column, so it is what the money is checked against. Doubling it
+  // leaves room for an agreement that genuinely ran long. Beyond that the
+  // money is wrong, and the row is refused rather than written: an import that
+  // invents a term buries the error, and this one is worth somebody's eyes.
+  const standardWeeks = Number(bike.total_weeks) || 78;
+  if (totalWeeks > standardWeeks * 2) {
+    throw new Error(
+      `Total received (R${totalReceived.toFixed(2)}) plus outstanding balance ` +
+      `(R${outstandingBalance.toFixed(2)}) comes to R${totalAmount.toFixed(2)}, which is ` +
+      `${totalWeeks} weeks at R${weeklyAmount.toFixed(2)} — this bike's term is ${standardWeeks} weeks. ` +
+      `Check both columns for a mistyped digit.`
+    );
+  }
   const startDate = parseDateFlexible(row['Date of bike hand over']) || parseDateFlexible(row['Date Taken']) || parseDateFlexible(row['Date Created']) || new Date().toISOString().slice(0, 10);
   const endDate = addDays(startDate, Math.max(0, totalWeeks - 1) * 7);
   const agreementNo = existing?.agreement_no || `LEG-${normalizeText(row['Vehicle Reg']) || bike.id}-${startDate.replace(/-/g, '')}`;
@@ -732,5 +754,8 @@ module.exports = {
   importPaymentsCsv,
   importLegacyBundle,
   importUserTagsCsv,
-  resolveAgreementForPayment
+  resolveAgreementForPayment,
+  // Exported for tests/balanceGuard.test.js: the row-level refusal that keeps a
+  // money error from becoming a term is worth exercising on its own.
+  upsertAgreementFromFleetRow
 };

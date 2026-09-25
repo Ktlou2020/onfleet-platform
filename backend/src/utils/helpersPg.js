@@ -199,12 +199,20 @@ async function rebuildScheduleAllocations(agreementId, db = pgDb) {
   }
 }
 
+// The term a rent-to-own agreement is written over when nothing says otherwise.
+// Only ever a fallback: it bounds the sanity check below when a bike carries no
+// term of its own, and never decides what anybody owes.
+const DEFAULT_TERM_WEEKS = 78;
+
 async function updateAgreementBalance(agreementId, remainingBalance) {
   const targetRemaining = Number(remainingBalance);
   if (!Number.isFinite(targetRemaining) || targetRemaining < 0) throw new Error('Remaining balance must be zero or greater');
 
   const { rows: agreementRows } = await pgDb.query(
-    'SELECT id, status, total_amount, weekly_amount, total_weeks FROM agreements WHERE id = $1', [agreementId]
+    `SELECT a.id, a.status, a.total_amount, a.weekly_amount, a.total_weeks,
+            b.total_weeks AS bike_total_weeks
+       FROM agreements a LEFT JOIN bikes b ON b.id = a.bike_id
+      WHERE a.id = $1`, [agreementId]
   );
   const agreement = agreementRows[0];
   if (!agreement) throw new Error('Agreement not found');
@@ -217,11 +225,23 @@ async function updateAgreementBalance(agreementId, remainingBalance) {
   // agreement's instalment into R8,426.82/week and left the rider showing ten
   // weeks overdue. The contract's own face value is the reference point: 1.5x
   // leaves room for arrears and fees, while an extra digit is always 10x.
-  const contractValue = +(Number(agreement.weekly_amount || 0) * Number(agreement.total_weeks || 0)).toFixed(2);
+  // The term this reference is built from must not itself be derivable from
+  // the figure being checked, and total_weeks is: the fleet CSV importer sets
+  // it to ceil(total_amount / weekly_amount), so on an imported agreement a
+  // money error has already become a term and weekly x total_weeks would vouch
+  // for the very number this is meant to catch. A bad balance of R472,703 on
+  // an R850 week implies a 556-week agreement, and against 556 weeks R472,703
+  // looks perfectly ordinary. The bike's term comes from the product rather
+  // than from a money column, so it bounds the reference. Doubling it leaves
+  // room for an agreement that genuinely ran long.
+  const standardWeeks = Number(agreement.bike_total_weeks) || DEFAULT_TERM_WEEKS;
+  const statedWeeks = Number(agreement.total_weeks || 0) || standardWeeks;
+  const referenceWeeks = Math.min(statedWeeks, standardWeeks * 2);
+  const contractValue = +(Number(agreement.weekly_amount || 0) * referenceWeeks).toFixed(2);
   if (contractValue > 0 && targetRemaining > contractValue * 1.5) {
     throw new Error(
       `Remaining balance of R${targetRemaining.toFixed(2)} is more than 1.5x this agreement's ` +
-      `contract value of R${contractValue.toFixed(2)} (${Number(agreement.total_weeks)} weeks x ` +
+      `contract value of R${contractValue.toFixed(2)} (${referenceWeeks} weeks x ` +
       `R${Number(agreement.weekly_amount).toFixed(2)}). Check for a mistyped digit. If the amount ` +
       `is genuinely correct, change the instalment count or weekly amount first.`
     );

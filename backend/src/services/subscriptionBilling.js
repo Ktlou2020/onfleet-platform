@@ -98,15 +98,17 @@ async function claimPeriod({ organizationId, quote, period, db = pgDb }) {
   const { rows } = await db.query(
     `INSERT INTO subscription_invoices
        (organization_id, reference, tier, cycle, per_bike_monthly, bikes, charged_bikes,
-        months_charged, amount, description, bike_breakdown, status, period_start, period_end)
-     SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12,$13
+        months_charged, subtotal, vat, vat_rate, amount, description, bike_breakdown,
+        status, period_start, period_end)
+     SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'pending',$15,$16
       WHERE NOT EXISTS (
         SELECT 1 FROM subscription_invoices
-         WHERE organization_id = $1 AND period_start = $12 AND status IN ('paid', 'pending')
+         WHERE organization_id = $1 AND period_start = $15 AND status IN ('paid', 'pending')
       )
      RETURNING *`,
     [organizationId, reference, quote.tier, quote.cycle, quote.per_bike_monthly, quote.bikes,
-     quote.charged_bikes, quote.months_charged, quote.total, quote.description,
+     quote.charged_bikes, quote.months_charged, quote.subtotal, quote.vat, quote.vat_rate,
+     quote.total, quote.description,
      JSON.stringify(quote.bike_breakdown || null), period.start, period.end]);
   return rows[0] || null;
 }

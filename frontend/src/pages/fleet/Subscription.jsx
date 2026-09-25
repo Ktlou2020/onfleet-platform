@@ -44,8 +44,14 @@ function TierCard({ quote, tier, selected, current, onPick }) {
           {quote?.cycle === 'annual' ? ' / year' : ' / month'}
         </span>
       </div>
+      {/* The rate card is quoted ex VAT and the card is charged the inclusive
+          figure, so both have to be on the page. A headline of R2 185 above a
+          line reading "20 bikes × R95" is a support call waiting to happen. */}
       <div className="text-xs muted" style={{ marginTop: 2 }}>
-        {quote ? <>{quote.charged_bikes} bikes × {fmt(tier.per_bike_monthly)} each</> : null}
+        {quote ? <>{quote.charged_bikes} bikes × {fmt(tier.per_bike_monthly)} each, ex VAT</> : null}
+      </div>
+      <div className="text-xs muted" style={{ marginTop: 2 }}>
+        {quote ? <>{fmt(quote.subtotal)} + {fmt(quote.vat)} VAT</> : null}
       </div>
       <div className="text-xs muted" style={{ marginTop: 8, lineHeight: 1.5 }}>{tier.includes}</div>
     </button>
@@ -65,7 +71,7 @@ export default function Subscription() {
     try {
       const { data } = await api.get('/fleet/subscription');
       setState(data);
-      setPicked((p) => p || data.tier || 'manage');
+      setPicked((p) => p || data.tier || 'fleet');
       setCycle(data.cycle || 'monthly');
     } catch {
       toast.error('Could not load your subscription');
@@ -157,7 +163,7 @@ export default function Subscription() {
       <h1>Your Pillion plan</h1>
       <p className="muted" style={{ marginTop: 4 }}>
         Priced per bike, so what you pay follows the size of your fleet. Everything below is your own
-        price at your own bike count.
+        price at your own bike count. Rates are quoted excluding VAT; the total charged includes it.
       </p>
 
       <div className="card mt-3">

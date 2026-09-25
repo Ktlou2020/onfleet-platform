@@ -207,7 +207,7 @@ const TEMPLATES = {
           `).join('')}
         </table>
         ${btn('View plans and upgrade →', PRICING_URL)}
-        <p style="margin:0 0 16px;font-size:13px;color:#6b7280">Plans start at <strong>R200/month</strong> for up to 20 bikes. Cancel anytime.</p>
+        <p style="margin:0 0 16px;font-size:13px;color:#6b7280">Plans start at <strong>R95 per bike / month</strong>, excluding VAT, with a ten-bike minimum. Cancel anytime.</p>
         <p style="margin:0">Best,<br /><strong>The ${brand.name} Team</strong></p>
       `
     })

@@ -66,7 +66,7 @@ export default function FleetSignup() {
           </div>
           <div className="card mt-6" style={{ background: 'rgba(245,158,11,0.08)', borderColor: 'rgba(245,158,11,0.3)', display: 'flex', gap: 10, alignItems: 'flex-start' }}>
             <Clock size={15} style={{ color: '#f59e0b', flexShrink: 0, marginTop: 1 }} />
-            <div className="text-sm">After your 14-day trial, choose a plan starting from <strong>R200/month</strong> to keep your fleet running.</div>
+            <div className="text-sm">After your 14-day trial, plans start at <strong>R95 per bike / month</strong>, excluding VAT, with a ten-bike minimum.</div>
           </div>
         </div>
         <div className="muted text-sm">© {brandFullName} · Fleet Owner Portal</div>

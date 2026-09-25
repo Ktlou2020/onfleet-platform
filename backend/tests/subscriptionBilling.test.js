@@ -15,21 +15,21 @@ const axios = load('axios');
 describe('what a fleet is charged', () => {
   it('multiplies the bikes it has by the rate for its plan', () => {
     expect(pricing.quote({ tierKey: 'complete', bikes: 40 })).toMatchObject({
-      per_bike_monthly: 379, charged_bikes: 40, total: 15160,
+      per_bike_monthly: 375, charged_bikes: 40, subtotal: 15000, vat: 2250, total: 17250,
     });
-    expect(pricing.quote({ tierKey: 'track', bikes: 40 }).total).toBe(7960);
-    expect(pricing.quote({ tierKey: 'manage', bikes: 20 }).total).toBe(5980);
+    expect(pricing.quote({ tierKey: 'basic', bikes: 40 }).subtotal).toBe(3800);
+    expect(pricing.quote({ tierKey: 'fleet', bikes: 20 }).subtotal).toBe(5900);
   });
 
   // The figure quoted in the proposal. If this ever changes, it changed by
   // somebody's decision rather than by accident.
   it('charges a 40-bike Complete fleet R15 160, as quoted', () => {
-    expect(pricing.quote({ tierKey: 'complete', bikes: 40 }).total).toBe(15160);
+    expect(pricing.quote({ tierKey: 'complete', bikes: 40 }).subtotal).toBe(15000);
   });
 
   it('bills a small fleet at the ten-bike minimum, and says so', () => {
     const q = pricing.quote({ tierKey: 'complete', bikes: 6 });
-    expect(q).toMatchObject({ bikes: 6, charged_bikes: 10, at_minimum: true, total: 3790 });
+    expect(q).toMatchObject({ bikes: 6, charged_bikes: 10, at_minimum: true, subtotal: 3750 });
   });
 
   it('does not pretend a fleet at the minimum is larger than it is', () => {
@@ -39,11 +39,22 @@ describe('what a fleet is charged', () => {
   it('charges ten months for a year, not twelve', () => {
     const annual = pricing.quote({ tierKey: 'complete', bikes: 40, cycle: 'annual' });
     expect(annual.months_charged).toBe(10);
-    expect(annual.total).toBe(151600);
+    expect(annual.subtotal).toBe(150000);
+  });
+
+  // The rate card is ex VAT. Charging the ex-VAT figure would under-collect
+  // fifteen per cent on every invoice, and an invoice with no VAT line is not
+  // a tax invoice a customer can claim against.
+  it('charges VAT on top of the quoted rate, and the three figures agree', () => {
+    const q = pricing.quote({ tierKey: 'basic', bikes: 20 });
+    expect(q.subtotal).toBe(1900);
+    expect(q.vat).toBe(285);
+    expect(q.total).toBe(2185);
+    expect(+(q.subtotal + q.vat).toFixed(2)).toBe(q.total);
   });
 
   it('sends Paystack the amount in cents, not rand', () => {
-    expect(pricing.quote({ tierKey: 'complete', bikes: 40 }).amount_kobo).toBe(1516000);
+    expect(pricing.quote({ tierKey: 'complete', bikes: 40 }).amount_kobo).toBe(1725000);
   });
 
   it('refuses a plan we do not sell', () => {
@@ -53,7 +64,7 @@ describe('what a fleet is charged', () => {
 
   it('spells out what the charge is for', () => {
     expect(pricing.quote({ tierKey: 'complete', bikes: 40 }).description)
-      .toBe('Pillion Complete — 40 bikes x R379');
+      .toBe('Pillion Complete — 40 bikes x R375, ex VAT');
   });
 });
 
@@ -131,8 +142,9 @@ describe.skipIf(!process.env.DATABASE_URL)('charging the card on file', () => {
     paystackReturns({ status: 'success', reference: 'ref_1' });
     const result = await billing.chargeOrganization(org.id);
     expect(result.charged).toBe(true);
-    expect(result.amount).toBe(15160);
-    expect(postSpy.mock.calls[0][1]).toMatchObject({ amount: 1516000, currency: 'ZAR' });
+    // R375 x 40 bikes is R15,000 ex VAT; the card is charged the inclusive figure.
+    expect(result.amount).toBe(17250);
+    expect(postSpy.mock.calls[0][1]).toMatchObject({ amount: 1725000, currency: 'ZAR' });
   });
 
   it('sends the saved authorisation, not a card number', async () => {
@@ -163,8 +175,11 @@ describe.skipIf(!process.env.DATABASE_URL)('charging the card on file', () => {
     expect(rows[0]).toMatchObject({
       tier: 'complete', bikes: 40, charged_bikes: 40, status: 'paid',
     });
-    expect(Number(rows[0].per_bike_monthly)).toBe(379);
-    expect(Number(rows[0].amount)).toBe(15160);
+    expect(Number(rows[0].per_bike_monthly)).toBe(375);
+    expect(Number(rows[0].subtotal)).toBe(15000);
+    expect(Number(rows[0].vat)).toBe(2250);
+    expect(Number(rows[0].amount)).toBe(17250);
+    expect(Number(rows[0].amount)).toBe(17250);
   });
 
   it('marks a declined card as failed and counts the failure', async () => {
@@ -238,7 +253,7 @@ describe.skipIf(!process.env.DATABASE_URL)('charging the card on file', () => {
     it('picks up a fleet that is due and leaves one that is not', async () => {
       const notDue = await createPgOrg({ name: 'Later Fleet', slug: 'later-fleet' });
       await pgDb.query(
-        `UPDATE organizations SET subscription_tier='track', subscription_status='active',
+        `UPDATE organizations SET subscription_tier='basic', subscription_status='active',
                 billing_authorization_encrypted='x', next_billing_date = CURRENT_DATE + 20 WHERE id=$1`, [notDue.id]);
 
       const due = await billing.organizationsDue();

@@ -75,6 +75,17 @@ export default function Landing() {
     return () => { document.body.style.overflow = ''; };
   }, [menuOpen]);
 
+  // Escape closes it, as it does every other overlay on the web. The menu had
+  // exactly one way out — the toggle you opened it with — and a person whose
+  // tap outside does nothing, and who then cannot scroll because the body is
+  // locked, has a page that is stuck rather than a menu that is open.
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') setMenuOpen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [menuOpen]);
+
   const closeMenu = () => setMenuOpen(false);
   const hasActiveFilters = Boolean(bikeFilters.make || bikeFilters.model || bikeFilters.condition);
 
@@ -103,6 +114,18 @@ export default function Landing() {
           <Link to="/signup" className="btn" onClick={closeMenu}>Apply now</Link>
         </nav>
       </header>
+
+      {/* Outside the <header> on purpose. .navbar has backdrop-filter, which
+          makes it a containing block for position:fixed descendants — a
+          backdrop with inset:0 in there is the size of the navbar, not the
+          page, so every tap on the body missed it. Out here it covers the
+          viewport, and sits under the navbar's z-index so the menu and the
+          toggle stay above it.
+          onMouseDown rather than onClick so a tap dismisses it without waiting
+          for the click to complete. */}
+      {menuOpen && (
+        <div className="nav-backdrop" onMouseDown={closeMenu} aria-hidden="true" />
+      )}
 
       <section className="hero">
         <div className="hero-copy">

@@ -539,6 +539,7 @@ export default function Tracking({ readOnly = false }) {
   const [pingDateLoading, setPingDateLoading] = useState(false);
   const [bikeNotes,    setBikeNotes]    = useState([]);
   const [newNoteText,  setNewNoteText]  = useState('');
+  const [noteForWorkshop, setNoteForWorkshop] = useState(false);
   const [savingNote,   setSavingNote]   = useState(false);
   const [bikeAlertHistory, setBikeAlertHistory] = useState([]);
   const [loadingBikeAlertHistory, setLoadingBikeAlertHistory] = useState(false);
@@ -744,20 +745,27 @@ export default function Tracking({ readOnly = false }) {
     } catch { /* silent */ }
   }, []);
 
+  // A note ticked for the workshop stops being a note and becomes a standing
+  // instruction: it sits at the top of every job card for this bike until a
+  // technician marks it done. Off by default — most notes here are about a
+  // rider or a payment and have no business in a workshop, and a panel full of
+  // somebody else's business is one nobody reads.
   const addBikeNote = useCallback(async (bikeId) => {
     const note = newNoteText.trim();
     if (!note) return;
     setSavingNote(true);
     try {
-      const { data } = await api.post(`/tracking/bikes/${bikeId}/notes`, { note });
+      const { data } = await api.post(`/tracking/bikes/${bikeId}/notes`, { note, for_workshop: noteForWorkshop });
       setBikeNotes((prev) => [data, ...prev]);
       setNewNoteText('');
+      setNoteForWorkshop(false);
+      if (noteForWorkshop) toast.success('The workshop will see this on the next job card');
     } catch (err) {
       toast.error(err?.response?.data?.error || 'Failed to save note');
     } finally {
       setSavingNote(false);
     }
-  }, [newNoteText]);
+  }, [newNoteText, noteForWorkshop]);
 
   const loadBikeAlertHistory = useCallback(async (bikeId) => {
     setLoadingBikeAlertHistory(true);
@@ -2509,23 +2517,47 @@ export default function Tracking({ readOnly = false }) {
                     rows={3}
                     style={{ width: '100%', fontSize: 12, padding: 8, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', resize: 'vertical' }}
                   />
+                  <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 8, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={noteForWorkshop}
+                      onChange={(e) => setNoteForWorkshop(e.target.checked)}
+                      style={{ marginTop: 2, flexShrink: 0 }}
+                    />
+                    <span style={{ fontSize: 12, lineHeight: 1.4 }}>
+                      Send to the workshop
+                      <span style={{ display: 'block', color: 'var(--muted)', fontSize: 11 }}>
+                        Shown at the top of every job card for this bike until a technician marks it done.
+                      </span>
+                    </span>
+                  </label>
                   <button
                     className="btn btn-sm btn-primary"
-                    style={{ marginTop: 6 }}
+                    style={{ marginTop: 8 }}
                     disabled={savingNote || !newNoteText.trim()}
                     onClick={() => addBikeNote(selectedDevice.bike_id)}
                   >
-                    {savingNote ? 'Saving…' : 'Add note'}
+                    {savingNote ? 'Saving…' : noteForWorkshop ? 'Send to workshop' : 'Add note'}
                   </button>
                 </div>
                 {bikeNotes.length === 0 ? (
                   <div style={{ fontSize: 12, color: 'var(--muted)' }}>No notes yet for this bike.</div>
                 ) : bikeNotes.map(n => (
-                  <div key={n.id} style={{ marginBottom: 8, padding: '9px 10px', background: 'var(--surface)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                  <div key={n.id} style={{ marginBottom: 8, padding: '9px 10px', background: 'var(--surface)', borderRadius: 8, border: '1px solid var(--border)', borderLeft: n.for_workshop && !n.resolved_at ? '3px solid var(--warn, #f97316)' : undefined }}>
                     <div style={{ fontSize: 13, lineHeight: 1.4, wordBreak: 'break-word' }}>{n.note}</div>
                     <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 5 }}>
                       {n.author_name || 'Unknown'} · {fmtSAST(n.created_at)}
                     </div>
+                    {/* Whether the workshop still owes us this one. Without it
+                        the control room cannot tell an outstanding instruction
+                        from one that was dealt with last week. */}
+                    {n.for_workshop && (
+                      <div style={{ fontSize: 11, marginTop: 5, color: n.resolved_at ? 'var(--success, #16a34a)' : 'var(--warn, #f97316)' }}>
+                        {n.resolved_at
+                          ? `Workshop — done${n.resolved_by_name ? ` by ${n.resolved_by_name}` : ''} · ${fmtSAST(n.resolved_at)}`
+                          : 'Workshop — outstanding'}
+                      </div>
+                    )}
                   </div>
                 ))}
               </>)}

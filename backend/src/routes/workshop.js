@@ -125,13 +125,21 @@ async function getJobCard(id) {
   const card = cardRows[0];
   if (!card) return null;
 
+  // What the control room knows about this bike and the technician does not.
+  // Open instructions only — a resolved one is history, not a thing to do.
+  const { rows: bikeFlags } = await pgDb.query(`
+    SELECT n.id, n.note, n.created_at, u.full_name AS raised_by
+      FROM bike_notes n LEFT JOIN users u ON u.id = n.author_id
+     WHERE n.bike_id = $1 AND n.for_workshop = TRUE AND n.resolved_at IS NULL
+     ORDER BY n.created_at ASC`, [card.bike_id]);
+
   const { rows: items } = await pgDb.query(`SELECT * FROM job_card_items WHERE job_card_id = $1 ORDER BY id ASC`, [id]);
   const { rows: notes } = await pgDb.query(
     `SELECT n.id, n.note, n.created_at, u.full_name AS author
        FROM job_card_notes n LEFT JOIN users u ON u.id = n.created_by
       WHERE n.job_card_id = $1 ORDER BY n.created_at ASC`, [id]);
   const total_cost = items.reduce((sum, item) => sum + Number(item.quantity) * Number(item.unit_cost), 0);
-  return { ...card, items, notes, total_cost: +total_cost.toFixed(2) };
+  return { ...card, items, notes, bike_flags: bikeFlags, total_cost: +total_cost.toFixed(2) };
 }
 
 // Dashboard
@@ -472,6 +480,31 @@ router.get('/job-cards/:id', authRequired, workshopOnly, async (req, res) => {
     const card = await getJobCard(toInt(req.params.id));
     if (!card) return res.status(404).json({ error: 'Job card not found' });
     res.json({ job_card: card });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Marking a standing instruction done.
+//
+// The technician who did the work closes it, from the job card they are
+// standing at. Nobody has to go and find the control room's note and tick it
+// somewhere else, which is the version of this that never happens — and an
+// instruction nobody can close is one the next technician learns to scroll
+// past.
+router.post('/bike-notes/:id/resolve', authRequired, workshopOnly, async (req, res) => {
+  try {
+    const { rows } = await pgDb.query(
+      `UPDATE bike_notes SET resolved_at = NOW(), resolved_by = $2
+        WHERE id = $1 AND for_workshop = TRUE AND resolved_at IS NULL
+        RETURNING id, bike_id, note, resolved_at`,
+      [toInt(req.params.id), req.user.id]);
+    // Already resolved, or never meant for the workshop. Not an error worth
+    // shouting about — two technicians ticking the same thing is fine.
+    if (!rows[0]) return res.status(404).json({ error: 'No open workshop instruction with that id' });
+    await logAudit(req.user.id, 'workshop.bike_note_resolved', 'bike_notes', rows[0].id,
+      { bike_id: rows[0].bike_id }, req.ip);
+    res.json({ ok: true, resolved: rows[0] });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

@@ -1097,8 +1097,11 @@ router.delete('/theft-cases/:id/follow', authRequired, trackingReadOnly, async (
 
 router.get('/bikes/:bikeId/notes', authRequired, trackingReadOnly, async (req, res) => {
   const { rows } = await pgDb.query(`
-    SELECT n.id, n.bike_id, n.note, n.created_at, n.author_id, u.full_name AS author_name
-    FROM bike_notes n LEFT JOIN users u ON u.id = n.author_id
+    SELECT n.id, n.bike_id, n.note, n.created_at, n.author_id, u.full_name AS author_name,
+           n.for_workshop, n.resolved_at, r.full_name AS resolved_by_name
+    FROM bike_notes n
+    LEFT JOIN users u ON u.id = n.author_id
+    LEFT JOIN users r ON r.id = n.resolved_by
     WHERE n.bike_id = $1 ORDER BY n.created_at DESC LIMIT 100
   `, [req.params.bikeId]);
   res.json(rows);
@@ -1111,13 +1114,20 @@ router.post('/bikes/:bikeId/notes', authRequired, trackingReadOnly, async (req, 
   const { rows: bikeRows } = await pgDb.query('SELECT id FROM bikes WHERE id = $1', [req.params.bikeId]);
   if (!bikeRows[0]) return res.status(404).json({ error: 'Bike not found' });
 
+  // Marked for the workshop, this stops being a note and becomes a standing
+  // instruction: it is shown to whoever opens a job card for this bike, and
+  // keeps being shown until a technician says it is done.
+  const forWorkshop = req.body.for_workshop === true || req.body.for_workshop === 'true';
+
   const { rows } = await pgDb.query(
-    `INSERT INTO bike_notes (bike_id, author_id, note) VALUES ($1,$2,$3) RETURNING id, bike_id, note, created_at, author_id`,
-    [req.params.bikeId, req.user.id, note]
+    `INSERT INTO bike_notes (bike_id, author_id, note, for_workshop) VALUES ($1,$2,$3,$4)
+     RETURNING id, bike_id, note, created_at, author_id, for_workshop, resolved_at`,
+    [req.params.bikeId, req.user.id, note, forWorkshop]
   );
   const created = rows[0];
   created.author_name = req.user.full_name;
-  await logAudit(req.user.id, 'bike.note_added', 'bike_notes', created.id, { bike_id: Number(req.params.bikeId) }, req.ip);
+  await logAudit(req.user.id, 'bike.note_added', 'bike_notes', created.id,
+    { bike_id: Number(req.params.bikeId), for_workshop: forWorkshop }, req.ip);
   res.json(created);
 });
 

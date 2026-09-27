@@ -16,7 +16,7 @@ import { resizeImage } from '../../lib/resizeImage';
 const partKey = (n) => String(n || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 import { useParams, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { ArrowLeft, Plus, Pencil, Trash2, Clock, ChevronDown, ChevronRight, Printer, FileText, Pause, Play, Camera, Image, CheckCircle } from 'lucide-react';
+import { ArrowLeft, Plus, Pencil, Trash2, Clock, ChevronDown, ChevronRight, Printer, FileText, Pause, Play, Camera, Image, CheckCircle, AlertTriangle } from 'lucide-react';
 import api from '../../api';
 import { Badge, ConfirmModal, Loading, Modal, fmt, fmtDate, fmtDateTime } from '../../components/ui';
 
@@ -306,6 +306,24 @@ export default function WorkshopJobCard() {
   const [completeForm, setCompleteForm] = useState(EMPTY_COMPLETE);
   const [completeKmTouched, setCompleteKmTouched] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [resolvingFlag, setResolvingFlag] = useState(null);
+
+  // Ticking off a standing instruction the control room left on this bike.
+  // The row is dropped from the banner locally rather than refetching the
+  // whole card: the technician is standing at the bike on a phone, and the
+  // point of the tick is that it is instant.
+  const resolveFlag = useCallback(async (noteId) => {
+    setResolvingFlag(noteId);
+    try {
+      await api.post(`/workshop/bike-notes/${noteId}/resolve`);
+      setCard((prev) => prev && ({ ...prev, bike_flags: (prev.bike_flags || []).filter((f) => f.id !== noteId) }));
+      toast.success('Marked done');
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Could not mark it done');
+    } finally {
+      setResolvingFlag(null);
+    }
+  }, []);
 
   const loadPhotos = async () => {
     try {
@@ -648,6 +666,39 @@ export default function WorkshopJobCard() {
       {/* Anything still waiting to reach the server. At the top because a
           queue nobody can see is a slower way of losing work. */}
       <PendingWrites />
+
+      {/* What the control room knows about this bike and the technician would
+          otherwise not. Above the header on purpose: a bike comes in for a
+          service and goes back out still miswired if this sits below the fold
+          on a phone. Each one is closed here, by the person who did the work —
+          an instruction nobody can tick is one the next technician scrolls
+          past. */}
+      {(card.bike_flags || []).length > 0 && (
+        <div className="card mb-3" style={{ borderLeft: '4px solid var(--warning, #f97316)', padding: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+            <AlertTriangle size={16} style={{ color: 'var(--warning, #f97316)', flexShrink: 0 }} />
+            <strong style={{ fontSize: 15 }}>
+              Before you start &mdash; {card.bike_flags.length} note{card.bike_flags.length > 1 ? 's' : ''} on this bike
+            </strong>
+          </div>
+          {card.bike_flags.map((flag) => (
+            <div key={flag.id} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 15, lineHeight: 1.45 }}>{flag.note}</div>
+                <div className="muted" style={{ fontSize: 12, marginTop: 3 }}>
+                  {flag.raised_by || 'Control room'} &middot; {fmtDateTime(flag.created_at)}
+                </div>
+              </div>
+              <button
+                className="btn btn-sm btn-secondary"
+                style={{ flexShrink: 0 }}
+                disabled={resolvingFlag === flag.id}
+                onClick={() => resolveFlag(flag.id)}
+              >{resolvingFlag === flag.id ? 'Saving…' : 'Done'}</button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Header */}
       <div className="flex-between mb-3" style={{ flexWrap: 'wrap', gap: 12 }}>

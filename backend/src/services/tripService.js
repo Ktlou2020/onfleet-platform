@@ -147,6 +147,16 @@ const ALERT_LABELS = {
   danger_zone_exit:  'Left a no-go zone',
 };
 
+const { MIN_TRUSTED_SATELLITES } = require('../constants/gps');
+
+// A fix we will not measure with. Named in constants/gps.js because
+// geofenceService and deviceHealth draw the same line, and a trip that
+// measures a ping those two refuse to trust is how a parked bike ends up
+// recorded at 106 km/h.
+function trustedFix(satellites) {
+  return satellites == null || Number(satellites) >= MIN_TRUSTED_SATELLITES;
+}
+
 function haversineKm(lat1, lng1, lat2, lng2) {
   const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -221,7 +231,7 @@ async function fireAlert(bikeId, deviceId, alertType, payload, recordedAt, nowMs
   await emitAlert(rows[0].id, bikeId, deviceId, alertType, payload, recordedAt);
 }
 
-async function processPing(bikeId, deviceId, lat, lng, speed, ignition, recordedAt, io, speedLimitKmh = 120) {
+async function processPing(bikeId, deviceId, lat, lng, speed, ignition, recordedAt, io, speedLimitKmh = 120, satellites = null) {
   const ts = new Date(recordedAt).getTime();
   const moving = speed > 2;
   // ignition is the raw io[239] value: a number when the device reports it, null when it doesn't.
@@ -270,7 +280,16 @@ async function processPing(bikeId, deviceId, lat, lng, speed, ignition, recorded
     }
   }
 
-  if (speed > speedLimitKmh) {
+  // Everything below reads a position and a speed off this ping, so all of it
+  // depends on the fix being worth reading. A Teltonika with its GNSS asleep
+  // reports a stale position and a speed to match — and the defences here were
+  // built against ONE glitchy ping, not against the run of them a sleeping
+  // receiver produces, which satisfies "sustained" and "displaced" perfectly
+  // well. A parked bike was alerting for towing and being clocked at 106 km/h
+  // on exactly that.
+  const trusted = trustedFix(satellites);
+
+  if (trusted && speed > speedLimitKmh) {
     await fireAlert(bikeId, deviceId, 'speeding', { lat, lng, speed_kmh: speed, limit_kmh: speedLimitKmh }, recordedAt, ts);
   }
 
@@ -281,7 +300,12 @@ async function processPing(bikeId, deviceId, lat, lng, speed, ignition, recorded
   // parked bike can't fire a critical alert.
   const nightHour = sastHour(ts);
   const inNightWindow = nightHour >= 0 && nightHour < 4;
-  if (moving && inNightWindow) {
+  // An untrusted fix is no information either way: it must not confirm a
+  // streak, and it must not clear one, because a bike genuinely being taken
+  // does not stop being taken when its receiver loses the sky for a moment.
+  if (!trusted) {
+    // leave any candidate streak exactly as it is
+  } else if (moving && inNightWindow) {
     const candidate = nightMovementCandidates.get(bikeId);
     if (!candidate) {
       nightMovementCandidates.set(bikeId, { streakStartTs: ts, streakStartLat: lat, streakStartLng: lng });
@@ -307,7 +331,11 @@ async function processPing(bikeId, deviceId, lat, lng, speed, ignition, recorded
   // An armed bike is cut as soon as it is down to walking pace — checked on
   // every ping, including ones outside the window, because a bike confirmed
   // at 03:58 should not get away with still moving at 04:02.
-  if (nightCurfew.isArmed(bikeId)) {
+  // Also on a trusted fix only, and this one is a safety matter rather than a
+  // noise one: the cut waits for walking pace so the engine never dies under a
+  // rider at speed, and a bad fix reporting 0 km/h on a bike doing 80 would
+  // defeat exactly that.
+  if (trusted && nightCurfew.isArmed(bikeId)) {
     await nightCurfew.cutIfSlowEnough(bikeId, speed);
   }
 
@@ -315,7 +343,9 @@ async function processPing(bikeId, deviceId, lat, lng, speed, ignition, recorded
   // being carried/towed — only checkable on devices that report an ignition
   // signal at all (see towingCandidates comment above).
   const towingCondition = hasIgnitionSignal && !ignitionOn && speed > TOWING_MIN_SPEED_KMH;
-  if (towingCondition) {
+  if (!trusted) {
+    // as above: a fix we cannot measure with neither confirms nor clears
+  } else if (towingCondition) {
     const candidate = towingCandidates.get(bikeId);
     if (!candidate) {
       towingCandidates.set(bikeId, { streakStartTs: ts, streakStartLat: lat, streakStartLng: lng });
@@ -360,13 +390,20 @@ async function processPing(bikeId, deviceId, lat, lng, speed, ignition, recorded
     return;
   }
 
-  const seg = haversineKm(state.lastLat, state.lastLng, lat, lng);
-  state.distanceKm += seg;
-  if (speed > state.maxSpeed) state.maxSpeed = speed;
-  state.totalSpeed += speed;
-  state.pingCount += 1;
-  state.lastLat = lat;
-  state.lastLng = lng;
+  // A ping we do not trust contributes nothing to the numbers on the trip.
+  // Its position is not measured from, so the next good fix measures from the
+  // last good one rather than from a point a kilometre away, and its speed
+  // cannot become the trip's maximum. The clock still moves, because the time
+  // passed whatever the satellites were doing.
+  const seg = trusted ? haversineKm(state.lastLat, state.lastLng, lat, lng) : 0;
+  if (trusted) {
+    state.distanceKm += seg;
+    if (speed > state.maxSpeed) state.maxSpeed = speed;
+    state.totalSpeed += speed;
+    state.pingCount += 1;
+    state.lastLat = lat;
+    state.lastLng = lng;
+  }
   state.lastTs = ts;
 
   if (ignition && speed < 5) {
@@ -484,7 +521,7 @@ async function closeStaleTrips() {
       // just before the final ping and silently drops it — which zeroed the
       // distance and made avg speed equal max on a trip that plainly moved.
       const { rows: pings } = await pgDb.query(
-        `SELECT p.lat, p.lng, p.speed_kmh
+        `SELECT p.lat, p.lng, p.speed_kmh, p.satellites
            FROM gps_pings p
            JOIN trips t ON t.id = $1
           WHERE p.bike_id = t.bike_id
@@ -493,19 +530,24 @@ async function closeStaleTrips() {
           ORDER BY p.recorded_at ASC`,
         [trip.id]);
 
+      // Same rule the live path applies, for the same reason: a reaped trip is
+      // measured only from the fixes worth measuring. Filtered before the walk
+      // rather than skipped inside it, so consecutive trusted fixes are
+      // measured against each other instead of across a discarded one.
+      const measurable = pings.filter((p) => trustedFix(p.satellites));
       let distanceKm = 0;
       let maxSpeed = 0;
       let totalSpeed = 0;
-      for (let i = 0; i < pings.length; i++) {
+      for (let i = 0; i < measurable.length; i++) {
         if (i > 0) {
-          distanceKm += haversineKm(pings[i - 1].lat, pings[i - 1].lng, pings[i].lat, pings[i].lng);
+          distanceKm += haversineKm(measurable[i - 1].lat, measurable[i - 1].lng, measurable[i].lat, measurable[i].lng);
         }
-        const s = Number(pings[i].speed_kmh) || 0;
+        const s = Number(measurable[i].speed_kmh) || 0;
         if (s > maxSpeed) maxSpeed = s;
         totalSpeed += s;
       }
       const distRounded = Math.round(distanceKm * 100) / 100;
-      const avgSpeed = pings.length ? Math.round(totalSpeed / pings.length) : 0;
+      const avgSpeed = measurable.length ? Math.round(totalSpeed / measurable.length) : 0;
 
       // ended_at and duration are derived in SQL for the same precision reason,
       // and fall back to started_at for a trip that never received a ping at all

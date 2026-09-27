@@ -353,7 +353,16 @@ router.post('/devices/:id/commands', authRequired, adminOnly, async (req, res) =
       `UPDATE tracking_devices SET engine_cut_active=FALSE, engine_cut_reason=NULL, engine_cut_at=NULL, engine_cut_by=NULL WHERE id=$1`,
       [device.id]
     );
-    await logAudit(req.user.id, 'tracking.engine_restore', 'tracking_devices', device.id, { bike_id: device.bike_id, imei: device.imei }, req.ip);
+    // Required here rather than at module scope, as elsewhere in this file:
+    // nightCurfew pulls in autoEngineCut, which pulls back into tracking.
+    const nightCurfew = require('../services/nightCurfew');
+    // Restoring an engine inside the overnight window is a person overruling
+    // the curfew for that bike. Without this the curfew re-arms on the next
+    // night_movement alert and cuts it again, which is what happened to
+    // MJ71MRGP: correct behaviour, in a loop the operator could not break.
+    const reprievedUntil = await nightCurfew.grantReprieve(device.bike_id);
+    await logAudit(req.user.id, 'tracking.engine_restore', 'tracking_devices', device.id,
+      { bike_id: device.bike_id, imei: device.imei, curfew_reprieve_until: reprievedUntil }, req.ip);
     notifyRiderEngineState(device.bike_id, 'restored')
       .catch((e) => console.error('[EngineCut] rider notify failed:', e.message));
   }
@@ -406,7 +415,10 @@ router.post('/devices/commands-bulk', authRequired, adminOnly, async (req, res) 
         `UPDATE tracking_devices SET engine_cut_active=FALSE, engine_cut_reason=NULL, engine_cut_at=NULL, engine_cut_by=NULL WHERE id=$1`,
         [device.id]
       );
-      await logAudit(req.user.id, 'tracking.engine_restore', 'tracking_devices', device.id, { bike_id: device.bike_id, imei: device.imei, bulk: true }, req.ip);
+      const nightCurfew = require('../services/nightCurfew');
+      const bulkReprieve = await nightCurfew.grantReprieve(device.bike_id);
+      await logAudit(req.user.id, 'tracking.engine_restore', 'tracking_devices', device.id,
+        { bike_id: device.bike_id, imei: device.imei, bulk: true, curfew_reprieve_until: bulkReprieve }, req.ip);
       notifyRiderEngineState(device.bike_id, 'restored')
         .catch((e) => console.error('[EngineCut] rider notify failed:', e.message));
     }

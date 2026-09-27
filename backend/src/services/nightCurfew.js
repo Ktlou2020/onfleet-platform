@@ -42,6 +42,54 @@ const CUTTABLE_STATUSES = ['active', 'ready_to_go', 'not_available', 'repairs', 
 
 const SETTING_KEY = 'night_curfew_enabled';
 
+// The window itself, matching the one tripService uses to raise night_movement.
+// SAST is UTC+2 all year, so no DST arithmetic is needed.
+const CURFEW_START_HOUR = 0;
+const CURFEW_END_HOUR = 4;
+const SAST_OFFSET_MS = 2 * 60 * 60 * 1000;
+
+function sastHour(at = new Date()) {
+  return new Date(at.getTime() + SAST_OFFSET_MS).getUTCHours();
+}
+
+function inCurfew(at = new Date()) {
+  const h = sastHour(at);
+  return h >= CURFEW_START_HOUR && h < CURFEW_END_HOUR;
+}
+
+/** The moment the current curfew window ends, in UTC. */
+function windowEnd(at = new Date()) {
+  const sast = new Date(at.getTime() + SAST_OFFSET_MS);
+  const end = new Date(Date.UTC(
+    sast.getUTCFullYear(), sast.getUTCMonth(), sast.getUTCDate(), CURFEW_END_HOUR, 0, 0));
+  return new Date(end.getTime() - SAST_OFFSET_MS);
+}
+
+/**
+ * A person has restored this bike's engine during the curfew, so the curfew
+ * leaves it alone for the rest of tonight.
+ *
+ * Without this the operator is arguing with a loop: night_movement re-fires
+ * after its cooldown, re-arms the cut, and the bike dies again the next time
+ * it slows down. Restoring an engine at 01:00 is not an accident — it is
+ * somebody deciding this particular bike is allowed to be moving — and the
+ * system has to be able to hear that.
+ *
+ * Deliberately not permanent, and deliberately not a switch anybody has to
+ * remember: it expires at 04:00 and the curfew covers the bike again tomorrow
+ * night without a person touching it. Granted only inside the window, so
+ * restoring an engine at two in the afternoon — after an arrears cut, say —
+ * does not quietly stand the curfew down for a night nobody was thinking about.
+ */
+async function grantReprieve(bikeId, { at = new Date(), db = pgDb } = {}) {
+  if (bikeId == null || !inCurfew(at)) return null;
+  const until = windowEnd(at);
+  await db.query('UPDATE bikes SET night_curfew_reprieve_until = $1 WHERE id = $2', [until, bikeId]);
+  armed.delete(bikeId);
+  console.log(`[night-curfew] bike ${bikeId} reprieved until ${until.toISOString()} — engine restored by hand during the window`);
+  return until;
+}
+
 // Bikes whose night movement has been confirmed and whose cut is now waiting
 // for them to slow down. In memory: a restart loses the pending cut, but the
 // bike is still moving in the window, so night_movement fires again after its
@@ -72,21 +120,25 @@ async function setEnabled(on) {
 
 // Whether this particular bike is covered tonight. Checked once, when the
 // alert confirms the movement — not on every ping.
-async function covers(bikeId) {
+async function covers(bikeId, { at = new Date() } = {}) {
   const { rows } = await pgDb.query(
-    'SELECT status, night_curfew_exempt FROM bikes WHERE id = $1', [bikeId]);
+    'SELECT status, night_curfew_exempt, night_curfew_reprieve_until FROM bikes WHERE id = $1', [bikeId]);
   const bike = rows[0];
   if (!bike) return false;
   if (bike.night_curfew_exempt) return false;
+  // Somebody put this bike back on the road tonight, on purpose.
+  if (bike.night_curfew_reprieve_until && new Date(bike.night_curfew_reprieve_until) > at) return false;
   return CUTTABLE_STATUSES.includes(bike.status);
 }
 
 // Called when night_movement has been confirmed for a bike.
-async function arm(bikeId, deviceId, payload = {}) {
+async function arm(bikeId, deviceId, payload = {}, { at = new Date() } = {}) {
   if (deviceId == null) return false;
   if (armed.has(bikeId)) return false;
   if (!(await isEnabled())) return false;
-  if (!(await covers(bikeId))) return false;
+  // `at` is passed through to covers so a reprieve is judged against the same
+  // moment the movement happened, rather than whenever this happens to run.
+  if (!(await covers(bikeId, { at }))) return false;
   armed.set(bikeId, { deviceId, armedAt: Date.now(), reason: 'Moving during the overnight curfew (00:00–04:00)', payload });
   console.log(`[night-curfew] armed bike ${bikeId} — cut will run once it is under ${CUT_BELOW_KMH} km/h`);
   return true;
@@ -117,5 +169,7 @@ function clearAll() { armed.clear(); }
 module.exports = {
   arm, cutIfSlowEnough, isArmed, disarm, clearAll,
   isEnabled, setEnabled, reloadSettings, covers,
+  grantReprieve, inCurfew, windowEnd,
   CUT_BELOW_KMH, CUTTABLE_STATUSES, SETTING_KEY,
+  CURFEW_START_HOUR, CURFEW_END_HOUR,
 };

@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const pgDb = require('../pgDb');
-const { authRequired, adminOnly } = require('../middleware/auth');
+const { authRequired, adminOnly, workshopOnly } = require('../middleware/auth');
 const { sendEmail } = require('../services/notifier');
 const { sendNotification } = require('../services/notifierPg');
 const UPLOAD_DIRS = require('../uploadPaths');
@@ -72,14 +72,6 @@ async function notifyAdmins(type, title, message, jobCardId) {
   for (const admin of admins) {
     sendNotification({ userId: admin.id, channel: 'in_app', type, title, message, entityType: 'job_card', entityId: jobCardId, throwOnError: false }).catch(() => {});
   }
-}
-
-const WORKSHOP_ROLES = ['technician', 'admin', 'superadmin'];
-
-function workshopOnly(req, res, next) {
-  if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
-  if (!WORKSHOP_ROLES.includes(req.user.role)) return res.status(403).json({ error: 'Workshop access required' });
-  next();
 }
 
 // The id a phone generates before its first attempt and keeps across every

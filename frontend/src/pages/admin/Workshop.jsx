@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PartsTab, PartsOrdersTab } from './workshopParts';
+import { BookingsTab } from './workshopBookings';
 import WorkshopGuidePage from '../../components/WorkshopGuidePage';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -49,7 +50,7 @@ function FleetOwnerCell({ jc }) {
   );
 }
 
-const TABS = ['Overview', 'All Jobs', 'Technicians', 'Fleet Health', 'Parts', 'Parts orders', 'Rates', 'Staff', 'Guide'];
+const TABS = ['Overview', 'Bookings', 'All Jobs', 'Technicians', 'Fleet Health', 'Parts', 'Parts orders', 'Rates', 'Staff', 'Guide'];
 
 const JOB_TYPES = ['service', 'repair', 'inspection', 'tyres', 'brakes', 'electrical', 'bodywork', 'other'];
 const PRIORITIES = ['normal', 'high', 'urgent'];
@@ -1354,6 +1355,7 @@ export default function AdminWorkshop() {
       </div>
 
       {tab === 'Overview' && <OverviewTab />}
+      {tab === 'Bookings' && <BookingsTab />}
       {tab === 'All Jobs' && <AllJobsTab />}
       {tab === 'Technicians' && <TechniciansTab />}
       {tab === 'Fleet Health' && <FleetHealthTab />}

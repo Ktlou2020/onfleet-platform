@@ -3,11 +3,12 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth';
 import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
-import { LayoutDashboard, FileText, Bike, CreditCard, User, LogOut, Bell, MoreHorizontal, X } from 'lucide-react';
+import { LayoutDashboard, FileText, Bike, CreditCard, User, LogOut, Bell, MoreHorizontal, X, CalendarDays } from 'lucide-react';
 
 const navItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/agreements', label: 'Agreement', icon: FileText },
+  { to: '/book-service', label: 'Book service', icon: CalendarDays },
   { to: '/payments', label: 'Payments', icon: CreditCard },
   { to: '/notifications', label: 'Notifications', icon: Bell },
   { to: '/application', label: 'Application', icon: Bike },

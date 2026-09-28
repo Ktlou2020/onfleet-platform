@@ -244,6 +244,7 @@ function buildApp() {
   app.use('/api/pilot', require('./routes/pilot'));
   app.use('/api/fleet', require('./routes/fleet'));
   app.use('/api/workshop', require('./routes/workshop'));
+  app.use('/api/bookings', require('./routes/bookings'));
   app.use('/api/v1', require('./routes/apiV1'));
   app.use('/api/tracking', require('./routes/tracking'));
   app.use('/api/guide', require('./routes/guide'));

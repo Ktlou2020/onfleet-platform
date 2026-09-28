@@ -44,6 +44,7 @@ const RiderApplication = lazy(() => import('./pages/rider/Application'));
 const RiderProfile = lazy(() => import('./pages/rider/Profile'));
 const RiderPayments = lazy(() => import('./pages/rider/Payments'));
 const RiderNotifications = lazy(() => import('./pages/rider/Notifications'));
+const RiderBookService = lazy(() => import('./pages/rider/BookService'));
 const PaymentCallback = lazy(() => import('./pages/rider/PaymentCallback'));
 
 const AdminShell = lazy(() => import('./pages/admin/AdminShell'));
@@ -80,6 +81,7 @@ const WorkshopDashboard = lazy(() => import('./pages/workshop/Dashboard'));
 const WorkshopJobCards = lazy(() => import('./pages/workshop/JobCards'));
 const WorkshopJobCard = lazy(() => import('./pages/workshop/JobCard'));
 const WorkshopParts = lazy(() => import('./pages/workshop/Parts'));
+const WorkshopCalendar = lazy(() => import('./pages/workshop/Calendar'));
 const WorkshopGuidePage = lazy(() => import('./pages/workshop/Guide'));
 const FleetImpersonate = lazy(() => import('./pages/fleet/FleetImpersonate'));
 const FleetRiderApply = lazy(() => import('./pages/FleetRiderApply'));
@@ -195,6 +197,7 @@ export default function App() {
             <Route path="application" element={<RiderApplication />} />
             <Route path="kyc" element={<Navigate to="/application" replace />} />
             <Route path="payments" element={<RiderPayments />} />
+            <Route path="book-service" element={<RiderBookService />} />
             <Route path="notifications" element={<RiderNotifications />} />
             <Route path="profile" element={<RiderProfile />} />
             <Route path="payments/callback" element={<PaymentCallback />} />
@@ -241,6 +244,7 @@ export default function App() {
           <Route path="/workshop/login" element={<WorkshopLogin />} />
           <Route path="/workshop/app" element={<PrivateRoute role="workshop"><WorkshopShell /></PrivateRoute>}>
             <Route index element={<WorkshopDashboard />} />
+            <Route path="bookings" element={<WorkshopCalendar />} />
             <Route path="job-cards" element={<WorkshopJobCards />} />
             <Route path="job-cards/:id" element={<WorkshopJobCard />} />
             <Route path="parts" element={<WorkshopParts />} />

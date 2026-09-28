@@ -96,7 +96,7 @@ export default function RiderDashboard() {
   const quickActions = [
     { label: "💳 Pay this week's fee", link: '/payments', primary: true },
     { label: '🧾 Monthly statement', link: `/agreements/${agreement.id}#statement` },
-    { label: '🛠️ Book service / bike care', link: `/agreements/${agreement.id}#book-service` },
+    { label: '🛠️ Book a service', link: '/book-service' },
     { label: '⚙️ Update profile', link: '/profile' }
   ];
 

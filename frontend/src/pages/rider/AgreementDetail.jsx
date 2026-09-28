@@ -451,6 +451,21 @@ export default function RiderAgreementDetail() {
         </div>
         <div className="card" id="book-service">
           <h3 className="mb-3">Book a service</h3>
+          <div className="card mb-3" style={{ background: 'var(--surface-2)' }}>
+            <div className="flex-between" style={{ gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+              <div>
+                <div style={{ fontWeight: 700 }}>Book in the app</div>
+                <div className="muted text-sm" style={{ marginTop: 6 }}>
+                  Pick a slot from the workshop&apos;s own calendar. You can change it yourself up to a day beforehand.
+                </div>
+              </div>
+              <Link className="btn btn-sm" to="/book-service">Pick a slot</Link>
+            </div>
+          </div>
+          {/* The two workshops below keep their own Google diaries and are not
+              on the in-app calendar yet. Until they are, removing these would
+              leave riders near them with no way to book at all. */}
+          <div className="muted text-sm mb-3">Or book directly with a workshop:</div>
           {SERVICE_BOOKING_LINKS.map((booking) => (
             <div key={booking.name} className="card mb-3" style={{ background: 'var(--surface-2)' }}>
               <div className="flex-between" style={{ gap: 12, alignItems: 'flex-start' }}>
@@ -462,7 +477,7 @@ export default function RiderAgreementDetail() {
               </div>
             </div>
           ))}
-          <div className="muted text-sm">Use the Google booking link for the workshop closest to you. If the bike feels unsafe to ride, get in touch before travelling to the workshop.</div>
+          <div className="muted text-sm">If the bike feels unsafe to ride, get in touch before travelling to the workshop.</div>
           <div className="mt-3">
             <SupportContact title="Bike unsafe to ride?" sub="Don't ride it to the workshop — contact your fleet manager first and they'll arrange collection." />
           </div>

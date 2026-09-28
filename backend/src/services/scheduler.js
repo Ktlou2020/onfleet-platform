@@ -298,7 +298,7 @@ async function runDailyReminders() {
         channel: 'sms',
         type: 'service_reminder',
         title,
-        message: `${lead} (${describe(bike)}). Book it via the app.`
+        message: `${lead} (${describe(bike)}). Open Book service in the app to pick a slot.`
       });
     } catch (err) {
       console.error(`[daily-reminder] service reminder failed for bike ${bike.registration || bike.id}:`, err.message);

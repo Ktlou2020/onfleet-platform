@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, ClipboardList, LogOut, Wrench , Package , BookOpen } from 'lucide-react';
+import { LayoutDashboard, ClipboardList, LogOut, Wrench , Package , BookOpen, CalendarDays } from 'lucide-react';
 import { useAuth } from '../../auth';
 import api from '../../api';
 import { brandFullName } from '../../brand';
@@ -27,6 +27,9 @@ export default function WorkshopShell() {
         <nav>
           <NavLink to="/workshop/app" end>
             <LayoutDashboard size={16} /> Dashboard
+          </NavLink>
+          <NavLink to="/workshop/app/bookings" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <CalendarDays size={16} /> Bookings
           </NavLink>
           <NavLink to="/workshop/app/job-cards" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <ClipboardList size={16} /> Job Cards
@@ -58,6 +61,10 @@ export default function WorkshopShell() {
         <NavLink to="/workshop/app" end>
           <LayoutDashboard size={20} />
           <span>Dashboard</span>
+        </NavLink>
+        <NavLink to="/workshop/app/bookings">
+          <CalendarDays size={20} />
+          <span>Bookings</span>
         </NavLink>
         <NavLink to="/workshop/app/job-cards">
           <ClipboardList size={20} />

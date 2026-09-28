@@ -52,6 +52,19 @@ function fleetOwnerOnly(req, res, next) {
   next();
 }
 
+// The workshop floor. Admins are included because the admin portal's Workshop
+// pages drive the same endpoints, and technicians have no organisation — the
+// workshop services every fleet's bikes, so it is a single global tenant.
+const WORKSHOP_ROLES = ['technician', 'admin', 'superadmin'];
+
+function workshopOnly(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+  if (!WORKSHOP_ROLES.includes(req.user.role)) {
+    return res.status(403).json({ error: 'Workshop access required' });
+  }
+  next();
+}
+
 function companyRoleAllowed(roles = []) {
   return (req, res, next) => {
     if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
@@ -65,4 +78,7 @@ function companyRoleAllowed(roles = []) {
   };
 }
 
-module.exports = { authRequired, adminOnly, trackingReadOnly, fleetOwnerOnly, companyRoleAllowed, FLEET_OWNER_ROLES };
+module.exports = {
+  authRequired, adminOnly, trackingReadOnly, fleetOwnerOnly, workshopOnly,
+  companyRoleAllowed, FLEET_OWNER_ROLES, WORKSHOP_ROLES,
+};

@@ -119,11 +119,57 @@ async function setSettings(patch, { db = pgDb } = {}) {
   return getSettings({ db });
 }
 
+// ------------------------------------------------------- the workshops ----
+//
+// Two of them: OnFix in Johannesburg and Bikerhouse in Cape Town. Everything
+// below takes a location, because a slot at one says nothing about the other.
+
+async function getLocations({ activeOnly = true, db = pgDb } = {}) {
+  const { rows } = await db.query(
+    `SELECT id, name, city, province, address, phone, active FROM workshop_locations
+      ${activeOnly ? 'WHERE active = TRUE' : ''} ORDER BY id`);
+  return rows;
+}
+
+async function locationExists(locationId, { db = pgDb } = {}) {
+  if (!Number.isInteger(Number(locationId))) return false;
+  const { rows } = await db.query(
+    'SELECT 1 FROM workshop_locations WHERE id = $1 AND active = TRUE', [Number(locationId)]);
+  return rows.length > 0;
+}
+
+// Which workshop to show a rider first.
+//
+// Their province if it matches one, otherwise wherever they last booked,
+// otherwise the first. Getting this right matters more than it looks: a Cape
+// Town rider who is shown Johannesburg and does not notice the selector books
+// a slot 1,400 km away, and nobody finds out until the bike does not arrive.
+async function defaultLocationFor(userId, { db = pgDb } = {}) {
+  const locations = await getLocations({ db });
+  if (locations.length === 0) return null;
+
+  const { rows: last } = await db.query(
+    `SELECT sb.location_id FROM service_bookings sb
+       JOIN workshop_locations l ON l.id = sb.location_id AND l.active = TRUE
+      WHERE sb.booked_by = $1 ORDER BY sb.created_at DESC LIMIT 1`, [userId]);
+  if (last[0]) return last[0].location_id;
+
+  const { rows: user } = await db.query('SELECT province FROM users WHERE id = $1', [userId]);
+  const province = String(user[0]?.province || '').trim().toLowerCase();
+  if (province) {
+    const match = locations.find((l) => String(l.province || '').trim().toLowerCase() === province);
+    if (match) return match.id;
+  }
+  return locations[0].id;
+}
+
 // ----------------------------------------------------------- the rules ----
 
-async function getRules({ db = pgDb } = {}) {
+async function getRules({ locationId = null, db = pgDb } = {}) {
   const { rows } = await db.query(
-    'SELECT id, weekday, opens_at, closes_at FROM service_slot_rules ORDER BY weekday, opens_at'
+    `SELECT id, weekday, opens_at, closes_at, location_id FROM service_slot_rules
+      ${locationId ? 'WHERE location_id = $1' : ''} ORDER BY location_id, weekday, opens_at`,
+    locationId ? [Number(locationId)] : []
   );
   // Postgres hands back TIME as 'HH:MM:SS'; the whole rest of this module and
   // every form field that edits it speaks 'HH:MM'.
@@ -133,7 +179,10 @@ async function getRules({ db = pgDb } = {}) {
 // The admin edits the week as a whole and saves it, so this replaces the lot
 // in one transaction rather than diffing. A half-applied week is a workshop
 // open at hours nobody chose.
-async function replaceRules(windows, userId, { db = pgDb } = {}) {
+async function replaceRules(locationId, windows, userId, { db = pgDb } = {}) {
+  if (!(await locationExists(locationId, { db }))) {
+    throw Object.assign(new Error('Which workshop?'), { status: 400 });
+  }
   const clean = [];
   for (const w of windows || []) {
     const weekday = Number(w.weekday);
@@ -162,25 +211,27 @@ async function replaceRules(windows, userId, { db = pgDb } = {}) {
     }
   }
 
+  // Scoped to this workshop: saving OnFix's week must not wipe Bikerhouse's.
   await pgDb.withTransaction(async (tx) => {
-    await tx.query('DELETE FROM service_slot_rules');
+    await tx.query('DELETE FROM service_slot_rules WHERE location_id = $1', [Number(locationId)]);
     for (const w of clean) {
       await tx.query(
-        'INSERT INTO service_slot_rules (weekday, opens_at, closes_at, updated_by) VALUES ($1,$2,$3,$4)',
-        [w.weekday, w.opens, w.closes, userId || null]
+        'INSERT INTO service_slot_rules (weekday, opens_at, closes_at, updated_by, location_id) VALUES ($1,$2,$3,$4,$5)',
+        [w.weekday, w.opens, w.closes, userId || null, Number(locationId)]
       );
     }
   });
-  return getRules({ db });
+  return getRules({ locationId, db });
 }
 
-async function getClosures({ from = null, to = null, db = pgDb } = {}) {
+async function getClosures({ locationId = null, from = null, to = null, db = pgDb } = {}) {
   const where = [];
   const params = [];
+  if (locationId) { params.push(Number(locationId)); where.push(`location_id = $${params.length}`); }
   if (from) { params.push(from); where.push(`closed_on >= $${params.length}`); }
   if (to) { params.push(to); where.push(`closed_on <= $${params.length}`); }
   const { rows } = await db.query(
-    `SELECT id, closed_on, reason FROM service_closures
+    `SELECT id, closed_on, reason, location_id FROM service_closures
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY closed_on`, params
   );
   return rows.map((r) => ({ ...r, closed_on: sastDateStr(r.closed_on) }));
@@ -209,7 +260,10 @@ function slotsForWeekday(dateStr, rules) {
 // `now` is injectable because every interesting case here is about time — a
 // slot that has passed, one inside the lead window, one beyond the horizon —
 // and a test that cannot move the clock can only assert the boring ones.
-async function availability({ from, to, now = new Date(), db = pgDb, ignoreHorizon = false } = {}) {
+async function availability({ locationId, from, to, now = new Date(), db = pgDb, ignoreHorizon = false } = {}) {
+  if (!(await locationExists(locationId, { db }))) {
+    throw Object.assign(new Error('Which workshop?'), { status: 400 });
+  }
   const settings = await getSettings({ db });
   const today = sastDateStr(now);
   const firstDay = from && from > today ? from : today;
@@ -217,14 +271,14 @@ async function availability({ from, to, now = new Date(), db = pgDb, ignoreHoriz
   let lastDay = to || addDays(today, 13);
   if (!ignoreHorizon && lastDay > horizonEnd) lastDay = horizonEnd;
 
-  const rules = await getRules({ db });
-  const closures = await getClosures({ from: firstDay, to: lastDay, db });
+  const rules = await getRules({ locationId, db });
+  const closures = await getClosures({ locationId, from: firstDay, to: lastDay, db });
   const closedOn = new Map(closures.map((c) => [c.closed_on, c.reason]));
 
   const { rows: taken } = await db.query(
     `SELECT starts_at FROM service_bookings
-      WHERE status = ANY($1) AND starts_at >= $2 AND starts_at < $3`,
-    [LIVE_STATUSES, sastToUtc(firstDay, '00:00'), sastToUtc(addDays(lastDay, 1), '00:00')]
+      WHERE location_id = $4 AND status = ANY($1) AND starts_at >= $2 AND starts_at < $3`,
+    [LIVE_STATUSES, sastToUtc(firstDay, '00:00'), sastToUtc(addDays(lastDay, 1), '00:00'), Number(locationId)]
   );
   const takenAt = new Set(taken.map((r) => new Date(r.starts_at).getTime()));
 
@@ -250,20 +304,22 @@ async function availability({ from, to, now = new Date(), db = pgDb, ignoreHoriz
     });
   }
 
-  return { days, settings, slot_minutes: SLOT_MINUTES, gap_minutes: GAP_MINUTES };
+  return { days, settings, location_id: Number(locationId), slot_minutes: SLOT_MINUTES, gap_minutes: GAP_MINUTES };
 }
 
 // Is this exact instant a slot the rules actually produce? Without this a
 // client could post any timestamp it liked — 09:07 on a Sunday — and the
 // unique index would happily accept it, because the index only stops two
 // bookings sharing a time, not a time nobody offered.
-async function isRealSlot(startsAt, { db = pgDb } = {}) {
+async function isRealSlot(locationId, startsAt, { db = pgDb } = {}) {
   const at = new Date(startsAt);
   if (Number.isNaN(at.getTime())) return false;
+  if (!(await locationExists(locationId, { db }))) return false;
   const date = sastDateStr(at);
-  const rules = await getRules({ db });
+  const rules = await getRules({ locationId, db });
   if (!slotsForWeekday(date, rules).includes(sastTimeStr(at))) return false;
-  const { rows } = await db.query('SELECT 1 FROM service_closures WHERE closed_on = $1', [date]);
+  const { rows } = await db.query(
+    'SELECT 1 FROM service_closures WHERE closed_on = $1 AND location_id = $2', [date, Number(locationId)]);
   return rows.length === 0;
 }
 
@@ -276,5 +332,6 @@ module.exports = {
   SLOT_MINUTES, GAP_MINUTES, CADENCE_MINUTES, SAST_OFFSET_MS, LIVE_STATUSES, DEFAULTS, SETTING_KEYS,
   sastToUtc, sastDateStr, sastTimeStr, weekdayOf, addDays, minutesOf, timeStrOf,
   getSettings, setSettings, getRules, replaceRules, getClosures,
+  getLocations, locationExists, defaultLocationFor,
   slotsForWeekday, availability, isRealSlot, withinChangeCutoff,
 };

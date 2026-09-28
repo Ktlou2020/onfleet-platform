@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import api from '../../api';
 import toast from 'react-hot-toast';
 import { Badge, EmptyState, Loading } from '../../components/ui';
-import { CalendarDays, ChevronLeft, ChevronRight, AlertTriangle, ArrowRight, UserX, Gauge } from 'lucide-react';
+import { CalendarDays, ChevronLeft, ChevronRight, AlertTriangle, ArrowRight, UserX, Gauge, MapPin } from 'lucide-react';
 
 // The workshop's day.
 //
@@ -31,7 +31,7 @@ const slotTime = (iso) => new Date(iso).toLocaleTimeString('en-ZA', {
   hour: '2-digit', minute: '2-digit', hour12: false, timeZone: SAST,
 });
 
-function BookingRow({ item, onArrive, onNoShow, busy }) {
+function BookingRow({ item, onArrive, onNoShow, busy, showLocation }) {
   const nav = useNavigate();
   return (
     <div className="card" style={{ marginBottom: 10, borderColor: item.open_flags > 0 ? 'rgba(234,179,8,0.45)' : undefined }}>
@@ -50,6 +50,11 @@ function BookingRow({ item, onArrive, onNoShow, busy }) {
               <h3 style={{ marginBottom: 0 }}>{item.registration}</h3>
               <Badge status={item.status}>{String(item.status).replace(/_/g, ' ')}</Badge>
             </div>
+            {showLocation && item.location_name && (
+              <div className="text-sm" style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 4 }}>
+                <MapPin size={13} /> {item.location_name}, {item.location_city}
+              </div>
+            )}
             <div className="text-sm muted">
               {item.make} {item.model}
               {item.organization_name ? ` · ${item.organization_name}` : ''}
@@ -95,17 +100,38 @@ function BookingRow({ item, onArrive, onNoShow, busy }) {
   );
 }
 
+// A technician works at one workshop and wants their own day, not both. There
+// is no workshop on a technician's user record to read this from, so the page
+// remembers their choice instead — per browser, which is per bench.
+const FILTER_KEY = 'of_ws_booking_location';
+const rememberedFilter = () => {
+  try { return localStorage.getItem(FILTER_KEY) || ''; } catch { return ''; }
+};
+
 export default function WorkshopCalendar() {
   const [date, setDate] = useState(todayInJohannesburg);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [locations, setLocations] = useState([]);
+  const [locationId, setLocationId] = useState(rememberedFilter);
   const nav = useNavigate();
 
-  const load = useCallback(async (forDate) => {
+  useEffect(() => {
+    api.get('/bookings/locations')
+      .then(({ data: res }) => setLocations(res.locations || []))
+      .catch(() => { /* the day still works without the filter */ });
+  }, []);
+
+  useEffect(() => {
+    try { localStorage.setItem(FILTER_KEY, locationId || ''); } catch { /* private window */ }
+  }, [locationId]);
+
+  const load = useCallback(async (forDate, forLocation) => {
     setLoading(true);
     try {
-      const { data: res } = await api.get(`/bookings/day?from=${forDate}`);
+      const scope = forLocation ? `&location_id=${forLocation}` : '';
+      const { data: res } = await api.get(`/bookings/day?from=${forDate}${scope}`);
       setData(res);
     } catch (err) {
       toast.error(err.response?.data?.error || 'Could not load the day');
@@ -114,7 +140,7 @@ export default function WorkshopCalendar() {
     }
   }, []);
 
-  useEffect(() => { load(date); }, [date, load]);
+  useEffect(() => { load(date, locationId); }, [date, locationId, load]);
 
   const arrive = async (item) => {
     setBusy(true);
@@ -124,7 +150,7 @@ export default function WorkshopCalendar() {
       nav(`/workshop/app/job-cards/${res.job_card_id}`);
     } catch (err) {
       toast.error(err.response?.data?.error || 'Could not open a job card');
-      load(date);
+      load(date, locationId);
     } finally {
       setBusy(false);
     }
@@ -135,7 +161,7 @@ export default function WorkshopCalendar() {
     try {
       await api.post(`/bookings/${item.id}/no-show`);
       toast.success(`${item.registration} marked as a no-show`);
-      await load(date);
+      await load(date, locationId);
     } catch (err) {
       toast.error(err.response?.data?.error || 'Could not mark that');
     } finally {
@@ -171,6 +197,23 @@ export default function WorkshopCalendar() {
         </div>
       </div>
 
+      {locations.length > 1 && (
+        <div className="row gap-2" style={{ flexWrap: 'wrap', marginBottom: 12, alignItems: 'center' }}>
+          <MapPin size={14} className="muted" />
+          <button
+            className={!locationId ? 'btn btn-sm' : 'btn btn-secondary btn-sm'}
+            onClick={() => setLocationId('')}
+          >All workshops</button>
+          {locations.map((l) => (
+            <button
+              key={l.id}
+              className={String(locationId) === String(l.id) ? 'btn btn-sm' : 'btn btn-secondary btn-sm'}
+              onClick={() => setLocationId(String(l.id))}
+            >{l.name} · {l.city}</button>
+          ))}
+        </div>
+      )}
+
       <p className="muted" style={{ marginTop: -6, marginBottom: 18 }}>
         {longDay(date)} — {bookings.length} {bookings.length === 1 ? 'booking' : 'bookings'}
       </p>
@@ -182,7 +225,10 @@ export default function WorkshopCalendar() {
         />
       ) : (
         bookings.map((b) => (
-          <BookingRow key={b.id} item={b} onArrive={arrive} onNoShow={noShow} busy={busy} />
+          <BookingRow
+            key={b.id} item={b} onArrive={arrive} onNoShow={noShow} busy={busy}
+            showLocation={!locationId && locations.length > 1}
+          />
         ))
       )}
     </div>

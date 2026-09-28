@@ -43,13 +43,15 @@ const BOOKING_COLUMNS = `
   sb.cancelled_at, sb.cancel_reason, sb.created_at,
   b.registration, b.make, b.model, b.odometer_km,
   o.name AS organization_name,
-  u.full_name AS booked_by_name`;
+  u.full_name AS booked_by_name,
+  sb.location_id, wl.name AS location_name, wl.city AS location_city`;
 
 const BOOKING_FROM = `
   FROM service_bookings sb
   JOIN bikes b ON b.id = sb.bike_id
   LEFT JOIN organizations o ON o.id = b.organization_id
-  LEFT JOIN users u ON u.id = sb.booked_by`;
+  LEFT JOIN users u ON u.id = sb.booked_by
+  JOIN workshop_locations wl ON wl.id = sb.location_id`;
 
 // A rider's bike is the one on their active agreement. Riders do not own bikes
 // in this schema; they rent one at a time.
@@ -67,13 +69,27 @@ async function bikeForRider(userId) {
 // What is free. Riders and the workshop both read this; a rider gets the
 // horizon clamp, the workshop does not, because it needs to see its own diary
 // further out than a rider may book into.
-router.get('/availability', authRequired, async (req, res) => {
-  const result = await booking.availability({
-    from: req.query.from || null,
-    to: req.query.to || null,
-    ignoreHorizon: isAdmin(req) && req.query.all === '1',
+// The workshops, and which one this person should be shown first.
+router.get('/locations', authRequired, async (req, res) => {
+  res.json({
+    locations: await booking.getLocations(),
+    default_location_id: await booking.defaultLocationFor(req.user.id),
   });
-  res.json(result);
+});
+
+router.get('/availability', authRequired, async (req, res) => {
+  const locationId = Number(req.query.location_id) || await booking.defaultLocationFor(req.user.id);
+  try {
+    res.json(await booking.availability({
+      locationId,
+      from: req.query.from || null,
+      to: req.query.to || null,
+      ignoreHorizon: isAdmin(req) && req.query.all === '1',
+    }));
+  } catch (err) {
+    if (err.status === 400) return res.status(400).json({ error: err.message });
+    throw err;
+  }
 });
 
 // ------------------------------------------------------- the rider side ----
@@ -119,7 +135,8 @@ router.post('/', authRequired, async (req, res) => {
     bikeId = bike.id;
   }
 
-  if (!(await booking.isRealSlot(startsAt))) {
+  const locationId = Number(req.body.location_id) || await booking.defaultLocationFor(req.user.id);
+  if (!(await booking.isRealSlot(locationId, startsAt))) {
     return res.status(400).json({ error: 'That is not a slot the workshop offers.' });
   }
 
@@ -139,8 +156,9 @@ router.post('/', authRequired, async (req, res) => {
 
   try {
     const { rows } = await pgDb.query(
-      `INSERT INTO service_bookings (bike_id, booked_by, starts_at, note) VALUES ($1,$2,$3,$4) RETURNING id`,
-      [bikeId, req.user.id, startsAt, note]);
+      `INSERT INTO service_bookings (bike_id, booked_by, starts_at, note, location_id)
+       VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+      [bikeId, req.user.id, startsAt, note, locationId]);
     const created = await loadBooking(rows[0].id);
     notifyBooked(created).catch(() => {});
     res.status(201).json(created);
@@ -183,8 +201,14 @@ router.patch('/:id', authRequired, async (req, res) => {
   }
 
   const startsAt = req.body.starts_at;
-  if (startsAt && !(await booking.isRealSlot(startsAt))) {
+  // A rider who picked the wrong city can move the booking to the other
+  // workshop, which is the same operation as moving the time.
+  const locationId = req.body.location_id != null ? Number(req.body.location_id) : row.location_id;
+  if (startsAt && !(await booking.isRealSlot(locationId, startsAt))) {
     return res.status(400).json({ error: 'That is not a slot the workshop offers.' });
+  }
+  if (!startsAt && locationId !== row.location_id) {
+    return res.status(400).json({ error: 'Pick a time at the other workshop as well.' });
   }
 
   try {
@@ -192,9 +216,10 @@ router.patch('/:id', authRequired, async (req, res) => {
       `UPDATE service_bookings
           SET starts_at = COALESCE($1, starts_at),
               note = COALESCE($2, note),
+              location_id = $4,
               updated_at = NOW()
         WHERE id = $3`,
-      [startsAt || null, req.body.note != null ? String(req.body.note).slice(0, 1000) : null, row.id]);
+      [startsAt || null, req.body.note != null ? String(req.body.note).slice(0, 1000) : null, row.id, locationId]);
     res.json(await loadBooking(row.id));
   } catch (err) {
     const clash = bookingConflict(err);
@@ -234,6 +259,12 @@ router.delete('/:id', authRequired, async (req, res) => {
 router.get('/day', authRequired, workshopOnly, async (req, res) => {
   const from = req.query.from || booking.sastDateStr(new Date());
   const to = req.query.to || from;
+  // No location_id means every workshop. A technician filters to their own;
+  // an admin looking at the week wants the lot.
+  const locationId = req.query.location_id ? Number(req.query.location_id) : null;
+  const params = [booking.sastToUtc(from, '00:00'), booking.sastToUtc(booking.addDays(to, 1), '00:00')];
+  if (locationId) params.push(locationId);
+
   const { rows } = await pgDb.query(
     `SELECT ${BOOKING_COLUMNS},
             jc.status AS job_card_status,
@@ -242,9 +273,9 @@ router.get('/day', authRequired, workshopOnly, async (req, res) => {
        ${BOOKING_FROM}
        LEFT JOIN job_cards jc ON jc.id = sb.job_card_id
       WHERE sb.starts_at >= $1 AND sb.starts_at < $2 AND sb.status <> 'cancelled'
-      ORDER BY sb.starts_at`,
-    [booking.sastToUtc(from, '00:00'), booking.sastToUtc(booking.addDays(to, 1), '00:00')]);
-  res.json({ from, to, bookings: rows });
+        ${locationId ? 'AND sb.location_id = $3' : ''}
+      ORDER BY sb.starts_at, wl.id`, params);
+  res.json({ from, to, location_id: locationId, bookings: rows });
 });
 
 // The bike turned up. This is where a job card is born — not at booking time,
@@ -303,9 +334,12 @@ router.post('/:id/no-show', authRequired, workshopOnly, async (req, res) => {
 // --------------------------------------------------- the admin's calendar ----
 
 router.get('/rules', authRequired, workshopOnly, async (req, res) => {
+  const locationId = req.query.location_id ? Number(req.query.location_id) : null;
   res.json({
-    rules: await booking.getRules(),
-    closures: await booking.getClosures({ from: booking.sastDateStr(new Date()) }),
+    locations: await booking.getLocations({ activeOnly: false }),
+    location_id: locationId,
+    rules: await booking.getRules({ locationId }),
+    closures: await booking.getClosures({ locationId, from: booking.sastDateStr(new Date()) }),
     settings: await booking.getSettings(),
     slot_minutes: booking.SLOT_MINUTES,
     gap_minutes: booking.GAP_MINUTES,
@@ -314,7 +348,7 @@ router.get('/rules', authRequired, workshopOnly, async (req, res) => {
 
 router.put('/rules', authRequired, adminOnly, async (req, res) => {
   try {
-    const rules = await booking.replaceRules(req.body.rules || [], req.user.id);
+    const rules = await booking.replaceRules(Number(req.body.location_id), req.body.rules || [], req.user.id);
     res.json({ rules });
   } catch (err) {
     if (err.status === 400) return res.status(400).json({ error: err.message });
@@ -329,6 +363,8 @@ router.put('/settings', authRequired, adminOnly, async (req, res) => {
 router.post('/closures', authRequired, adminOnly, async (req, res) => {
   const closedOn = String(req.body.closed_on || '').slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(closedOn)) return res.status(400).json({ error: 'Which date?' });
+  const locationId = Number(req.body.location_id);
+  if (!(await booking.locationExists(locationId))) return res.status(400).json({ error: 'Which workshop?' });
 
   // Closing a day with bookings already on it is allowed — public holidays get
   // announced late — but the admin is told exactly who needs phoning rather
@@ -336,15 +372,66 @@ router.post('/closures', authRequired, adminOnly, async (req, res) => {
   const { rows: affected } = await pgDb.query(
     `SELECT sb.id, sb.starts_at, b.registration
        FROM service_bookings sb JOIN bikes b ON b.id = sb.bike_id
-      WHERE sb.status = ANY($1) AND sb.starts_at >= $2 AND sb.starts_at < $3 ORDER BY sb.starts_at`,
-    [booking.LIVE_STATUSES, booking.sastToUtc(closedOn, '00:00'), booking.sastToUtc(booking.addDays(closedOn, 1), '00:00')]);
+      WHERE sb.location_id = $4 AND sb.status = ANY($1)
+        AND sb.starts_at >= $2 AND sb.starts_at < $3 ORDER BY sb.starts_at`,
+    [booking.LIVE_STATUSES, booking.sastToUtc(closedOn, '00:00'), booking.sastToUtc(booking.addDays(closedOn, 1), '00:00'), locationId]);
 
   await pgDb.query(
-    `INSERT INTO service_closures (closed_on, reason, created_by) VALUES ($1,$2,$3)
-     ON CONFLICT (closed_on) DO UPDATE SET reason = EXCLUDED.reason`,
-    [closedOn, String(req.body.reason || '').slice(0, 200) || null, req.user.id]);
+    `INSERT INTO service_closures (closed_on, reason, created_by, location_id) VALUES ($1,$2,$3,$4)
+     ON CONFLICT (location_id, closed_on) DO UPDATE SET reason = EXCLUDED.reason`,
+    [closedOn, String(req.body.reason || '').slice(0, 200) || null, req.user.id, locationId]);
 
-  res.status(201).json({ closed_on: closedOn, affected_bookings: affected });
+  res.status(201).json({ closed_on: closedOn, location_id: locationId, affected_bookings: affected });
+});
+
+// Adding a third workshop should be a row an admin types, not a migration.
+router.post('/locations', authRequired, adminOnly, async (req, res) => {
+  const name = String(req.body.name || '').trim().slice(0, 120);
+  const city = String(req.body.city || '').trim().slice(0, 120);
+  if (!name || !city) return res.status(400).json({ error: 'A workshop needs a name and a city.' });
+  const { rows } = await pgDb.query(
+    `INSERT INTO workshop_locations (name, city, province, address, phone) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+    [name, city,
+      String(req.body.province || '').trim().slice(0, 120) || null,
+      String(req.body.address || '').trim().slice(0, 300) || null,
+      String(req.body.phone || '').trim().slice(0, 40) || null]);
+  res.status(201).json(rows[0]);
+});
+
+router.put('/locations/:id', authRequired, adminOnly, async (req, res) => {
+  const id = Number(req.params.id);
+  const { rows: existing } = await pgDb.query('SELECT id FROM workshop_locations WHERE id = $1', [id]);
+  if (!existing[0]) return res.status(404).json({ error: 'Workshop not found' });
+
+  // Closing a workshop must not strand bikes already booked into it. They are
+  // named back so somebody can phone them, the same as closing a single day.
+  if (req.body.active === false) {
+    const { rows: stranded } = await pgDb.query(
+      `SELECT sb.id, sb.starts_at, b.registration
+         FROM service_bookings sb JOIN bikes b ON b.id = sb.bike_id
+        WHERE sb.location_id = $1 AND sb.status = ANY($2) AND sb.starts_at >= NOW()
+        ORDER BY sb.starts_at`, [id, booking.LIVE_STATUSES]);
+    if (stranded.length && req.body.confirm !== true) {
+      return res.status(409).json({
+        error: `${stranded.length} booking${stranded.length === 1 ? '' : 's'} still open at this workshop.`,
+        affected_bookings: stranded,
+      });
+    }
+  }
+
+  const { rows } = await pgDb.query(
+    `UPDATE workshop_locations SET
+        name = COALESCE($2, name), city = COALESCE($3, city), province = COALESCE($4, province),
+        address = COALESCE($5, address), phone = COALESCE($6, phone), active = COALESCE($7, active)
+      WHERE id = $1 RETURNING *`,
+    [id,
+      req.body.name != null ? String(req.body.name).trim().slice(0, 120) : null,
+      req.body.city != null ? String(req.body.city).trim().slice(0, 120) : null,
+      req.body.province != null ? String(req.body.province).trim().slice(0, 120) : null,
+      req.body.address != null ? String(req.body.address).trim().slice(0, 300) : null,
+      req.body.phone != null ? String(req.body.phone).trim().slice(0, 40) : null,
+      typeof req.body.active === 'boolean' ? req.body.active : null]);
+  res.json(rows[0]);
 });
 
 router.delete('/closures/:id', authRequired, adminOnly, async (req, res) => {
@@ -371,7 +458,7 @@ async function notifyBooked(row) {
     channel: 'in_app',
     type: 'service_booking',
     title: 'Service booked',
-    message: `${row.registration} is booked in for ${when}.`,
+    message: `${row.registration} is booked in at ${row.location_name} (${row.location_city}) for ${when}.`,
     entityType: 'service_booking',
     entityId: row.id,
   });

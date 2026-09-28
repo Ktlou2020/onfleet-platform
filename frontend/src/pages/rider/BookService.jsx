@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import api from '../../api';
 import toast from 'react-hot-toast';
 import { Badge, ConfirmModal, EmptyState, Loading } from '../../components/ui';
-import { CalendarDays, ChevronLeft, ChevronRight, Clock, AlertTriangle, CheckCircle2, Wrench } from 'lucide-react';
+import { CalendarDays, ChevronLeft, ChevronRight, Clock, AlertTriangle, CheckCircle2, Wrench, MapPin } from 'lucide-react';
 
 // Booking a service, from the rider's side.
 //
@@ -79,6 +79,11 @@ function BookingCard({ item, settings, onCancel, onMove }) {
           <div>
             <h3 style={{ marginBottom: 2 }}>{slotWhen(item.starts_at)}</h3>
             <div className="text-sm muted">{item.registration} · {item.make} {item.model}</div>
+            {item.location_name && (
+              <div className="text-sm" style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 5 }}>
+                <MapPin size={13} /> {item.location_name}, {item.location_city}
+              </div>
+            )}
             {item.note && <p className="text-sm muted" style={{ marginTop: 6, marginBottom: 0 }}>“{item.note}”</p>}
           </div>
         </div>
@@ -89,7 +94,7 @@ function BookingCard({ item, settings, onCancel, onMove }) {
         <div className="row gap-2" style={{ marginTop: 12, flexWrap: 'wrap' }}>
           {canChange ? (
             <>
-              <button className="btn btn-secondary btn-sm" onClick={() => onMove(item)}>Change time</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => onMove(item)}>Change time or workshop</button>
               <button className="btn btn-secondary btn-sm" onClick={() => onCancel(item)}>Cancel</button>
             </>
           ) : (
@@ -115,27 +120,50 @@ export default function BookService() {
   const [saving, setSaving] = useState(false);
   const [cancelling, setCancelling] = useState(null);
   const [movingId, setMovingId] = useState(null);
+  const [locations, setLocations] = useState([]);
+  const [locationId, setLocationId] = useState(null);
 
-  const load = useCallback(async () => {
+  // Which workshop, and the rider's own bookings. The server picks the first
+  // workshop to show — their province, or wherever they last went.
+  const loadMine = useCallback(async () => {
     try {
-      const [m, c] = await Promise.all([
+      const [locs, m] = await Promise.all([
+        api.get('/bookings/locations'),
         api.get('/bookings/mine'),
-        api.get('/bookings/availability'),
       ]);
+      setLocations(locs.data.locations || []);
       setMine(m.data);
-      setCalendar(c.data);
-      // Open on the first day with something free rather than on today, which
-      // is usually shut or already inside the lead time.
-      const first = c.data.days.findIndex((d) => d.open_count > 0);
-      setDayIndex(first === -1 ? 0 : first);
+      setLocationId((current) => current ?? locs.data.default_location_id ?? locs.data.locations?.[0]?.id ?? null);
     } catch (err) {
       toast.error(err.response?.data?.error || 'Could not load the service calendar');
+      setLoading(false);
+    }
+  }, []);
+
+  // The calendar belongs to one workshop, so it reloads whenever that changes.
+  const loadCalendar = useCallback(async (id) => {
+    if (!id) return;
+    try {
+      const { data } = await api.get(`/bookings/availability?location_id=${id}`);
+      setCalendar(data);
+      // Open on the first day with something free rather than on today, which
+      // is usually shut or already inside the lead time.
+      const first = data.days.findIndex((d) => d.open_count > 0);
+      setDayIndex(first === -1 ? 0 : first);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Could not load that workshop\'s calendar');
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  const load = useCallback(async () => {
+    await loadMine();
+    await loadCalendar(locationId);
+  }, [loadMine, loadCalendar, locationId]);
+
+  useEffect(() => { loadMine(); }, [loadMine]);
+  useEffect(() => { setChosen(null); loadCalendar(locationId); }, [locationId, loadCalendar]);
 
   const days = useMemo(() => calendar?.days || [], [calendar]);
   const day = days[dayIndex];
@@ -146,16 +174,18 @@ export default function BookService() {
   // Days worth stepping through — a fortnight of shut Sundays between the
   // rider and the next free Tuesday is not a calendar, it is an obstacle.
   const openDays = useMemo(() => days.filter((d) => d.open_count > 0), [days]);
+  const currentLocation = useMemo(
+    () => locations.find((l) => l.id === locationId) || null, [locations, locationId]);
 
   const confirm = async () => {
     if (!chosen) return;
     setSaving(true);
     try {
       if (movingId) {
-        await api.patch(`/bookings/${movingId}`, { starts_at: chosen });
+        await api.patch(`/bookings/${movingId}`, { starts_at: chosen, location_id: locationId });
         toast.success('Booking moved');
       } else {
-        await api.post('/bookings', { starts_at: chosen, note: note.trim() || undefined });
+        await api.post('/bookings', { starts_at: chosen, location_id: locationId, note: note.trim() || undefined });
         toast.success('Service booked');
       }
       setChosen(null); setNote(''); setMovingId(null);
@@ -206,7 +236,13 @@ export default function BookService() {
         <BookingCard
           key={b.id} item={b} settings={mine.settings}
           onCancel={setCancelling}
-          onMove={(item) => { setMovingId(item.id); setChosen(null); }}
+          onMove={(item) => {
+            setMovingId(item.id);
+            setChosen(null);
+            // Start them at the workshop the booking is already at, not
+            // wherever they happened to be browsing.
+            if (item.location_id) setLocationId(item.location_id);
+          }}
         />
       ))}
 
@@ -230,10 +266,31 @@ export default function BookService() {
             )}
           </div>
 
+          {locations.length > 1 && (
+            <div style={{ marginBottom: 16 }}>
+              <span className="text-sm muted" style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                <MapPin size={14} /> Which workshop?
+              </span>
+              <div className="row gap-2" style={{ flexWrap: 'wrap' }}>
+                {locations.map((l) => (
+                  <button
+                    key={l.id}
+                    className={locationId === l.id ? 'btn btn-sm' : 'btn btn-secondary btn-sm'}
+                    onClick={() => setLocationId(l.id)}
+                  >
+                    {l.name} · {l.city}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {openDays.length === 0 ? (
             <EmptyState
-              title="Nothing free at the moment"
-              sub="Every slot in the next few weeks is taken. Please phone the workshop."
+              title={`Nothing free at ${currentLocation?.name || 'this workshop'}`}
+              sub={locations.length > 1
+                ? 'Every slot here is taken for now. Try the other workshop, or phone them.'
+                : 'Every slot in the next few weeks is taken. Please phone the workshop.'}
             />
           ) : (
             <>
@@ -309,11 +366,14 @@ export default function BookService() {
                   )}
                   <div className="row gap-2" style={{ alignItems: 'center', flexWrap: 'wrap' }}>
                     <button className="btn" onClick={confirm} disabled={saving}>
-                      {saving ? 'Saving…' : movingId ? `Move to ${slotWhen(chosen)}` : `Book ${slotWhen(chosen)}`}
+                      {saving ? 'Saving…'
+                        : movingId ? `Move to ${slotWhen(chosen)}`
+                          : `Book ${slotWhen(chosen)}`}
                     </button>
                     <button className="btn btn-secondary" onClick={() => setChosen(null)} disabled={saving}>Clear</button>
                   </div>
                   <p className="text-xs muted" style={{ marginTop: 10, marginBottom: 0 }}>
+                    {currentLocation && <>At {currentLocation.name}, {currentLocation.city}. </>}
                     Each slot is {calendar?.slot_minutes ?? 30} minutes. You can change it yourself up to{' '}
                     {mine.settings?.change_cutoff_hours ?? 24} hours beforehand.
                   </p>

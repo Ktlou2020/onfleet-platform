@@ -462,9 +462,10 @@ export default function RiderAgreementDetail() {
               <Link className="btn btn-sm" to="/book-service">Pick a slot</Link>
             </div>
           </div>
-          {/* The two workshops below keep their own Google diaries and are not
-              on the in-app calendar yet. Until they are, removing these would
-              leave riders near them with no way to book at all. */}
+          {/* Both workshops are on the in-app calendar now, so these links are
+              a fallback rather than the only route. They stay until each
+              workshop is actually working off the new diary; deleting them the
+              day it ships would strand riders if either is still on Google. */}
           <div className="muted text-sm mb-3">Or book directly with a workshop:</div>
           {SERVICE_BOOKING_LINKS.map((booking) => (
             <div key={booking.name} className="card mb-3" style={{ background: 'var(--surface-2)' }}>

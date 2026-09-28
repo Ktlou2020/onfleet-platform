@@ -25,13 +25,26 @@ function nextWednesday() {
   throw new Error('no Wednesday in ten days — impossible');
 }
 
+// Two workshops, because there are two: OnFix in Johannesburg and Bikerhouse
+// in Cape Town. Unless a test says otherwise it books at JHB.
+const makeLocations = async () => {
+  const { rows } = await pgDb.query(
+    `INSERT INTO workshop_locations (name, city, province) VALUES
+       ('OnFix','Johannesburg','Gauteng'), ('Bikerhouse','Cape Town','Western Cape')
+     RETURNING id`);
+  return { jhb: rows[0].id, cpt: rows[1].id };
+};
+
 describe.skipIf(!process.env.DATABASE_URL)('booking a service', () => {
-  let rider, otherRider, tech, admin, bike, WED;
+  let rider, otherRider, tech, admin, bike, WED, jhb, cpt;
 
   beforeEach(async () => {
     await resetAllPgTables();
+    ({ jhb, cpt } = await makeLocations());
     await pgDb.query('DELETE FROM service_slot_rules');
-    await pgDb.query(`INSERT INTO service_slot_rules (weekday, opens_at, closes_at) VALUES (3,'08:00','12:00')`);
+    await pgDb.query(
+      `INSERT INTO service_slot_rules (weekday, opens_at, closes_at, location_id) VALUES (3,'08:00','12:00',$1),(3,'08:00','12:00',$2)`,
+      [jhb, cpt]);
     WED = nextWednesday();
 
     rider = await createPgUser({ role: 'rider' });
@@ -43,7 +56,8 @@ describe.skipIf(!process.env.DATABASE_URL)('booking a service', () => {
   });
 
   const slot = (time) => booking.sastToUtc(WED, time).toISOString();
-  const book = (user, body) => request(app).post('/api/bookings').set(authHeader(user)).send(body);
+  const book = (user, body) =>
+    request(app).post('/api/bookings').set(authHeader(user)).send({ location_id: jhb, ...body });
 
   describe('what a rider can do', () => {
     it('takes a slot the workshop offers', async () => {
@@ -64,7 +78,7 @@ describe.skipIf(!process.env.DATABASE_URL)('booking a service', () => {
 
     it('and the slot stops being offered to anybody else', async () => {
       await book(rider.user, { starts_at: slot('09:30') });
-      const res = await request(app).get(`/api/bookings/availability?from=${WED}&to=${WED}`)
+      const res = await request(app).get(`/api/bookings/availability?location_id=${jhb}&from=${WED}&to=${WED}`)
         .set(authHeader(otherRider.user));
       const taken = res.body.days[0].slots.find((s) => s.time === '09:30');
       expect(taken.available).toBe(false);
@@ -163,7 +177,7 @@ describe.skipIf(!process.env.DATABASE_URL)('booking a service', () => {
     // times would otherwise take out a morning.
     it('hands the old slot back', async () => {
       await request(app).patch(`/api/bookings/${id}`).set(authHeader(rider.user)).send({ starts_at: slot('10:15') });
-      const res = await request(app).get(`/api/bookings/availability?from=${WED}&to=${WED}`).set(authHeader(rider.user));
+      const res = await request(app).get(`/api/bookings/availability?location_id=${jhb}&from=${WED}&to=${WED}`).set(authHeader(rider.user));
       expect(res.body.days[0].slots.find((s) => s.time === '09:30').available).toBe(true);
       expect(res.body.days[0].slots.find((s) => s.time === '10:15').available).toBe(false);
     });
@@ -172,7 +186,7 @@ describe.skipIf(!process.env.DATABASE_URL)('booking a service', () => {
       const res = await request(app).delete(`/api/bookings/${id}`).set(authHeader(rider.user)).send({ reason: 'Away that week' });
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('cancelled');
-      const avail = await request(app).get(`/api/bookings/availability?from=${WED}&to=${WED}`).set(authHeader(rider.user));
+      const avail = await request(app).get(`/api/bookings/availability?location_id=${jhb}&from=${WED}&to=${WED}`).set(authHeader(rider.user));
       expect(avail.body.days[0].slots.find((s) => s.time === '09:30').available).toBe(true);
     });
 
@@ -205,8 +219,8 @@ describe.skipIf(!process.env.DATABASE_URL)('booking a service', () => {
     const bookCloseBy = async (hoursOut) => {
       const at = new Date(Date.now() + hoursOut * 60 * 60 * 1000);
       const { rows } = await pgDb.query(
-        'INSERT INTO service_bookings (bike_id, booked_by, starts_at) VALUES ($1,$2,$3) RETURNING id',
-        [bike.id, rider.user.id, at]);
+        'INSERT INTO service_bookings (bike_id, booked_by, starts_at, location_id) VALUES ($1,$2,$3,$4) RETURNING id',
+        [bike.id, rider.user.id, at, jhb]);
       return rows[0].id;
     };
 
@@ -317,7 +331,7 @@ describe.skipIf(!process.env.DATABASE_URL)('booking a service', () => {
     // slot is freed by cancellation should it be offered again.
     it('the slot is still not offered to anyone else', async () => {
       await request(app).post(`/api/bookings/${id}/arrive`).set(authHeader(tech.user));
-      const res = await request(app).get(`/api/bookings/availability?from=${WED}&to=${WED}`).set(authHeader(rider.user));
+      const res = await request(app).get(`/api/bookings/availability?location_id=${jhb}&from=${WED}&to=${WED}`).set(authHeader(rider.user));
       expect(res.body.days[0].slots.find((s) => s.time === '09:30').available).toBe(false);
     });
   });
@@ -340,17 +354,18 @@ describe.skipIf(!process.env.DATABASE_URL)('booking a service', () => {
 });
 
 describe.skipIf(!process.env.DATABASE_URL)('keeping the calendar', () => {
-  let admin, tech, rider;
+  let admin, tech, rider, jhb, cpt;
 
   beforeEach(async () => {
     await resetAllPgTables();
+    ({ jhb, cpt } = await makeLocations());
     admin = await createPgUser({ role: 'superadmin' });
     tech = await createPgUser({ role: 'technician' });
     rider = await createPgUser({ role: 'rider' });
   });
 
-  const putRules = (user, rules) =>
-    request(app).put('/api/bookings/rules').set(authHeader(user)).send({ rules });
+  const putRules = (user, rules, locationId = jhb) =>
+    request(app).put('/api/bookings/rules').set(authHeader(user)).send({ location_id: locationId, rules });
 
   it('the admin sets the week', async () => {
     const res = await putRules(admin.user, [
@@ -381,10 +396,10 @@ describe.skipIf(!process.env.DATABASE_URL)('keeping the calendar', () => {
       await putRules(admin.user, [{ weekday: 3, opens_at: '08:00', closes_at: '12:00' }]);
       const wed = nextWednesday();
       const res = await request(app).post('/api/bookings/closures')
-        .set(authHeader(admin.user)).send({ closed_on: wed, reason: 'Human Rights Day' });
+        .set(authHeader(admin.user)).send({ location_id: jhb, closed_on: wed, reason: 'Human Rights Day' });
       expect(res.status).toBe(201);
 
-      const avail = await request(app).get(`/api/bookings/availability?from=${wed}&to=${wed}`).set(authHeader(rider.user));
+      const avail = await request(app).get(`/api/bookings/availability?location_id=${jhb}&from=${wed}&to=${wed}`).set(authHeader(rider.user));
       expect(avail.body.days[0].closed).toBe(true);
       expect(avail.body.days[0].open_count).toBe(0);
     });
@@ -397,10 +412,10 @@ describe.skipIf(!process.env.DATABASE_URL)('keeping the calendar', () => {
       const bike = await createPgBike({ status: 'active', registration: 'AFFECT1' });
       await createPgAgreement({ bike_id: bike.id, user_id: rider.user.id, status: 'active' });
       await request(app).post('/api/bookings').set(authHeader(rider.user))
-        .send({ starts_at: booking.sastToUtc(wed, '09:30').toISOString() });
+        .send({ location_id: jhb, starts_at: booking.sastToUtc(wed, '09:30').toISOString() });
 
       const res = await request(app).post('/api/bookings/closures')
-        .set(authHeader(admin.user)).send({ closed_on: wed, reason: 'Burst pipe' });
+        .set(authHeader(admin.user)).send({ location_id: jhb, closed_on: wed, reason: 'Burst pipe' });
       expect(res.status).toBe(201);
       expect(res.body.affected_bookings).toHaveLength(1);
       expect(res.body.affected_bookings[0].registration).toBe('AFFECT1');
@@ -409,18 +424,18 @@ describe.skipIf(!process.env.DATABASE_URL)('keeping the calendar', () => {
     it('and reopening it puts the day back', async () => {
       await putRules(admin.user, [{ weekday: 3, opens_at: '08:00', closes_at: '12:00' }]);
       const wed = nextWednesday();
-      await request(app).post('/api/bookings/closures').set(authHeader(admin.user)).send({ closed_on: wed });
+      await request(app).post('/api/bookings/closures').set(authHeader(admin.user)).send({ location_id: jhb, closed_on: wed });
       const { rows } = await pgDb.query('SELECT id FROM service_closures WHERE closed_on = $1', [wed]);
       const gone = await request(app).delete(`/api/bookings/closures/${rows[0].id}`).set(authHeader(admin.user));
       expect(gone.status).toBe(200);
 
-      const avail = await request(app).get(`/api/bookings/availability?from=${wed}&to=${wed}`).set(authHeader(rider.user));
+      const avail = await request(app).get(`/api/bookings/availability?location_id=${jhb}&from=${wed}&to=${wed}`).set(authHeader(rider.user));
       expect(avail.body.days[0].closed).toBe(false);
     });
 
     it('a rider cannot close the workshop', async () => {
       const res = await request(app).post('/api/bookings/closures')
-        .set(authHeader(rider.user)).send({ closed_on: nextWednesday() });
+        .set(authHeader(rider.user)).send({ location_id: jhb, closed_on: nextWednesday() });
       expect(res.status).toBe(403);
     });
   });

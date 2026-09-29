@@ -10,21 +10,6 @@ import SupportContact from '../../components/SupportContact';
 // neither should cost every visit its ~150-400KB of leaflet/jspdf.
 const RiderBikeMap = lazy(() => import('../../components/RiderBikeMap'));
 
-const SERVICE_BOOKING_LINKS = [
-  {
-    name: 'OnFix',
-    city: 'Johannesburg',
-    url: 'https://calendar.app.google/cnLsGRQPm2j7d6w27',
-    description: 'Book your OnFleet service slot in JHB for inspections, routine maintenance, or repairs.'
-  },
-  {
-    name: 'Bikerhouse',
-    city: 'Cape Town',
-    url: 'https://calendar.app.google/JjLd7TFBdDGK6W4r6',
-    description: 'Book your Cape Town service appointment for monthly checks and bike support.'
-  }
-];
-
 const CARE_TIPS = [
   { title: 'Check tyres every week', text: 'Keep tyre pressure correct, inspect tread and sidewalls, and never ride long distances on a puncture or soft tyre.' },
   { title: 'Watch oil, chain, and brakes', text: 'Check engine oil regularly, keep the chain clean and lubricated, and stop riding immediately if brakes feel weak or noisy.' },
@@ -450,34 +435,15 @@ export default function RiderAgreementDetail() {
           </div>
         </div>
         <div className="card" id="book-service">
-          <h3 className="mb-3">Book a service</h3>
-          <div className="card mb-3" style={{ background: 'var(--surface-2)' }}>
-            <div className="flex-between" style={{ gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-              <div>
-                <div style={{ fontWeight: 700 }}>Book in the app</div>
-                <div className="muted text-sm" style={{ marginTop: 6 }}>
-                  Pick a slot from the workshop&apos;s own calendar. You can change it yourself up to a day beforehand.
-                </div>
+          <div className="flex-between mb-3" style={{ gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            <div>
+              <h3 style={{ marginBottom: 6 }}>Book a service</h3>
+              <div className="muted text-sm">
+                Pick a slot at the workshop nearest you. You can change it yourself up to a day beforehand.
               </div>
-              <Link className="btn btn-sm" to="/book-service">Pick a slot</Link>
             </div>
+            <Link className="btn btn-sm" to="/book-service">Pick a slot</Link>
           </div>
-          {/* Both workshops are on the in-app calendar now, so these links are
-              a fallback rather than the only route. They stay until each
-              workshop is actually working off the new diary; deleting them the
-              day it ships would strand riders if either is still on Google. */}
-          <div className="muted text-sm mb-3">Or book directly with a workshop:</div>
-          {SERVICE_BOOKING_LINKS.map((booking) => (
-            <div key={booking.name} className="card mb-3" style={{ background: 'var(--surface-2)' }}>
-              <div className="flex-between" style={{ gap: 12, alignItems: 'flex-start' }}>
-                <div>
-                  <div style={{ fontWeight: 700 }}>{booking.name} · {booking.city}</div>
-                  <div className="muted text-sm" style={{ marginTop: 6 }}>{booking.description}</div>
-                </div>
-                <a className="btn btn-secondary btn-sm" href={booking.url} target="_blank" rel="noreferrer">Book now</a>
-              </div>
-            </div>
-          ))}
           <div className="muted text-sm">If the bike feels unsafe to ride, get in touch before travelling to the workshop.</div>
           <div className="mt-3">
             <SupportContact title="Bike unsafe to ride?" sub="Don't ride it to the workshop — contact your fleet manager first and they'll arrange collection." />

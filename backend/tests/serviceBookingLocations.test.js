@@ -301,6 +301,38 @@ describe.skipIf(!process.env.DATABASE_URL)('two workshops', () => {
       expect(res.body.active).toBe(false);
     });
 
+    // Renaming matters more than it looks: the two seeded workshops are
+    // OnFleet's own, and the same migration runs in the Pillion environment,
+    // where they are somebody else's business entirely.
+    it('an admin can rename one', async () => {
+      const res = await request(app).put(`/api/bookings/locations/${cpt}`)
+        .set(authHeader(admin.user)).send({ name: 'Cape Bike Works', city: 'Cape Town' });
+      expect(res.status).toBe(200);
+      expect(res.body.name).toBe('Cape Bike Works');
+    });
+
+    it('and that follows through to the bookings already at it', async () => {
+      await book(capeRider.user, { location_id: cpt, starts_at: slot('09:30') });
+      await request(app).put(`/api/bookings/locations/${cpt}`)
+        .set(authHeader(admin.user)).send({ name: 'Cape Bike Works' });
+      const res = await request(app).get(`/api/bookings/day?from=${WED}&location_id=${cpt}`).set(authHeader(tech.user));
+      expect(res.body.bookings[0].location_name).toBe('Cape Bike Works');
+    });
+
+    it('changing the province changes who is sent there', async () => {
+      await pgDb.query(`UPDATE users SET province = 'Eastern Cape' WHERE id = $1`, [capeRider.user.id]);
+      await request(app).put(`/api/bookings/locations/${cpt}`)
+        .set(authHeader(admin.user)).send({ province: 'Eastern Cape' });
+      const res = await request(app).get('/api/bookings/locations').set(authHeader(capeRider.user));
+      expect(res.body.default_location_id).toBe(cpt);
+    });
+
+    it('a technician cannot rename one', async () => {
+      const res = await request(app).put(`/api/bookings/locations/${cpt}`)
+        .set(authHeader(tech.user)).send({ name: 'Nope' });
+      expect(res.status).toBe(403);
+    });
+
     it('switches one off without fuss when nothing is booked', async () => {
       const res = await request(app).put(`/api/bookings/locations/${cpt}`)
         .set(authHeader(admin.user)).send({ active: false });

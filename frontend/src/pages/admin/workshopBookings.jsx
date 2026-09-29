@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import api from '../../api';
 import toast from 'react-hot-toast';
 import { Badge, ConfirmModal, EmptyState, Loading } from '../../components/ui';
-import { Plus, Trash2, CalendarDays, Clock, AlertTriangle, Save, MapPin, Power } from 'lucide-react';
+import { Plus, Trash2, CalendarDays, Clock, AlertTriangle, Save, MapPin, Power, Pencil } from 'lucide-react';
 
 // The admin's side of the service calendar: which days and hours can be
 // booked, which specific dates are shut, and how far ahead riders may go.
@@ -11,6 +11,15 @@ import { Plus, Trash2, CalendarDays, Clock, AlertTriangle, Save, MapPin, Power }
 // already fourteen hundred lines and this is a self-contained screen.
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+// Name, city, province, phone — the four things a workshop is. Province is
+// matched against a rider's own to pick which workshop they see first.
+const FIELDS = [
+  ['name', 'Name', 'Durban Moto'],
+  ['city', 'City', 'Durban'],
+  ['province', 'Province', 'KwaZulu-Natal'],
+  ['phone', 'Phone', '031 000 0000'],
+];
 
 const todayInJohannesburg = () => new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
@@ -244,9 +253,12 @@ function UpcomingCard({ bookings }) {
   );
 }
 
-function LocationsCard({ locations, selected, onSelect, onAdd, onToggle }) {
+const BLANK_LOCATION = { name: '', city: '', province: '', phone: '' };
+
+function LocationsCard({ locations, selected, onSelect, onAdd, onToggle, onRename }) {
   const [adding, setAdding] = useState(false);
-  const [draft, setDraft] = useState({ name: '', city: '', province: '', phone: '' });
+  const [editing, setEditing] = useState(null);
+  const [draft, setDraft] = useState(BLANK_LOCATION);
 
   return (
     <div className="card">
@@ -254,7 +266,7 @@ function LocationsCard({ locations, selected, onSelect, onAdd, onToggle }) {
         <h2 style={{ marginBottom: 0, marginLeft: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
           <MapPin size={18} /> Workshops
         </h2>
-        <button className="btn btn-secondary btn-sm" onClick={() => setAdding((v) => !v)}>
+        <button className="btn btn-secondary btn-sm" onClick={() => { setAdding((v) => !v); setEditing(null); }}>
           <Plus size={14} /> {adding ? 'Cancel' : 'Add a workshop'}
         </button>
       </div>
@@ -277,21 +289,56 @@ function LocationsCard({ locations, selected, onSelect, onAdd, onToggle }) {
       </div>
 
       {locations.filter((l) => l.id === selected).map((l) => (
-        <div key={l.id} className="flex-between" style={{ paddingTop: 10, borderTop: '1px solid var(--border)', flexWrap: 'wrap', gap: 8 }}>
-          <div className="text-sm muted">
-            {l.province ? `Riders in ${l.province} are offered this one first.` : 'No province set, so this is never a rider’s default.'}
-            {l.phone ? ` · ${l.phone}` : ''}
+        <div key={l.id} style={{ paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+          <div className="flex-between" style={{ flexWrap: 'wrap', gap: 8 }}>
+            <div className="text-sm muted">
+              {l.province ? `Riders in ${l.province} are offered this one first.` : 'No province set, so this is never a rider’s default.'}
+              {l.phone ? ` · ${l.phone}` : ''}
+            </div>
+            <div className="row gap-2" style={{ flexWrap: 'wrap' }}>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => {
+                  setEditing(editing === l.id ? null : l.id);
+                  setDraft({ name: l.name, city: l.city, province: l.province || '', phone: l.phone || '' });
+                  setAdding(false);
+                }}
+              ><Pencil size={14} /> {editing === l.id ? 'Cancel' : 'Rename'}</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => onToggle(l)}>
+                <Power size={14} /> {l.active ? 'Switch off' : 'Switch on'}
+              </button>
+            </div>
           </div>
-          <button className="btn btn-secondary btn-sm" onClick={() => onToggle(l)}>
-            <Power size={14} /> {l.active ? 'Switch off' : 'Switch on'}
-          </button>
+
+          {editing === l.id && (
+            <div style={{ marginTop: 12 }}>
+              <div className="row gap-2" style={{ flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                {FIELDS.map(([key, label, hint]) => (
+                  <label key={key} style={{ flex: 1, minWidth: 150 }}>
+                    <span className="text-sm">{label}</span>
+                    <input
+                      value={draft[key]} placeholder={hint}
+                      onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
+                      style={{ display: 'block', marginTop: 4, width: '100%' }}
+                    />
+                  </label>
+                ))}
+                <button
+                  className="btn btn-sm"
+                  onClick={async () => {
+                    if (await onRename(l, draft)) { setEditing(null); setDraft(BLANK_LOCATION); }
+                  }}
+                ><Save size={14} /> Save</button>
+              </div>
+            </div>
+          )}
         </div>
       ))}
 
       {adding && (
         <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
           <div className="row gap-2" style={{ flexWrap: 'wrap', alignItems: 'flex-end' }}>
-            {[['name', 'Name', 'Durban Moto'], ['city', 'City', 'Durban'], ['province', 'Province', 'KwaZulu-Natal'], ['phone', 'Phone', '031 000 0000']].map(([key, label, hint]) => (
+            {FIELDS.map(([key, label, hint]) => (
               <label key={key} style={{ flex: 1, minWidth: 150 }}>
                 <span className="text-sm">{label}{key === 'province' || key === 'phone' ? <span className="muted"> (optional)</span> : ''}</span>
                 <input
@@ -304,7 +351,7 @@ function LocationsCard({ locations, selected, onSelect, onAdd, onToggle }) {
             <button
               className="btn btn-sm"
               onClick={async () => {
-                if (await onAdd(draft)) { setDraft({ name: '', city: '', province: '', phone: '' }); setAdding(false); }
+                if (await onAdd(draft)) { setDraft(BLANK_LOCATION); setAdding(false); }
               }}
             >Add</button>
           </div>
@@ -411,6 +458,22 @@ export function BookingsTab() {
     }
   };
 
+  const renameLocation = async (location, draft) => {
+    if (!draft.name.trim() || !draft.city.trim()) {
+      toast.error('A workshop needs a name and a city');
+      return false;
+    }
+    try {
+      await api.put(`/bookings/locations/${location.id}`, draft);
+      toast.success('Workshop updated');
+      await load(locationId);
+      return true;
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Could not update that workshop');
+      return false;
+    }
+  };
+
   const toggleLocation = async (location) => {
     try {
       await api.put(`/bookings/locations/${location.id}`, { active: !location.active });
@@ -443,6 +506,7 @@ export function BookingsTab() {
         onSelect={setLocationId}
         onAdd={addLocation}
         onToggle={toggleLocation}
+        onRename={renameLocation}
       />
       <WeekEditor rules={state.rules} onSave={saveRules} saving={saving} locationName={current?.name} />
       <div className="grid grid-2" style={{ gap: 16, alignItems: 'start' }}>

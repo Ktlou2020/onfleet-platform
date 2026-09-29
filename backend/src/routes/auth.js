@@ -43,13 +43,9 @@ const signupLimiter = rateLimit({
 const router = asyncRouter(express.Router());
 const { profiles: profileUploadDir } = require('../uploadPaths');
 const FLEET_ROLE_VALUES = ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'];
-const FLEET_PLAN_ENTITLEMENTS = {
-  trial:  { max_bikes: 6,    max_admin_users: 2 },
-  small:  { max_bikes: 6,    max_admin_users: 2 },
-  medium: { max_bikes: 20,   max_admin_users: 3 },
-  large:  { max_bikes: 35,   max_admin_users: 5 },
-  empire: { max_bikes: 9999, max_admin_users: 20 },
-};
+// Was defined here and again in routes/pilot.js. It now lives beside the
+// transaction that uses it, in services/fleetOnboarding.js.
+const { FLEET_PLAN_ENTITLEMENTS } = require('../services/fleetOnboarding');
 
 const profileUpload = multer({
   storage: hybridStorage(profileUploadDir, 'profiles', (req, file) =>
@@ -108,22 +104,6 @@ function hashResetToken(token) {
 function buildResetUrl(token) {
   const base = readEnv('FRONTEND_URL', 'http://localhost:5173').replace(/\/$/, '');
   return `${base}/reset-password?token=${encodeURIComponent(token)}`;
-}
-
-async function slugifyCompanyName(value) {
-  const base = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || `fleet-${Date.now()}`;
-  let slug = base;
-  let counter = 2;
-  while (true) {
-    const { rows } = await pgDb.query('SELECT id FROM organizations WHERE slug = $1', [slug]);
-    if (!rows[0]) break;
-    slug = `${base}-${counter++}`;
-  }
-  return slug;
-}
-
-function getFleetEntitlements(planKey = 'trial') {
-  return FLEET_PLAN_ENTITLEMENTS[planKey] || FLEET_PLAN_ENTITLEMENTS.trial;
 }
 
 async function getSafeUser(userId) {
@@ -197,46 +177,27 @@ router.post('/fleet/signup',
       return res.status(400).json({ error: 'Invalid fleet-owner role' });
     }
 
-    const entitlements = getFleetEntitlements(planKey);
-    const hash = await bcrypt.hash(password, 10);
-    const now = new Date();
-    const trialEnds = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
-    const slug = await slugifyCompanyName(company_name);
-
-    const created = await pgDb.withTransaction(async (client) => {
-      const { rows: orgRows } = await client.query(`INSERT INTO organizations
-        (name, slug, contact_email, contact_phone, city, fleet_size, plan_key, status, trial_started_at, trial_ends_at, max_bikes, max_admin_users)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,'trialing',$8,$9,$10,$11) RETURNING id`,
-        [
-          company_name,
-          slug,
-          email,
-          phone || null,
-          city || null,
-          fleet_size,
-          planKey,
-          now.toISOString(),
-          trialEnds.toISOString(),
-          entitlements.max_bikes,
-          entitlements.max_admin_users
-        ]);
-      const organizationId = orgRows[0].id;
-
-      const { rows: userRows } = await client.query(`INSERT INTO users
-          (email, password_hash, full_name, phone, city, role, organization_id, status)
-          VALUES ($1,$2,$3,$4,$5,$6,$7, 'active') RETURNING id`,
-        [
-          email,
-          hash,
-          full_name,
-          phone || null,
-          city || null,
-          requestedRole,
-          organizationId
-        ]);
-
-      return { organizationId, userId: userRows[0].id };
-    });
+    // One implementation of "a fleet comes into being", shared with the
+    // operator-side onboarding in routes/admin.js.
+    const onboarding = require('../services/fleetOnboarding');
+    let created;
+    try {
+      created = await onboarding.createFleetOrganisation({
+        companyName: company_name,
+        fullName: full_name,
+        email,
+        phone,
+        city,
+        fleetSize: fleet_size,
+        planKey,
+        role: requestedRole,
+        password,
+        status: 'trialing',
+      });
+    } catch (err) {
+      if (err.status) return res.status(err.status).json({ error: err.message });
+      throw err;
+    }
 
     const user = await getSafeUser(created.userId);
     await logAudit(user.id, 'fleet_owner.signup', 'organizations', created.organizationId, { company_name, role: requestedRole, plan: planKey }, req.ip);

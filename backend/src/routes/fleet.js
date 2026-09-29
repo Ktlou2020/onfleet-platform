@@ -81,6 +81,26 @@ const FLEET_RESOURCE_ACCESS = {
   reporting: {
     view: ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'],
     manage: []
+  },
+  // The four the admin portal had and this one did not. A fleet on a
+  // telematics deployment runs its own business here, so it needs them — but
+  // scoped to its own bikes, which is the whole reason they are being added
+  // to this router rather than the fleet roles being pointed at admin.js.
+  workshop: {
+    view: ['fleet_owner_admin', 'fleet_owner_ops'],
+    manage: ['fleet_owner_admin', 'fleet_owner_ops']
+  },
+  applications: {
+    view: ['fleet_owner_admin', 'fleet_owner_ops'],
+    manage: ['fleet_owner_admin', 'fleet_owner_ops']
+  },
+  security: {
+    view: ['fleet_owner_admin', 'fleet_owner_ops'],
+    manage: ['fleet_owner_admin', 'fleet_owner_ops']
+  },
+  activity: {
+    view: ['fleet_owner_admin'],
+    manage: []
   }
 };
 
@@ -3631,4 +3651,222 @@ router.get('/tracking/live', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.v
   });
 });
 
+
+// ─── What the admin portal had and a fleet owner did not ──────────────────
+//
+// Workshop, rider applications, theft and claims, and the fleet's own
+// activity. On an OnFleet deployment these live in the admin portal, where
+// the operator owns every bike in the database and no query needs to ask
+// whose they are. That is exactly why they could not simply be opened up to
+// fleet roles: admin.js, bikes.js, agreements.js, payments.js, tracking.js
+// and claims.js contain not one reference to the caller's organisation
+// between them.
+//
+// So they are rebuilt here, on the router that has always been tenant-aware,
+// and every query below goes through getBikeScope or the organisation's own
+// user list. A leak has to be written deliberately rather than by forgetting
+// a WHERE clause.
+
+// The bikes this fleet may ask about, as a subquery other statements can
+// join against. Written once so that no endpoint below has to remember the
+// legacy `fleet` text-match that getBikeScope carries.
+function orgBikeIds(org, startIndex = 1) {
+  const scope = getBikeScope(org, 'b', startIndex);
+  return {
+    sql: `SELECT b.id FROM bikes b WHERE ${scope.clause}`,
+    params: scope.params,
+  };
+}
+
+// ---------------------------------------------------------- workshop ----
+
+router.get('/workshop/job-cards', companyRoleAllowed(FLEET_RESOURCE_ACCESS.workshop.view), async (req, res) => {
+  try {
+    const org = await getOrganizationOrThrow(req);
+    const bikes = orgBikeIds(org, 1);
+    const params = [...bikes.params];
+    let statusClause = '';
+    const status = String(req.query.status || '').trim();
+    if (status) { params.push(status); statusClause = `AND jc.status = $${params.length}`; }
+
+    const { rows } = await pgDb.query(
+      `SELECT jc.id, jc.status, jc.job_type, jc.priority, jc.description, jc.created_at,
+              jc.started_at, jc.completed_at, jc.odometer_km, jc.quote_amount,
+              jc.registration, jc.make, jc.model,
+              u.full_name AS technician_name,
+              COALESCE((SELECT SUM(i.quantity * i.unit_cost) FROM job_card_items i WHERE i.job_card_id = jc.id), 0) AS items_total
+         FROM job_cards jc
+         LEFT JOIN users u ON u.id = jc.technician_id
+        WHERE jc.bike_id IN (${bikes.sql}) ${statusClause}
+        ORDER BY jc.created_at DESC
+        LIMIT 200`, params);
+    res.json({ job_cards: rows });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not load job cards' });
+  }
+});
+
+router.get('/workshop/job-cards/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.workshop.view), async (req, res) => {
+  try {
+    const org = await getOrganizationOrThrow(req);
+    const bikes = orgBikeIds(org, 2);
+    // The id is checked against this fleet's bikes in the same statement that
+    // fetches it. Fetching first and checking after is how one of these
+    // eventually returns somebody else's job card.
+    const { rows } = await pgDb.query(
+      `SELECT jc.*, u.full_name AS technician_name
+         FROM job_cards jc
+         LEFT JOIN users u ON u.id = jc.technician_id
+        WHERE jc.id = $1 AND jc.bike_id IN (${bikes.sql})`,
+      [Number(req.params.id), ...bikes.params]);
+    if (!rows[0]) return res.status(404).json({ error: 'Job card not found' });
+
+    const { rows: items } = await pgDb.query(
+      `SELECT id, item_type, description, quantity, unit_cost,
+              (quantity * unit_cost) AS total
+         FROM job_card_items WHERE job_card_id = $1 ORDER BY id`,
+      [rows[0].id]);
+    res.json({ job_card: rows[0], items });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not load that job card' });
+  }
+});
+
+router.get('/workshop/service-due', companyRoleAllowed(FLEET_RESOURCE_ACCESS.workshop.view), async (req, res) => {
+  try {
+    const org = await getOrganizationOrThrow(req);
+    const { bikesDueForService } = require('../services/serviceDue');
+    // serviceDue already takes an organizationId; passing the caller's own is
+    // the whole scope.
+    const bikes = await bikesDueForService({ organizationId: org.id });
+    res.json({
+      bikes,
+      summary: {
+        total: bikes.length,
+        overdue: bikes.filter((b) => b.state === 'overdue').length,
+        due_soon: bikes.filter((b) => b.state === 'due_soon').length,
+      },
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not load services due' });
+  }
+});
+
+// ------------------------------------------------------ applications ----
+
+router.get('/applications', companyRoleAllowed(FLEET_RESOURCE_ACCESS.applications.view), async (req, res) => {
+  try {
+    const org = await getOrganizationOrThrow(req);
+    // An application belongs to a rider, and a rider belongs to an
+    // organisation. That is the only join that scopes it.
+    const { rows } = await pgDb.query(
+      `SELECT a.id, a.status, a.submitted_at, a.reviewed_at, a.monthly_income, a.auto_decision,
+              u.id AS user_id, u.full_name, u.email, u.phone,
+              b.registration AS preferred_bike
+         FROM applications a
+         JOIN users u ON u.id = a.user_id
+         LEFT JOIN bikes b ON b.id = a.preferred_bike_id
+        WHERE u.organization_id = $1 AND u.deleted_at IS NULL
+        ORDER BY a.submitted_at DESC NULLS LAST, a.id DESC
+        LIMIT 200`, [org.id]);
+    res.json({ applications: rows });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not load applications' });
+  }
+});
+
+router.get('/applications/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.applications.view), async (req, res) => {
+  try {
+    const org = await getOrganizationOrThrow(req);
+    const { rows } = await pgDb.query(
+      `SELECT a.*, u.full_name, u.email, u.phone
+         FROM applications a JOIN users u ON u.id = a.user_id
+        WHERE a.id = $1 AND u.organization_id = $2 AND u.deleted_at IS NULL`,
+      [Number(req.params.id), org.id]);
+    if (!rows[0]) return res.status(404).json({ error: 'Application not found' });
+
+    const { rows: docs } = await pgDb.query(
+      'SELECT id, doc_type, created_at FROM application_documents WHERE application_id = $1 ORDER BY id',
+      [rows[0].id]).catch(() => ({ rows: [] }));
+    res.json({ application: rows[0], documents: docs });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not load that application' });
+  }
+});
+
+// ------------------------------------------------ theft and claims ----
+
+router.get('/theft-cases', companyRoleAllowed(FLEET_RESOURCE_ACCESS.security.view), async (req, res) => {
+  try {
+    const org = await getOrganizationOrThrow(req);
+    const bikes = orgBikeIds(org, 1);
+    const { rows } = await pgDb.query(
+      `SELECT tc.id, tc.status, tc.opened_at, tc.closed_at, tc.closing_note, tc.police_reference, tc.bike_id,
+              b.registration, b.make, b.model
+         FROM theft_cases tc JOIN bikes b ON b.id = tc.bike_id
+        WHERE tc.bike_id IN (${bikes.sql})
+        ORDER BY tc.opened_at DESC LIMIT 200`, bikes.params);
+    res.json({ theft_cases: rows });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not load theft cases' });
+  }
+});
+
+router.get('/claims', companyRoleAllowed(FLEET_RESOURCE_ACCESS.security.view), async (req, res) => {
+  try {
+    const org = await getOrganizationOrThrow(req);
+    const bikes = orgBikeIds(org, 1);
+    const { rows } = await pgDb.query(
+      `SELECT c.id, c.status, c.claim_type, c.description, c.bike_id,
+              b.registration, b.make, b.model
+         FROM insurance_claims c JOIN bikes b ON b.id = c.bike_id
+        WHERE c.bike_id IN (${bikes.sql})
+        ORDER BY c.id DESC LIMIT 200`, bikes.params);
+    res.json({ claims: rows });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not load claims' });
+  }
+});
+
+// -------------------------------------------------------- activity ----
+
+router.get('/activity/audit', companyRoleAllowed(FLEET_RESOURCE_ACCESS.activity.view), async (req, res) => {
+  try {
+    const org = await getOrganizationOrThrow(req);
+    // Only what this fleet's own people did. A platform operator's actions on
+    // the account are deliberately not here: that is the operator's audit
+    // trail, and showing a tenant a partial view of it is worse than none.
+    const { rows } = await pgDb.query(
+      `SELECT al.id, al.action, al.entity, al.entity_id, al.created_at,
+              u.full_name AS actor_name, u.email AS actor_email
+         FROM audit_logs al JOIN users u ON u.id = al.actor_id
+        WHERE u.organization_id = $1
+        ORDER BY al.created_at DESC LIMIT 200`, [org.id]);
+    res.json({ entries: rows });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not load activity' });
+  }
+});
+
+router.get('/activity/notifications', companyRoleAllowed(FLEET_RESOURCE_ACCESS.activity.view), async (req, res) => {
+  try {
+    const org = await getOrganizationOrThrow(req);
+    const { rows } = await pgDb.query(
+      `SELECT n.id, n.channel, n.type, n.title, n.status, n.created_at, n.sent_at,
+              u.full_name AS recipient_name
+         FROM notifications n JOIN users u ON u.id = n.user_id
+        WHERE u.organization_id = $1 AND u.deleted_at IS NULL
+        ORDER BY n.created_at DESC LIMIT 200`, [org.id]);
+    res.json({ notifications: rows });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Could not load notifications' });
+  }
+});
+
+
 module.exports = router;
+// Exported so a test can hold it against the frontend's copy in
+// frontend/src/pages/fleet/access.js. The two are written out separately —
+// one decides what the API allows, the other what the menu draws — and when
+// they drift the symptom is a menu item that 403s when clicked.
+module.exports.FLEET_RESOURCE_ACCESS = FLEET_RESOURCE_ACCESS;

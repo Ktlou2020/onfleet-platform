@@ -5,7 +5,7 @@ import MobileOnboardingPrompt from './components/MobileOnboardingPrompt';
 import OfflineBanner from './components/OfflineBanner';
 import AnalyticsTracker from './analytics';
 import { canViewFleetSection, getDefaultFleetRoute, isAdminPortalRole } from './pages/fleet/access';
-import brand from './brand';
+import brand, { isTelematicsConsole } from './brand';
 
 const Landing = lazy(() => import('./pages/Landing'));
 const PortalDoor = lazy(() => import('./pages/PortalDoor'));
@@ -25,6 +25,10 @@ const FleetAgreementDetail = lazy(() => import('./pages/fleet/AgreementDetail'))
 const FleetOwnerPayments = lazy(() => import('./pages/fleet/Payments'));
 const FleetOwnerRiders = lazy(() => import('./pages/fleet/Riders'));
 const FleetOwnerHelp = lazy(() => import('./pages/fleet/Help'));
+const FleetWorkshop = lazy(() => import('./pages/fleet/Workshop'));
+const FleetApplications = lazy(() => import('./pages/fleet/Applications'));
+const FleetSecurity = lazy(() => import('./pages/fleet/Security'));
+const FleetActivity = lazy(() => import('./pages/fleet/Activity'));
 const FleetBilling = lazy(() => import('./pages/fleet/Billing'));
 const FleetPaystackAccount = lazy(() => import('./pages/fleet/PaystackAccount'));
 const FleetSubscription = lazy(() => import('./pages/fleet/Subscription'));
@@ -49,6 +53,7 @@ const PaymentCallback = lazy(() => import('./pages/rider/PaymentCallback'));
 
 const AdminShell = lazy(() => import('./pages/admin/AdminShell'));
 const AdminDashboard = lazy(() => import('./pages/admin/Dashboard'));
+const PlatformDashboard = lazy(() => import('./pages/admin/PlatformDashboard'));
 const AdminApplications = lazy(() => import('./pages/admin/Applications'));
 const AdminApplicationDetail = lazy(() => import('./pages/admin/ApplicationDetail'));
 const AdminAgreements = lazy(() => import('./pages/admin/Agreements'));
@@ -186,6 +191,10 @@ export default function App() {
             <Route path="hubs" element={<FleetRouteGate section="hubs"><FleetHubs /></FleetRouteGate>} />
             <Route path="api-keys" element={<FleetRouteGate section="api_keys"><FleetApiKeys /></FleetRouteGate>} />
             <Route path="reports" element={<FleetRouteGate section="reporting"><FleetReports /></FleetRouteGate>} />
+            <Route path="workshop" element={<FleetRouteGate section="workshop"><FleetWorkshop /></FleetRouteGate>} />
+            <Route path="applications" element={<FleetRouteGate section="applications"><FleetApplications /></FleetRouteGate>} />
+            <Route path="security" element={<FleetRouteGate section="security"><FleetSecurity /></FleetRouteGate>} />
+            <Route path="activity" element={<FleetRouteGate section="activity"><FleetActivity /></FleetRouteGate>} />
             <Route path="team" element={<FleetRouteGate section="team"><FleetTeam /></FleetRouteGate>} />
             <Route path="help" element={<FleetRouteGate section="help"><FleetOwnerHelp /></FleetRouteGate>} />
           </Route>
@@ -204,7 +213,11 @@ export default function App() {
           </Route>
 
           <Route path="/admin" element={<PrivateRoute role="admin"><AdminShell /></PrivateRoute>}>
-            <Route index element={<AdminDashboard />} />
+            {/* A telematics deployment lands on the platform console; a fleet
+
+                operator lands on its own business. */}
+
+            <Route index element={isTelematicsConsole ? <PlatformDashboard /> : <AdminDashboard />} />
             <Route path="applications" element={<AdminApplications />} />
             <Route path="applications/:id" element={<AdminApplicationDetail />} />
             <Route path="agreements" element={<AdminAgreements />} />

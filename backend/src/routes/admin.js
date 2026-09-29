@@ -14,6 +14,7 @@ const { requireValidMime } = require('../utils/validateUpload');
 const { convertHeicUploads } = require('../utils/heicToJpeg');
 const { sendHtmlEmail, detectEmailProvider } = require('../services/notifier');
 const { sendNotification } = require('../services/notifierPg');
+const { brand } = require('../brand');
 const { getTemplate, listTemplates, previewTemplate } = require('../services/emailTemplates');
 const asyncRouter = require('../utils/asyncRouter');
 
@@ -1033,6 +1034,80 @@ router.post('/organizations/:id/plan', superadminOnly, async (req, res) => {
   }, req.ip);
 
   res.json({ ok: true, plan_key: planKey, status: newStatus, max_bikes: maxBikes, max_admin_users: maxAdmins });
+});
+
+// Onboarding a fleet from this side of the table.
+//
+// Until now an organisation could only come into being through public
+// self-serve signup, which is the wrong shape for a telematics business: the
+// account gets created on a sales call, on a plan that was negotiated, by
+// somebody who is not the customer.
+//
+// No password is set here on purpose. The customer gets a reset link and
+// chooses their own — an operator who types a password for a customer has
+// created a credential two people know.
+// adminOnly is not repeated here: the router gates every route in this file
+// at the top. Restating it per route reads as a decision being made, and the
+// day somebody relaxes the router-level gate the repetition is what makes them
+// believe the individual routes are still covered.
+router.post('/fleet-owners', async (req, res) => {
+  const onboarding = require('../services/fleetOnboarding');
+  let created;
+  try {
+    created = await onboarding.createFleetOrganisation({
+      companyName: req.body.company_name,
+      fullName: req.body.full_name,
+      email: req.body.email,
+      phone: req.body.phone,
+      city: req.body.city,
+      fleetSize: req.body.fleet_size,
+      planKey: req.body.plan_key,
+      status: req.body.status || 'trialing',
+      role: req.body.role || 'fleet_owner_admin',
+    });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    throw err;
+  }
+
+  await logAudit(req.user.id, 'fleet_owner.onboarded', 'organizations', created.organizationId, {
+    company_name: created.organization.name,
+    plan: created.organization.plan_key,
+    status: created.organization.status,
+    owner_email: created.user.email,
+  }, req.ip);
+
+  // The account exists either way; the invite is what makes it usable. If the
+  // email fails, say so plainly rather than reporting success — and do not
+  // undo the fleet, because it is fine and can be invited again.
+  let invited = false;
+  let inviteError = null;
+  if (req.body.send_invite !== false) {
+    try {
+      const resetUrl = await issuePasswordResetToken(created.userId, req);
+      await sendNotification({
+        userId: created.userId,
+        channel: 'email',
+        type: 'password_reset',
+        title: `Set up your ${brand.name} account`,
+        message: `${created.user.full_name}, an account has been created for ${created.organization.name} on ${brand.name}.\n\n`
+          + `Set your password to get started: ${resetUrl}\n\n`
+          + 'The link is single use and expires.',
+      });
+      invited = true;
+    } catch (err) {
+      console.error('[admin] fleet onboarding invite failed:', err.message);
+      inviteError = 'The fleet was created but the invite email could not be sent. Send it again from Manage accounts.';
+    }
+  }
+
+  res.status(201).json({
+    organization: created.organization,
+    owner: created.user,
+    invited,
+    needs_password_setup: created.needsPasswordSetup,
+    ...(inviteError ? { warning: inviteError } : {}),
+  });
 });
 
 router.post('/fleet-owners/:id/status', superadminOnly, async (req, res) => {

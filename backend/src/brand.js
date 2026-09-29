@@ -19,9 +19,33 @@
 // appear in emails, contracts, SMS and legal pages — those are copy, some of
 // it naming a real legal entity, and they need writing rather than switching.
 
+// Who the company running a deployment actually is.
+//
+// Until now the brand was purely cosmetic — a name, a logo, a colour — and
+// nothing about routing or permission depended on it. That held while both
+// products were the same shape. They are not:
+//
+//   'fleet'       the company running this deployment owns the motorcycles and
+//                 rents them out. Its admin portal is the whole business:
+//                 applications, agreements, bikes, riders, money, workshop.
+//                 That is OnFleet.
+//
+//   'telematics'  the company running this deployment owns no motorcycles. It
+//                 sells the platform to companies that do. Its admin portal is
+//                 about the tenants, the devices in their bikes, and what they
+//                 are billed — and the operating detail of any one fleet
+//                 belongs to that fleet, not on this console. That is Pillion.
+//
+// This drives which console the admin portal shows. It is deliberately a
+// property of the brand rather than a separate env var, because it is not an
+// independent choice: a deployment calling itself Pillion and showing OnFleet's
+// console is not a configuration anybody wants.
+const CONSOLES = { FLEET: 'fleet', TELEMATICS: 'telematics' };
+
 const BRANDS = {
   onfleet: {
     key: 'onfleet',
+    adminConsole: CONSOLES.FLEET,
     name: 'OnFleet',
     fullName: 'OnFleet Africa',
     themeColor: '#1E88D1',
@@ -64,6 +88,7 @@ const BRANDS = {
 
   pillion: {
     key: 'pillion',
+    adminConsole: CONSOLES.TELEMATICS,
     name: 'Pillion',
     fullName: 'Pillion',
     themeColor: '#0C4A5A',
@@ -140,6 +165,9 @@ function publicBrand(b = brand) {
   return {
     key: b.key, name: b.name, fullName: b.fullName,
     portalUrl: b.portalUrl, domain: b.domain,
+    // Which admin console to draw. The frontend decides this on first paint,
+    // so it cannot be fetched.
+    adminConsole: b.adminConsole || CONSOLES.FLEET,
     // MARKETING_URL wins, and an explicit empty value turns the redirect off
     // — which is what you want if the marketing domain is not live yet.
     marketingUrl: process.env.MARKETING_URL !== undefined
@@ -159,4 +187,4 @@ function brandScriptTag() {
     .replace(/</g, '\\u003c')};</script>`;
 }
 
-module.exports = { brand, isDefault, BRANDS, manifestFor, publicBrand, brandScriptTag };
+module.exports = { brand, isDefault, BRANDS, CONSOLES, manifestFor, publicBrand, brandScriptTag };

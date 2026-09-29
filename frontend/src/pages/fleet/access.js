@@ -33,6 +33,25 @@ export const FLEET_RESOURCE_ACCESS = {
     view: ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'],
     manage: []
   },
+  // Mirrors FLEET_RESOURCE_ACCESS in backend/src/routes/fleet.js. The backend
+  // copy is the one that decides anything; this one only decides what is
+  // drawn, and the two disagreeing shows up as a menu item that 403s.
+  workshop: {
+    view: ['fleet_owner_admin', 'fleet_owner_ops'],
+    manage: ['fleet_owner_admin', 'fleet_owner_ops']
+  },
+  applications: {
+    view: ['fleet_owner_admin', 'fleet_owner_ops'],
+    manage: ['fleet_owner_admin', 'fleet_owner_ops']
+  },
+  security: {
+    view: ['fleet_owner_admin', 'fleet_owner_ops'],
+    manage: ['fleet_owner_admin', 'fleet_owner_ops']
+  },
+  activity: {
+    view: ['fleet_owner_admin'],
+    manage: []
+  },
   billing: {
     view: ['fleet_owner_admin', 'fleet_owner_billing'],
     manage: ['fleet_owner_admin']
@@ -77,7 +96,11 @@ export const FLEET_NAV_ITEMS = [
   { key: 'collections',to: '/fleet/app/collections',   label: 'Collections' },
   { key: 'wallet',     to: '/fleet/app/wallet',        label: 'Wallet' },
   { key: 'hubs',       to: '/fleet/app/hubs',          label: 'Hubs' },
+  { key: 'workshop',   to: '/fleet/app/workshop',      label: 'Workshop' },
+  { key: 'applications', to: '/fleet/app/applications', label: 'Applications' },
+  { key: 'security',   to: '/fleet/app/security',      label: 'Theft & claims' },
   { key: 'team',       to: '/fleet/app/team',          label: 'Team' },
+  { key: 'activity',   to: '/fleet/app/activity',      label: 'Activity' },
   { key: 'billing',    to: '/fleet/app/billing',       label: 'Billing' },
   { key: 'help',       to: '/fleet/app/help',          label: 'Help' },
 ];

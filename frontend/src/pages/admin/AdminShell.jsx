@@ -5,9 +5,11 @@ import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
 import NotificationBell from '../../components/NotificationBell';
 import { LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell, Briefcase, ShieldCheck, PiggyBank, MapPin, UserCheck, Wrench, ShieldAlert, Gauge, Star, TrendingUp, Plug, Inbox, Repeat, MoreHorizontal, X, Siren, BookOpen } from 'lucide-react';
-import { brandFullName } from '../../brand';
+import { brandFullName, isTelematicsConsole } from '../../brand';
 
-const navItems = [
+// The console for a company that runs its own motorcycles: the whole business
+// is here, because the whole business is theirs.
+const FLEET_CONSOLE_NAV = [
   { section: 'Operations', mobileOnly: true },
   { to: '/admin', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/admin/applications', label: 'Applications', icon: FileCheck },
@@ -39,10 +41,45 @@ const navItems = [
   { to: '/admin/audit', label: 'Audit Logs', icon: ClipboardList }
 ];
 
+// The console for a company that owns no motorcycles and sells the platform to
+// companies that do.
+//
+// What is absent matters more than what is here. Applications, agreements,
+// bikes, riders, payments, theft, claims and the workshop are a tenant's
+// operating detail, and a telematics supplier that keeps them on its own front
+// page will sooner or later act on the wrong fleet's data by accident. Those
+// pages still exist and a platform admin can still reach them by URL — this is
+// a console, not a permission boundary — but supporting a customer should mean
+// stepping into their account deliberately, through impersonation, rather than
+// working on it from here without noticing whose it is.
+const TELEMATICS_CONSOLE_NAV = [
+  { section: 'Fleets', mobileOnly: true },
+  { to: '/admin', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/admin/fleet-dashboard', label: 'Fleets', icon: Briefcase },
+  { to: '/admin/fleet-owners', label: 'Manage accounts', icon: ShieldCheck },
+  { to: '/admin/leads', label: 'Leads', icon: UserCheck },
+  { section: 'Devices' },
+  { to: '/admin/tracking', label: 'Devices & map', icon: MapPin, end: true },
+  { to: '/admin/tracking/dashboard', label: 'Device health', icon: Gauge },
+  { to: '/admin/tracking/guide', label: 'Fitment guide', icon: BookOpen },
+  { section: 'Billing' },
+  { to: '/admin/paystack-subscriptions', label: 'Subscriptions', icon: Repeat },
+  { to: '/admin/paystack-charges', label: 'Charges', icon: Inbox },
+  { to: '/admin/fleet-payouts', label: 'Payout requests', icon: PiggyBank },
+  { section: 'System' },
+  { to: '/admin/users', label: 'Users', icon: Users },
+  { to: '/admin/integrations', label: 'Integrations', icon: Plug, superadminOnly: true },
+  { to: '/admin/audit', label: 'Audit Logs', icon: ClipboardList },
+];
+
+const navItems = isTelematicsConsole ? TELEMATICS_CONSOLE_NAV : FLEET_CONSOLE_NAV;
+
 // Phones get no sidebar, and the bottom bar used to show just the first five
 // items with no way to reach the other twenty. It now shows the pages used
 // most from a phone, plus More, which opens every page grouped as in the sidebar.
-const MOBILE_PRIMARY = ['/admin', '/admin/agreements', '/admin/tracking', '/admin/payments'];
+const MOBILE_PRIMARY = isTelematicsConsole
+  ? ['/admin', '/admin/fleet-dashboard', '/admin/tracking', '/admin/paystack-subscriptions']
+  : ['/admin', '/admin/agreements', '/admin/tracking', '/admin/payments'];
 
 function groupedNav(items) {
   const groups = [];

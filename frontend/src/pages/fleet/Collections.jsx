@@ -3,7 +3,7 @@ import toast from 'react-hot-toast';
 import api from '../../api';
 import { useAuth } from '../../auth';
 import { Badge, ConfirmModal, EmptyState, Loading, SearchInput, Stat, fmt, fmtDate, matchesSearch } from '../../components/ui';
-import { ChevronDown, ChevronRight, Zap, ZapOff, Wifi, WifiOff, CalendarClock, Banknote, Users } from 'lucide-react';
+import { ChevronDown, ChevronRight, Zap, ZapOff, Wifi, WifiOff, CalendarClock, Banknote, Users, Send } from 'lucide-react';
 import { canManageFleetSection } from './access';
 
 const STAGES = ['pending', 'contacted', 'notice_sent', 'recovery', 'resolved'];
@@ -59,6 +59,7 @@ export default function Collections() {
   const [loadingActions, setLoadingActions] = useState(false);
   const [immobModal, setImmobModal] = useState(null); // { item, preset }
   const [immobBusy, setImmobBusy] = useState(false);
+  const [reminding, setReminding] = useState(null);   // agreement id being sent to
 
   const load = async ({ silent = false } = {}) => {
     if (!silent) setLoading(true);
@@ -123,6 +124,36 @@ export default function Collections() {
       toast.error(error.response?.data?.error || 'Could not log action');
     } finally {
       setSaving(false);
+    }
+  };
+
+  // Sends the reminder rather than recording that somebody sent one. The
+  // message is composed from the arrears on the server — there is no box to
+  // type in, deliberately — and whatever happens is written into the history
+  // by itself, including "not delivered".
+  const sendReminder = async (item, channel, anyway = false) => {
+    setReminding(item.id);
+    try {
+      const { data } = await api.post(`/fleet/collections/${item.id}/remind`, { channel, anyway });
+      if (data.ok) toast.success(data.outcome);
+      else toast(data.outcome, { icon: '⚠️' });
+      setActions((prev) => ({ ...prev, [item.id]: [data.action, ...(prev[item.id] || [])] }));
+      await load({ silent: true });
+    } catch (error) {
+      const body = error.response?.data;
+      // Already reminded today. Offered again rather than refused outright:
+      // somebody who has just spoken to the rider may have a reason.
+      if (body?.code === 'ALREADY_REMINDED') {
+        const when = body.last_sent_at ? fmtDate(body.last_sent_at) : 'today';
+        if (window.confirm(`${item.rider_name || 'This rider'} was already reminded ${when}. Send another?`)) {
+          await sendReminder(item, channel, true);
+          return;
+        }
+      } else {
+        toast.error(body?.error || 'Could not send that reminder');
+      }
+    } finally {
+      setReminding(null);
     }
   };
 
@@ -215,6 +246,20 @@ export default function Collections() {
                     {item.current_stage.replace(/_/g, ' ')}
                   </span>
                   <Badge status={item.status} />
+                  {canManage && (
+                    <div className="row" style={{ gap: 4 }} onClick={(e) => e.stopPropagation()}>
+                      {['whatsapp', 'sms'].map((channel) => (
+                        <button key={channel}
+                                className="btn btn-secondary btn-sm"
+                                style={{ padding: '3px 10px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}
+                                disabled={reminding === item.id}
+                                title={`Send this rider a ${channel} reminder for ${fmt(item.overdue_balance)}`}
+                                onClick={() => sendReminder(item, channel)}>
+                          <Send size={12} /> {channel === 'whatsapp' ? 'WhatsApp' : 'SMS'}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   {canImmobilise && item.tracking_device_id && (
                     <div style={{ display: 'flex', gap: 6 }} onClick={(e) => e.stopPropagation()}>
                       <span title={item.device_connected ? 'Device online' : 'Device offline — command will queue'} style={{ display: 'flex', alignItems: 'center', color: item.device_connected ? 'var(--success)' : 'var(--muted)' }}>

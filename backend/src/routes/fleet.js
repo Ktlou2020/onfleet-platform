@@ -3448,6 +3448,126 @@ router.post('/collections/:agreementId/action', fleetSection('collections', 'man
   }
 });
 
+// Sending the reminder, rather than recording that somebody sent one.
+//
+// The action log has always had 'sms' and 'whatsapp' among its types, but
+// they meant "I picked up my phone and did this myself" — the platform sent
+// nothing, and the history was somebody's word for it. This sends, then
+// writes down what actually happened, including when nothing could be sent.
+//
+// Three deliberate limits:
+//
+//   no free text        the message is composed from the arrears, because a
+//                       box that lets one company write anything it likes to
+//                       another person's phone, through our sender, is a
+//                       thing we would have to police rather than build.
+//   one a day           a rider being chased is not a rider to be chased four
+//                       times before lunch, and the cost and the sender
+//                       reputation are the platform's.
+//   the outcome is real a rider with no phone number produces a note saying
+//                       exactly that, not a tick in a box.
+const REMINDER_CHANNELS = ['whatsapp', 'sms', 'email'];
+
+router.post('/collections/:agreementId/remind', fleetSection('collections', 'manage'), async (req, res) => {
+  const org = await getOrganizationOrThrow(req);
+  const agreementId = toInt(req.params.agreementId);
+  if (!agreementId) return res.status(400).json({ error: 'Invalid agreement id' });
+
+  const agreement = await getScopedAgreement(org, agreementId);
+  if (!agreement) return res.status(404).json({ error: 'Agreement not found' });
+  if (!agreement.user_id) return res.status(400).json({ error: 'That agreement has no rider on it' });
+
+  const channel = String(req.body.channel || 'whatsapp');
+  if (!REMINDER_CHANNELS.includes(channel)) {
+    return res.status(400).json({ error: `A reminder goes by ${REMINDER_CHANNELS.join(', ')}` });
+  }
+
+  // One a day, per agreement, whoever sends it.
+  const { rows: recent } = await pgDb.query(
+    `SELECT created_at FROM collections_actions
+      WHERE agreement_id = $1 AND action_type = ANY($2) AND created_at > NOW() - INTERVAL '20 hours'
+      ORDER BY created_at DESC LIMIT 1`,
+    [agreementId, REMINDER_CHANNELS]);
+  if (recent[0] && req.body.anyway !== true) {
+    return res.status(429).json({
+      error: 'This rider was already reminded today.',
+      code: 'ALREADY_REMINDED',
+      last_sent_at: recent[0].created_at,
+    });
+  }
+
+  const { rows: owed } = await pgDb.query(
+    `SELECT COALESCE(SUM(amount_due - COALESCE(amount_paid, 0)), 0)::numeric AS amount,
+            COUNT(*)::int AS weeks
+       FROM payment_schedules
+      WHERE agreement_id = $1 AND status = 'overdue' AND amount_due > COALESCE(amount_paid, 0)`,
+    [agreementId]);
+  const amount = Number(owed[0]?.amount || 0);
+  const weeks = Number(owed[0]?.weeks || 0);
+  if (amount <= 0) return res.status(400).json({ error: 'Nothing is overdue on that agreement.' });
+
+  const firstName = String(agreement.rider_name || 'there').split(' ')[0];
+  const weeksNote = weeks > 1 ? ` (${weeks} weeks)` : '';
+  // Named for the fleet, not for us: the rider has an agreement with them and
+  // has never heard of the company whose software sends this.
+  const message = `Hi ${firstName}, ${org.name} has R${amount.toFixed(2)} outstanding on agreement `
+    + `${agreement.agreement_no}${weeksNote}. Please arrange payment to keep your agreement in good standing.`;
+
+  const notificationId = await sendNotification({
+    userId: agreement.user_id,
+    channel,
+    type: 'payment_overdue',
+    title: `Payment overdue — ${agreement.agreement_no}`,
+    message,
+    entityType: 'agreements',
+    entityId: agreementId,
+    throwOnError: false,
+    templateValues: {
+      first_name: firstName,
+      amount: amount.toFixed(2),
+      agreement_no: agreement.agreement_no,
+      weeks_note: weeksNote,
+    },
+  });
+
+  // What the notification itself says happened, rather than what we hoped
+  // would happen. The three ways it does not arrive are worth telling apart,
+  // because only one of them is the rider's doing and only one of them is
+  // something the fleet can fix:
+  //
+  //   no contact detail  we hold no phone number for them. The notifier
+  //                      records this as failed, so the specific reason comes
+  //                      from what we know rather than from the status.
+  //   not switched on    the channel has no provider on this deployment.
+  //                      'skipped' rather than failed: the message is on file
+  //                      and would go the day one is connected.
+  //   failed             the provider was asked and said no.
+  const { rows: sentRows } = await pgDb.query(
+    'SELECT status FROM notifications WHERE id = $1', [notificationId]);
+  const status = sentRows[0]?.status || 'failed';
+  const missingDetail = channel === 'email'
+    ? (!agreement.rider_email && 'no email address on file')
+    : (!agreement.rider_phone && 'no phone number on file');
+  const outcome = status === 'sent' ? `Reminder delivered by ${channel}`
+    : missingDetail ? `Not delivered: ${missingDetail}`
+    : status === 'skipped' ? `Not delivered: ${channel} is not switched on for this platform`
+    : `Not delivered: ${channel} failed`;
+
+  const { rows: logged } = await pgDb.query(
+    `INSERT INTO collections_actions
+       (agreement_id, organization_id, stage, action_type, notes, outcome, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+    [agreementId, org.id, String(req.body.stage || 'contacted'), channel, message, outcome, req.user.id]);
+
+  await logAudit(req.user.id, 'fleet_owner.collections_reminder', 'agreements', agreementId,
+    { organization_id: org.id, channel, status, amount }, req.ip);
+
+  const { rows: action } = await pgDb.query(
+    `SELECT ca.*, u.full_name AS created_by_name FROM collections_actions ca
+       JOIN users u ON u.id = ca.created_by WHERE ca.id = $1`, [logged[0].id]);
+  res.status(status === 'sent' ? 201 : 202).json({ ok: status === 'sent', status, outcome, action: action[0] });
+});
+
 router.get('/collections/:agreementId/actions', fleetSection('collections', 'view'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req);

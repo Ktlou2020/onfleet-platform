@@ -4,8 +4,15 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../../auth';
 import { Loading, Badge, SearchInput, fmtDate, Modal, Pagination, matchesSearch, CopyableContactValue, normalizePhoneInput } from '../../components/ui';
 import { sortNewestFirst } from '../../utils/sortNewestFirst';
+import { brandName } from '../../brand';
 
 const SPECIAL_AUDIENCE_TAG = 'password-reset-batch-2026-05';
+
+// The roles that staff a workshop, and so the only ones that can belong to a
+// fleet. Mirrors WORKSHOP_STAFF in backend/src/services/workshopScope.js; the
+// backend copy is the one that decides anything, this one decides whether a
+// field is drawn.
+const WORKSHOP_ROLES = ['technician', 'control_room'];
 
 const bulkScopeOptions = [
   { value: 'selected', label: 'Selected users' },
@@ -40,7 +47,11 @@ export default function AdminUsers() {
   const [sendingBulkEmail, setSendingBulkEmail] = useState(false);
   const [sendingBulkReset, setSendingBulkReset] = useState(false);
   const [selectedIds, setSelectedIds] = useState([]);
-  const [form, setForm] = useState({ full_name: '', email: '', phone: '', password: '', role: 'rider' });
+  const [form, setForm] = useState({ full_name: '', email: '', phone: '', password: '', role: 'rider', organization_id: '' });
+  // The fleets a mechanic could be attached to. Only a superadmin can open
+  // this form, and /admin/fleet-owners already carries them, so there is no
+  // second endpoint and nothing loads until the form is opened.
+  const [fleets, setFleets] = useState([]);
   const [roleEdits, setRoleEdits] = useState({});
   const [bulkEmailForm, setBulkEmailForm] = useState({
     scope: 'filtered',
@@ -172,15 +183,31 @@ export default function AdminUsers() {
     }
   };
 
+  // Fetched when the form opens rather than on every visit to the page: most
+  // of what happens here is reading the list, and a fleet dropdown is only
+  // needed by the one person adding a mechanic.
+  useEffect(() => {
+    if (!showCreate || fleets.length || user?.role !== 'superadmin') return;
+    api.get('/admin/fleet-owners')
+      .then((r) => setFleets(r.data.organizations || []))
+      .catch(() => setFleets([]));
+  }, [showCreate, fleets.length, user?.role]);
+
   const createUser = async () => {
     if (!form.full_name.trim()) return toast.error('Full name is required');
     if (!form.email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) return toast.error('Enter a valid email address');
     if (!form.password || form.password.length < 6) return toast.error('Password must be at least 6 characters');
     try {
-      await api.post('/admin/users', form);
+      // Sent only for the roles it applies to: the API refuses a fleet on an
+      // admin or a rider, and a stale value left behind by switching the role
+      // dropdown should not turn into a 400 the person cannot see the cause of.
+      const payload = WORKSHOP_ROLES.includes(form.role) && form.organization_id
+        ? { ...form, organization_id: Number(form.organization_id) }
+        : { ...form, organization_id: undefined };
+      await api.post('/admin/users', payload);
       toast.success('User added');
       setShowCreate(false);
-      setForm({ full_name: '', email: '', phone: '', password: '', role: 'rider' });
+      setForm({ full_name: '', email: '', phone: '', password: '', role: 'rider', organization_id: '' });
       load();
     } catch (error) {
       toast.error(error.response?.data?.error || 'Could not create user');
@@ -416,6 +443,27 @@ export default function AdminUsers() {
             <div className="field"><label className="label">Phone</label><input type="tel" autoComplete="tel" inputMode="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: normalizePhoneInput(e.target.value) })} /></div>
             <div className="field"><label className="label">Password</label><input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></div>
             <div className="field"><label className="label">Role</label><select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}><option value="rider">Rider</option><option value="technician">Technician</option><option value="control_room">Control Room</option><option value="admin">Admin</option>{user?.role === 'superadmin' && <option value="superadmin">Superadmin</option>}</select></div>
+            {/* Which fleet's workshop this person staffs. Only workshop roles
+                can belong to one — a rider belongs to a fleet through their
+                motorcycle, and an admin to the platform — so the field is
+                absent rather than disabled for everybody else. */}
+            {WORKSHOP_ROLES.includes(form.role) && (
+              <div className="field">
+                <label className="label">Workshop</label>
+                <select value={form.organization_id}
+                        onChange={(e) => setForm({ ...form, organization_id: e.target.value })}>
+                  <option value="">{brandName}&apos;s own workshop</option>
+                  {fleets.map((fleet) => (
+                    <option key={fleet.id} value={fleet.id}>{fleet.name}</option>
+                  ))}
+                </select>
+                <div className="text-xs muted" style={{ marginTop: 6 }}>
+                  {form.organization_id
+                    ? 'They will see this fleet\'s bookings and job cards, and no other fleet\'s.'
+                    : `They will see every fleet's work, which is what ${brandName}'s own workshop staff need.`}
+                </div>
+              </div>
+            )}
           </div>
           <div className="row"><button className="btn" onClick={createUser}>Create</button><button className="btn btn-secondary" onClick={() => setShowCreate(false)}>Cancel</button></div>
         </Modal>

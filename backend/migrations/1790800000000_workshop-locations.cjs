@@ -36,13 +36,37 @@ exports.up = (pgm) => {
     created_at: { type: 'timestamptz', notNull: true, default: pgm.func('NOW()') },
   });
 
-  // The two that exist. Seeded rather than left to an admin because the
-  // backfill below has to put the existing week somewhere, and because a
-  // booking page with no locations on it is broken rather than empty.
+  // Seeded rather than left to an admin because the backfill below has to put
+  // the existing week somewhere, and because a booking page with no locations
+  // on it is broken rather than empty.
+  //
+  // Which workshops depends on the brand. OnFleet owns two and services its
+  // own motorcycles at them; Pillion owns none and sells the platform to
+  // companies that do, so a Pillion deployment seeded with OnFleet's workshop
+  // names ships a competitor's branding to that competitor's customers. It
+  // did exactly that, which is why this is no longer a fixed list.
+  //
+  // Editing a migration that has already run is normally a mistake. It is
+  // safe here precisely because it has already run: a database carrying this
+  // in pgmigrations will not run it again, so nothing that exists changes.
+  // This decides what a database created from today gets, and nothing else.
+  // The two rows already sitting in Pillion's production database are not
+  // corrected by this and have to be renamed in the admin console.
+  const { initialWorkshops } = require('../src/constants/workshopSeed');
+  const { isDefault } = require('../src/brand');
+
+  // pgm.sql takes no parameters, so the values are inlined. They come from a
+  // constant in this repository rather than from anything a user typed, but
+  // they are quoted properly regardless: a seed that breaks on an apostrophe
+  // the day somebody adds "O'Brien Motors" is a bad way to find out.
+  const lit = (v) => (v == null ? 'NULL' : `'${String(v).replace(/'/g, "''")}'`);
+
+  const rows = initialWorkshops(isDefault)
+    .map((w) => `(${lit(w.name)}, ${lit(w.city)}, ${lit(w.province)})`)
+    .join(',\n      ');
   pgm.sql(`
     INSERT INTO workshop_locations (name, city, province) VALUES
-      ('OnFix', 'Johannesburg', 'Gauteng'),
-      ('Bikerhouse', 'Cape Town', 'Western Cape')
+      ${rows}
   `);
 
   // Backfill in three steps — add nullable, fill, then constrain — because

@@ -22,6 +22,7 @@ const { lessorOrgForAgreement } = require('../services/contractsPg');
 const { writeFleetOwnerContractSnapshot } = require('../services/contractsPg');
 const { insertImportedPaymentForFleet } = require('../services/csvImportsFleet');
 const asyncRouter = require('../utils/asyncRouter');
+const theftCases = require('../services/theftCaseService');
 
 const router = asyncRouter(express.Router());
 const PAYSTACK_BASE = 'https://api.paystack.co';
@@ -3878,7 +3879,9 @@ router.get('/theft-cases', fleetSection('security', 'view'), async (req, res) =>
     const bikes = orgBikeIds(org, 1);
     const { rows } = await pgDb.query(
       `SELECT tc.id, tc.status, tc.opened_at, tc.closed_at, tc.closing_note, tc.police_reference, tc.bike_id,
-              b.registration, b.make, b.model
+              tc.opened_reason, tc.follow_until,
+              b.registration, b.make, b.model,
+              (SELECT COUNT(*)::int FROM theft_case_events e WHERE e.case_id = tc.id) AS event_count
          FROM theft_cases tc JOIN bikes b ON b.id = tc.bike_id
         WHERE tc.bike_id IN (${bikes.sql})
         ORDER BY tc.opened_at DESC LIMIT 200`, bikes.params);
@@ -3894,6 +3897,8 @@ router.get('/claims', fleetSection('security', 'view'), async (req, res) => {
     const bikes = orgBikeIds(org, 1);
     const { rows } = await pgDb.query(
       `SELECT c.id, c.status, c.claim_type, c.description, c.bike_id,
+              c.incident_date, c.payout_amount, c.filed_at, c.resolved_at, c.notes,
+              c.saps_case_number, c.saps_police_station,
               b.registration, b.make, b.model
          FROM insurance_claims c JOIN bikes b ON b.id = c.bike_id
         WHERE c.bike_id IN (${bikes.sql})
@@ -3902,6 +3907,215 @@ router.get('/claims', fleetSection('security', 'view'), async (req, res) => {
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Could not load claims' });
   }
+});
+
+// A fleet works its own cases.
+//
+// Until now theft cases and claims were the platform operator's to run and a
+// fleet owner could only watch. That is the wrong way round for the two facts
+// the record turns on: whose bike it is, and who has the police reference and
+// the insurer's letter. Both are the fleet's.
+//
+// Everything below scopes through the bike, the same as the lists do, because
+// the bike is the only thing a case or a claim is attached to. A case on
+// somebody else's bike is a 404 — whether it exists is not this fleet's
+// business.
+
+const CLAIM_TYPES = ['theft', 'damage', 'accident', 'fire', 'other'];
+const CLAIM_STATUSES = ['filed', 'investigating', 'approved', 'rejected', 'paid', 'closed'];
+// approved and paid are the insurer's word, recorded here. The money is not
+// ours to move, so a payout is a number written down, not a transaction.
+const CLAIM_PAYOUT_STATUSES = ['approved', 'paid'];
+const CLAIM_DECIDED_STATUSES = ['approved', 'rejected', 'paid', 'closed'];
+
+async function scopedTheftCase(org, caseId) {
+  const bikes = orgBikeIds(org, 2);
+  const { rows } = await pgDb.query(
+    `SELECT tc.* FROM theft_cases tc
+      WHERE tc.id = $1 AND tc.bike_id IN (${bikes.sql})`, [Number(caseId), ...bikes.params]);
+  return rows[0];
+}
+
+async function scopedClaim(org, claimId) {
+  const bikes = orgBikeIds(org, 2);
+  const { rows } = await pgDb.query(
+    `SELECT c.* FROM insurance_claims c
+      WHERE c.id = $1 AND c.bike_id IN (${bikes.sql})`, [Number(claimId), ...bikes.params]);
+  return rows[0];
+}
+
+// The story so far: what opened the case, what was marked, what was noted.
+router.get('/theft-cases/:id', fleetSection('security', 'view'), async (req, res) => {
+  const org = await getOrganizationOrThrow(req);
+  const theftCase = await scopedTheftCase(org, req.params.id);
+  if (!theftCase) return res.status(404).json({ error: 'Case not found' });
+  const { rows: events } = await pgDb.query(
+    `SELECT e.id, e.kind, e.summary, e.created_at, u.full_name AS actor_name
+       FROM theft_case_events e LEFT JOIN users u ON u.id = e.actor_id
+      WHERE e.case_id = $1 ORDER BY e.created_at, e.id`, [theftCase.id]);
+  res.json({ case: theftCase, events });
+});
+
+// Reporting a theft by hand. Most cases open themselves off a tamper or a
+// towing alert, but the ones that matter most often do not: a bike taken
+// while parked with the tracker ripped out sends nothing at all.
+router.post('/theft-cases', fleetSection('security', 'manage'), async (req, res) => {
+  const org = await getOrganizationOrThrow(req);
+  const bikeId = Number(req.body.bike_id);
+  if (!Number.isFinite(bikeId)) return res.status(400).json({ error: 'Which bike?' });
+
+  const bike = await getScopedBike(org, bikeId);
+  if (!bike) return res.status(404).json({ error: 'Bike not found' });
+
+  const reason = String(req.body.reason || '').trim();
+  if (reason.length < 3) return res.status(400).json({ error: 'Say why this case is being opened' });
+
+  const { rows: device } = await pgDb.query(
+    'SELECT id FROM tracking_devices WHERE bike_id = $1 LIMIT 1', [bikeId]);
+
+  // openCase attaches to the case already open on this bike rather than
+  // making a second one, which is what the one-open-case-per-bike index in
+  // the database enforces anyway. Reporting a theft twice is a thing a
+  // worried person does.
+  const { theftCase, created } = await theftCases.openCase({
+    bikeId, deviceId: device[0]?.id || null, reason, actorId: req.user.id,
+  });
+  await logAudit(req.user.id, created ? 'fleet_owner.theft_case_open' : 'fleet_owner.theft_case_reuse',
+    'theft_cases', theftCase.id, { organization_id: org.id, bike_id: bikeId, reason }, req.ip);
+  res.status(created ? 201 : 200).json({ case: theftCase, created });
+});
+
+router.post('/theft-cases/:id/notes', fleetSection('security', 'manage'), async (req, res) => {
+  const org = await getOrganizationOrThrow(req);
+  const theftCase = await scopedTheftCase(org, req.params.id);
+  if (!theftCase) return res.status(404).json({ error: 'Case not found' });
+
+  const note = String(req.body.note || '').trim();
+  if (!note) return res.status(400).json({ error: 'Write something to add' });
+  const event = await theftCases.addEvent(theftCase.id, 'note', note.slice(0, 2000), null, req.user.id);
+  res.status(201).json(event);
+});
+
+// With the police, recovered, a false alarm, or gone for good. The last three
+// close the case; the closing note and the police reference are the parts
+// somebody will still need a year later when the insurer asks.
+router.put('/theft-cases/:id/status', fleetSection('security', 'manage'), async (req, res) => {
+  const org = await getOrganizationOrThrow(req);
+  const theftCase = await scopedTheftCase(org, req.params.id);
+  if (!theftCase) return res.status(404).json({ error: 'Case not found' });
+
+  const status = String(req.body.status || '');
+  const note = String(req.body.note || '').trim() || null;
+  const police = String(req.body.police_reference || '').trim() || null;
+  try {
+    const updated = theftCases.CLOSED_STATUSES.includes(status)
+      ? await theftCases.closeCase({ caseId: theftCase.id, status, note, policeReference: police, actorId: req.user.id })
+      : await theftCases.setStatus({ caseId: theftCase.id, status, policeReference: police, actorId: req.user.id });
+    if (!updated) return res.status(409).json({ error: 'That case is already closed' });
+    await logAudit(req.user.id, 'fleet_owner.theft_case_status', 'theft_cases', theftCase.id,
+      { organization_id: org.id, status, police_reference: police, note }, req.ip);
+    res.json(updated);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// ---------------------------------------------------------- claims ----
+
+router.post('/claims', fleetSection('security', 'manage'), async (req, res) => {
+  const org = await getOrganizationOrThrow(req);
+  const bikeId = Number(req.body.bike_id);
+  if (!Number.isFinite(bikeId)) return res.status(400).json({ error: 'Which bike?' });
+
+  const bike = await getScopedBike(org, bikeId);
+  if (!bike) return res.status(404).json({ error: 'Bike not found' });
+
+  const claimType = String(req.body.claim_type || '').trim();
+  if (!CLAIM_TYPES.includes(claimType)) {
+    return res.status(400).json({ error: `A claim is one of: ${CLAIM_TYPES.join(', ')}` });
+  }
+  const description = String(req.body.description || '').trim();
+  if (description.length < 3) return res.status(400).json({ error: 'Say what happened' });
+
+  const incidentDate = String(req.body.incident_date || '').slice(0, 10) || null;
+  if (incidentDate && !/^\d{4}-\d{2}-\d{2}$/.test(incidentDate)) {
+    return res.status(400).json({ error: 'The incident date must look like 2026-09-30' });
+  }
+
+  // The agreement the bike was on when it happened, so a claim and the money
+  // owed on that bike can be read together later.
+  const { rows: agreement } = await pgDb.query(
+    `SELECT id FROM agreements WHERE bike_id = $1 AND status IN ('active','paused','defaulted')
+      ORDER BY id DESC LIMIT 1`, [bikeId]);
+
+  const { rows } = await pgDb.query(
+    `INSERT INTO insurance_claims
+       (bike_id, agreement_id, claim_type, status, description, incident_date,
+        saps_case_number, saps_police_station, notes, filed_by)
+     VALUES ($1,$2,$3,'filed',$4,$5,$6,$7,$8,$9) RETURNING *`,
+    [bikeId, agreement[0]?.id || null, claimType, description, incidentDate,
+     String(req.body.saps_case_number || '').trim().slice(0, 120) || null,
+     String(req.body.saps_police_station || '').trim().slice(0, 160) || null,
+     String(req.body.notes || '').trim().slice(0, 4000) || null,
+     req.user.id]);
+
+  await logAudit(req.user.id, 'fleet_owner.claim_file', 'insurance_claims', rows[0].id,
+    { organization_id: org.id, bike_id: bikeId, claim_type: claimType }, req.ip);
+  res.status(201).json(rows[0]);
+});
+
+// Recording what the insurer said.
+//
+// The decision is theirs, not the platform's and not ours to check — this
+// writes down an answer that arrived by letter or phone. What it does insist
+// on is that the record means something: "paid" without an amount says
+// nothing a year later, and a closed claim stays closed so that a file
+// somebody has finished with cannot be quietly rewritten.
+router.put('/claims/:id', fleetSection('security', 'manage'), async (req, res) => {
+  const org = await getOrganizationOrThrow(req);
+  const claim = await scopedClaim(org, req.params.id);
+  if (!claim) return res.status(404).json({ error: 'Claim not found' });
+  if (claim.status === 'closed') {
+    return res.status(409).json({ error: 'That claim is closed. Open a new one rather than rewriting it.' });
+  }
+
+  const status = req.body.status !== undefined ? String(req.body.status) : claim.status;
+  if (!CLAIM_STATUSES.includes(status)) {
+    return res.status(400).json({ error: `A claim's status is one of: ${CLAIM_STATUSES.join(', ')}` });
+  }
+
+  const hasPayout = req.body.payout_amount !== undefined && req.body.payout_amount !== null && req.body.payout_amount !== '';
+  const payout = hasPayout ? Number(req.body.payout_amount) : (claim.payout_amount != null ? Number(claim.payout_amount) : null);
+  if (hasPayout && (!Number.isFinite(payout) || payout < 0)) {
+    return res.status(400).json({ error: 'A payout is an amount of money, or nothing at all' });
+  }
+  if (hasPayout && !CLAIM_PAYOUT_STATUSES.includes(status)) {
+    return res.status(400).json({ error: 'A payout belongs on a claim the insurer has approved or paid' });
+  }
+  if (status === 'paid' && !(payout > 0)) {
+    return res.status(400).json({ error: 'A paid claim needs the amount that was paid' });
+  }
+
+  const { rows } = await pgDb.query(
+    `UPDATE insurance_claims
+        SET status = $1,
+            payout_amount = $2,
+            notes = COALESCE($3, notes),
+            saps_case_number = COALESCE($4, saps_case_number),
+            saps_police_station = COALESCE($5, saps_police_station),
+            resolved_at = CASE WHEN $6 THEN COALESCE(resolved_at, NOW()) ELSE NULL END,
+            updated_at = NOW()
+      WHERE id = $7 RETURNING *`,
+    [status, payout,
+     req.body.notes !== undefined ? String(req.body.notes).trim().slice(0, 4000) : null,
+     req.body.saps_case_number !== undefined ? String(req.body.saps_case_number).trim().slice(0, 120) : null,
+     req.body.saps_police_station !== undefined ? String(req.body.saps_police_station).trim().slice(0, 160) : null,
+     CLAIM_DECIDED_STATUSES.includes(status),
+     claim.id]);
+
+  await logAudit(req.user.id, 'fleet_owner.claim_update', 'insurance_claims', claim.id,
+    { organization_id: org.id, status, payout_amount: payout }, req.ip);
+  res.json(rows[0]);
 });
 
 // -------------------------------------------------------- activity ----

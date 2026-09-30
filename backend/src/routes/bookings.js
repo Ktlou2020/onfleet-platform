@@ -12,7 +12,7 @@
 
 const express = require('express');
 const pgDb = require('../pgDb');
-const { authRequired, adminOnly, workshopOnly } = require('../middleware/auth');
+const { authRequired, adminOnly, workshopOnly, FLEET_OWNER_ROLES } = require('../middleware/auth');
 const asyncRouter = require('../utils/asyncRouter');
 const booking = require('../services/serviceBooking');
 const { sendNotification } = require('../services/notifierPg');
@@ -20,6 +20,37 @@ const { sendNotification } = require('../services/notifierPg');
 const router = asyncRouter(express.Router());
 
 const isAdmin = (req) => ['admin', 'superadmin'].includes(req.user.role);
+
+/**
+ * Whose workshops this request may see.
+ *
+ * Two separate facts, because conflating them is how a rider with no
+ * organisation ended up seeing every fleet's private workshops:
+ *
+ *   seesAll   platform staff — admins, and technicians, who carry no
+ *             organisation and staff the workshop itself.
+ *   orgId     the organisation whose workshops these are. For a rider that
+ *             is whoever owns the motorcycle, not the rider's own row: on a
+ *             fleet's bike the workshop belongs to the fleet. Null here means
+ *             shared workshops only, which is the right answer for somebody
+ *             with no fleet behind them — not "everything".
+ */
+async function actingScope(req) {
+  if (isAdmin(req) || ['technician', 'control_room'].includes(req.user.role)) {
+    return { seesAll: true, orgId: null };
+  }
+  if (req.user.role === 'rider') {
+    const bike = await bikeForRider(req.user.id);
+    const orgId = bike ? await bikeOrgId(bike.id) : null;
+    return { seesAll: false, orgId: orgId ?? null };
+  }
+  return { seesAll: false, orgId: req.user.organization_id || null };
+}
+
+async function bikeOrgId(bikeId) {
+  const { rows } = await pgDb.query('SELECT organization_id FROM bikes WHERE id = $1', [bikeId]);
+  return rows[0]?.organization_id ?? null;
+}
 
 // Postgres raises 23505 when a partial unique index rejects a row. Two of them
 // guard this table and they mean quite different things to the person who hit
@@ -71,17 +102,20 @@ async function bikeForRider(userId) {
 // further out than a rider may book into.
 // The workshops, and which one this person should be shown first.
 router.get('/locations', authRequired, async (req, res) => {
+  const scope = await actingScope(req);
   res.json({
-    locations: await booking.getLocations(),
-    default_location_id: await booking.defaultLocationFor(req.user.id),
+    locations: await booking.getLocations({ scope }),
+    default_location_id: await booking.defaultLocationFor(req.user.id, { scope }),
   });
 });
 
 router.get('/availability', authRequired, async (req, res) => {
-  const locationId = Number(req.query.location_id) || await booking.defaultLocationFor(req.user.id);
+  const scope = await actingScope(req);
+  const locationId = Number(req.query.location_id) || await booking.defaultLocationFor(req.user.id, { scope });
   try {
     res.json(await booking.availability({
       locationId,
+      scope,
       from: req.query.from || null,
       to: req.query.to || null,
       ignoreHorizon: isAdmin(req) && req.query.all === '1',
@@ -135,8 +169,9 @@ router.post('/', authRequired, async (req, res) => {
     bikeId = bike.id;
   }
 
-  const locationId = Number(req.body.location_id) || await booking.defaultLocationFor(req.user.id);
-  if (!(await booking.isRealSlot(locationId, startsAt))) {
+  const scope = await actingScope(req);
+  const locationId = Number(req.body.location_id) || await booking.defaultLocationFor(req.user.id, { scope });
+  if (!(await booking.isRealSlot(locationId, startsAt, { scope }))) {
     return res.status(400).json({ error: 'That is not a slot the workshop offers.' });
   }
 
@@ -203,8 +238,9 @@ router.patch('/:id', authRequired, async (req, res) => {
   const startsAt = req.body.starts_at;
   // A rider who picked the wrong city can move the booking to the other
   // workshop, which is the same operation as moving the time.
+  const scope = await actingScope(req);
   const locationId = req.body.location_id != null ? Number(req.body.location_id) : row.location_id;
-  if (startsAt && !(await booking.isRealSlot(locationId, startsAt))) {
+  if (startsAt && !(await booking.isRealSlot(locationId, startsAt, { scope }))) {
     return res.status(400).json({ error: 'That is not a slot the workshop offers.' });
   }
   if (!startsAt && locationId !== row.location_id) {
@@ -385,22 +421,58 @@ router.post('/closures', authRequired, adminOnly, async (req, res) => {
 });
 
 // Adding a third workshop should be a row an admin types, not a migration.
-router.post('/locations', authRequired, adminOnly, async (req, res) => {
+// Adding a workshop. Two callers with different rights:
+//
+//   a platform admin   may add one for everybody (no owner) or for a named
+//                      fleet — they run the platform and place both kinds.
+//   a fleet owner      may add one, and it is theirs. They cannot make a
+//                      shared workshop and cannot place one in somebody
+//                      else's fleet, whatever they put in the body.
+router.post('/locations', authRequired, async (req, res) => {
+  if (!isAdmin(req) && !FLEET_OWNER_ROLES.includes(req.user.role)) {
+    return res.status(403).json({ error: 'Only an admin or a fleet owner can add a workshop' });
+  }
+
+  // The ownership is decided here, from who is asking, and never read from
+  // the request for a fleet owner. Taking it from the body would let one
+  // fleet place a workshop inside another's account.
+  const ownerOrgId = isAdmin(req)
+    ? (req.body.organization_id != null ? Number(req.body.organization_id) : null)
+    : req.user.organization_id;
+
+  if (!isAdmin(req) && !ownerOrgId) {
+    return res.status(400).json({ error: 'Your account is not attached to a fleet.' });
+  }
+
   const name = String(req.body.name || '').trim().slice(0, 120);
   const city = String(req.body.city || '').trim().slice(0, 120);
   if (!name || !city) return res.status(400).json({ error: 'A workshop needs a name and a city.' });
   const { rows } = await pgDb.query(
-    `INSERT INTO workshop_locations (name, city, province, address, phone) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+    `INSERT INTO workshop_locations (name, city, province, address, phone, organization_id)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
     [name, city,
       String(req.body.province || '').trim().slice(0, 120) || null,
       String(req.body.address || '').trim().slice(0, 300) || null,
-      String(req.body.phone || '').trim().slice(0, 40) || null]);
+      String(req.body.phone || '').trim().slice(0, 40) || null,
+      ownerOrgId || null]);
   res.status(201).json(rows[0]);
 });
 
-router.put('/locations/:id', authRequired, adminOnly, async (req, res) => {
+router.put('/locations/:id', authRequired, async (req, res) => {
+  if (!isAdmin(req) && !FLEET_OWNER_ROLES.includes(req.user.role)) {
+    return res.status(403).json({ error: 'Only an admin or a fleet owner can change a workshop' });
+  }
   const id = Number(req.params.id);
-  const { rows: existing } = await pgDb.query('SELECT id FROM workshop_locations WHERE id = $1', [id]);
+
+  // A fleet owner may only touch a workshop that is theirs. Not a shared one
+  // — that belongs to the platform and every other fleet depends on it — and
+  // obviously not another fleet's. 404 rather than 403: whether somebody
+  // else's workshop exists is not their business.
+  const scope = isAdmin(req)
+    ? { clause: '', params: [id] }
+    : { clause: 'AND organization_id = $2', params: [id, req.user.organization_id] };
+  const { rows: existing } = await pgDb.query(
+    `SELECT id FROM workshop_locations WHERE id = $1 ${scope.clause}`, scope.params);
   if (!existing[0]) return res.status(404).json({ error: 'Workshop not found' });
 
   // Closing a workshop must not strand bikes already booked into it. They are

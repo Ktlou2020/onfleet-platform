@@ -124,17 +124,64 @@ async function setSettings(patch, { db = pgDb } = {}) {
 // Two of them: OnFix in Johannesburg and Bikerhouse in Cape Town. Everything
 // below takes a location, because a slot at one says nothing about the other.
 
-async function getLocations({ activeOnly = true, db = pgDb } = {}) {
+// Which workshops an organisation may see.
+//
+//   NULL organization_id   the platform offers it to everybody
+//   a matching id          it belongs to this fleet
+//
+// Seeing everything is stated, never inferred from a missing organisation.
+//
+// The first version of this treated `orgId == null` as "platform staff, sees
+// the lot". That is true of an admin and a technician, and quietly false of a
+// rider with no organisation of their own riding a fleet's motorcycle — who
+// would have been shown every fleet's private workshops. Two very different
+// situations arriving at the same value is exactly the bug this whole change
+// exists to remove, so the two are now separate arguments:
+//
+//   seesAll          platform staff. Says so.
+//   orgId            the organisation whose workshops these are. Null with
+//                    seesAll false means shared workshops only, which is the
+//                    right answer for somebody with no fleet behind them.
+function visibilityClause({ seesAll = false, orgId = null } = {}, alias = 'wl', index = 1) {
+  if (seesAll) return { clause: 'TRUE', params: [] };
+  if (orgId == null) return { clause: `${alias}.organization_id IS NULL`, params: [] };
+  return {
+    clause: `(${alias}.organization_id IS NULL OR ${alias}.organization_id = $${index})`,
+    params: [Number(orgId)],
+  };
+}
+
+async function getLocations({ scope = {}, activeOnly = true, db = pgDb } = {}) {
+  const vis = visibilityClause(scope, 'wl', 1);
+  const where = [vis.clause];
+  if (activeOnly) where.push('active = TRUE');
+  // The owner's name travels with it. Without it a platform admin looking at
+  // the list sees an organization_id and has to go and look up whose it is,
+  // which is the sort of friction that ends in somebody editing the wrong
+  // fleet's workshop.
   const { rows } = await db.query(
-    `SELECT id, name, city, province, address, phone, active FROM workshop_locations
-      ${activeOnly ? 'WHERE active = TRUE' : ''} ORDER BY id`);
+    `SELECT wl.id, wl.name, wl.city, wl.province, wl.address, wl.phone, wl.active,
+            wl.organization_id, o.name AS organization_name
+       FROM workshop_locations wl
+       LEFT JOIN organizations o ON o.id = wl.organization_id
+      WHERE ${where.join(' AND ').replace(/\bactive = TRUE\b/, 'wl.active = TRUE')}
+      ORDER BY wl.organization_id NULLS LAST, wl.id`, vis.params);
   return rows;
 }
 
-async function locationExists(locationId, { db = pgDb } = {}) {
+/**
+ * May this organisation use this workshop?
+ *
+ * Both halves in one statement rather than fetching and then checking:
+ * separating them is how a check gets forgotten on the third caller.
+ */
+async function locationExists(locationId, { scope = {}, db = pgDb } = {}) {
   if (!Number.isInteger(Number(locationId))) return false;
+  const vis = visibilityClause(scope, 'workshop_locations', 2);
   const { rows } = await db.query(
-    'SELECT 1 FROM workshop_locations WHERE id = $1 AND active = TRUE', [Number(locationId)]);
+    `SELECT 1 FROM workshop_locations
+      WHERE id = $1 AND active = TRUE AND ${vis.clause}`,
+    [Number(locationId), ...vis.params]);
   return rows.length > 0;
 }
 
@@ -144,15 +191,18 @@ async function locationExists(locationId, { db = pgDb } = {}) {
 // otherwise the first. Getting this right matters more than it looks: a Cape
 // Town rider who is shown Johannesburg and does not notice the selector books
 // a slot 1,400 km away, and nobody finds out until the bike does not arrive.
-async function defaultLocationFor(userId, { db = pgDb } = {}) {
-  const locations = await getLocations({ db });
+async function defaultLocationFor(userId, { scope = {}, db = pgDb } = {}) {
+  const locations = await getLocations({ scope, db });
   if (locations.length === 0) return null;
 
+  // Where they last went, but only if they may still go there — a workshop
+  // can be switched off, or stop being shared, after a booking was made.
+  const allowed = new Set(locations.map((l) => l.id));
   const { rows: last } = await db.query(
     `SELECT sb.location_id FROM service_bookings sb
        JOIN workshop_locations l ON l.id = sb.location_id AND l.active = TRUE
       WHERE sb.booked_by = $1 ORDER BY sb.created_at DESC LIMIT 1`, [userId]);
-  if (last[0]) return last[0].location_id;
+  if (last[0] && allowed.has(last[0].location_id)) return last[0].location_id;
 
   const { rows: user } = await db.query('SELECT province FROM users WHERE id = $1', [userId]);
   const province = String(user[0]?.province || '').trim().toLowerCase();
@@ -260,8 +310,8 @@ function slotsForWeekday(dateStr, rules) {
 // `now` is injectable because every interesting case here is about time — a
 // slot that has passed, one inside the lead window, one beyond the horizon —
 // and a test that cannot move the clock can only assert the boring ones.
-async function availability({ locationId, from, to, now = new Date(), db = pgDb, ignoreHorizon = false } = {}) {
-  if (!(await locationExists(locationId, { db }))) {
+async function availability({ locationId, scope = {}, from, to, now = new Date(), db = pgDb, ignoreHorizon = false } = {}) {
+  if (!(await locationExists(locationId, { scope, db }))) {
     throw Object.assign(new Error('Which workshop?'), { status: 400 });
   }
   const settings = await getSettings({ db });
@@ -311,10 +361,12 @@ async function availability({ locationId, from, to, now = new Date(), db = pgDb,
 // client could post any timestamp it liked — 09:07 on a Sunday — and the
 // unique index would happily accept it, because the index only stops two
 // bookings sharing a time, not a time nobody offered.
-async function isRealSlot(locationId, startsAt, { db = pgDb } = {}) {
+async function isRealSlot(locationId, startsAt, { scope = {}, db = pgDb } = {}) {
   const at = new Date(startsAt);
   if (Number.isNaN(at.getTime())) return false;
-  if (!(await locationExists(locationId, { db }))) return false;
+  // A workshop this organisation cannot see is not a workshop it can book,
+  // whatever the timestamp says.
+  if (!(await locationExists(locationId, { scope, db }))) return false;
   const date = sastDateStr(at);
   const rules = await getRules({ locationId, db });
   if (!slotsForWeekday(date, rules).includes(sastTimeStr(at))) return false;
@@ -332,6 +384,6 @@ module.exports = {
   SLOT_MINUTES, GAP_MINUTES, CADENCE_MINUTES, SAST_OFFSET_MS, LIVE_STATUSES, DEFAULTS, SETTING_KEYS,
   sastToUtc, sastDateStr, sastTimeStr, weekdayOf, addDays, minutesOf, timeStrOf,
   getSettings, setSettings, getRules, replaceRules, getClosures,
-  getLocations, locationExists, defaultLocationFor,
+  getLocations, locationExists, defaultLocationFor, visibilityClause,
   slotsForWeekday, availability, isRealSlot, withinChangeCutoff,
 };

@@ -281,9 +281,18 @@ function LocationsCard({ locations, selected, onSelect, onAdd, onToggle, onRenam
             className={selected === l.id ? 'btn btn-sm' : 'btn btn-secondary btn-sm'}
             onClick={() => onSelect(l.id)}
             style={{ opacity: l.active ? 1 : 0.5 }}
-            title={l.active ? '' : 'Switched off — not offered to riders'}
+            title={[
+              l.organization_name ? `Belongs to ${l.organization_name}` : 'Shared — every fleet can book it',
+              l.active ? '' : 'Switched off — not offered to riders',
+            ].filter(Boolean).join(' · ')}
           >
             {l.name} · {l.city}{l.active ? '' : ' (off)'}
+            {/* Whose it is, on the button. A shared workshop and one fleet's
+                look identical otherwise, and editing the wrong one is a
+                mistake nobody notices until a fleet's diary changes. */}
+            <span className="text-xs" style={{ marginLeft: 6, opacity: 0.7 }}>
+              {l.organization_name ? `· ${l.organization_name}` : '· shared'}
+            </span>
           </button>
         ))}
       </div>
@@ -292,6 +301,10 @@ function LocationsCard({ locations, selected, onSelect, onAdd, onToggle, onRenam
         <div key={l.id} style={{ paddingTop: 10, borderTop: '1px solid var(--border)' }}>
           <div className="flex-between" style={{ flexWrap: 'wrap', gap: 8 }}>
             <div className="text-sm muted">
+              {l.organization_name
+                ? `Belongs to ${l.organization_name} — only their riders see it.`
+                : 'Shared — every fleet on the platform can book it.'}
+              <br />
               {l.province ? `Riders in ${l.province} are offered this one first.` : 'No province set, so this is never a rider’s default.'}
               {l.phone ? ` · ${l.phone}` : ''}
             </div>

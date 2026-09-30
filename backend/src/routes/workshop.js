@@ -11,6 +11,7 @@ const UPLOAD_DIRS = require('../uploadPaths');
 const asyncRouter = require('../utils/asyncRouter');
 const { hybridStorage } = require('../utils/hybridStorage');
 const storageService = require('../services/storageService');
+const { workshopScope, bikeScopeSql } = require('../services/workshopScope');
 const deviceCommissioning = require('../services/deviceCommissioning');
 const partPhotos = require('../services/partPhotos');
 const router = asyncRouter(express.Router());
@@ -236,6 +237,14 @@ router.get('/job-cards', authRequired, workshopOnly, async (req, res) => {
     const where = [];
     const params = [];
 
+    // Whose work this is. On OnFleet every technician staffs the one floor
+    // and this is TRUE; where a fleet runs its own workshop, its mechanics
+    // see that fleet's cards and no others.
+    const scope = workshopScope(req);
+    if (scope.refuse) return res.status(scope.refuse.status).json(scope.refuse);
+    const scoped = bikeScopeSql(scope, { index: params.length + 1 });
+    if (!scope.all) { where.push(scoped.clause); params.push(...scoped.params); }
+
     if (status) { where.push(`jc.status = $${params.length + 1}`); params.push(status); }
     if (search) {
       const like = `%${search}%`;
@@ -418,6 +427,32 @@ router.delete('/part-photos/:id', authRequired, adminOnly, async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+});
+
+// Everything below reaches a job card by its id, so the id is the door.
+//
+// Mounted as middleware rather than repeated in fourteen handlers: a guard
+// that has to be remembered is a guard that will eventually be forgotten, and
+// the next route added under /job-cards/:id gets this for free. It costs a
+// second authRequired on these paths — the route's own runs again after — and
+// one extra lookup per request on a workshop floor is a fair price for not
+// having to be careful fourteen times.
+router.use('/job-cards/:id', authRequired, workshopOnly, async (req, res, next) => {
+  const scope = workshopScope(req);
+  if (scope.refuse) return res.status(scope.refuse.status).json(scope.refuse);
+  if (scope.all) return next();
+
+  const id = toInt(req.params.id);
+  if (!id) return next();
+  const { rows } = await pgDb.query(
+    `SELECT 1 FROM job_cards jc
+       LEFT JOIN bikes b ON b.id = jc.bike_id
+      WHERE jc.id = $1 AND COALESCE(b.organization_id, jc.fleet_org_id) = $2`,
+    [id, scope.orgId]);
+  // 404, not 403: whether another fleet has a job card with that number is
+  // not this fleet's business.
+  if (!rows[0]) return res.status(404).json({ error: 'Job card not found' });
+  return next();
 });
 
 router.get('/job-cards/:id/tracker-check', authRequired, workshopOnly, async (req, res) => {

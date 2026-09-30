@@ -132,9 +132,26 @@ describe.skipIf(!process.env.DATABASE_URL)('a platform admin on a telematics dep
       expect((await request(app).get('/api/fleet/collections').set(authHeader(owner.user))).status).toBe(200);
     });
 
-    it('and a technician still works the workshop', async () => {
-      const res = await request(app).get('/api/workshop/job-cards').set(authHeader(tech.user));
+    // A fleet's own mechanic. On a telematics deployment every workshop
+    // belongs to a customer, so this is who the workshop is for.
+    it('a fleet\'s own mechanic works their fleet\'s workshop', async () => {
+      const theirs = await createPgUser({ role: 'technician', organization_id: org.id });
+      const res = await request(app).get('/api/workshop/job-cards').set(authHeader(theirs.user));
       expect(res.status).toBe(200);
+    });
+
+    // And one belonging to nobody is the platform's own, on a platform that
+    // runs no workshop. There is nothing for them to be looking at, and what
+    // they would have seen is every customer's work.
+    it('but a technician belonging to nobody has no workshop to be in', async () => {
+      const res = await request(app).get('/api/workshop/job-cards').set(authHeader(tech.user));
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('NOT_THIS_CONSOLE');
+    });
+
+    it('and cannot read the diary either', async () => {
+      const res = await request(app).get('/api/bookings/day').set(authHeader(tech.user));
+      expect(res.status).toBe(403);
     });
   });
 });

@@ -201,7 +201,8 @@ async function main() {
   for (const [i, item] of (LIMIT ? todo.slice(0, LIMIT) : todo).entries()) {
     try {
       const { buffer, contentType } = await get(item.image, { binary: true });
-      const ext = (item.image.match(/\.(jpe?g|png|webp)$/i) || [, 'jpg'])[1].toLowerCase();
+      const matched = item.image.match(/\.(jpe?g|png|webp)$/i);
+      const ext = (matched ? matched[1] : 'jpg').toLowerCase();
       const filename = `hero-${partKey(item.part_number)}.${ext}`;
       await store(buffer, contentType, filename);
 

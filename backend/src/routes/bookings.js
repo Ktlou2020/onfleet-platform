@@ -17,6 +17,7 @@ const asyncRouter = require('../utils/asyncRouter');
 const booking = require('../services/serviceBooking');
 const { sendNotification } = require('../services/notifierPg');
 const tierFeatures = require('../services/tierFeatures');
+const { workshopScope, WORKSHOP_STAFF } = require('../services/workshopScope');
 
 const router = asyncRouter(express.Router());
 
@@ -37,8 +38,17 @@ const isAdmin = (req) => ['admin', 'superadmin'].includes(req.user.role);
  *             with no fleet behind them — not "everything".
  */
 async function actingScope(req) {
-  if (isAdmin(req) || ['technician', 'control_room'].includes(req.user.role)) {
-    return { seesAll: true, orgId: null };
+  if (isAdmin(req)) return { seesAll: true, orgId: null };
+
+  // Workshop staff see the workshops they staff. On OnFleet that is all of
+  // them, because no technician belongs to a fleet; on a deployment where
+  // fleets run their own, a fleet's mechanic sees that fleet's and no other.
+  if (WORKSHOP_STAFF.includes(req.user.role)) {
+    const scope = workshopScope(req);
+    if (scope.all) return { seesAll: true, orgId: null };
+    // Not "theirs or the platform's": a fleet's mechanic staffs their own
+    // bay, and the shared workshops are somebody else's people.
+    return { seesAll: false, orgId: scope.orgId ?? null, ownOnly: true };
   }
   if (req.user.role === 'rider') {
     const bike = await bikeForRider(req.user.id);
@@ -366,7 +376,17 @@ router.get('/day', authRequired, async (req, res) => {
   // one they do not own is refused rather than quietly returning empty, so a
   // mistake is visible instead of looking like a quiet day.
   let ownerScope = '';
-  if (!isAdmin(req) && !['technician', 'control_room'].includes(req.user.role)) {
+  if (WORKSHOP_STAFF.includes(req.user.role)) {
+    // A mechanic belonging to a fleet sees that fleet's workshops. One
+    // belonging to nobody is the platform's own: every workshop on OnFleet,
+    // and none on a deployment where every workshop is a customer's.
+    const scope = workshopScope(req);
+    if (scope.refuse) return res.status(scope.refuse.status).json(scope.refuse);
+    if (!scope.all) {
+      params.push(scope.orgId);
+      ownerScope = `AND wl.organization_id = $${params.length}`;
+    }
+  } else if (!isAdmin(req)) {
     if (!FLEET_OWNER_ROLES.includes(req.user.role)) {
       return res.status(403).json({ error: 'Not allowed' });
     }
@@ -396,9 +416,32 @@ router.get('/day', authRequired, async (req, res) => {
 
 // The bike turned up. This is where a job card is born — not at booking time,
 // because an open job card should mean work that is actually happening.
+/**
+ * The booking, if this member of workshop staff has any business with it.
+ *
+ * Arrive and no-show take an id, so the id is the door: without this a
+ * mechanic could mark a motorcycle arrived at a workshop belonging to a fleet
+ * that is not theirs, which would open a job card on somebody else's bike.
+ */
+async function bookingForWorkshop(req, id) {
+  const row = await loadBooking(Number(id));
+  if (!row) return { error: { status: 404, body: { error: 'Booking not found' } } };
+  const scope = workshopScope(req);
+  if (scope.refuse) return { error: { status: scope.refuse.status, body: scope.refuse } };
+  if (scope.all) return { row };
+
+  const { rows } = await pgDb.query(
+    'SELECT 1 FROM workshop_locations WHERE id = $1 AND organization_id = $2',
+    [row.location_id, scope.orgId]);
+  // 404 rather than 403: whether another fleet has a booking at that hour is
+  // not this fleet's business.
+  if (!rows[0]) return { error: { status: 404, body: { error: 'Booking not found' } } };
+  return { row };
+}
+
 router.post('/:id/arrive', authRequired, workshopOnly, async (req, res) => {
-  const row = await loadBooking(Number(req.params.id));
-  if (!row) return res.status(404).json({ error: 'Booking not found' });
+  const { row, error } = await bookingForWorkshop(req, req.params.id);
+  if (error) return res.status(error.status).json(error.body);
   if (row.job_card_id) {
     return res.status(409).json({ error: 'That booking already has a job card.', job_card_id: row.job_card_id });
   }
@@ -440,8 +483,8 @@ router.post('/:id/arrive', authRequired, workshopOnly, async (req, res) => {
 // point: a no-show is a fact about a rider, and a workshop deciding whether to
 // keep offering same-week slots needs to be able to count them.
 router.post('/:id/no-show', authRequired, workshopOnly, async (req, res) => {
-  const row = await loadBooking(Number(req.params.id));
-  if (!row) return res.status(404).json({ error: 'Booking not found' });
+  const { row, error } = await bookingForWorkshop(req, req.params.id);
+  if (error) return res.status(error.status).json(error.body);
   if (row.status !== 'booked') return res.status(409).json({ error: `That booking is ${row.status}.` });
   await pgDb.query(`UPDATE service_bookings SET status = 'no_show', updated_at = NOW() WHERE id = $1`, [row.id]);
   res.json(await loadBooking(row.id));

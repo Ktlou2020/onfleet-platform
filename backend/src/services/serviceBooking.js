@@ -142,9 +142,14 @@ async function setSettings(patch, { db = pgDb } = {}) {
 //   orgId            the organisation whose workshops these are. Null with
 //                    seesAll false means shared workshops only, which is the
 //                    right answer for somebody with no fleet behind them.
-function visibilityClause({ seesAll = false, orgId = null } = {}, alias = 'wl', index = 1) {
+function visibilityClause({ seesAll = false, orgId = null, ownOnly = false } = {}, alias = 'wl', index = 1) {
   if (seesAll) return { clause: 'TRUE', params: [] };
   if (orgId == null) return { clause: `${alias}.organization_id IS NULL`, params: [] };
+  // ownOnly is workshop staff: a fleet's mechanic staffs that fleet's bay and
+  // has no business in the diary of a workshop the platform runs for
+  // everybody. An owner, by contrast, may book into both — which is what the
+  // default below says.
+  if (ownOnly) return { clause: `${alias}.organization_id = $${index}`, params: [Number(orgId)] };
   return {
     clause: `(${alias}.organization_id IS NULL OR ${alias}.organization_id = $${index})`,
     params: [Number(orgId)],

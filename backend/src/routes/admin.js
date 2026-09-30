@@ -1336,14 +1336,33 @@ router.post('/users', superadminOnly, async (req, res) => {
   if (!email || !password || !full_name || !['rider', 'admin', 'superadmin', 'technician', 'control_room'].includes(role)) {
     return res.status(400).json({ error: 'email, password, full_name and valid role are required' });
   }
+
+  // Which fleet's workshop this person staffs.
+  //
+  // Optional, and leaving it out means what it has always meant: the
+  // platform's own workshop, where a technician works across every fleet's
+  // motorcycles. Naming a fleet is what makes a mechanic theirs — it is the
+  // only thing that scopes what they can see, so it is worth being able to
+  // set at the moment the account is made rather than by hand afterwards.
+  const workshopRoles = ['technician', 'control_room'];
+  let organizationId = null;
+  if (req.body.organization_id != null && String(req.body.organization_id) !== '') {
+    if (!workshopRoles.includes(role)) {
+      return res.status(400).json({ error: 'Only workshop staff belong to a fleet. A rider belongs through their bike, and an admin to the platform.' });
+    }
+    organizationId = Number(req.body.organization_id);
+    const { rows: org } = await pgDb.query('SELECT id FROM organizations WHERE id = $1', [organizationId]);
+    if (!org[0]) return res.status(404).json({ error: 'Fleet not found' });
+  }
+
   const normalizedEmail = String(email).trim().toLowerCase();
   const { rows: existsRows } = await pgDb.query('SELECT id FROM users WHERE email = $1 AND deleted_at IS NULL', [normalizedEmail]);
   if (existsRows[0]) return res.status(409).json({ error: 'Email already exists' });
   const hash = await bcrypt.hash(password, 10);
-  const { rows: insertedRows } = await pgDb.query(`INSERT INTO users (email, password_hash, full_name, phone, role, status)
-    VALUES ($1,$2,$3,$4,$5, 'active') RETURNING id`, [normalizedEmail, hash, full_name, phone || null, role]);
+  const { rows: insertedRows } = await pgDb.query(`INSERT INTO users (email, password_hash, full_name, phone, role, status, organization_id)
+    VALUES ($1,$2,$3,$4,$5, 'active', $6) RETURNING id`, [normalizedEmail, hash, full_name, phone || null, role, organizationId]);
   const newUserId = insertedRows[0].id;
-  await logAudit(req.user.id, 'user.create', 'users', newUserId, { role });
+  await logAudit(req.user.id, 'user.create', 'users', newUserId, { role, organization_id: organizationId });
   res.json({ id: newUserId });
 });
 

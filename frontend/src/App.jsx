@@ -28,6 +28,7 @@ const FleetOwnerHelp = lazy(() => import('./pages/fleet/Help'));
 const FleetWorkshop = lazy(() => import('./pages/fleet/Workshop'));
 const FleetWorkshopDiary = lazy(() => import('./pages/fleet/WorkshopDiary'));
 const NotOnThisConsole = lazy(() => import('./pages/admin/NotOnThisConsole'));
+const AdminDeviceImport = lazy(() => import('./pages/admin/DeviceImport'));
 const FleetApplications = lazy(() => import('./pages/fleet/Applications'));
 const FleetSecurity = lazy(() => import('./pages/fleet/Security'));
 const FleetActivity = lazy(() => import('./pages/fleet/Activity'));
@@ -249,6 +250,7 @@ export default function App() {
             <Route path="tracking" element={<AdminTracking />} />
             <Route path="tracking/dashboard" element={<AdminTrackingDashboard />} />
             <Route path="tracking/guide" element={<TrackingGuide portal="admin" />} />
+            <Route path="tracking/import" element={<AdminDeviceImport />} />
             <Route path="claims" element={fleetConsoleOnly(<AdminClaims />)} />
             <Route path="riders" element={fleetConsoleOnly(<AdminRiders />)} />
             <Route path="signup-stats" element={fleetConsoleOnly(<AdminSignupStats />)} />

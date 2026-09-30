@@ -56,7 +56,7 @@ const TELEMATICS_CONSOLE_NAV = [
   { section: 'Fleets', mobileOnly: true },
   { to: '/admin', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/admin/fleet-dashboard', label: 'Fleets', icon: Briefcase },
-  { to: '/admin/fleet-owners', label: 'Manage accounts', icon: ShieldCheck },
+  { to: '/admin/fleet-owners', label: 'Manage accounts', icon: ShieldCheck, superadminOnly: true },
   { to: '/admin/leads', label: 'Leads', icon: UserCheck },
   { section: 'Devices' },
   { to: '/admin/tracking', label: 'Devices & map', icon: MapPin, end: true },

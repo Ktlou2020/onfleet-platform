@@ -1,7 +1,61 @@
 const jwt = require('jsonwebtoken');
 const pgDb = require('../pgDb');
+const { brand, CONSOLES } = require('../brand');
 
 const FLEET_OWNER_ROLES = ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'];
+
+// Where a telematics operator's admin account stops.
+//
+// On a deployment that sells the platform rather than running motorcycles, a
+// tenant's applications, agreements, rider payments, claims, KYC files,
+// workshop and CSV imports are that tenant's operating records. The console
+// already leaves them off the menu, but a menu is not a boundary: the pages
+// were one typed URL away, and an admin working in them could act on the
+// wrong fleet's data without ever seeing whose it was.
+//
+// Supporting a customer means stepping into their account through
+// impersonation, which is deliberate, scoped to one fleet, and says so across
+// the top of every screen. This makes that the only way in.
+//
+// An impersonating admin is carrying the tenant's own role by then, not
+// admin, so they pass through this untouched — which is the point.
+//
+// Three things this deliberately does not touch:
+//
+//   riders and fleet owners  they never pass through an admin guard, so
+//                            /agreements/mine and the whole fleet portal are
+//                            exactly as they were. This refuses a platform
+//                            admin, not a tenant.
+//   /api/bikes               a device is fitted to a motorcycle, so the
+//                            telematics console needs to read bikes to
+//                            commission one. The Bikes *page* is off the
+//                            menu; the bike records behind tracking stay.
+//   /api/admin               that router is this console's own API. Splitting
+//                            it is a separate job, and it is named for what
+//                            it is rather than looking like a tenant's screen.
+const TENANT_OPERATING_PATHS = [
+  '/api/applications',
+  '/api/agreements',
+  '/api/payments',
+  '/api/claims',
+  '/api/kyc',
+  '/api/imports',
+  '/api/workshop',
+];
+
+const isTelematicsDeployment = brand.adminConsole === CONSOLES.TELEMATICS;
+
+/** The refusal to send a platform admin reaching into a tenant's records, or null. */
+function offThisConsole(req) {
+  if (!isTelematicsDeployment) return null;
+  if (!['admin', 'superadmin'].includes(req.user?.role)) return null;
+  const path = String(req.originalUrl || '').split('?')[0];
+  if (!TENANT_OPERATING_PATHS.some((prefix) => path === prefix || path.startsWith(`${prefix}/`))) return null;
+  return {
+    error: 'That belongs to a fleet, not to this console. Open the fleet\'s account to work in it.',
+    code: 'NOT_THIS_CONSOLE',
+  };
+}
 
 async function authRequired(req, res, next) {
   const header = req.headers.authorization || '';
@@ -21,6 +75,15 @@ async function authRequired(req, res, next) {
     if (payload.impersonated_by) {
       req.user = { ...user, is_impersonated: true, impersonated_by: payload.impersonated_by };
     }
+
+    // Checked here rather than on adminOnly because adminOnly is not the only
+    // door: several of these routes take any authenticated caller and branch
+    // on the role inside — GET /agreements/:id hands an admin the whole
+    // bundle, schedule, payments and documents included. This is the one
+    // place every authenticated request passes through.
+    const refusal = offThisConsole(req);
+    if (refusal) return res.status(403).json(refusal);
+
     next();
   } catch {
     return res.status(401).json({ error: 'Invalid token' });
@@ -81,4 +144,5 @@ function companyRoleAllowed(roles = []) {
 module.exports = {
   authRequired, adminOnly, trackingReadOnly, fleetOwnerOnly, workshopOnly,
   companyRoleAllowed, FLEET_OWNER_ROLES, WORKSHOP_ROLES,
+  offThisConsole, TENANT_OPERATING_PATHS,
 };

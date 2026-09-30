@@ -27,6 +27,7 @@ const FleetOwnerRiders = lazy(() => import('./pages/fleet/Riders'));
 const FleetOwnerHelp = lazy(() => import('./pages/fleet/Help'));
 const FleetWorkshop = lazy(() => import('./pages/fleet/Workshop'));
 const FleetWorkshopDiary = lazy(() => import('./pages/fleet/WorkshopDiary'));
+const NotOnThisConsole = lazy(() => import('./pages/admin/NotOnThisConsole'));
 const FleetApplications = lazy(() => import('./pages/fleet/Applications'));
 const FleetSecurity = lazy(() => import('./pages/fleet/Security'));
 const FleetActivity = lazy(() => import('./pages/fleet/Activity'));
@@ -155,6 +156,9 @@ function HomeRoute() {
   return <Navigate to="/dashboard" replace />;
 }
 
+// A page that only a deployment running its own motorcycles should show.
+const fleetConsoleOnly = (element) => (isTelematicsConsole ? <NotOnThisConsole /> : element);
+
 export default function App() {
   return (
     <AuthProvider>
@@ -214,25 +218,29 @@ export default function App() {
             <Route path="payments/callback" element={<PaymentCallback />} />
           </Route>
 
+          {/* On a telematics deployment these are a customer's operating
+              records, not this console's — see NotOnThisConsole. The API
+              refuses them too; this is so the refusal reads as a sentence
+              rather than a failed request. */}
           <Route path="/admin" element={<PrivateRoute role="admin"><AdminShell /></PrivateRoute>}>
             {/* A telematics deployment lands on the platform console; a fleet
 
                 operator lands on its own business. */}
 
             <Route index element={isTelematicsConsole ? <PlatformDashboard /> : <AdminDashboard />} />
-            <Route path="applications" element={<AdminApplications />} />
-            <Route path="applications/:id" element={<AdminApplicationDetail />} />
-            <Route path="agreements" element={<AdminAgreements />} />
-            <Route path="agreements/:id" element={<AdminAgreementDetail />} />
-            <Route path="bikes" element={<AdminBikes />} />
-            <Route path="bikes/:id" element={<AdminBikeDetail />} />
-            <Route path="payments" element={<AdminPayments />} />
-            <Route path="theft-cases" element={<AdminTheftCases />} />
+            <Route path="applications" element={fleetConsoleOnly(<AdminApplications />)} />
+            <Route path="applications/:id" element={fleetConsoleOnly(<AdminApplicationDetail />)} />
+            <Route path="agreements" element={fleetConsoleOnly(<AdminAgreements />)} />
+            <Route path="agreements/:id" element={fleetConsoleOnly(<AdminAgreementDetail />)} />
+            <Route path="bikes" element={fleetConsoleOnly(<AdminBikes />)} />
+            <Route path="bikes/:id" element={fleetConsoleOnly(<AdminBikeDetail />)} />
+            <Route path="payments" element={fleetConsoleOnly(<AdminPayments />)} />
+            <Route path="theft-cases" element={fleetConsoleOnly(<AdminTheftCases />)} />
             <Route path="paystack-charges" element={<AdminPaystackCharges />} />
             <Route path="paystack-subscriptions" element={<AdminPaystackSubscriptions />} />
-            <Route path="notifications" element={<AdminNotifications />} />
-            <Route path="imports" element={<AdminImports />} />
-            <Route path="strategy" element={<AdminStrategyReport />} />
+            <Route path="notifications" element={fleetConsoleOnly(<AdminNotifications />)} />
+            <Route path="imports" element={fleetConsoleOnly(<AdminImports />)} />
+            <Route path="strategy" element={fleetConsoleOnly(<AdminStrategyReport />)} />
             <Route path="fleet-dashboard" element={<AdminFleetDashboard />} />
             <Route path="fleet-owners" element={<AdminFleetOwners />} />
             <Route path="fleet-payouts" element={<AdminFleetPayouts />} />
@@ -241,11 +249,11 @@ export default function App() {
             <Route path="tracking" element={<AdminTracking />} />
             <Route path="tracking/dashboard" element={<AdminTrackingDashboard />} />
             <Route path="tracking/guide" element={<TrackingGuide portal="admin" />} />
-            <Route path="claims" element={<AdminClaims />} />
-            <Route path="riders" element={<AdminRiders />} />
-            <Route path="signup-stats" element={<AdminSignupStats />} />
+            <Route path="claims" element={fleetConsoleOnly(<AdminClaims />)} />
+            <Route path="riders" element={fleetConsoleOnly(<AdminRiders />)} />
+            <Route path="signup-stats" element={fleetConsoleOnly(<AdminSignupStats />)} />
             <Route path="integrations" element={<AdminIntegrations />} />
-            <Route path="workshop" element={<AdminWorkshop />} />
+            <Route path="workshop" element={fleetConsoleOnly(<AdminWorkshop />)} />
             <Route path="users" element={<AdminUsers />} />
             <Route path="audit" element={<AdminAuditLogs />} />
           </Route>

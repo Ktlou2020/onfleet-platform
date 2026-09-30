@@ -23,14 +23,29 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const pgDb = require('../pgDb');
 
-// What each plan lets a fleet do. Previously in routes/auth.js and again in
-// routes/pilot.js; auth.js now reads it from here.
+// What each plan lets a fleet do.
+//
+// There were three copies of this — here, in routes/admin.js and in
+// routes/pilot.js — and they disagreed on both the numbers and the names.
+// Two of them offered a plan called `empire`; the organizations table only
+// accepts trial, small, medium, large and enterprise, so onboarding a fleet
+// on Empire failed with a check-constraint violation and a 500. The plan was
+// on the form and could never have worked.
+//
+// The numbers here are admin.js's, because that copy is the one that governed
+// a live account: it is what an operator changing somebody's plan actually
+// applied. The others would have quietly given a self-serve trial six bikes
+// where an operator-assigned trial gave ten.
+//
+// `status` travels with the plan for the same reason. A fleet put on a paid
+// plan is active; a trial is trialing. Keeping that beside the limits stops
+// the two being set from different places and disagreeing.
 const FLEET_PLAN_ENTITLEMENTS = {
-  trial: { max_bikes: 6, max_admin_users: 2 },
-  small: { max_bikes: 6, max_admin_users: 2 },
-  medium: { max_bikes: 20, max_admin_users: 3 },
-  large: { max_bikes: 35, max_admin_users: 5 },
-  empire: { max_bikes: 9999, max_admin_users: 20 },
+  trial: { status: 'trialing', max_bikes: 10, max_admin_users: 2 },
+  small: { status: 'active', max_bikes: 20, max_admin_users: 3 },
+  medium: { status: 'active', max_bikes: 60, max_admin_users: 5 },
+  large: { status: 'active', max_bikes: 100, max_admin_users: 10 },
+  enterprise: { status: 'active', max_bikes: 999, max_admin_users: 50 },
 };
 
 const FLEET_ROLE_VALUES = ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'];

@@ -992,13 +992,11 @@ router.post('/impersonate/:org_id', superadminOnly, async (req, res) => {
   res.json({ token, user: target });
 });
 
-const FLEET_PLAN_ENTITLEMENTS = {
-  trial:      { status: 'trialing', max_bikes: 10,  max_admin_users: 2  },
-  small:      { status: 'active',   max_bikes: 20,  max_admin_users: 3  },
-  medium:     { status: 'active',   max_bikes: 60,  max_admin_users: 5  },
-  large:      { status: 'active',   max_bikes: 100, max_admin_users: 10 },
-  enterprise: { status: 'active',   max_bikes: 999, max_admin_users: 50 }
-};
+// Moved to services/fleetOnboarding.js, which signup and operator-side
+// onboarding also read. The copy that used to live here disagreed with both
+// of theirs, and its numbers were the ones that won on a live account — so
+// they are the ones that survived.
+const { FLEET_PLAN_ENTITLEMENTS } = require('../services/fleetOnboarding');
 
 router.post('/organizations/:id/plan', superadminOnly, async (req, res) => {
   const orgId = Number(req.params.id);

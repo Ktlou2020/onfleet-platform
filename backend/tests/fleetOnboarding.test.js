@@ -49,8 +49,8 @@ describe.skipIf(!process.env.DATABASE_URL)('onboarding a fleet', () => {
       await onboard(admin.user, { ...FLEET, plan_key: 'medium' });
       const { rows } = await pgDb.query('SELECT plan_key, max_bikes, max_admin_users FROM organizations WHERE slug = $1', ['rapid-wheels']);
       expect(rows[0].plan_key).toBe('medium');
-      expect(rows[0].max_bikes).toBe(20);
-      expect(rows[0].max_admin_users).toBe(3);
+      expect(rows[0].max_bikes).toBe(60);
+      expect(rows[0].max_admin_users).toBe(5);
     });
 
     // Self-serve signup can only ever create a trial. An operator closing a
@@ -152,7 +152,7 @@ describe.skipIf(!process.env.DATABASE_URL)('onboarding a fleet', () => {
       await onboard(admin.user, { ...FLEET, plan_key: 'platinum-deluxe' });
       const { rows } = await pgDb.query('SELECT plan_key, max_bikes FROM organizations WHERE slug = $1', ['rapid-wheels']);
       expect(rows[0].plan_key).toBe('trial');
-      expect(rows[0].max_bikes).toBe(6);
+      expect(rows[0].max_bikes).toBe(onboarding.FLEET_PLAN_ENTITLEMENTS.trial.max_bikes);
     });
   });
 
@@ -210,14 +210,54 @@ describe.skipIf(!process.env.DATABASE_URL)('the self-serve signup it now shares 
   });
 });
 
+// The bug this exists to stop happening again.
+//
+// There were three copies of the plan table and two of them offered a plan
+// called `empire`. The organizations table has never accepted that value, so
+// onboarding a fleet on Empire failed with a check-constraint violation and a
+// 500 — a plan on the form that could not be chosen. Nothing checked that the
+// plans the code offers are plans the database will take.
+describe.skipIf(!process.env.DATABASE_URL)('every plan on offer', () => {
+  let admin;
+  beforeEach(async () => {
+    await resetAllPgTables();
+    admin = await createPgUser({ role: 'superadmin' });
+  });
+
+  for (const plan of Object.keys(onboarding.FLEET_PLAN_ENTITLEMENTS)) {
+    it(`can actually create a fleet: ${plan}`, async () => {
+      const res = await request(app).post('/api/admin/fleet-owners')
+        .set(authHeader(admin.user))
+        .send({ ...FLEET, email: `${plan}@plans.test`, plan_key: plan });
+      expect(res.status, res.body?.error).toBe(201);
+      expect(res.body.organization.plan_key).toBe(plan);
+    });
+  }
+
+  it('and the entitlements land on the row', async () => {
+    await request(app).post('/api/admin/fleet-owners').set(authHeader(admin.user))
+      .send({ ...FLEET, plan_key: 'medium' });
+    const { rows } = await pgDb.query('SELECT max_bikes, max_admin_users FROM organizations WHERE slug = $1', ['rapid-wheels']);
+    const want = onboarding.FLEET_PLAN_ENTITLEMENTS.medium;
+    expect(rows[0].max_bikes).toBe(want.max_bikes);
+    expect(rows[0].max_admin_users).toBe(want.max_admin_users);
+  });
+});
+
 describe('the plan entitlements, now in one place', () => {
-  it('is the table both signup paths read', () => {
-    expect(onboarding.entitlementsFor('medium')).toEqual({ max_bikes: 20, max_admin_users: 3 });
-    expect(onboarding.entitlementsFor('empire')).toEqual({ max_bikes: 9999, max_admin_users: 20 });
+  it('is the table every signup path reads', () => {
+    expect(onboarding.entitlementsFor('medium')).toEqual(onboarding.FLEET_PLAN_ENTITLEMENTS.medium);
+    expect(onboarding.entitlementsFor('enterprise').max_bikes).toBe(999);
   });
 
   it('falls back to trial for anything it does not recognise', () => {
     expect(onboarding.entitlementsFor('nonsense')).toEqual(onboarding.FLEET_PLAN_ENTITLEMENTS.trial);
     expect(onboarding.entitlementsFor()).toEqual(onboarding.FLEET_PLAN_ENTITLEMENTS.trial);
+  });
+
+  // The plan called `empire` is the one that could never be saved.
+  it('no longer offers a plan the database has never accepted', () => {
+    expect(Object.keys(onboarding.FLEET_PLAN_ENTITLEMENTS)).not.toContain('empire');
+    expect(Object.keys(onboarding.FLEET_PLAN_ENTITLEMENTS)).toContain('enterprise');
   });
 });

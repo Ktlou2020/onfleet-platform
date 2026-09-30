@@ -89,8 +89,11 @@ describe.skipIf(!process.env.DATABASE_URL)('a fleet owner from signup to first p
     expect(q.bikes).toBe(20);
     expect(q.at_minimum).toBe(false);
     expect(q.subtotal).toBe(1900);
-    expect(q.vat).toBe(285);
-    expect(q.total).toBe(2185);
+    // The package is R1 900. The card is charged that plus the processing fee
+    // plus VAT on both, and what comes back out the other side is R1 900 —
+    // which is the number this journey is actually about.
+    expect(q.total).toBeCloseTo(q.subtotal + q.processing_fee + q.vat, 2);
+    expect(q.net_after_fees).toBeCloseTo(1900, 1);
   });
 
   // The dealer deck sells a ten-bike minimum. A fleet under it pays as though
@@ -112,16 +115,25 @@ describe.skipIf(!process.env.DATABASE_URL)('a fleet owner from signup to first p
     const result = await billing.chargeOrganization(orgId);
 
     expect(result.charged).toBe(true);
-    expect(result.amount).toBe(2185);
+    const expected = await pricing.quoteForOrganization(orgId, { tierKey: 'basic' });
+    expect(result.amount).toBeCloseTo(expected.total, 2);
 
     const { rows } = await pgDb.query(
-      `SELECT subtotal, vat, amount, status, tier FROM subscription_invoices WHERE organization_id = $1`, [orgId]);
+      `SELECT subtotal, processing_fee, vat, vat_rate, amount, status, tier
+         FROM subscription_invoices WHERE organization_id = $1`, [orgId]);
     expect(rows).toHaveLength(1);
-    expect(Number(rows[0].subtotal)).toBe(1900);
-    expect(Number(rows[0].vat)).toBe(285);
-    expect(Number(rows[0].amount)).toBe(2185);
-    expect(rows[0].status).toBe('paid');
-    expect(rows[0].tier).toBe('basic');
+    const line = rows[0];
+    expect(Number(line.subtotal)).toBe(1900);
+    // The three lines have to add up to what came off the card, or it is not
+    // a tax invoice the customer can put through their books.
+    expect(
+      Number(line.subtotal) + Number(line.processing_fee) + Number(line.vat),
+      'invoice lines do not add up to the amount charged',
+    ).toBeCloseTo(Number(line.amount), 2);
+    expect(Number(line.vat)).toBeCloseTo(
+      (Number(line.subtotal) + Number(line.processing_fee)) * Number(line.vat_rate), 2);
+    expect(line.status).toBe('paid');
+    expect(line.tier).toBe('basic');
   });
 
   // Paystack takes cents. Sending it the ex-VAT figure is the fault this
@@ -134,7 +146,8 @@ describe.skipIf(!process.env.DATABASE_URL)('a fleet owner from signup to first p
     const post = paystackSays({ status: 'success', reference: 'ref_journey' });
     await billing.chargeOrganization(orgId);
 
-    expect(post.mock.calls[0][1]).toMatchObject({ amount: 218500, currency: 'ZAR' });
+    const expected = await pricing.quoteForOrganization(orgId, { tierKey: 'basic' });
+    expect(post.mock.calls[0][1]).toMatchObject({ amount: expected.amount_kobo, currency: 'ZAR' });
   });
 
   it('is not billed twice in the same month', async () => {

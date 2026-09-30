@@ -13,12 +13,16 @@ import { brandName } from '../../brand';
 // And the plan and status are here, because this account is being created on
 // the back of a conversation about both.
 
+// Must match FLEET_PLAN_ENTITLEMENTS in backend/src/services/fleetOnboarding.js,
+// which in turn must match the organizations table's plan_key constraint.
+// This list previously offered "Empire", which the database has never
+// accepted — choosing it returned a 500.
 const PLANS = [
-  ['trial', 'Trial', '6 bikes, 2 admins'],
-  ['small', 'Small', '6 bikes, 2 admins'],
-  ['medium', 'Medium', '20 bikes, 3 admins'],
-  ['large', 'Large', '35 bikes, 5 admins'],
-  ['empire', 'Empire', 'Unlimited'],
+  ['trial', 'Trial', '10 bikes, 2 admins'],
+  ['small', 'Small', '20 bikes, 3 admins'],
+  ['medium', 'Medium', '60 bikes, 5 admins'],
+  ['large', 'Large', '100 bikes, 10 admins'],
+  ['enterprise', 'Enterprise', '999 bikes, 50 admins'],
 ];
 
 const BLANK = {

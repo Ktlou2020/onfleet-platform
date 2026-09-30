@@ -216,6 +216,151 @@ router.post('/devices', authRequired, adminOnly, async (req, res) => {
   }
 });
 
+// Loading a batch of trackers.
+//
+// Devices arrive from a supplier as a list, not one at a time, and the
+// single-device form above means opening it once per tracker. On a telematics
+// deployment this is the operator's routine job: take what the supplier sent,
+// put each one on the right bike, hand the fleet a working set.
+//
+// Two passes on purpose. The first validates the whole list and changes
+// nothing, so the operator sees every problem at once — a duplicate IMEI, a
+// registration that matches no bike — rather than discovering them one insert
+// at a time with half the batch already loaded. The second commits, and only
+// what the first pass approved.
+const DEVICE_MODELS = ['FMB920', 'FMB965', 'FMC920', 'other'];
+
+function parseDeviceRows(text) {
+  // IMEI, registration, model — comma or tab separated, header optional.
+  const lines = String(text || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const out = [];
+  let headerSkipped = null;
+
+  for (const [index, line] of lines.entries()) {
+    const parts = line.split(/[\t,;]/).map((p) => p.trim());
+    // A header is recognised rather than required, because half the lists a
+    // supplier sends have one and half do not.
+    //
+    // The test is "no digits at all", not "mentions IMEI". Matching the word
+    // anywhere ate a first row reading IMEI123456789 — a real shape for a
+    // supplier list, and one that would have dropped a tracker in silence.
+    // Whatever is skipped is reported, so a dropped line is never invisible.
+    if (index === 0 && parts[0] && !/\d/.test(parts[0])) {
+      headerSkipped = line;
+      continue;
+    }
+    const [imei, registration, model] = parts;
+    if (!imei) continue;
+    out.push({ line: index + 1, imei, registration: registration || null, model: model || null });
+  }
+  out.headerSkipped = headerSkipped;
+  return out;
+}
+
+async function checkDeviceRows(rows) {
+  const seen = new Map();
+  const checked = [];
+
+  for (const row of rows) {
+    const problems = [];
+    const imei = String(row.imei).replace(/\s/g, '');
+
+    if (!/^\d{10,20}$/.test(imei)) problems.push('IMEI should be 10 to 20 digits');
+    if (seen.has(imei)) problems.push(`Same IMEI as line ${seen.get(imei)}`);
+    seen.set(imei, row.line);
+
+    if (row.model && !DEVICE_MODELS.includes(row.model)) {
+      problems.push(`Model must be one of: ${DEVICE_MODELS.join(', ')}`);
+    }
+
+    const { rows: already } = await pgDb.query(
+      'SELECT id, bike_id FROM tracking_devices WHERE imei = $1', [imei]);
+    if (already[0]) problems.push('Already registered');
+
+    // A blank registration is a tracker going into stock, which is fine and
+    // not the same as a registration that matches nothing.
+    let bike = null;
+    if (row.registration) {
+      const { rows: found } = await pgDb.query(
+        `SELECT b.id, b.registration, b.organization_id, o.name AS organization_name
+           FROM bikes b LEFT JOIN organizations o ON o.id = b.organization_id
+          WHERE UPPER(REPLACE(b.registration, ' ', '')) = UPPER(REPLACE($1, ' ', ''))`,
+        [row.registration]);
+      if (!found[0]) problems.push(`No bike with registration ${row.registration}`);
+      else if (found.length > 1) problems.push(`${row.registration} matches more than one bike`);
+      else {
+        bike = found[0];
+        const { rows: taken } = await pgDb.query(
+          'SELECT imei FROM tracking_devices WHERE bike_id = $1', [bike.id]);
+        if (taken[0]) problems.push(`${row.registration} already has tracker ${taken[0].imei}`);
+      }
+    }
+
+    checked.push({
+      ...row, imei,
+      bike_id: bike?.id || null,
+      bike_registration: bike?.registration || null,
+      organization_name: bike?.organization_name || null,
+      model: row.model || 'other',
+      problems,
+      ok: problems.length === 0,
+    });
+  }
+  return checked;
+}
+
+router.post('/devices/import/preview', authRequired, adminOnly, async (req, res) => {
+  const parsed = parseDeviceRows(req.body.text);
+  const checked = await checkDeviceRows(parsed);
+  res.json({
+    rows: checked,
+    // Shown back so a line treated as a header is a thing the operator can
+    // see and disagree with, rather than a tracker that quietly vanished.
+    header_skipped: parsed.headerSkipped,
+    summary: {
+      total: checked.length,
+      ok: checked.filter((r) => r.ok).length,
+      problems: checked.filter((r) => !r.ok).length,
+      to_stock: checked.filter((r) => r.ok && !r.bike_id).length,
+    },
+  });
+});
+
+router.post('/devices/import', authRequired, adminOnly, async (req, res) => {
+  const checked = await checkDeviceRows(parseDeviceRows(req.body.text));
+  const good = checked.filter((r) => r.ok);
+
+  // Nothing is loaded from a batch that has a problem in it, unless the
+  // operator has looked at the preview and said to load the rest anyway. A
+  // partially loaded batch is the worst outcome: it cannot be re-run and it
+  // cannot be undone.
+  if (checked.some((r) => !r.ok) && req.body.skip_problem_rows !== true) {
+    return res.status(400).json({
+      error: `${checked.filter((r) => !r.ok).length} of ${checked.length} lines have problems. Fix them, or send skip_problem_rows to load the rest.`,
+      rows: checked,
+    });
+  }
+
+  const loaded = await pgDb.withTransaction(async (tx) => {
+    const done = [];
+    for (const row of good) {
+      const { rows } = await tx.query(
+        `INSERT INTO tracking_devices (imei, model, bike_id) VALUES ($1,$2,$3) RETURNING id`,
+        [row.imei, row.model, row.bike_id]);
+      done.push({ id: rows[0].id, imei: row.imei, bike_registration: row.bike_registration });
+    }
+    return done;
+  });
+
+  await logAudit(req.user.id, 'tracking.device_import', 'tracking_devices', null, {
+    loaded: loaded.length,
+    skipped: checked.length - good.length,
+    imeis: loaded.map((d) => d.imei),
+  }, req.ip);
+
+  res.status(201).json({ loaded, count: loaded.length, skipped: checked.length - good.length });
+});
+
 router.put('/devices/:id', authRequired, adminOnly, async (req, res) => {
   const { model, label } = req.body;
   const validModels = ['FMB920', 'FMB965', 'FMC920', 'other'];

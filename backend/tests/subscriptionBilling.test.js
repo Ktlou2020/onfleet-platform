@@ -14,8 +14,12 @@ const axios = load('axios');
 // right amount, and never charge twice for the same month.
 describe('what a fleet is charged', () => {
   it('multiplies the bikes it has by the rate for its plan', () => {
+    // The package is what the rate card says, and adding a card-processing
+    // fee must not move it. vat and total now include that fee — see
+    // processingFee.test.js — so they are asserted there rather than pinned
+    // to a figure here that would have to change with the fee.
     expect(pricing.quote({ tierKey: 'complete', bikes: 40 })).toMatchObject({
-      per_bike_monthly: 375, charged_bikes: 40, subtotal: 15000, vat: 2250, total: 17250,
+      per_bike_monthly: 375, charged_bikes: 40, subtotal: 15000,
     });
     expect(pricing.quote({ tierKey: 'basic', bikes: 40 }).subtotal).toBe(3800);
     expect(pricing.quote({ tierKey: 'fleet', bikes: 20 }).subtotal).toBe(5900);
@@ -45,16 +49,27 @@ describe('what a fleet is charged', () => {
   // The rate card is ex VAT. Charging the ex-VAT figure would under-collect
   // fifteen per cent on every invoice, and an invoice with no VAT line is not
   // a tax invoice a customer can claim against.
-  it('charges VAT on top of the quoted rate, and the three figures agree', () => {
+  it('charges VAT on top of the quoted rate, and the figures agree', () => {
     const q = pricing.quote({ tierKey: 'basic', bikes: 20 });
     expect(q.subtotal).toBe(1900);
-    expect(q.vat).toBe(285);
-    expect(q.total).toBe(2185);
-    expect(+(q.subtotal + q.vat).toFixed(2)).toBe(q.total);
+    // VAT is charged on the package and on the processing fee, because the
+    // fee is part of the same supply. The invoice is the three lines, and
+    // they have to add up to what the card is charged.
+    expect(q.invoiced_ex_vat).toBeCloseTo(q.subtotal + q.processing_fee, 2);
+    expect(q.vat).toBeCloseTo(q.invoiced_ex_vat * q.vat_rate, 2);
+    expect(q.total).toBeCloseTo(q.subtotal + q.processing_fee + q.vat, 2);
+  });
+
+  // The reason the fee exists at all.
+  it('leaves the quoted package amount once the processor has been paid', () => {
+    const q = pricing.quote({ tierKey: 'basic', bikes: 20 });
+    expect(q.net_after_fees).toBeCloseTo(q.subtotal, 1);
   });
 
   it('sends Paystack the amount in cents, not rand', () => {
-    expect(pricing.quote({ tierKey: 'complete', bikes: 40 }).amount_kobo).toBe(1725000);
+    const q = pricing.quote({ tierKey: 'complete', bikes: 40 });
+    expect(q.amount_kobo).toBe(Math.round(q.total * 100));
+    expect(Number.isInteger(q.amount_kobo)).toBe(true);
   });
 
   it('refuses a plan we do not sell', () => {
@@ -142,9 +157,15 @@ describe.skipIf(!process.env.DATABASE_URL)('charging the card on file', () => {
     paystackReturns({ status: 'success', reference: 'ref_1' });
     const result = await billing.chargeOrganization(org.id);
     expect(result.charged).toBe(true);
-    // R375 x 40 bikes is R15,000 ex VAT; the card is charged the inclusive figure.
-    expect(result.amount).toBe(17250);
-    expect(postSpy.mock.calls[0][1]).toMatchObject({ amount: 1725000, currency: 'ZAR' });
+    // R375 x 40 bikes is R15,000 ex VAT. The card is charged that plus the
+    // card-processing fee plus VAT on both, so the figure is derived rather
+    // than pinned — pinning it would mean editing this test every time the
+    // processor's rate moves.
+    const q = pricing.quote({ tierKey: 'complete', bikes: 40 });
+    expect(result.amount).toBeCloseTo(q.total, 2);
+    expect(postSpy.mock.calls[0][1]).toMatchObject({ amount: q.amount_kobo, currency: 'ZAR' });
+    // And the point of all of it: R15 000 is what is left.
+    expect(q.net_after_fees).toBeCloseTo(15000, 1);
   });
 
   it('sends the saved authorisation, not a card number', async () => {
@@ -177,9 +198,19 @@ describe.skipIf(!process.env.DATABASE_URL)('charging the card on file', () => {
     });
     expect(Number(rows[0].per_bike_monthly)).toBe(375);
     expect(Number(rows[0].subtotal)).toBe(15000);
-    expect(Number(rows[0].vat)).toBe(2250);
-    expect(Number(rows[0].amount)).toBe(17250);
-    expect(Number(rows[0].amount)).toBe(17250);
+
+    // The invoice has to reconcile. Adding the processing fee without a
+    // column to record it left subtotal + vat short of the amount charged by
+    // the fee — a tax invoice whose lines do not add up to what came off the
+    // card, which is the first thing a customer queries.
+    const line = rows[0];
+    expect(
+      Number(line.subtotal) + Number(line.processing_fee) + Number(line.vat),
+      'invoice lines do not add up to the amount charged',
+    ).toBeCloseTo(Number(line.amount), 2);
+    expect(Number(line.processing_fee)).toBeGreaterThan(0);
+    expect(Number(line.vat)).toBeCloseTo(
+      (Number(line.subtotal) + Number(line.processing_fee)) * Number(line.vat_rate), 2);
   });
 
   it('marks a declined card as failed and counts the failure', async () => {

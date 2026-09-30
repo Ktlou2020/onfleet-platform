@@ -25,8 +25,15 @@ describe.skipIf(!process.env.DATABASE_URL)('two fleets on one platform', () => {
 
   beforeEach(async () => {
     await resetAllPgTables();
+    // Both on Complete: this file is about the boundary between two tenants,
+    // not about what a tier includes. Leaving them untiered would make every
+    // case below fail on the tier gate instead, which proves nothing about
+    // isolation and hides it if isolation breaks.
     rapid = await createPgOrg({ name: 'Rapid Wheels', slug: 'rapid-wheels' });
     kasi = await createPgOrg({ name: 'Kasi Couriers', slug: 'kasi-couriers' });
+    await pgDb.query(
+      `UPDATE organizations SET subscription_tier = 'complete', status = 'active' WHERE id = ANY($1)`,
+      [[rapid.id, kasi.id]]);
 
     rapidOwner = await createPgUser({ role: 'fleet_owner_admin', organization_id: rapid.id });
     kasiOwner = await createPgUser({ role: 'fleet_owner_admin', organization_id: kasi.id });

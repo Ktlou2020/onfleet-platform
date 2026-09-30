@@ -6,6 +6,7 @@ const multer = require('multer');
 const path = require('path');
 const pgDb = require('../pgDb');
 const { authRequired, fleetOwnerOnly, companyRoleAllowed } = require('../middleware/auth');
+const tierFeatures = require('../services/tierFeatures');
 const { requireValidMime } = require('../utils/validateUpload');
 const { convertHeicUploads } = require('../utils/heicToJpeg');
 // Postgres versions — fleet.js is fully migrated off SQLite. See each *Pg
@@ -568,6 +569,10 @@ async function getOrganization(organizationId) {
 }
 
 async function getOrganizationOrThrow(req, { allowExpired = false } = {}) {
+  // Cached on the request: the tier gate below fetches the organisation
+  // before the handler does, and without this every gated endpoint would
+  // read the same row twice.
+  if (req._organization && !allowExpired) return req._organization;
   const organization = await getOrganization(req.user.organization_id);
   if (!organization) {
     const error = new Error('Organization not found');
@@ -589,7 +594,47 @@ async function getOrganizationOrThrow(req, { allowExpired = false } = {}) {
     error.code = 'SUBSCRIPTION_REQUIRED';
     throw error;
   }
+  if (!allowExpired) req._organization = organization;
   return organization;
+}
+
+// One gate, covering both questions a fleet-portal request has to answer:
+// may this person do it, and does their plan include it.
+//
+// They were separate concerns and only the first was ever asked. The tiers
+// were sold and billed for and never enforced, so Basic and Complete bought
+// the same product. Keeping the two checks in one helper is what stops the
+// next section being added with a role gate and no price attached.
+function fleetSection(sectionKey, level = 'view') {
+  const roles = (FLEET_RESOURCE_ACCESS[sectionKey] || {})[level] || [];
+  const roleGate = companyRoleAllowed(roles);
+
+  return (req, res, next) => {
+    roleGate(req, res, async () => {
+      try {
+        const organization = await getOrganizationOrThrow(req);
+        const tier = tierFeatures.effectiveTier(organization);
+        if (!tierFeatures.tierAllows(tier, sectionKey)) {
+          const required = tierFeatures.minimumTierFor(sectionKey);
+          // A shape the frontend can act on rather than a sentence it has to
+          // parse: which section, what they are on, what it would take.
+          return res.status(403).json({
+            error: `Your plan does not include this. ${sectionKey} is part of the ${required} plan.`,
+            code: 'TIER_REQUIRED',
+            section: sectionKey,
+            current_tier: tier,
+            required_tier: required,
+          });
+        }
+        next();
+      } catch (error) {
+        res.status(error.status || 500).json({
+          error: error.message || 'Could not check your plan',
+          ...(error.code ? { code: error.code } : {}),
+        });
+      }
+    });
+  };
 }
 
 // Builds a reusable "does this bike belong to this org" clause fragment.
@@ -1008,14 +1053,14 @@ async function getPortalData(org, role) {
   });
 }
 
-router.get('/account', companyRoleAllowed(FLEET_RESOURCE_ACCESS.dashboard.view), async (req, res) => {
+router.get('/account', fleetSection('dashboard', 'view'), async (req, res) => {
   const organization = await getOrganization(req.user.organization_id);
   if (!organization) return res.status(404).json({ error: 'Organization not found' });
   const members = canViewFleetResource(req.user.role, 'team') ? await getFleetMembers(req.user.organization_id) : [];
   res.json({ organization, members });
 });
 
-router.patch('/account/org', companyRoleAllowed(FLEET_RESOURCE_ACCESS.dashboard.view), async (req, res) => {
+router.patch('/account/org', fleetSection('dashboard', 'view'), async (req, res) => {
   try {
     const { address, registration_number, vat_number } = req.body || {};
     await pgDb.query(`UPDATE organizations SET address = $1, registration_number = $2, vat_number = $3 WHERE id = $4`,
@@ -1027,7 +1072,7 @@ router.patch('/account/org', companyRoleAllowed(FLEET_RESOURCE_ACCESS.dashboard.
   }
 });
 
-router.get('/portal-data', companyRoleAllowed(FLEET_RESOURCE_ACCESS.dashboard.view), async (req, res) => {
+router.get('/portal-data', fleetSection('dashboard', 'view'), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req, { allowExpired: true });
     res.json(await getPortalData(organization, req.user.role));
@@ -1036,7 +1081,7 @@ router.get('/portal-data', companyRoleAllowed(FLEET_RESOURCE_ACCESS.dashboard.vi
   }
 });
 
-router.get('/riders/share-link', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.view), async (req, res) => {
+router.get('/riders/share-link', fleetSection('riders', 'view'), async (req, res) => {
   const organization = await getOrganization(req.user.organization_id);
   if (!organization) return res.status(404).json({ error: 'Organization not found' });
   res.json({ slug: organization.slug, path: `/fleet/rider-apply/${organization.slug}` });
@@ -1069,7 +1114,7 @@ function performanceLabel(score) {
   return 'At Risk';
 }
 
-router.get('/riders', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.view), async (req, res) => {
+router.get('/riders', fleetSection('riders', 'view'), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req);
     const riderApplications = await listFleetRiderApplications(organization);
@@ -1083,7 +1128,7 @@ router.get('/riders', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.view), asy
   }
 });
 
-router.get('/riders/scorecards', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.view), async (req, res) => {
+router.get('/riders/scorecards', fleetSection('riders', 'view'), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req);
     const { scoreRiders } = require('../services/riderScoring');
@@ -1102,7 +1147,7 @@ router.get('/riders/scorecards', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders
   }
 });
 
-router.get('/riders/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.view), async (req, res) => {
+router.get('/riders/:id', fleetSection('riders', 'view'), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req);
     const application = await getScopedFleetApplication(organization, Number(req.params.id));
@@ -1113,7 +1158,7 @@ router.get('/riders/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.view),
   }
 });
 
-router.post('/riders', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), riderApplicationUpload.fields([
+router.post('/riders', fleetSection('riders', 'manage'), riderApplicationUpload.fields([
   { name: 'id_document', maxCount: 1 },
   { name: 'drivers_license', maxCount: 1 },
   { name: 'selfie', maxCount: 1 },
@@ -1175,7 +1220,7 @@ router.post('/riders', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), 
   }
 });
 
-router.patch('/riders/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), async (req, res) => {
+router.patch('/riders/:id', fleetSection('riders', 'manage'), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req);
     const applicationId = Number(req.params.id);
@@ -1264,7 +1309,7 @@ router.patch('/riders/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.mana
   }
 });
 
-router.post('/riders/:id/documents', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), riderApplicationUpload.single('file'), convertHeicUploads(), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
+router.post('/riders/:id/documents', fleetSection('riders', 'manage'), riderApplicationUpload.single('file'), convertHeicUploads(), requireValidMime(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const organization = await getOrganizationOrThrow(req);
@@ -1284,7 +1329,7 @@ router.post('/riders/:id/documents', companyRoleAllowed(FLEET_RESOURCE_ACCESS.ri
   }
 });
 
-router.post('/riders/:id/approve', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), async (req, res) => {
+router.post('/riders/:id/approve', fleetSection('riders', 'manage'), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req);
     const result = await approveFleetApplication({
@@ -1302,7 +1347,7 @@ router.post('/riders/:id/approve', companyRoleAllowed(FLEET_RESOURCE_ACCESS.ride
   }
 });
 
-router.post('/riders/:id/reject', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), async (req, res) => {
+router.post('/riders/:id/reject', fleetSection('riders', 'manage'), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req);
     const result = await rejectFleetApplication({
@@ -1317,7 +1362,7 @@ router.post('/riders/:id/reject', companyRoleAllowed(FLEET_RESOURCE_ACCESS.rider
   }
 });
 
-router.post('/team-members', companyRoleAllowed(FLEET_RESOURCE_ACCESS.team.manage), async (req, res) => {
+router.post('/team-members', fleetSection('team', 'manage'), async (req, res) => {
   const full_name = String(req.body.full_name || '').trim();
   const email = String(req.body.email || '').trim().toLowerCase();
   const password = String(req.body.password || '');
@@ -1368,7 +1413,7 @@ router.post('/team-members', companyRoleAllowed(FLEET_RESOURCE_ACCESS.team.manag
   res.status(201).json({ ok: true, member: memberRows[0] });
 });
 
-router.patch('/team-members/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.team.manage), async (req, res) => {
+router.patch('/team-members/:id', fleetSection('team', 'manage'), async (req, res) => {
   const memberId = Number(req.params.id);
   if (!Number.isInteger(memberId) || memberId <= 0) return res.status(400).json({ error: 'Invalid team member id' });
 
@@ -1398,7 +1443,7 @@ router.patch('/team-members/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.team.
   res.json({ ok: true, member: updatedRows[0] });
 });
 
-router.delete('/team-members/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.team.manage), async (req, res) => {
+router.delete('/team-members/:id', fleetSection('team', 'manage'), async (req, res) => {
   const memberId = Number(req.params.id);
   if (!Number.isInteger(memberId) || memberId <= 0) return res.status(400).json({ error: 'Invalid team member id' });
   if (memberId === req.user.id) return res.status(400).json({ error: 'You cannot remove yourself from the team' });
@@ -1410,7 +1455,7 @@ router.delete('/team-members/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.team
   res.json({ ok: true });
 });
 
-router.post('/allocations', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.manage), async (req, res) => {
+router.post('/allocations', fleetSection('agreements', 'manage'), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req);
     const bikeId = toInt(req.body.bike_id);
@@ -1492,7 +1537,7 @@ router.post('/allocations', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.
   }
 });
 
-router.post('/reassignments', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.manage), async (req, res) => {
+router.post('/reassignments', fleetSection('agreements', 'manage'), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req);
     const agreementId = toInt(req.body.agreement_id);
@@ -1548,7 +1593,7 @@ router.post('/reassignments', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreement
   }
 });
 
-router.post('/maintenance/schedule', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.manage), async (req, res) => {
+router.post('/maintenance/schedule', fleetSection('bikes', 'manage'), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req);
     const bikeId = toInt(req.body.bike_id);
@@ -1584,7 +1629,7 @@ router.post('/maintenance/schedule', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bi
   }
 });
 
-router.post('/maintenance/log', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.manage), async (req, res) => {
+router.post('/maintenance/log', fleetSection('bikes', 'manage'), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req);
     const bikeId = toInt(req.body.bike_id);
@@ -1675,7 +1720,7 @@ router.post('/maintenance/log', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.m
   }
 });
 
-router.get('/bikes', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.view), async (req, res) => {
+router.get('/bikes', fleetSection('bikes', 'view'), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req);
     const status = String(req.query.status || '').trim();
@@ -1689,7 +1734,7 @@ router.get('/bikes', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.view), async
   }
 });
 
-router.get('/bikes/:id/service', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.view), async (req, res) => {
+router.get('/bikes/:id/service', fleetSection('bikes', 'view'), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req);
     const bikeId = toInt(req.params.id);
@@ -1708,7 +1753,7 @@ router.get('/bikes/:id/service', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.
   }
 });
 
-router.post('/bikes', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.manage), async (req, res) => {
+router.post('/bikes', fleetSection('bikes', 'manage'), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req);
     const vin = String(req.body.vin || '').trim();
@@ -1759,7 +1804,7 @@ router.post('/bikes', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.manage), as
   }
 });
 
-router.put('/bikes/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.manage), async (req, res) => {
+router.put('/bikes/:id', fleetSection('bikes', 'manage'), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req);
     const bikeId = toInt(req.params.id);
@@ -1802,7 +1847,7 @@ router.put('/bikes/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bikes.manage),
   }
 });
 
-router.get('/agreements', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.view), async (req, res) => {
+router.get('/agreements', fleetSection('agreements', 'view'), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req);
     const status = String(req.query.status || '').trim();
@@ -1818,7 +1863,7 @@ router.get('/agreements', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.vi
   }
 });
 
-router.get('/agreements/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.view), async (req, res) => {
+router.get('/agreements/:id', fleetSection('agreements', 'view'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req);
     const agreementId = toInt(req.params.id);
@@ -1861,7 +1906,7 @@ router.get('/agreements/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreement
   }
 });
 
-router.get('/agreements/:id/fleet-contract', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.view), async (req, res) => {
+router.get('/agreements/:id/fleet-contract', fleetSection('agreements', 'view'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req);
     const agreementId = toInt(req.params.id);
@@ -1876,7 +1921,7 @@ router.get('/agreements/:id/fleet-contract', companyRoleAllowed(FLEET_RESOURCE_A
   }
 });
 
-router.post('/agreements', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.manage), async (req, res) => {
+router.post('/agreements', fleetSection('agreements', 'manage'), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req);
     const bikeId = toInt(req.body.bike_id);
@@ -1958,7 +2003,7 @@ router.post('/agreements', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.m
   }
 });
 
-router.patch('/agreements/:id/remaining-balance', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.manage), async (req, res) => {
+router.patch('/agreements/:id/remaining-balance', fleetSection('agreements', 'manage'), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req);
     const agreementId = toInt(req.params.id);
@@ -1979,7 +2024,7 @@ router.patch('/agreements/:id/remaining-balance', companyRoleAllowed(FLEET_RESOU
   }
 });
 
-router.post('/agreements/:id/status', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.manage), async (req, res) => {
+router.post('/agreements/:id/status', fleetSection('agreements', 'manage'), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req);
     const agreementId = toInt(req.params.id);
@@ -2029,7 +2074,7 @@ router.post('/agreements/:id/status', companyRoleAllowed(FLEET_RESOURCE_ACCESS.a
   }
 });
 
-router.post('/agreements/:id/reinstate', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.manage), async (req, res) => {
+router.post('/agreements/:id/reinstate', fleetSection('agreements', 'manage'), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req);
     const agreementId = toInt(req.params.id);
@@ -2044,7 +2089,7 @@ router.post('/agreements/:id/reinstate', companyRoleAllowed(FLEET_RESOURCE_ACCES
 });
 
 // POST /fleet/agreements/:id/payment-link — generate Paystack checkout link and email it to the rider
-router.post('/agreements/:id/payment-link', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.manage), async (req, res) => {
+router.post('/agreements/:id/payment-link', fleetSection('agreements', 'manage'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req);
     const agreementId = toInt(req.params.id);
@@ -2136,7 +2181,7 @@ If you have any questions, contact ${orgName} directly.`;
   }
 });
 
-router.get('/agreements/:id/rider-portal-token', companyRoleAllowed(FLEET_RESOURCE_ACCESS.agreements.view), async (req, res) => {
+router.get('/agreements/:id/rider-portal-token', fleetSection('agreements', 'view'), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req);
     const agreementId = toInt(req.params.id);
@@ -2155,7 +2200,7 @@ router.get('/agreements/:id/rider-portal-token', companyRoleAllowed(FLEET_RESOUR
   }
 });
 
-router.get('/payments', companyRoleAllowed(FLEET_RESOURCE_ACCESS.payments.view), async (req, res) => {
+router.get('/payments', fleetSection('payments', 'view'), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req);
     const search = String(req.query.search || '').trim();
@@ -2170,7 +2215,7 @@ router.get('/payments', companyRoleAllowed(FLEET_RESOURCE_ACCESS.payments.view),
   }
 });
 
-router.post('/payments/manual', companyRoleAllowed(FLEET_RESOURCE_ACCESS.payments.manage), async (req, res) => {
+router.post('/payments/manual', fleetSection('payments', 'manage'), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req);
     const agreementId = toInt(req.body.agreement_id);
@@ -2186,7 +2231,7 @@ router.post('/payments/manual', companyRoleAllowed(FLEET_RESOURCE_ACCESS.payment
   }
 });
 
-router.post('/payments/bulk-delete', companyRoleAllowed(FLEET_RESOURCE_ACCESS.payments.manage), async (req, res) => {
+router.post('/payments/bulk-delete', fleetSection('payments', 'manage'), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req);
     const paymentIds = Array.from(new Set((Array.isArray(req.body.payment_ids) ? req.body.payment_ids : [])
@@ -2225,7 +2270,7 @@ router.post('/payments/bulk-delete', companyRoleAllowed(FLEET_RESOURCE_ACCESS.pa
 
 // ─── Fleet Reports ────────────────────────────────────────────────────────────
 
-router.get('/reports', companyRoleAllowed(FLEET_RESOURCE_ACCESS.reporting.view), async (req, res) => {
+router.get('/reports', fleetSection('reporting', 'view'), async (req, res) => {
   try {
     const organization = await getOrganizationOrThrow(req);
     const scope = getBikeScope(organization, 'b');
@@ -2343,7 +2388,7 @@ router.get('/reports', companyRoleAllowed(FLEET_RESOURCE_ACCESS.reporting.view),
 
 const csvUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
-router.post('/payments/import/preview', companyRoleAllowed(FLEET_RESOURCE_ACCESS.payments.manage), csvUpload.single('file'), async (req, res) => {
+router.post('/payments/import/preview', fleetSection('payments', 'manage'), csvUpload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const mime = req.file.mimetype || '';
@@ -2380,7 +2425,7 @@ router.post('/payments/import/preview', companyRoleAllowed(FLEET_RESOURCE_ACCESS
   }
 });
 
-router.post('/payments/import', companyRoleAllowed(FLEET_RESOURCE_ACCESS.payments.manage), csvUpload.single('file'), async (req, res) => {
+router.post('/payments/import', fleetSection('payments', 'manage'), csvUpload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const organization = await getOrganizationOrThrow(req);
@@ -2490,7 +2535,7 @@ async function cancelPaystackSubscription(subscriptionCode) {
 }
 
 // GET /fleet/billing/diagnose — admin-only config check (does not charge)
-router.get('/billing/diagnose', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
+router.get('/billing/diagnose', fleetSection('billing', 'manage'), async (req, res) => {
   const secretKey = process.env.PAYSTACK_SECRET_KEY || '';
   const checks = {
     secret_key_set: !!secretKey && !secretKey.includes('xxxx'),
@@ -2523,7 +2568,7 @@ router.get('/billing/diagnose', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing
 // rather than read off a plan. The first payment does double duty — it takes
 // the first month and saves the card, so later months can be charged without
 // sending anybody back to a checkout page.
-router.get('/subscription', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.view), async (req, res) => {
+router.get('/subscription', fleetSection('billing', 'view'), async (req, res) => {
   const pricing = require('../services/subscriptionPricing');
   const orgId = req.user.organization_id;
   const { rows } = await pgDb.query(
@@ -2568,7 +2613,7 @@ router.get('/subscription', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.vie
   });
 });
 
-router.get('/subscription/quote', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.view), async (req, res) => {
+router.get('/subscription/quote', fleetSection('billing', 'view'), async (req, res) => {
   const pricing = require('../services/subscriptionPricing');
   try {
     res.json(await pricing.quoteForOrganization(req.user.organization_id, {
@@ -2581,7 +2626,7 @@ router.get('/subscription/quote', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billi
 
 // Begins a subscription: claims this month so the monthly run cannot charge
 // for it again, then sends the fleet to Paystack to pay it and save the card.
-router.post('/subscription/start', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
+router.post('/subscription/start', fleetSection('billing', 'manage'), async (req, res) => {
   const pricing = require('../services/subscriptionPricing');
   const billingSvc = require('../services/subscriptionBilling');
   const orgId = req.user.organization_id;
@@ -2623,7 +2668,7 @@ router.post('/subscription/start', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bill
 // Called when Paystack sends the fleet back. Verifies the payment on our own
 // account and keeps the authorisation, which is what makes every later month
 // chargeable without another checkout.
-router.get('/subscription/confirm/:reference', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
+router.get('/subscription/confirm/:reference', fleetSection('billing', 'manage'), async (req, res) => {
   const billingSvc = require('../services/subscriptionBilling');
   const orgId = req.user.organization_id;
   try {
@@ -2661,7 +2706,7 @@ router.get('/subscription/confirm/:reference', companyRoleAllowed(FLEET_RESOURCE
 
 // Changing plan takes effect on the next charge. No pro-rata: the fleet keeps
 // what it is already paying for until the month it paid for runs out.
-router.put('/subscription', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
+router.put('/subscription', fleetSection('billing', 'manage'), async (req, res) => {
   const pricing = require('../services/subscriptionPricing');
   const tierKey = String(req.body.tier || '').toLowerCase();
   const cycle = req.body.cycle === 'annual' ? 'annual' : 'monthly';
@@ -2674,7 +2719,7 @@ router.put('/subscription', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.man
   res.json(await pricing.quoteForOrganization(req.user.organization_id, { tierKey, cycle }));
 });
 
-router.delete('/subscription', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
+router.delete('/subscription', fleetSection('billing', 'manage'), async (req, res) => {
   await pgDb.query(
     `UPDATE organizations
         SET subscription_status = 'cancelled', next_billing_date = NULL,
@@ -2690,14 +2735,14 @@ router.delete('/subscription', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.
 //
 // This is separate from the subscription the fleet pays us, which stays on the
 // platform's account — these routes never touch that.
-router.get('/payments/account', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.view), async (req, res) => {
+router.get('/payments/account', fleetSection('billing', 'view'), async (req, res) => {
   const paystackAccounts = require('../services/paystackAccounts');
   const status = await paystackAccounts.connectionStatus(req.user.organization_id);
   if (!status) return res.status(404).json({ error: 'Organisation not found' });
   res.json(status);
 });
 
-router.put('/payments/account', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
+router.put('/payments/account', fleetSection('billing', 'manage'), async (req, res) => {
   const paystackAccounts = require('../services/paystackAccounts');
   try {
     const saved = await paystackAccounts.connectAccount({
@@ -2719,7 +2764,7 @@ router.put('/payments/account', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing
 // Linking a Paystack subaccount: the lighter of the two routes. The fleet
 // gives Paystack its bank details and gives us the resulting code; it never
 // needs a merchant account of its own.
-router.put('/payments/subaccount', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
+router.put('/payments/subaccount', fleetSection('billing', 'manage'), async (req, res) => {
   const paystackAccounts = require('../services/paystackAccounts');
   try {
     const saved = await paystackAccounts.linkSubaccount({
@@ -2738,7 +2783,7 @@ router.put('/payments/subaccount', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bill
   }
 });
 
-router.delete('/payments/subaccount', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
+router.delete('/payments/subaccount', fleetSection('billing', 'manage'), async (req, res) => {
   const paystackAccounts = require('../services/paystackAccounts');
   const removed = await paystackAccounts.unlinkSubaccount({ organizationId: req.user.organization_id });
   if (!removed) return res.status(404).json({ error: 'Organisation not found' });
@@ -2746,7 +2791,7 @@ router.delete('/payments/subaccount', companyRoleAllowed(FLEET_RESOURCE_ACCESS.b
   res.json(await paystackAccounts.connectionStatus(req.user.organization_id));
 });
 
-router.delete('/payments/account', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
+router.delete('/payments/account', fleetSection('billing', 'manage'), async (req, res) => {
   const paystackAccounts = require('../services/paystackAccounts');
   const removed = await paystackAccounts.disconnectAccount({ organizationId: req.user.organization_id });
   if (!removed) return res.status(404).json({ error: 'Organisation not found' });
@@ -2754,7 +2799,7 @@ router.delete('/payments/account', companyRoleAllowed(FLEET_RESOURCE_ACCESS.bill
   res.json(await paystackAccounts.connectionStatus(req.user.organization_id));
 });
 
-router.get('/billing/status', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.view), async (req, res) => {
+router.get('/billing/status', fleetSection('billing', 'view'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req, { allowExpired: true });
     const trialDaysLeft = (org.status === 'trialing' && org.trial_ends_at)
@@ -2776,7 +2821,26 @@ router.get('/billing/status', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.v
       },
       plans: Object.values(FLEET_BILLING_PLANS),
       can_subscribe: ['trialing', 'past_due', 'cancelled', 'suspended', 'active'].includes(org.status),
-      is_active_subscriber: org.status === 'active' && !!org.paystack_subscription_code
+      is_active_subscriber: org.status === 'active' && !!org.paystack_subscription_code,
+      // What this fleet's subscription actually includes. The shell draws the
+      // menu from it, and a locked section is shown with what it would take
+      // rather than hidden — a customer who cannot see the workshop cannot
+      // decide to pay for the workshop.
+      //
+      // This is for drawing only. The endpoints refuse on their own; hiding a
+      // menu item has never been a permission.
+      tier: (() => {
+        const current = tierFeatures.effectiveTier(org);
+        const unlocked = tierFeatures.sectionsFor(current);
+        return {
+          current,
+          on_trial: org.status === 'trialing',
+          unlocked,
+          locked: Object.keys(tierFeatures.SECTION_TIER)
+            .filter((section) => !unlocked.includes(section))
+            .map((section) => ({ section, requires: tierFeatures.minimumTierFor(section) })),
+        };
+      })(),
     });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Could not load billing status' });
@@ -2784,7 +2848,7 @@ router.get('/billing/status', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.v
 });
 
 // POST /fleet/billing/subscribe — initialise Paystack subscription checkout
-router.post('/billing/subscribe', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
+router.post('/billing/subscribe', fleetSection('billing', 'manage'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req, { allowExpired: true });
     const { plan_key } = req.body;
@@ -2836,7 +2900,7 @@ router.post('/billing/subscribe', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billi
 });
 
 // GET /fleet/billing/verify?reference=xxx — verify subscription after redirect
-router.get('/billing/verify', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
+router.get('/billing/verify', fleetSection('billing', 'manage'), async (req, res) => {
   try {
     const { reference } = req.query;
     if (!reference) return res.status(400).json({ error: 'Reference is required' });
@@ -2913,7 +2977,7 @@ async function computeWalletAvailability(organizationId, wallet, db = pgDb) {
 }
 
 // GET /fleet/wallet — wallet balance and recent transactions
-router.get('/wallet', companyRoleAllowed(FLEET_RESOURCE_ACCESS.wallet.view), async (req, res) => {
+router.get('/wallet', fleetSection('wallet', 'view'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req);
     await ensureFleetWallet(org.id);
@@ -2941,7 +3005,7 @@ router.get('/wallet', companyRoleAllowed(FLEET_RESOURCE_ACCESS.wallet.view), asy
 });
 
 // POST /fleet/wallet/payout — request payout from wallet
-router.post('/wallet/payout', companyRoleAllowed(FLEET_RESOURCE_ACCESS.wallet.manage), async (req, res) => {
+router.post('/wallet/payout', fleetSection('wallet', 'manage'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req);
     await ensureFleetWallet(org.id);
@@ -3045,7 +3109,7 @@ router.post('/wallet/payout', companyRoleAllowed(FLEET_RESOURCE_ACCESS.wallet.ma
 });
 
 // GET /fleet/bank-details — get org bank account details
-router.get('/bank-details', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.view), async (req, res) => {
+router.get('/bank-details', fleetSection('billing', 'view'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req, { allowExpired: true });
     res.json({
@@ -3060,7 +3124,7 @@ router.get('/bank-details', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.vie
 });
 
 // PUT /fleet/bank-details — save org bank account details
-router.put('/bank-details', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
+router.put('/bank-details', fleetSection('billing', 'manage'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req, { allowExpired: true });
     const { bank_account_name, bank_name, bank_account_number, bank_branch_code } = req.body;
@@ -3074,7 +3138,7 @@ router.put('/bank-details', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.man
 });
 
 // GET /fleet/riders/:id/subscription — get a rider's current subscription status
-router.get('/riders/:id/subscription', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.view), async (req, res) => {
+router.get('/riders/:id/subscription', fleetSection('riders', 'view'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req);
     const { rows: subRows } = await pgDb.query(`SELECT * FROM rider_subscriptions WHERE rider_user_id = $1 AND organization_id = $2 ORDER BY created_at DESC LIMIT 1`,
@@ -3086,7 +3150,7 @@ router.get('/riders/:id/subscription', companyRoleAllowed(FLEET_RESOURCE_ACCESS.
 });
 
 // POST /fleet/riders/:id/subscription/init — create Paystack subscription checkout for a rider
-router.post('/riders/:id/subscription/init', companyRoleAllowed(FLEET_RESOURCE_ACCESS.riders.manage), async (req, res) => {
+router.post('/riders/:id/subscription/init', fleetSection('riders', 'manage'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req);
     const rider = await getScopedRider(org, toInt(req.params.id));
@@ -3153,7 +3217,7 @@ router.post('/riders/:id/subscription/init', companyRoleAllowed(FLEET_RESOURCE_A
 });
 
 // POST /fleet/billing/cancel — cancel active subscription
-router.post('/billing/cancel', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.manage), async (req, res) => {
+router.post('/billing/cancel', fleetSection('billing', 'manage'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req, { allowExpired: true });
     if (org.status !== 'active') return res.status(400).json({ error: 'No active subscription to cancel' });
@@ -3177,7 +3241,7 @@ router.post('/billing/cancel', companyRoleAllowed(FLEET_RESOURCE_ACCESS.billing.
 
 // ─── Hubs ─────────────────────────────────────────────────────────────────────
 
-router.get('/hubs', companyRoleAllowed(FLEET_RESOURCE_ACCESS.hubs.view), async (req, res) => {
+router.get('/hubs', fleetSection('hubs', 'view'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req);
     const { rows: hubs } = await pgDb.query(`SELECT * FROM hubs WHERE organization_id = $1 ORDER BY name ASC`, [org.id]);
@@ -3187,7 +3251,7 @@ router.get('/hubs', companyRoleAllowed(FLEET_RESOURCE_ACCESS.hubs.view), async (
   }
 });
 
-router.post('/hubs', companyRoleAllowed(FLEET_RESOURCE_ACCESS.hubs.manage), async (req, res) => {
+router.post('/hubs', fleetSection('hubs', 'manage'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req);
     const name = String(req.body.name || '').trim();
@@ -3203,7 +3267,7 @@ router.post('/hubs', companyRoleAllowed(FLEET_RESOURCE_ACCESS.hubs.manage), asyn
   }
 });
 
-router.put('/hubs/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.hubs.manage), async (req, res) => {
+router.put('/hubs/:id', fleetSection('hubs', 'manage'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req);
     const hubId = toInt(req.params.id);
@@ -3222,7 +3286,7 @@ router.put('/hubs/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.hubs.manage), a
   }
 });
 
-router.delete('/hubs/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.hubs.manage), async (req, res) => {
+router.delete('/hubs/:id', fleetSection('hubs', 'manage'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req);
     const hubId = toInt(req.params.id);
@@ -3241,7 +3305,7 @@ router.delete('/hubs/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.hubs.manage)
 
 // ─── Collections ──────────────────────────────────────────────────────────────
 
-router.get('/collections', companyRoleAllowed(FLEET_RESOURCE_ACCESS.collections.view), async (req, res) => {
+router.get('/collections', fleetSection('collections', 'view'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req);
     const scope = getBikeScope(org, 'b', 2);
@@ -3285,7 +3349,7 @@ router.get('/collections', companyRoleAllowed(FLEET_RESOURCE_ACCESS.collections.
   }
 });
 
-router.post('/collections/:agreementId/action', companyRoleAllowed(FLEET_RESOURCE_ACCESS.collections.manage), async (req, res) => {
+router.post('/collections/:agreementId/action', fleetSection('collections', 'manage'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req);
     const agreementId = toInt(req.params.agreementId);
@@ -3321,7 +3385,7 @@ router.post('/collections/:agreementId/action', companyRoleAllowed(FLEET_RESOURC
   }
 });
 
-router.get('/collections/:agreementId/actions', companyRoleAllowed(FLEET_RESOURCE_ACCESS.collections.view), async (req, res) => {
+router.get('/collections/:agreementId/actions', fleetSection('collections', 'view'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req);
     const agreementId = toInt(req.params.agreementId);
@@ -3337,7 +3401,7 @@ router.get('/collections/:agreementId/actions', companyRoleAllowed(FLEET_RESOURC
 
 // ─── API Keys ─────────────────────────────────────────────────────────────────
 
-router.get('/api-keys', companyRoleAllowed(FLEET_RESOURCE_ACCESS.api_keys.view), async (req, res) => {
+router.get('/api-keys', fleetSection('api_keys', 'view'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req, { allowExpired: true });
     const { rows: keys } = await pgDb.query(`SELECT ak.id, ak.name, ak.key_prefix, ak.last_used_at, ak.revoked_at, ak.created_at, u.full_name AS created_by_name
@@ -3349,7 +3413,7 @@ router.get('/api-keys', companyRoleAllowed(FLEET_RESOURCE_ACCESS.api_keys.view),
   }
 });
 
-router.post('/api-keys', companyRoleAllowed(FLEET_RESOURCE_ACCESS.api_keys.manage), async (req, res) => {
+router.post('/api-keys', fleetSection('api_keys', 'manage'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req, { allowExpired: true });
     const name = String(req.body.name || '').trim();
@@ -3367,7 +3431,7 @@ router.post('/api-keys', companyRoleAllowed(FLEET_RESOURCE_ACCESS.api_keys.manag
   }
 });
 
-router.delete('/api-keys/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.api_keys.manage), async (req, res) => {
+router.delete('/api-keys/:id', fleetSection('api_keys', 'manage'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req, { allowExpired: true });
     const keyId = toInt(req.params.id);
@@ -3414,7 +3478,7 @@ async function getOrgBikeMap(bikeIds) {
 }
 
 // GET /fleet/tracking/map
-router.get('/tracking/map', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.view), async (req, res) => {
+router.get('/tracking/map', fleetSection('tracking', 'view'), async (req, res) => {
   const orgId = req.user.organization_id;
   const orgBikeIds = await getOrgBikeIds(orgId);
   if (!orgBikeIds.length) return res.json([]);
@@ -3450,7 +3514,7 @@ router.get('/tracking/map', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.vi
 });
 
 // GET /fleet/tracking/devices
-router.get('/tracking/devices', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.view), async (req, res) => {
+router.get('/tracking/devices', fleetSection('tracking', 'view'), async (req, res) => {
   const orgId = req.user.organization_id;
   const orgBikeIds = await getOrgBikeIds(orgId);
   if (!orgBikeIds.length) return res.json([]);
@@ -3476,7 +3540,7 @@ router.get('/tracking/devices', companyRoleAllowed(FLEET_RESOURCE_ACCESS.trackin
 });
 
 // GET /fleet/tracking/devices/:id/positions
-router.get('/tracking/devices/:id/positions', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.view), async (req, res) => {
+router.get('/tracking/devices/:id/positions', fleetSection('tracking', 'view'), async (req, res) => {
   const orgId = req.user.organization_id;
   const { rows: devRows } = await pgDb.query('SELECT * FROM tracking_devices WHERE id=$1', [req.params.id]);
   if (!devRows[0]) return res.status(404).json({ error: 'Device not found' });
@@ -3500,7 +3564,7 @@ router.get('/tracking/devices/:id/positions', companyRoleAllowed(FLEET_RESOURCE_
 });
 
 // POST /fleet/tracking/devices/:id/commands
-router.post('/tracking/devices/:id/commands', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.manage), async (req, res) => {
+router.post('/tracking/devices/:id/commands', fleetSection('tracking', 'manage'), async (req, res) => {
   const orgId = req.user.organization_id;
   const { rows: devRows } = await pgDb.query('SELECT * FROM tracking_devices WHERE id=$1', [req.params.id]);
   if (!devRows[0]) return res.status(404).json({ error: 'Device not found' });
@@ -3548,7 +3612,7 @@ router.post('/tracking/devices/:id/commands', companyRoleAllowed(FLEET_RESOURCE_
 });
 
 // GET /fleet/tracking/devices/:id/commands
-router.get('/tracking/devices/:id/commands', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.view), async (req, res) => {
+router.get('/tracking/devices/:id/commands', fleetSection('tracking', 'view'), async (req, res) => {
   const orgId = req.user.organization_id;
   const { rows: devRows } = await pgDb.query('SELECT * FROM tracking_devices WHERE id=$1', [req.params.id]);
   if (!devRows[0]) return res.status(404).json({ error: 'Device not found' });
@@ -3572,7 +3636,7 @@ router.get('/tracking/devices/:id/commands', companyRoleAllowed(FLEET_RESOURCE_A
 });
 
 // GET /fleet/tracking/alerts
-router.get('/tracking/alerts', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.view), async (req, res) => {
+router.get('/tracking/alerts', fleetSection('tracking', 'view'), async (req, res) => {
   const orgId = req.user.organization_id;
   const orgBikeIds = await getOrgBikeIds(orgId);
   if (!orgBikeIds.length) return res.json([]);
@@ -3594,7 +3658,7 @@ router.get('/tracking/alerts', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking
 });
 
 // PUT /fleet/tracking/alerts/:id/acknowledge
-router.put('/tracking/alerts/:id/acknowledge', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.manage), async (req, res) => {
+router.put('/tracking/alerts/:id/acknowledge', fleetSection('tracking', 'manage'), async (req, res) => {
   const orgId = req.user.organization_id;
   const orgBikeIds = await getOrgBikeIds(orgId);
   if (!orgBikeIds.length) return res.status(404).json({ error: 'Alert not found' });
@@ -3610,7 +3674,7 @@ router.put('/tracking/alerts/:id/acknowledge', companyRoleAllowed(FLEET_RESOURCE
 });
 
 // POST /fleet/tracking/alerts/acknowledge-all
-router.post('/tracking/alerts/acknowledge-all', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.manage), async (req, res) => {
+router.post('/tracking/alerts/acknowledge-all', fleetSection('tracking', 'manage'), async (req, res) => {
   const orgBikeIds = await getOrgBikeIds(req.user.organization_id);
   if (!orgBikeIds.length) return res.json({ ok: true });
   await pgDb.query(
@@ -3621,7 +3685,7 @@ router.post('/tracking/alerts/acknowledge-all', companyRoleAllowed(FLEET_RESOURC
 });
 
 // GET /fleet/tracking/live — SSE stream filtered to org's bikes
-router.get('/tracking/live', companyRoleAllowed(FLEET_RESOURCE_ACCESS.tracking.view), async (req, res) => {
+router.get('/tracking/live', fleetSection('tracking', 'view'), async (req, res) => {
   const orgId = req.user.organization_id;
   const bikeIds = new Set(await getOrgBikeIds(orgId));
 
@@ -3680,7 +3744,7 @@ function orgBikeIds(org, startIndex = 1) {
 
 // ---------------------------------------------------------- workshop ----
 
-router.get('/workshop/job-cards', companyRoleAllowed(FLEET_RESOURCE_ACCESS.workshop.view), async (req, res) => {
+router.get('/workshop/job-cards', fleetSection('workshop', 'view'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req);
     const bikes = orgBikeIds(org, 1);
@@ -3706,7 +3770,7 @@ router.get('/workshop/job-cards', companyRoleAllowed(FLEET_RESOURCE_ACCESS.works
   }
 });
 
-router.get('/workshop/job-cards/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.workshop.view), async (req, res) => {
+router.get('/workshop/job-cards/:id', fleetSection('workshop', 'view'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req);
     const bikes = orgBikeIds(org, 2);
@@ -3732,7 +3796,7 @@ router.get('/workshop/job-cards/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.w
   }
 });
 
-router.get('/workshop/service-due', companyRoleAllowed(FLEET_RESOURCE_ACCESS.workshop.view), async (req, res) => {
+router.get('/workshop/service-due', fleetSection('workshop', 'view'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req);
     const { bikesDueForService } = require('../services/serviceDue');
@@ -3754,7 +3818,7 @@ router.get('/workshop/service-due', companyRoleAllowed(FLEET_RESOURCE_ACCESS.wor
 
 // ------------------------------------------------------ applications ----
 
-router.get('/applications', companyRoleAllowed(FLEET_RESOURCE_ACCESS.applications.view), async (req, res) => {
+router.get('/applications', fleetSection('applications', 'view'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req);
     // An application belongs to a rider, and a rider belongs to an
@@ -3775,7 +3839,7 @@ router.get('/applications', companyRoleAllowed(FLEET_RESOURCE_ACCESS.application
   }
 });
 
-router.get('/applications/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.applications.view), async (req, res) => {
+router.get('/applications/:id', fleetSection('applications', 'view'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req);
     const { rows } = await pgDb.query(
@@ -3796,7 +3860,7 @@ router.get('/applications/:id', companyRoleAllowed(FLEET_RESOURCE_ACCESS.applica
 
 // ------------------------------------------------ theft and claims ----
 
-router.get('/theft-cases', companyRoleAllowed(FLEET_RESOURCE_ACCESS.security.view), async (req, res) => {
+router.get('/theft-cases', fleetSection('security', 'view'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req);
     const bikes = orgBikeIds(org, 1);
@@ -3812,7 +3876,7 @@ router.get('/theft-cases', companyRoleAllowed(FLEET_RESOURCE_ACCESS.security.vie
   }
 });
 
-router.get('/claims', companyRoleAllowed(FLEET_RESOURCE_ACCESS.security.view), async (req, res) => {
+router.get('/claims', fleetSection('security', 'view'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req);
     const bikes = orgBikeIds(org, 1);
@@ -3830,7 +3894,7 @@ router.get('/claims', companyRoleAllowed(FLEET_RESOURCE_ACCESS.security.view), a
 
 // -------------------------------------------------------- activity ----
 
-router.get('/activity/audit', companyRoleAllowed(FLEET_RESOURCE_ACCESS.activity.view), async (req, res) => {
+router.get('/activity/audit', fleetSection('activity', 'view'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req);
     // Only what this fleet's own people did. A platform operator's actions on
@@ -3848,7 +3912,7 @@ router.get('/activity/audit', companyRoleAllowed(FLEET_RESOURCE_ACCESS.activity.
   }
 });
 
-router.get('/activity/notifications', companyRoleAllowed(FLEET_RESOURCE_ACCESS.activity.view), async (req, res) => {
+router.get('/activity/notifications', fleetSection('activity', 'view'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req);
     const { rows } = await pgDb.query(

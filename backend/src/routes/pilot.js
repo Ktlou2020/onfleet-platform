@@ -86,13 +86,9 @@ async function slugifyCompanyName(value) {
   return slug;
 }
 
-const FLEET_PLAN_ENTITLEMENTS = {
-  trial:  { max_bikes: 6,    max_admin_users: 2 },
-  small:  { max_bikes: 6,    max_admin_users: 2 },
-  medium: { max_bikes: 20,   max_admin_users: 3 },
-  large:  { max_bikes: 35,   max_admin_users: 5 },
-  empire: { max_bikes: 9999, max_admin_users: 20 },
-};
+// Was a third copy of this, offering an `empire` plan the organizations
+// table has never accepted. One table now, in services/fleetOnboarding.js.
+const { FLEET_PLAN_ENTITLEMENTS } = require('../services/fleetOnboarding');
 
 router.get('/stats', async (req, res) => {
   const { rows: bikeRows } = await pgDb.query('SELECT COUNT(*) c FROM bikes');

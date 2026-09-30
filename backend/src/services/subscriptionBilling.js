@@ -98,18 +98,23 @@ async function claimPeriod({ organizationId, quote, period, db = pgDb }) {
   const { rows } = await db.query(
     `INSERT INTO subscription_invoices
        (organization_id, reference, tier, cycle, per_bike_monthly, bikes, charged_bikes,
-        months_charged, subtotal, vat, vat_rate, amount, description, bike_breakdown,
-        status, period_start, period_end)
-     SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'pending',$15,$16
+        months_charged, subtotal, processing_fee, vat, vat_rate, amount, description,
+        bike_breakdown, status, period_start, period_end)
+     SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$17,$10,$11,$12,$13,$14,'pending',$15,$16
       WHERE NOT EXISTS (
         SELECT 1 FROM subscription_invoices
          WHERE organization_id = $1 AND period_start = $15 AND status IN ('paid', 'pending')
       )
      RETURNING *`,
+    // $17 is appended rather than inserted in the middle so the existing
+    // placeholder numbering — and the WHERE NOT EXISTS that reuses $15 — stays
+    // exactly as it was. Renumbering this list is how the VAT migration
+    // previously broke the idempotency guard.
     [organizationId, reference, quote.tier, quote.cycle, quote.per_bike_monthly, quote.bikes,
      quote.charged_bikes, quote.months_charged, quote.subtotal, quote.vat, quote.vat_rate,
      quote.total, quote.description,
-     JSON.stringify(quote.bike_breakdown || null), period.start, period.end]);
+     JSON.stringify(quote.bike_breakdown || null), period.start, period.end,
+     quote.processing_fee || 0]);
   return rows[0] || null;
 }
 

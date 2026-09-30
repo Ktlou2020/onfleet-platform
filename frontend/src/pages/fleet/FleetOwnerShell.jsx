@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Bike, FileText, CreditCard, HelpCircle, LogOut, Users, Wallet, AlertTriangle, PiggyBank, AlertCircle, MapPin, Key, Clock, CheckCircle2, ArrowRight, X, MoreHorizontal, BarChart2, UserCog, Eye } from 'lucide-react';
+import { LayoutDashboard, Bike, FileText, CreditCard, HelpCircle, LogOut, Users, Wallet, AlertTriangle, PiggyBank, AlertCircle, MapPin, Key, Clock, CheckCircle2, ArrowRight, X, MoreHorizontal, BarChart2, UserCog, Eye, Lock, Wrench, ClipboardList, Siren, History } from 'lucide-react';
 import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
 import { useAuth } from '../../auth';
@@ -22,7 +22,14 @@ const navIconMap = {
   api_keys: Key,
   reporting: BarChart2,
   team: UserCog,
-  help: HelpCircle
+  help: HelpCircle,
+  // The four added when fleet owners gained what the admin portal had. Every
+  // one of them was falling through to the dashboard icon, so the menu showed
+  // the same glyph five times.
+  workshop: Wrench,
+  applications: ClipboardList,
+  security: Siren,
+  activity: History,
 };
 
 const BLOCKED_STATUSES = ['past_due', 'suspended', 'cancelled'];
@@ -208,7 +215,21 @@ export default function FleetOwnerShell() {
     && trialDaysLeft !== null
     && trialDaysLeft <= 7;
 
-  const allowedNav = useMemo(() => FLEET_NAV_ITEMS.filter((item) => canAccessFleetRoute(user?.role, item.key)), [user?.role]);
+  // Two different reasons a section might not be available, and they are not
+  // the same thing to a fleet owner. A role they do not have is somebody
+  // else's job and is simply absent. A section their plan does not include is
+  // something they could have, so it stays on the menu with a padlock — a
+  // customer who cannot see the workshop cannot decide to pay for it.
+  const lockedSections = useMemo(() => {
+    const locked = billingData?.tier?.locked || [];
+    return new Map(locked.map((l) => [l.section, l.requires]));
+  }, [billingData]);
+
+  const allowedNav = useMemo(
+    () => FLEET_NAV_ITEMS
+      .filter((item) => canAccessFleetRoute(user?.role, item.key))
+      .map((item) => ({ ...item, lockedBehind: lockedSections.get(item.key) || null })),
+    [user?.role, lockedSections]);
   const filteredNav = useMemo(() => allowedNav.filter((item) => matchesSearch(search, item.label, item.to)), [allowedNav, search]);
 
   const goToFirstMatch = (event) => {
@@ -257,6 +278,22 @@ export default function FleetOwnerShell() {
         <nav>
           {allowedNav.map((item) => {
             const Icon = navIconMap[item.key] || LayoutDashboard;
+            // A locked section still links to Billing rather than to itself:
+            // clicking it should lead somewhere useful, not to a page that
+            // refuses. The padlock says why.
+            if (item.lockedBehind) {
+              return (
+                <NavLink
+                  key={item.to}
+                  to="/fleet/app/billing"
+                  style={{ opacity: 0.55 }}
+                  title={`${item.label} is part of the ${item.lockedBehind} plan`}
+                >
+                  <Icon size={16} /> {item.label}
+                  <Lock size={12} style={{ marginLeft: 'auto', flexShrink: 0 }} />
+                </NavLink>
+              );
+            }
             return <NavLink key={item.to} to={item.to} end={item.to === '/fleet/app'}><Icon size={16} /> {item.label}</NavLink>;
           })}
         </nav>

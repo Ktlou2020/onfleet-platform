@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { FleetHelpTip } from './helpSupport';
 import api from '../../api';
@@ -70,6 +71,7 @@ function buildInitialFiles() {
 export default function FleetOwnerRiders() {
   const { user } = useAuth();
   const canManage = canManageFleetSection(user?.role, 'riders');
+  const [searchParams, setSearchParams] = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -122,6 +124,18 @@ export default function FleetOwnerRiders() {
   };
 
   useEffect(() => { load(); }, []);
+
+  // Arriving from the Applications page, which lists who is waiting but keeps
+  // the decision here: one approval form, in the file you approve from. The
+  // parameter is cleared once it has been used so a refresh does not reopen
+  // a rider the fleet owner has since closed.
+  useEffect(() => {
+    const applicationId = searchParams.get('application');
+    if (loading || !applicationId) return;
+    setSearchParams({}, { replace: true });
+    openEdit(Number(applicationId));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, searchParams]);
   useEffect(() => { setPage(1); }, [search]);
 
   const shareUrl = useMemo(() => {

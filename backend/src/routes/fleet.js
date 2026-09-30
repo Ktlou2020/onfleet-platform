@@ -3821,18 +3821,30 @@ router.get('/workshop/service-due', fleetSection('workshop', 'view'), async (req
 router.get('/applications', fleetSection('applications', 'view'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req);
-    // An application belongs to a rider, and a rider belongs to an
-    // organisation. That is the only join that scopes it.
+    // An application reaches a fleet two ways: the rider belongs to it, or the
+    // bike they asked for does. The second is how a rider with no organisation
+    // of their own — someone applying through a share link — still lands in
+    // the right fleet's queue.
+    //
+    // The same two ways as getScopedFleetApplication, deliberately: this list
+    // is the queue for that decision, and a queue that is narrower than what
+    // can be decided hides work rather than protecting anything.
+    const scope = getBikeScope(org, 'pb', 2);
     const { rows } = await pgDb.query(
       `SELECT a.id, a.status, a.submitted_at, a.reviewed_at, a.monthly_income, a.auto_decision,
+              a.rejection_reason,
               u.id AS user_id, u.full_name, u.email, u.phone,
               b.registration AS preferred_bike
          FROM applications a
          JOIN users u ON u.id = a.user_id
          LEFT JOIN bikes b ON b.id = a.preferred_bike_id
-        WHERE u.organization_id = $1 AND u.deleted_at IS NULL
+         LEFT JOIN bikes pb ON pb.id = a.preferred_bike_id
+        WHERE u.deleted_at IS NULL AND (
+                u.organization_id = $1
+                OR (a.preferred_bike_id IS NOT NULL AND ${scope.clause})
+              )
         ORDER BY a.submitted_at DESC NULLS LAST, a.id DESC
-        LIMIT 200`, [org.id]);
+        LIMIT 200`, [org.id, ...scope.params]);
     res.json({ applications: rows });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Could not load applications' });

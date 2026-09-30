@@ -36,7 +36,6 @@ const path = require('path');
 const https = require('https');
 const pgDb = require('../pgDb');
 const storageService = require('../services/storageService');
-const UPLOAD_DIRS = require('../uploadPaths');
 
 const SITEMAP = 'https://shop.heromotocorp.com/sitemap.xml';
 // Says who this is and why, so an operator reading their logs can tell it
@@ -140,6 +139,14 @@ async function store(buffer, contentType, filename) {
     await storageService.putObject(`part-photos/${filename}`, buffer, contentType || 'image/jpeg');
     return 'r2';
   }
+  // Required here rather than at the top on purpose: uploadPaths creates
+  // every upload directory the moment it is required, and the path it creates
+  // is the one the deployment's environment names. Run with a production
+  // environment from a laptop, that is a container path like
+  // /app/backend/data/uploads and the script dies on require before it has
+  // done anything. Where R2 is configured no local directory is wanted at
+  // all, so this is only reached when one genuinely is.
+  const UPLOAD_DIRS = require('../uploadPaths');
   fs.mkdirSync(UPLOAD_DIRS.partPhotos, { recursive: true });
   fs.writeFileSync(path.join(UPLOAD_DIRS.partPhotos, filename), buffer);
   return 'disk';

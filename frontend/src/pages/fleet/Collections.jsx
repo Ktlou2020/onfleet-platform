@@ -2,20 +2,43 @@ import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../../api';
 import { useAuth } from '../../auth';
-import { Badge, ConfirmModal, EmptyState, Loading, SearchInput, fmt, fmtDate, matchesSearch } from '../../components/ui';
-import { ChevronDown, ChevronRight, Zap, ZapOff, Wifi, WifiOff } from 'lucide-react';
+import { Badge, ConfirmModal, EmptyState, Loading, SearchInput, Stat, fmt, fmtDate, matchesSearch } from '../../components/ui';
+import { ChevronDown, ChevronRight, Zap, ZapOff, Wifi, WifiOff, CalendarClock, Banknote, Users } from 'lucide-react';
 import { canManageFleetSection } from './access';
 
 const STAGES = ['pending', 'contacted', 'notice_sent', 'recovery', 'resolved'];
 const ACTION_TYPES = ['call', 'sms', 'whatsapp', 'email', 'visit', 'legal_notice', 'repo', 'note'];
 
 const STAGE_COLORS = {
-  pending: 'var(--warning)',
+  pending: 'var(--warn)',
   contacted: 'var(--primary)',
   notice_sent: 'var(--accent)',
   recovery: 'var(--danger)',
   resolved: 'var(--success)'
 };
+
+// What was promised about this debt, and whether that day has come.
+function FollowUp({ item }) {
+  if (item.never_actioned) {
+    return (
+      <div className="text-xs" style={{ color: 'var(--warn)', marginTop: 2 }}>
+        Nobody has chased this yet
+      </div>
+    );
+  }
+  if (!item.next_action_date) {
+    return item.last_action_at ? (
+      <div className="text-xs muted" style={{ marginTop: 2 }}>
+        Last chased {fmtDate(item.last_action_at)}{item.last_action_type ? ` · ${item.last_action_type.replace(/_/g, ' ')}` : ''} · no follow-up set
+      </div>
+    ) : null;
+  }
+  return (
+    <div className="text-xs" style={{ marginTop: 2, color: item.follow_up_due ? 'var(--warn)' : 'var(--muted)' }}>
+      {item.follow_up_due ? 'Follow up was due ' : 'Follow up '}{fmtDate(item.next_action_date)}
+    </div>
+  );
+}
 
 function buildActionForm() {
   return { stage: 'contacted', action_type: 'call', notes: '', outcome: '', next_action_date: '' };
@@ -51,10 +74,21 @@ export default function Collections() {
 
   useEffect(() => { load(); }, []);
 
+  // Today's work first. A collections queue sorted by size alone shows the
+  // biggest debt every morning, whether or not anybody can do anything about
+  // it today; what somebody promised to chase, and never chased, is the part
+  // that goes quiet.
   const filtered = useMemo(() => collections.filter((item) => {
-    if (stageFilter && item.current_stage !== stageFilter) return false;
+    if (stageFilter === 'due' && !(item.follow_up_due || item.never_actioned)) return false;
+    if (stageFilter && stageFilter !== 'due' && item.current_stage !== stageFilter) return false;
     return matchesSearch(search, item.rider_name, item.agreement_no, item.bike_registration, item.current_stage);
   }), [collections, search, stageFilter]);
+
+  const totals = useMemo(() => ({
+    owed: collections.reduce((sum, item) => sum + (Number(item.overdue_balance) || 0), 0),
+    riders: collections.length,
+    due: collections.filter((item) => item.follow_up_due || item.never_actioned).length,
+  }), [collections]);
 
   const toggleExpand = async (id) => {
     if (expanded === id) {
@@ -97,7 +131,7 @@ export default function Collections() {
     const { item, preset } = immobModal;
     setImmobBusy(true);
     try {
-      const { data } = await api.post(`/fleet/tracking/devices${item.tracking_device_id}/commands`, { preset });
+      const { data } = await api.post(`/fleet/tracking/devices/${item.tracking_device_id}/commands`, { preset });
       toast.success(data.note || (preset === 'cut_engine' ? 'Immobilisation command sent' : 'Restore command sent'));
       setImmobModal(null);
     } catch (err) {
@@ -131,8 +165,20 @@ export default function Collections() {
         </div>
         <SearchInput value={search} onChange={setSearch} placeholder="Search rider, agreement, registration" style={{ flex: '1 1 220px', maxWidth: 380 }} />
       </div>
+      <div className="grid grid-3 mb-4">
+        <Stat label="Overdue across the book" value={fmt(totals.owed)}
+              accent={totals.owed ? 'var(--danger)' : undefined} icon={<Banknote size={18} />} />
+        <Stat label="Riders behind" value={totals.riders} icon={<Users size={18} />} />
+        <Stat label="Waiting on you today" value={totals.due}
+              accent={totals.due ? 'var(--warn)' : undefined} icon={<CalendarClock size={18} />}
+              onClick={() => setStageFilter(stageFilter === 'due' ? '' : 'due')} />
+      </div>
+
       <div className="filter-pills mb-3">
         <button className={`filter-pill ${stageFilter === '' ? 'active' : ''}`} onClick={() => setStageFilter('')}>All stages</button>
+        <button className={`filter-pill ${stageFilter === 'due' ? 'active' : ''}`} onClick={() => setStageFilter('due')}>
+          Waiting on you{totals.due ? ` (${totals.due})` : ''}
+        </button>
         {STAGES.map((s) => (
           <button key={s} className={`filter-pill ${stageFilter === s ? 'active' : ''}`} onClick={() => setStageFilter(s)} style={{ color: stageFilter === s ? undefined : STAGE_COLORS[s] }}>
             {s.replace(/_/g, ' ')}
@@ -158,6 +204,7 @@ export default function Collections() {
                   <div style={{ fontWeight: 600 }}>{item.rider_name || 'Unknown rider'}</div>
                   <div className="text-xs muted">{item.agreement_no} · {item.bike_registration || 'No reg'} · {item.make} {item.model}</div>
                   <div className="text-xs muted">{item.rider_email} {item.rider_phone ? `· ${item.rider_phone}` : ''}</div>
+                  <FollowUp item={item} />
                 </div>
                 <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                   <div style={{ textAlign: 'right' }}>

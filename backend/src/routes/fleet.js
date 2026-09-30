@@ -3319,11 +3319,10 @@ router.get('/collections', fleetSection('collections', 'view'), async (req, res)
           FROM payment_schedules ps
           WHERE ps.agreement_id = a.id AND ps.status = 'overdue'
         ), 0) AS overdue_balance,
-        (
-          SELECT ca.stage FROM collections_actions ca
-          WHERE ca.agreement_id = a.id AND ca.organization_id = $1
-          ORDER BY ca.created_at DESC, ca.id DESC LIMIT 1
-        ) AS current_stage,
+        last_action.stage AS current_stage,
+        last_action.next_action_date,
+        last_action.created_at AS last_action_at,
+        last_action.action_type AS last_action_type,
         (
           SELECT MIN(ps2.due_date) FROM payment_schedules ps2
           WHERE ps2.agreement_id = a.id AND ps2.status = 'overdue'
@@ -3332,18 +3331,39 @@ router.get('/collections', fleetSection('collections', 'view'), async (req, res)
       JOIN bikes b ON b.id = a.bike_id
       LEFT JOIN users u ON u.id = a.user_id
       LEFT JOIN tracking_devices td ON td.bike_id = b.id
+      -- The last thing anybody did about this debt: which stage it reached,
+      -- and the day they said they would come back to it. Without that date
+      -- the queue cannot tell today's work from next month's, which is most
+      -- of what a collections list is for.
+      LEFT JOIN LATERAL (
+        SELECT ca.stage, ca.next_action_date, ca.created_at, ca.action_type
+          FROM collections_actions ca
+         WHERE ca.agreement_id = a.id AND ca.organization_id = $1
+         ORDER BY ca.created_at DESC, ca.id DESC LIMIT 1
+      ) last_action ON TRUE
       WHERE (a.status = 'defaulted' OR EXISTS(
         SELECT 1 FROM payment_schedules ps WHERE ps.agreement_id = a.id AND ps.status = 'overdue'
       )) AND ${scope.clause}
       ORDER BY overdue_balance DESC, a.id DESC`, [org.id, ...scope.params]);
 
     const today = todayIso();
-    const result = items.map((item) => ({
-      ...item,
-      overdue_balance: Number(item.overdue_balance) || 0,
-      current_stage: item.current_stage || 'pending',
-      days_overdue: item.first_overdue_date ? Math.max(0, Math.floor((new Date(today) - new Date(item.first_overdue_date)) / 86400000)) : 0
-    }));
+    const result = items.map((item) => {
+      const stage = item.current_stage || 'pending';
+      const followUp = item.next_action_date ? String(item.next_action_date).slice(0, 10) : null;
+      return {
+        ...item,
+        overdue_balance: Number(item.overdue_balance) || 0,
+        current_stage: stage,
+        next_action_date: followUp,
+        // Due today counts as due. A debt somebody promised to chase this
+        // morning is this morning's work, not tomorrow's.
+        follow_up_due: !!followUp && followUp <= today && stage !== 'resolved',
+        // Nothing logged at all is also work waiting, and it is the kind that
+        // goes unnoticed because it never appears on a list of promises.
+        never_actioned: !item.last_action_at,
+        days_overdue: item.first_overdue_date ? Math.max(0, Math.floor((new Date(today) - new Date(item.first_overdue_date)) / 86400000)) : 0
+      };
+    });
     res.json({ collections: result });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Could not load collections' });

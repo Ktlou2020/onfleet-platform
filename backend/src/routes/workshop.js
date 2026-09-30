@@ -138,6 +138,16 @@ async function getJobCard(id) {
 // Dashboard
 router.get('/dashboard', authRequired, workshopOnly, async (req, res) => {
   try {
+    // A mechanic's dashboard counts the work in their own bay. Unscoped it
+    // was both a leak and simply wrong: a fleet's mechanic would be shown the
+    // whole platform's open jobs and revenue as though they were theirs.
+    const scope = workshopScope(req);
+    if (scope.refuse) return res.status(scope.refuse.status).json(scope.refuse);
+    const own = scope.all ? [] : [scope.orgId];
+    const mine = (alias = 'jc') => (scope.all
+      ? ''
+      : `AND COALESCE((SELECT organization_id FROM bikes WHERE id = ${alias}.bike_id), ${alias}.fleet_org_id) = $${own.length}`);
+
     const { rows: statsRows } = await pgDb.query(`
       SELECT
         COUNT(*) AS total,
@@ -155,8 +165,9 @@ router.get('/dashboard', authRequired, workshopOnly, async (req, res) => {
         SUM(CASE WHEN status = 'open' AND started_at IS NULL
                   AND created_at < NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) AS stalled_count,
         SUM(CASE WHEN status IN ('open','in_progress') AND technician_id IS NULL THEN 1 ELSE 0 END) AS unassigned_count
-      FROM job_cards
-    `);
+      FROM job_cards jc
+      WHERE TRUE ${mine()}
+    `, own);
     const stats = statsRows[0];
 
     const { rows: revenueRows } = await pgDb.query(`
@@ -164,8 +175,8 @@ router.get('/dashboard', authRequired, workshopOnly, async (req, res) => {
         COALESCE(SUM(CASE WHEN jc.completed_at::date = CURRENT_DATE THEN i.quantity * i.unit_cost ELSE 0 END), 0) AS revenue_today
       FROM job_card_items i
       JOIN job_cards jc ON jc.id = i.job_card_id
-      WHERE jc.status = 'completed'
-    `);
+      WHERE jc.status = 'completed' ${mine()}
+    `, own);
     const revenueRow = revenueRows[0];
 
     const { rows: activeJobs } = await pgDb.query(`
@@ -179,7 +190,7 @@ router.get('/dashboard', authRequired, workshopOnly, async (req, res) => {
       FROM job_cards jc
       LEFT JOIN bikes b ON b.id = jc.bike_id
       LEFT JOIN users u ON u.id = jc.technician_id
-      WHERE jc.status IN ('open', 'in_progress')
+      WHERE jc.status IN ('open', 'in_progress') ${mine()}
       -- Oldest first, not newest. Sorting active work newest-first buried the
       -- jobs that had been waiting longest at the bottom of a LIMIT 10, which
       -- is exactly the work someone needs to see: 15 cards were open against
@@ -188,7 +199,7 @@ router.get('/dashboard', authRequired, workshopOnly, async (req, res) => {
         CASE jc.priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 WHEN 'normal' THEN 3 ELSE 4 END,
         jc.created_at ASC
       LIMIT 50
-    `);
+    `, own);
 
     const { rows: myJobs } = await pgDb.query(`
       SELECT jc.*,
@@ -521,11 +532,19 @@ router.get('/job-cards/:id', authRequired, workshopOnly, async (req, res) => {
 // past.
 router.post('/bike-notes/:id/resolve', authRequired, workshopOnly, async (req, res) => {
   try {
+    const scope = workshopScope(req);
+    if (scope.refuse) return res.status(scope.refuse.status).json(scope.refuse);
+    const params = [toInt(req.params.id), req.user.id];
+    let ownScope = '';
+    if (!scope.all) {
+      params.push(scope.orgId);
+      ownScope = `AND bike_id IN (SELECT id FROM bikes WHERE organization_id = $${params.length})`;
+    }
     const { rows } = await pgDb.query(
       `UPDATE bike_notes SET resolved_at = NOW(), resolved_by = $2
-        WHERE id = $1 AND for_workshop = TRUE AND resolved_at IS NULL
+        WHERE id = $1 AND for_workshop = TRUE AND resolved_at IS NULL ${ownScope}
         RETURNING id, bike_id, note, resolved_at`,
-      [toInt(req.params.id), req.user.id]);
+      params);
     // Already resolved, or never meant for the workshop. Not an error worth
     // shouting about — two technicians ticking the same thing is fine.
     if (!rows[0]) return res.status(404).json({ error: 'No open workshop instruction with that id' });
@@ -808,16 +827,25 @@ router.get('/bikes/search', authRequired, workshopOnly, async (req, res) => {
     const q = String(req.query.q || '').trim();
     if (!q || q.length < 2) return res.json({ bikes: [] });
     const like = `%${q}%`;
+    // A mechanic searches the motorcycles they work on. For the platform's own
+    // that is all of them; for a fleet's, that fleet's — otherwise the search
+    // box is a way to enumerate every bike on the platform.
+    const scope = workshopScope(req);
+    if (scope.refuse) return res.status(scope.refuse.status).json(scope.refuse);
+    const params = [like];
+    let ownScope = '';
+    if (!scope.all) { params.push(scope.orgId); ownScope = `AND b.organization_id = $${params.length}`; }
     const { rows: bikes } = await pgDb.query(`
       SELECT b.id, b.vin, b.registration, b.make, b.model, b.year, b.color, b.engine_cc,
         b.status, b.fleet, b.organization_id, o.name AS org_name,
         b.next_service_date, b.next_service_km, b.odometer_km, b.image_url
       FROM bikes b
       LEFT JOIN organizations o ON o.id = b.organization_id
-      WHERE b.registration ILIKE $1 OR b.vin ILIKE $1 OR b.make ILIKE $1 OR b.model ILIKE $1
+      WHERE (b.registration ILIKE $1 OR b.vin ILIKE $1 OR b.make ILIKE $1 OR b.model ILIKE $1)
+        ${ownScope}
       ORDER BY b.registration, b.make
       LIMIT 10
-    `, [like]);
+    `, params);
     res.json({ bikes });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -834,15 +862,23 @@ router.post('/bikes', authRequired, workshopOnly, async (req, res) => {
     const existing = existingRows[0];
     if (existing) return res.status(409).json({ error: `A bike with VIN ${vin} already exists`, existing_id: existing.id });
 
+    // A bike brought in off the street belongs to whoever's workshop took it.
+    // Without this a fleet's mechanic would create one with no organisation —
+    // invisible to them the moment it is saved, and to their fleet owner for
+    // good.
+    const bikeScope = workshopScope(req);
+    if (bikeScope.refuse) return res.status(bikeScope.refuse.status).json(bikeScope.refuse);
+
     const { rows: insertedRows } = await pgDb.query(`
-      INSERT INTO bikes (vin, registration, make, model, year, color, engine_cc, fleet, rental_weekly, total_weeks, status, notes, workshop_only)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8, 0, 0, 'not_available', $9, TRUE) RETURNING id
+      INSERT INTO bikes (vin, registration, make, model, year, color, engine_cc, fleet, rental_weekly, total_weeks, status, notes, workshop_only, organization_id)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8, 0, 0, 'not_available', $9, TRUE, $10) RETURNING id
     `, [
       vin, registration || null, make, model,
       year ? Number(year) : null, color || null,
       engine_cc ? Number(engine_cc) : null,
       fleet_owner_name || null,
-      fleet_owner_name ? `Registered via workshop — fleet owner: ${fleet_owner_name}` : 'Registered via workshop'
+      fleet_owner_name ? `Registered via workshop — fleet owner: ${fleet_owner_name}` : 'Registered via workshop',
+      bikeScope.all ? null : bikeScope.orgId,
     ]);
 
     const { rows: bikeRows } = await pgDb.query('SELECT * FROM bikes WHERE id = $1', [insertedRows[0].id]);
@@ -856,13 +892,21 @@ router.post('/bikes', authRequired, workshopOnly, async (req, res) => {
 // List technicians (for assignment dropdown)
 router.get('/technicians', authRequired, workshopOnly, async (req, res) => {
   try {
+    // Who a job can be assigned to: the people in this workshop. For a fleet's
+    // bay that is their own mechanics — the platform's staff are not theirs to
+    // hand work to, and the full list is a staff directory.
+    const scope = workshopScope(req);
+    if (scope.refuse) return res.status(scope.refuse.status).json(scope.refuse);
+    const staffScope = scope.all
+      ? { clause: "role IN ('technician', 'admin', 'superadmin')", params: [] }
+      : { clause: "role = 'technician' AND organization_id = $1", params: [scope.orgId] };
     const { rows: technicians } = await pgDb.query(`
       SELECT id, full_name, email, role, (role = 'technician') AS is_technician FROM users
-      WHERE role IN ('technician', 'admin', 'superadmin') AND status = 'active' AND deleted_at IS NULL
+      WHERE ${staffScope.clause} AND status = 'active' AND deleted_at IS NULL
       -- Real technicians first: admins remain assignable because a small
       -- workshop genuinely needs that, but they should not be the easy default.
       ORDER BY (role = 'technician') DESC, full_name
-    `);
+    `, staffScope.params);
     res.json({ technicians });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -984,9 +1028,16 @@ router.get('/service-plan/models', authRequired, workshopOnly, async (req, res) 
 // services/serviceDue.js for why date alone was not enough.
 router.get('/service-due', authRequired, workshopOnly, async (req, res) => {
   const { bikesDueForService } = require('../services/serviceDue');
+  const scope = workshopScope(req);
+  if (scope.refuse) return res.status(scope.refuse.status).json(scope.refuse);
+  // A fleet's mechanic gets their fleet whatever the query string says: the
+  // parameter is a filter for somebody who may see everything, not a way to
+  // pick a fleet.
   const bikes = await bikesDueForService({
-    organizationId: req.query.organization_id ? Number(req.query.organization_id) : null,
-    ownFleetOnly: req.query.own_fleet === '1',
+    organizationId: scope.all
+      ? (req.query.organization_id ? Number(req.query.organization_id) : null)
+      : scope.orgId,
+    ownFleetOnly: scope.all && req.query.own_fleet === '1',
   });
   res.json({
     bikes,
@@ -1002,6 +1053,11 @@ router.get('/service-due', authRequired, workshopOnly, async (req, res) => {
 router.get('/upcoming-services', authRequired, workshopOnly, async (req, res) => {
   try {
     const days = Math.min(Number(req.query.days) || 30, 90);
+    const scope = workshopScope(req);
+    if (scope.refuse) return res.status(scope.refuse.status).json(scope.refuse);
+    const params = [days];
+    let ownScope = '';
+    if (!scope.all) { params.push(scope.orgId); ownScope = `AND b.organization_id = $${params.length}`; }
     const { rows: bikes } = await pgDb.query(`
       SELECT b.id, b.registration, b.vin, b.make, b.model, b.next_service_date, b.next_service_km,
         b.odometer_km, b.status, o.name AS org_name,
@@ -1012,9 +1068,10 @@ router.get('/upcoming-services', authRequired, workshopOnly, async (req, res) =>
       WHERE b.next_service_date IS NOT NULL
         AND b.next_service_date <= (CURRENT_DATE + $1)
         AND b.status NOT IN ('sold','paid_off','written_off')
+        ${ownScope}
       ORDER BY b.next_service_date ASC
       LIMIT 30
-    `, [days]);
+    `, params);
     res.json({ bikes });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -1034,6 +1091,12 @@ router.get('/templates', authRequired, workshopOnly, async (req, res) => {
 // Job card templates — create from current job items or manual
 router.post('/templates', authRequired, workshopOnly, async (req, res) => {
   try {
+    // A job template is shared by everybody who uses this workshop software,
+    // so it is the platform's to write. A fleet's mechanic may use them and
+    // may not rewrite them for everyone else.
+    const scope = workshopScope(req);
+    if (!scope.all) return res.status(403).json({ error: 'Templates are shared. Ask the workshop to change one.' });
+
     const { name, job_type, description, items } = req.body;
     if (!name || !name.trim()) return res.status(400).json({ error: 'Template name is required' });
     if (!Array.isArray(items)) return res.status(400).json({ error: 'Items must be an array' });
@@ -1051,6 +1114,12 @@ router.post('/templates', authRequired, workshopOnly, async (req, res) => {
 // Job card templates — delete
 router.delete('/templates/:id', authRequired, workshopOnly, async (req, res) => {
   try {
+    // A job template is shared by everybody who uses this workshop software,
+    // so it is the platform's to write. A fleet's mechanic may use them and
+    // may not rewrite them for everyone else.
+    const scope = workshopScope(req);
+    if (!scope.all) return res.status(403).json({ error: 'Templates are shared. Ask the workshop to change one.' });
+
     const id = toInt(req.params.id);
     const { rows: existingRows } = await pgDb.query('SELECT id FROM job_card_templates WHERE id = $1', [id]);
     if (!existingRows[0]) return res.status(404).json({ error: 'Template not found' });

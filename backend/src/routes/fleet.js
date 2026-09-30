@@ -1376,13 +1376,43 @@ router.post('/team-members', fleetSection('team', 'manage'), async (req, res) =>
   }
   if (!email.includes('@')) return res.status(400).json({ error: 'Valid email required' });
   if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
-  if (!FLEET_ROLE_VALUES.includes(role)) return res.status(400).json({ error: 'Invalid fleet-owner role' });
+  // A fleet's own mechanic.
+  //
+  // Their workshop was theirs to create and theirs to run, and every mechanic
+  // still had to be added by the platform operator — a support ticket per
+  // hire, on a product sold to companies that do their own hiring. A
+  // technician created here belongs to this fleet, which is what scopes what
+  // they can see: their fleet's bookings, their fleet's job cards, their
+  // fleet's motorcycles and nothing else.
+  //
+  // The organisation is taken from who is asking and never from the body, the
+  // same as adding a workshop. Nobody gets to put a mechanic in somebody
+  // else's fleet, whatever they send.
+  const WORKSHOP_ROLE = 'technician';
+  if (role === WORKSHOP_ROLE) {
+    const { rows: org } = await pgDb.query(
+      'SELECT status, subscription_tier FROM organizations WHERE id = $1', [req.user.organization_id]);
+    const tier = tierFeatures.effectiveTier(org[0]);
+    if (!tierFeatures.tierAllows(tier, 'workshop')) {
+      return res.status(403).json({
+        error: `Workshop staff are part of the ${tierFeatures.minimumTierFor('workshop')} plan.`,
+        code: 'TIER_REQUIRED',
+        current_tier: tier,
+        required_tier: tierFeatures.minimumTierFor('workshop'),
+      });
+    }
+  } else if (!FLEET_ROLE_VALUES.includes(role)) {
+    return res.status(400).json({ error: 'Invalid fleet-owner role' });
+  }
 
   const { rows: existingRows } = await pgDb.query('SELECT id FROM users WHERE email = $1 AND deleted_at IS NULL', [email]);
   if (existingRows[0]) return res.status(409).json({ error: 'Email already registered' });
 
   const { rows: orgRows } = await pgDb.query(`SELECT id, max_admin_users FROM organizations WHERE id = $1`, [req.user.organization_id]);
   const organization = orgRows[0];
+  // A mechanic takes no admin seat: they never open the fleet portal, they
+  // open the workshop one. Charging a plan seat for the person turning the
+  // spanners would price the workshop feature twice.
   const adminRoles = ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing'];
   const isAdminSeat = adminRoles.includes(role);
   if (isAdminSeat) {
@@ -1429,7 +1459,19 @@ router.patch('/team-members/:id', fleetSection('team', 'manage'), async (req, re
 
   const nextRole = req.body.role === undefined ? member.role : String(req.body.role).trim();
   const nextStatus = req.body.status === undefined ? member.status : String(req.body.status).trim();
-  if (!FLEET_ROLE_VALUES.includes(nextRole)) return res.status(400).json({ error: 'Invalid role value' });
+  // A role changes within its own family. A mechanic stays a mechanic — the
+  // way to make one a company admin is to give them an account in the portal,
+  // not to promote the workshop login they sign in with every morning. Before
+  // this, suspending a mechanic was refused outright, because the role coming
+  // back unchanged was not one this list knew.
+  const allowedRoles = member.role === 'technician' ? ['technician'] : FLEET_ROLE_VALUES;
+  if (!allowedRoles.includes(nextRole)) {
+    return res.status(400).json({
+      error: member.role === 'technician'
+        ? 'A mechanic stays a mechanic. Add a separate portal account if they also need one.'
+        : 'Invalid role value',
+    });
+  }
   if (!MEMBER_STATUSES.includes(nextStatus)) return res.status(400).json({ error: 'Invalid status value' });
 
   await pgDb.query(`UPDATE users SET role = $1, status = $2, updated_at = NOW() WHERE id = $3`, [nextRole, nextStatus, memberId]);

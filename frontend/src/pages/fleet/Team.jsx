@@ -12,14 +12,25 @@ const ROLE_OPTIONS = [
   { value: 'fleet_owner_viewer', label: 'Viewer' }
 ];
 
+// A mechanic is not a portal role: they sign into the workshop, see your
+// bookings and job cards, and never open this side at all. Offered on the
+// invite form and deliberately absent from the per-row role dropdown, because
+// a mechanic stays a mechanic — the API refuses the promotion and a select
+// that offers what will be refused is a select that lies.
+const WORKSHOP_ROLE = { value: 'technician', label: 'Workshop mechanic' };
+const INVITE_ROLE_OPTIONS = [...ROLE_OPTIONS, WORKSHOP_ROLE];
+
 const ADMIN_TIER_ROLES = ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing'];
 
 const ROLE_BADGE_VARIANTS = {
   fleet_owner_admin: 'purple',
   fleet_owner_ops: 'blue',
   fleet_owner_billing: 'green',
-  fleet_owner_viewer: 'default'
+  fleet_owner_viewer: 'default',
+  technician: 'orange'
 };
+
+const ROLE_LABELS = { ...FLEET_ROLE_LABELS, technician: 'Workshop mechanic' };
 
 const EMPTY_INVITE = { full_name: '', email: '', password: '', role: 'fleet_owner_ops' };
 
@@ -164,7 +175,7 @@ export default function FleetTeam() {
                     </td>
                     <td style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{member.email}</td>
                     <td>
-                      {isEditing ? (
+                      {isEditing && member.role !== WORKSHOP_ROLE.value ? (
                         <select
                           className="form-select"
                           style={{ fontSize: 13, padding: '3px 6px' }}
@@ -177,7 +188,7 @@ export default function FleetTeam() {
                         </select>
                       ) : (
                         <Badge variant={ROLE_BADGE_VARIANTS[member.role] || 'default'}>
-                          {FLEET_ROLE_LABELS[member.role] || member.role}
+                          {ROLE_LABELS[member.role] || member.role}
                         </Badge>
                       )}
                     </td>
@@ -289,10 +300,16 @@ export default function FleetTeam() {
                     value={inviteForm.role}
                     onChange={(e) => setInviteForm((f) => ({ ...f, role: e.target.value }))}
                   >
-                    {ROLE_OPTIONS.map((o) => (
+                    {INVITE_ROLE_OPTIONS.map((o) => (
                       <option key={o.value} value={o.value}>{o.label}</option>
                     ))}
                   </select>
+                  {inviteForm.role === WORKSHOP_ROLE.value && (
+                    <div style={{ fontSize: 12, marginTop: 4 }} className="muted">
+                      They sign into the workshop, not this portal, and see your bookings
+                      and job cards only. A mechanic uses no admin seat.
+                    </div>
+                  )}
                   {ADMIN_TIER_ROLES.includes(inviteForm.role) && maxAdmin > 0 && adminCount >= maxAdmin && (
                     <div style={{ fontSize: 12, color: 'var(--danger)', marginTop: 4 }}>
                       Admin seat limit reached ({adminCount}/{maxAdmin}). Upgrade your plan or choose Viewer.

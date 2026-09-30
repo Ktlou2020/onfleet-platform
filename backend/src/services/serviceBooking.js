@@ -151,10 +151,25 @@ function visibilityClause({ seesAll = false, orgId = null } = {}, alias = 'wl', 
   };
 }
 
-async function getLocations({ scope = {}, activeOnly = true, db = pgDb } = {}) {
+/**
+ * The workshops this caller may see.
+ *
+ * `inactiveOwnerId` is the one exception to activeOnly: a fleet owner has to
+ * see their own switched-off workshop or they cannot switch it back on, while
+ * somebody else's switched-off workshop stays none of their business.
+ */
+async function getLocations({ scope = {}, activeOnly = true, inactiveOwnerId = null, db = pgDb } = {}) {
   const vis = visibilityClause(scope, 'wl', 1);
   const where = [vis.clause];
-  if (activeOnly) where.push('active = TRUE');
+  const params = [...vis.params];
+  if (activeOnly) {
+    if (inactiveOwnerId != null) {
+      params.push(Number(inactiveOwnerId));
+      where.push(`(wl.active = TRUE OR wl.organization_id = $${params.length})`);
+    } else {
+      where.push('wl.active = TRUE');
+    }
+  }
   // The owner's name travels with it. Without it a platform admin looking at
   // the list sees an organization_id and has to go and look up whose it is,
   // which is the sort of friction that ends in somebody editing the wrong
@@ -164,8 +179,8 @@ async function getLocations({ scope = {}, activeOnly = true, db = pgDb } = {}) {
             wl.organization_id, o.name AS organization_name
        FROM workshop_locations wl
        LEFT JOIN organizations o ON o.id = wl.organization_id
-      WHERE ${where.join(' AND ').replace(/\bactive = TRUE\b/, 'wl.active = TRUE')}
-      ORDER BY wl.organization_id NULLS LAST, wl.id`, vis.params);
+      WHERE ${where.join(' AND ')}
+      ORDER BY wl.organization_id NULLS LAST, wl.id`, params);
   return rows;
 }
 
@@ -230,7 +245,11 @@ async function getRules({ locationId = null, db = pgDb } = {}) {
 // in one transaction rather than diffing. A half-applied week is a workshop
 // open at hours nobody chose.
 async function replaceRules(locationId, windows, userId, { db = pgDb } = {}) {
-  if (!(await locationExists(locationId, { db }))) {
+  // seesAll: this is an existence check, not an authorisation one. Whether
+  // the caller may touch this workshop was settled by the route before it got
+  // here, and having the default scope silently apply here meant a fleet
+  // could not set hours on its own workshop.
+  if (!(await locationExists(locationId, { scope: { seesAll: true }, db }))) {
     throw Object.assign(new Error('Which workshop?'), { status: 400 });
   }
   const clean = [];

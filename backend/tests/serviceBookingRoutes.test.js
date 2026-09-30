@@ -381,6 +381,13 @@ describe.skipIf(!process.env.DATABASE_URL)('keeping the calendar', () => {
     expect((await putRules(tech.user, [])).status).toBe(403);
   });
 
+  // Both ways round: naming a workshop must not turn "not allowed" into
+  // "which one?". The role is decided before the parameter is.
+  it('a rider may not even read it, having named a workshop', async () => {
+    const res = await request(app).get('/api/bookings/rules?location_id=1').set(authHeader(rider.user));
+    expect(res.status).toBe(403);
+  });
+
   it('a rider may not even read it', async () => {
     expect((await request(app).get('/api/bookings/rules').set(authHeader(rider.user))).status).toBe(403);
   });

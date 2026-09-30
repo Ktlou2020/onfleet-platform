@@ -3,6 +3,7 @@ import api from '../../api';
 import toast from 'react-hot-toast';
 import { Badge, EmptyState, Loading, Stat, fmt, fmtDate } from '../../components/ui';
 import { Wrench, AlertTriangle, Gauge } from 'lucide-react';
+import WorkshopTabs from './workshopTabs';
 
 // The workshop, from the fleet owner's side.
 //
@@ -42,7 +43,8 @@ export default function FleetWorkshop() {
   return (
     <>
       <h1>Workshop</h1>
-      <p className="muted" style={{ marginTop: -8 }}>
+      <WorkshopTabs />
+      <p className="muted" style={{ marginTop: 0 }}>
         What the workshop has done to your bikes, and which are due next.
       </p>
 

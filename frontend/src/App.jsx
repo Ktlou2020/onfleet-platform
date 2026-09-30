@@ -26,6 +26,7 @@ const FleetOwnerPayments = lazy(() => import('./pages/fleet/Payments'));
 const FleetOwnerRiders = lazy(() => import('./pages/fleet/Riders'));
 const FleetOwnerHelp = lazy(() => import('./pages/fleet/Help'));
 const FleetWorkshop = lazy(() => import('./pages/fleet/Workshop'));
+const FleetWorkshopDiary = lazy(() => import('./pages/fleet/WorkshopDiary'));
 const FleetApplications = lazy(() => import('./pages/fleet/Applications'));
 const FleetSecurity = lazy(() => import('./pages/fleet/Security'));
 const FleetActivity = lazy(() => import('./pages/fleet/Activity'));
@@ -192,6 +193,7 @@ export default function App() {
             <Route path="api-keys" element={<FleetRouteGate section="api_keys"><FleetApiKeys /></FleetRouteGate>} />
             <Route path="reports" element={<FleetRouteGate section="reporting"><FleetReports /></FleetRouteGate>} />
             <Route path="workshop" element={<FleetRouteGate section="workshop"><FleetWorkshop /></FleetRouteGate>} />
+            <Route path="workshop/diary" element={<FleetRouteGate section="workshop"><FleetWorkshopDiary /></FleetRouteGate>} />
             <Route path="applications" element={<FleetRouteGate section="applications"><FleetApplications /></FleetRouteGate>} />
             <Route path="security" element={<FleetRouteGate section="security"><FleetSecurity /></FleetRouteGate>} />
             <Route path="activity" element={<FleetRouteGate section="activity"><FleetActivity /></FleetRouteGate>} />

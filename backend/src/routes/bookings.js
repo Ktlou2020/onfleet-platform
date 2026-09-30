@@ -16,6 +16,7 @@ const { authRequired, adminOnly, workshopOnly, FLEET_OWNER_ROLES } = require('..
 const asyncRouter = require('../utils/asyncRouter');
 const booking = require('../services/serviceBooking');
 const { sendNotification } = require('../services/notifierPg');
+const tierFeatures = require('../services/tierFeatures');
 
 const router = asyncRouter(express.Router());
 
@@ -45,6 +46,56 @@ async function actingScope(req) {
     return { seesAll: false, orgId: orgId ?? null };
   }
   return { seesAll: false, orgId: req.user.organization_id || null };
+}
+
+// May this caller change this workshop's diary?
+//
+// A platform admin may change any. A fleet owner may change one that belongs
+// to them — not a shared one, because every other fleet books into it, and
+// obviously not another fleet's.
+//
+// Returns a reason rather than a boolean so the caller can answer with the
+// right status: 404 for a workshop that is not theirs (whether somebody
+// else's exists is not their business) and 403 for a plan that does not
+// include running one.
+// Whether this fleet's plan includes running a workshop of their own, with no
+// workshop named yet. Adding one and operating one have to agree: a fleet that
+// may create a workshop but not set its hours has been sold a trap.
+async function mayRunOwnWorkshop(req) {
+  if (isAdmin(req)) return { ok: true };
+  if (!FLEET_OWNER_ROLES.includes(req.user.role)) return { ok: false, status: 403, error: 'Not allowed' };
+
+  const { rows: org } = await pgDb.query(
+    'SELECT status, subscription_tier FROM organizations WHERE id = $1', [req.user.organization_id]);
+  const tier = tierFeatures.effectiveTier(org[0]);
+  if (!tierFeatures.tierAllows(tier, 'workshop')) {
+    return {
+      ok: false,
+      status: 403,
+      error: `Running your own workshop is part of the ${tierFeatures.minimumTierFor('workshop')} plan.`,
+      code: 'TIER_REQUIRED',
+      current_tier: tier,
+      required_tier: tierFeatures.minimumTierFor('workshop'),
+    };
+  }
+  return { ok: true };
+}
+
+async function mayManageLocation(req, locationId) {
+  const plan = await mayRunOwnWorkshop(req);
+  if (!plan.ok) return plan;
+  if (isAdmin(req)) return { ok: true };
+
+  const { rows } = await pgDb.query(
+    'SELECT 1 FROM workshop_locations WHERE id = $1 AND organization_id = $2',
+    [Number(locationId), req.user.organization_id]);
+  if (!rows[0]) return { ok: false, status: 404, error: 'Workshop not found' };
+  return { ok: true };
+}
+
+function refuse(res, verdict) {
+  const { status, ok, ...body } = verdict;
+  return res.status(status).json(body);
 }
 
 async function bikeOrgId(bikeId) {
@@ -103,8 +154,19 @@ async function bikeForRider(userId) {
 // The workshops, and which one this person should be shown first.
 router.get('/locations', authRequired, async (req, res) => {
   const scope = await actingScope(req);
+  // A rider is offered the workshops that are open, which is the default.
+  // Somebody managing workshops needs the switched-off ones too, or a
+  // workshop they closed has no screen on which to reopen it. For a fleet
+  // owner that means their own closed ones only — a shared workshop the
+  // platform has switched off is not theirs to reopen, so it stays hidden.
+  const wantsInactive = req.query.include_inactive === '1';
+  const manages = wantsInactive && (isAdmin(req) || FLEET_OWNER_ROLES.includes(req.user.role));
   res.json({
-    locations: await booking.getLocations({ scope }),
+    locations: await booking.getLocations({
+      scope,
+      activeOnly: !(manages && isAdmin(req)),
+      inactiveOwnerId: manages && !isAdmin(req) ? req.user.organization_id : null,
+    }),
     default_location_id: await booking.defaultLocationFor(req.user.id, { scope }),
   });
 });
@@ -292,13 +354,30 @@ router.delete('/:id', authRequired, async (req, res) => {
 
 // Everything booked in a date range, for the workshop's diary and the admin's
 // oversight tab. Defaults to today.
-router.get('/day', authRequired, workshopOnly, async (req, res) => {
+router.get('/day', authRequired, async (req, res) => {
   const from = req.query.from || booking.sastDateStr(new Date());
   const to = req.query.to || from;
   // No location_id means every workshop. A technician filters to their own;
   // an admin looking at the week wants the lot.
   const locationId = req.query.location_id ? Number(req.query.location_id) : null;
   const params = [booking.sastToUtc(from, '00:00'), booking.sastToUtc(booking.addDays(to, 1), '00:00')];
+
+  // A fleet owner sees their own workshops' diaries and nothing else. Naming
+  // one they do not own is refused rather than quietly returning empty, so a
+  // mistake is visible instead of looking like a quiet day.
+  let ownerScope = '';
+  if (!isAdmin(req) && !['technician', 'control_room'].includes(req.user.role)) {
+    if (!FLEET_OWNER_ROLES.includes(req.user.role)) {
+      return res.status(403).json({ error: 'Not allowed' });
+    }
+    if (locationId) {
+      const verdict = await mayManageLocation(req, locationId);
+      if (!verdict.ok) return refuse(res, verdict);
+    } else {
+      params.push(req.user.organization_id);
+      ownerScope = `AND wl.organization_id = $${params.length}`;
+    }
+  }
   if (locationId) params.push(locationId);
 
   const { rows } = await pgDb.query(
@@ -309,7 +388,8 @@ router.get('/day', authRequired, workshopOnly, async (req, res) => {
        ${BOOKING_FROM}
        LEFT JOIN job_cards jc ON jc.id = sb.job_card_id
       WHERE sb.starts_at >= $1 AND sb.starts_at < $2 AND sb.status <> 'cancelled'
-        ${locationId ? 'AND sb.location_id = $3' : ''}
+        ${ownerScope}
+        ${locationId ? `AND sb.location_id = $${params.length}` : ''}
       ORDER BY sb.starts_at, wl.id`, params);
   res.json({ from, to, location_id: locationId, bookings: rows });
 });
@@ -369,10 +449,23 @@ router.post('/:id/no-show', authRequired, workshopOnly, async (req, res) => {
 
 // --------------------------------------------------- the admin's calendar ----
 
-router.get('/rules', authRequired, workshopOnly, async (req, res) => {
+router.get('/rules', authRequired, async (req, res) => {
   const locationId = req.query.location_id ? Number(req.query.location_id) : null;
+  // Platform staff read the whole diary. A fleet owner reads their own
+  // workshop's, and only once they can point at which one.
+  //
+  // Who is asking is settled before which workshop, so a rider is told they
+  // may not read the calendar rather than being asked which one they meant.
+  if (!isAdmin(req) && req.user.role !== 'technician') {
+    const plan = await mayRunOwnWorkshop(req);
+    if (!plan.ok) return refuse(res, plan);
+    if (!locationId) return res.status(400).json({ error: 'Which workshop?' });
+    const verdict = await mayManageLocation(req, locationId);
+    if (!verdict.ok) return refuse(res, verdict);
+  }
+  const scope = await actingScope(req);
   res.json({
-    locations: await booking.getLocations({ activeOnly: false }),
+    locations: await booking.getLocations({ scope, activeOnly: false }),
     location_id: locationId,
     rules: await booking.getRules({ locationId }),
     closures: await booking.getClosures({ locationId, from: booking.sastDateStr(new Date()) }),
@@ -382,7 +475,9 @@ router.get('/rules', authRequired, workshopOnly, async (req, res) => {
   });
 });
 
-router.put('/rules', authRequired, adminOnly, async (req, res) => {
+router.put('/rules', authRequired, async (req, res) => {
+  const verdict = await mayManageLocation(req, Number(req.body.location_id));
+  if (!verdict.ok) return refuse(res, verdict);
   try {
     const rules = await booking.replaceRules(Number(req.body.location_id), req.body.rules || [], req.user.id);
     res.json({ rules });
@@ -396,11 +491,16 @@ router.put('/settings', authRequired, adminOnly, async (req, res) => {
   res.json({ settings: await booking.setSettings(req.body || {}) });
 });
 
-router.post('/closures', authRequired, adminOnly, async (req, res) => {
+router.post('/closures', authRequired, async (req, res) => {
   const closedOn = String(req.body.closed_on || '').slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(closedOn)) return res.status(400).json({ error: 'Which date?' });
   const locationId = Number(req.body.location_id);
-  if (!(await booking.locationExists(locationId))) return res.status(400).json({ error: 'Which workshop?' });
+  const verdict = await mayManageLocation(req, locationId);
+  if (!verdict.ok) return refuse(res, verdict);
+  // Existence only — mayManageLocation above has already settled whose it is.
+  if (!(await booking.locationExists(locationId, { scope: { seesAll: true } }))) {
+    return res.status(400).json({ error: 'Which workshop?' });
+  }
 
   // Closing a day with bookings already on it is allowed — public holidays get
   // announced late — but the admin is told exactly who needs phoning rather
@@ -432,6 +532,11 @@ router.post('/locations', authRequired, async (req, res) => {
   if (!isAdmin(req) && !FLEET_OWNER_ROLES.includes(req.user.role)) {
     return res.status(403).json({ error: 'Only an admin or a fleet owner can add a workshop' });
   }
+  // Gated on the plan for the same reason the hours are: a workshop whose
+  // hours cannot be set takes no bookings, so letting one be created on a
+  // plan that cannot operate it only produces a dead row and a support call.
+  const plan = await mayRunOwnWorkshop(req);
+  if (!plan.ok) return refuse(res, plan);
 
   // The ownership is decided here, from who is asking, and never read from
   // the request for a fleet owner. Taking it from the body would let one
@@ -506,9 +611,16 @@ router.put('/locations/:id', authRequired, async (req, res) => {
   res.json(rows[0]);
 });
 
-router.delete('/closures/:id', authRequired, adminOnly, async (req, res) => {
-  const { rowCount } = await pgDb.query('DELETE FROM service_closures WHERE id = $1', [Number(req.params.id)]);
-  if (!rowCount) return res.status(404).json({ error: 'Closure not found' });
+router.delete('/closures/:id', authRequired, async (req, res) => {
+  // Which workshop's closure this is decides who may remove it, so it has to
+  // be looked up before the delete rather than after.
+  const { rows } = await pgDb.query(
+    'SELECT location_id FROM service_closures WHERE id = $1', [Number(req.params.id)]);
+  if (!rows[0]) return res.status(404).json({ error: 'Closure not found' });
+  const verdict = await mayManageLocation(req, rows[0].location_id);
+  if (!verdict.ok) return refuse(res, verdict);
+
+  await pgDb.query('DELETE FROM service_closures WHERE id = $1', [Number(req.params.id)]);
   res.json({ ok: true });
 });
 

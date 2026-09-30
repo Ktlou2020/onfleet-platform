@@ -228,6 +228,169 @@ describe.skipIf(!process.env.DATABASE_URL)('two fleets, each with its own worksh
     it('a rider can add none at all', async () => {
       expect((await create(rapidRider.user, { name: 'Nope', city: 'X' })).status).toBe(403);
     });
+
+    // Adding one and operating one have to agree. Setting the hours is gated
+    // on the plan, so creating has to be too — otherwise a fleet on Basic can
+    // make a workshop it can never open, which is a dead row and a support
+    // call rather than a feature.
+    it('adding one needs the plan that includes a workshop', async () => {
+      await pgDb.query(`UPDATE organizations SET subscription_tier='basic' WHERE id=$1`, [rapid.id]);
+      const res = await create(rapidOwner.user, { name: 'Basic Bay', city: 'Soweto' });
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('TIER_REQUIRED');
+      expect(res.body.required_tier).toBe('workshop');
+
+      const { rows } = await pgDb.query(
+        'SELECT COUNT(*)::int n FROM workshop_locations WHERE organization_id = $1', [rapid.id]);
+      expect(rows[0].n, 'a workshop was created that its plan cannot operate').toBe(1);
+    });
+  });
+
+  // Running the workshop, not just owning the row. A workshop with no opening
+  // hours takes no bookings, so being able to create one and nothing else was
+  // half a feature.
+  describe('running its own workshop', () => {
+    const setHours = (user, locationId, rules) =>
+      request(app).put('/api/bookings/rules').set(authHeader(user))
+        .send({ location_id: locationId, rules });
+
+    it('a fleet owner sets its own opening hours', async () => {
+      const res = await setHours(rapidOwner.user, rapidWs, [
+        { weekday: 1, opens_at: '07:00', closes_at: '12:00' },
+      ]);
+      expect(res.status).toBe(200);
+      expect(res.body.rules).toHaveLength(1);
+    });
+
+    it('and those hours show up as bookable slots', async () => {
+      await setHours(rapidOwner.user, rapidWs, [{ weekday: 3, opens_at: '14:00', closes_at: '16:00' }]);
+      const res = await request(app)
+        .get(`/api/bookings/availability?location_id=${rapidWs}&from=${WED}&to=${WED}`)
+        .set(authHeader(rapidRider.user));
+      expect(res.body.days[0].slots.map((sl) => sl.time)).toEqual(['14:00', '14:45', '15:30']);
+    });
+
+    it('but cannot set hours at another fleet\'s workshop', async () => {
+      const res = await setHours(rapidOwner.user, kasiWs, [
+        { weekday: 1, opens_at: '00:00', closes_at: '23:00' },
+      ]);
+      expect(res.status).toBe(404);
+      const { rows } = await pgDb.query(
+        'SELECT COUNT(*)::int n FROM service_slot_rules WHERE location_id = $1', [kasiWs]);
+      expect(rows[0].n, 'another fleet\'s hours were changed').toBe(1);
+    });
+
+    // The shared workshop belongs to the platform and every fleet books into
+    // it. One fleet rewriting its hours would close it for everybody.
+    it('nor at the platform\'s shared one', async () => {
+      const res = await setHours(rapidOwner.user, sharedWs, [
+        { weekday: 1, opens_at: '09:00', closes_at: '10:00' },
+      ]);
+      expect(res.status).toBe(404);
+    });
+
+    it('closes its own workshop for a day', async () => {
+      const res = await request(app).post('/api/bookings/closures').set(authHeader(rapidOwner.user))
+        .send({ location_id: rapidWs, closed_on: WED, reason: 'Stocktake' });
+      expect(res.status).toBe(201);
+
+      const avail = await request(app)
+        .get(`/api/bookings/availability?location_id=${rapidWs}&from=${WED}&to=${WED}`)
+        .set(authHeader(rapidRider.user));
+      expect(avail.body.days[0].closed).toBe(true);
+    });
+
+    it('and cannot close another fleet\'s', async () => {
+      const res = await request(app).post('/api/bookings/closures').set(authHeader(rapidOwner.user))
+        .send({ location_id: kasiWs, closed_on: WED });
+      expect(res.status).toBe(404);
+    });
+
+    it('cannot reopen a day another fleet closed', async () => {
+      await request(app).post('/api/bookings/closures').set(authHeader(kasiOwner.user))
+        .send({ location_id: kasiWs, closed_on: WED });
+      const { rows } = await pgDb.query('SELECT id FROM service_closures WHERE location_id = $1', [kasiWs]);
+      const res = await request(app).delete(`/api/bookings/closures/${rows[0].id}`)
+        .set(authHeader(rapidOwner.user));
+      expect(res.status).toBe(404);
+    });
+
+    it('sees the diary of its own workshops', async () => {
+      await request(app).post('/api/bookings').set(authHeader(rapidRider.user))
+        .send({ location_id: rapidWs, starts_at: slot('09:30') });
+      await request(app).post('/api/bookings').set(authHeader(kasiRider.user))
+        .send({ location_id: kasiWs, starts_at: slot('09:30') });
+
+      const res = await request(app).get(`/api/bookings/day?from=${WED}`).set(authHeader(rapidOwner.user));
+      expect(res.status).toBe(200);
+      expect(res.body.bookings.map((b) => b.location_id)).toEqual([rapidWs]);
+    });
+
+    it('and is refused a diary that is not its own', async () => {
+      const res = await request(app)
+        .get(`/api/bookings/day?from=${WED}&location_id=${kasiWs}`).set(authHeader(rapidOwner.user));
+      expect(res.status).toBe(404);
+    });
+
+    // Running a workshop is what the Workshop plan is for.
+    it('needs the plan that includes a workshop', async () => {
+      await pgDb.query(`UPDATE organizations SET subscription_tier='basic' WHERE id=$1`, [rapid.id]);
+      const res = await setHours(rapidOwner.user, rapidWs, [
+        { weekday: 1, opens_at: '08:00', closes_at: '12:00' },
+      ]);
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('TIER_REQUIRED');
+      expect(res.body.required_tier).toBe('workshop');
+    });
+  });
+
+  // A workshop that has been switched off.
+  //
+  // Riders must not be offered it, which is what active = FALSE is for. But
+  // the fleet that owns it still has to be able to see it, or there is no
+  // screen on which to switch it back on — the list is the only way in.
+  describe('a workshop that has been switched off', () => {
+    const listing = (user, qs = '') =>
+      request(app).get(`/api/bookings/locations${qs}`).set(authHeader(user));
+
+    beforeEach(async () => {
+      await pgDb.query('UPDATE workshop_locations SET active = FALSE WHERE id = ANY($1)',
+        [[rapidWs, kasiWs, sharedWs]]);
+    });
+
+    it('is out of the list by default', async () => {
+      const res = await listing(rapidOwner.user);
+      expect(res.body.locations).toEqual([]);
+    });
+
+    it('but the fleet that owns it can ask for it back', async () => {
+      const res = await listing(rapidOwner.user, '?include_inactive=1');
+      expect(res.body.locations.map((l) => l.name)).toEqual(['Rapid Own Workshop']);
+      expect(res.body.locations[0].active).toBe(false);
+    });
+
+    it('and asking does not reach another fleet\'s', async () => {
+      const res = await listing(rapidOwner.user, '?include_inactive=1');
+      expect(res.body.locations.map((l) => l.name)).not.toContain('Kasi Own Workshop');
+    });
+
+    // The platform switched the shared one off, so it is not this fleet's to
+    // reopen. Listing it would offer a button that 404s.
+    it('nor the platform\'s shared one', async () => {
+      const res = await listing(rapidOwner.user, '?include_inactive=1');
+      expect(res.body.locations.map((l) => l.name)).not.toContain('Platform Partner');
+    });
+
+    it('a rider is never offered one, however they ask', async () => {
+      const res = await listing(rapidRider.user, '?include_inactive=1');
+      expect(res.body.locations).toEqual([]);
+    });
+
+    it('a platform admin sees all of them', async () => {
+      const res = await listing(admin.user, '?include_inactive=1');
+      expect(res.body.locations.map((l) => l.name).sort())
+        .toEqual(['Kasi Own Workshop', 'Platform Partner', 'Rapid Own Workshop']);
+    });
   });
 
   // Technicians carry no organisation and staff the workshop itself, so they

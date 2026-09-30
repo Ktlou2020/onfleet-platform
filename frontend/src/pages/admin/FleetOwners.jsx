@@ -5,6 +5,7 @@ import api from '../../api';
 import { useAuth } from '../../auth';
 import { Badge, ConfirmModal, CopyableContactValue, EmptyState, Loading, Modal, Pagination, SearchInput, Stat, fmt, fmtDate, matchesSearch, paginateItems } from '../../components/ui';
 import { getFleetRoleLabel } from '../fleet/access';
+import { isTelematicsConsole } from '../../brand';
 import { Building2, ShieldCheck, Users, Wallet, Settings, ChevronDown, ChevronRight, Mail, MapPin, CreditCard, KeyRound, Trash2, Send, Eye, Phone, TrendingUp, AlertTriangle, CheckCircle2, Circle, Zap, RefreshCw } from 'lucide-react';
 
 const EMAIL_TEMPLATES = [
@@ -1023,14 +1024,22 @@ export default function AdminFleetOwners() {
                       >
                         <RefreshCw size={13} /> Sync by codes
                       </button>
-                      <button
-                        className="btn btn-sm btn-secondary"
-                        onClick={() => setRecordPaymentOrg(org)}
-                        title="Manually record a Paystack payment for this fleet owner"
-                        style={{ display: 'flex', alignItems: 'center', gap: 4 }}
-                      >
-                        <CreditCard size={13} /> Record PS payment
-                      </button>
+                      {/* Recording a payment here means a rider's payment,
+                          against a rider's agreement schedule — which is a
+                          thing to do only where the operator is also the
+                          lessor collecting that money. Where the platform is
+                          sold to fleets, their riders pay them, and this
+                          would be reaching into a customer's book. */}
+                      {!isTelematicsConsole && (
+                        <button
+                          className="btn btn-sm btn-secondary"
+                          onClick={() => setRecordPaymentOrg(org)}
+                          title="Manually record a Paystack payment for this fleet owner"
+                          style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+                        >
+                          <CreditCard size={13} /> Record PS payment
+                        </button>
+                      )}
                       <button
                         className="btn btn-sm btn-secondary"
                         onClick={() => setAdjustWalletOrg(org)}

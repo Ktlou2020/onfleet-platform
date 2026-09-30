@@ -41,6 +41,39 @@ const TENANT_OPERATING_PATHS = [
   '/api/kyc',
   '/api/imports',
   '/api/workshop',
+
+  // And the parts of /api/admin that are a customer's business rather than
+  // the console's.
+  //
+  // That router was left whole when this boundary went in, on the grounds
+  // that it is the console's own API. Most of it is: who may log in, what
+  // they are billed, which devices are fitted, what the audit trail says.
+  // The line runs between administering an account and reading what the
+  // account does with the platform —
+  //
+  //   /admin/users          stays. Who can sign in, with what role, and
+  //                         whether they are suspended is the operator's job
+  //                         on any deployment.
+  //   /admin/fleet-owners   stays, and so do plans, wallets, payouts and the
+  //   /admin/organizations  Paystack routes: that is the customer
+  //                         relationship, which is the whole console.
+  //
+  // — and the records below are on the tenant's side of it. Most have never
+  // appeared on a telematics menu; two were reachable because the console's
+  // own pages used them for a job that only makes sense on OnFleet, where the
+  // operator is also the lessor collecting the rider's money.
+  '/api/admin/agreement-schedule',
+  '/api/admin/org-agreements',
+  '/api/admin/record-paystack-payment',
+  '/api/admin/riders',
+  '/api/admin/applications',
+  '/api/admin/signup-stats',
+  '/api/admin/strategy-report',
+  '/api/admin/dashboard',
+  '/api/admin/kpis',
+  '/api/admin/reports',
+  '/api/admin/parts-catalog',
+  '/api/admin/parts-orders',
 ];
 
 const isTelematicsDeployment = brand.adminConsole === CONSOLES.TELEMATICS;

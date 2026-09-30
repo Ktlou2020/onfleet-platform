@@ -98,6 +98,38 @@ describe.skipIf(!process.env.DATABASE_URL)('a platform admin on a telematics dep
     });
   });
 
+  // /api/admin was left whole when this boundary went in, on the grounds that
+  // it is the console's own API. Most of it is. These are the parts that are
+  // a customer's business rather than the operator's.
+  describe('nor the parts of the admin API that belong to a fleet', () => {
+    const shut = [
+      ['get', '/api/admin/org-agreements?org_id=1'],
+      ['get', '/api/admin/agreement-schedule?agreement_id=1'],
+      ['get', '/api/admin/riders/scorecards'],
+      ['get', '/api/admin/signup-stats'],
+      ['get', '/api/admin/strategy-report'],
+      ['get', '/api/admin/dashboard'],
+      ['get', '/api/admin/kpis'],
+      ['get', '/api/admin/parts-catalog'],
+      ['get', '/api/admin/parts-orders'],
+    ];
+
+    it.each(shut)('%s %s', async (method, path) => {
+      const res = await request(app)[method](path).set(authHeader(superadmin.user));
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('NOT_THIS_CONSOLE');
+    });
+
+    // Recording a payment here means a rider's payment against a rider's
+    // schedule, which only makes sense where the operator is the lessor.
+    it('and cannot record a rider\'s payment', async () => {
+      const res = await request(app).post('/api/admin/record-paystack-payment')
+        .set(authHeader(superadmin.user)).send({ organization_id: org.id, amount: 500 });
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('NOT_THIS_CONSOLE');
+    });
+  });
+
   describe('but the console it does have still works', () => {
     it('the fleets it sells to', async () => {
       const res = await request(app).get('/api/admin/fleet-owners').set(authHeader(superadmin.user));
@@ -113,6 +145,30 @@ describe.skipIf(!process.env.DATABASE_URL)('a platform admin on a telematics dep
 
     it('and the audit trail', async () => {
       expect((await asAdmin('get', '/api/admin/audit-logs')).status).toBe(200);
+    });
+
+    // The line is between administering an account and reading what the
+    // account does with the platform. Everything here is the first kind, and
+    // breaking any of it would take the console with it.
+    it('and the account administration the console is made of', async () => {
+      for (const path of [
+        '/api/admin/users',
+        '/api/admin/fleet-owners/dashboard',
+        '/api/admin/fleet-payouts',
+        '/api/admin/paystack-charges',
+        '/api/admin/integrations/api-keys',
+        '/api/admin/login-attempts',
+        '/api/admin/email-provider-status',
+      ]) {
+        const res = await request(app).get(path).set(authHeader(superadmin.user));
+        expect(res.status, `${path} was refused`).toBe(200);
+      }
+    });
+
+    it('including a fleet\'s wallet and plan, which is what it bills on', async () => {
+      const res = await request(app).get(`/api/admin/organizations/${org.id}/wallet`)
+        .set(authHeader(superadmin.user));
+      expect(res.status).toBe(200);
     });
   });
 

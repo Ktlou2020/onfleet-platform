@@ -4,7 +4,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../../auth';
 import { Loading, Badge, SearchInput, fmtDate, Modal, Pagination, matchesSearch, CopyableContactValue, normalizePhoneInput } from '../../components/ui';
 import { sortNewestFirst } from '../../utils/sortNewestFirst';
-import { brandName } from '../../brand';
+import { brandName, isTelematicsConsole } from '../../brand';
 
 const SPECIAL_AUDIENCE_TAG = 'password-reset-batch-2026-05';
 
@@ -65,10 +65,15 @@ export default function AdminUsers() {
   });
 
   const load = async () => {
+    // A rider's risk score is their fleet's business, not the platform's, so
+    // a telematics console does not ask for it — the API refuses, and asking
+    // anyway would put a 403 in the log on every visit to this page.
     const [usersRes, providerRes, scorecardsRes] = await Promise.all([
       api.get('/admin/users'),
       api.get('/admin/email-provider-status'),
-      api.get('/admin/riders/scorecards').catch(() => ({ data: { riders: [] } }))
+      isTelematicsConsole
+        ? Promise.resolve({ data: { riders: [] } })
+        : api.get('/admin/riders/scorecards').catch(() => ({ data: { riders: [] } }))
     ]);
     setUsers(usersRes.data.users || []);
     setProviderInfo(providerRes.data || null);

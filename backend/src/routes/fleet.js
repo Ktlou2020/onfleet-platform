@@ -4420,14 +4420,39 @@ router.put('/claims/:id', fleetSection('security', 'manage'), async (req, res) =
 router.get('/activity/audit', fleetSection('activity', 'view'), async (req, res) => {
   try {
     const org = await getOrganizationOrThrow(req);
-    // Only what this fleet's own people did. A platform operator's actions on
-    // the account are deliberately not here: that is the operator's audit
-    // trail, and showing a tenant a partial view of it is worse than none.
+    // What this fleet's own people did, and what the platform did to them.
+    //
+    // The second half used to be left out, on the grounds that a partial view
+    // of the operator's audit trail is worse than none. The opposite is
+    // truer: somebody signed into your account, changed your plan or adjusted
+    // your wallet, and the one record of it was on a screen you cannot reach.
+    //
+    // A platform action counts as yours when it names you — your
+    // organisation, your wallet, or one of your people. That is not the whole
+    // of what the operator does; it is everything they did *to this account*,
+    // which is the part a customer has a claim on. The page says as much
+    // rather than implying completeness.
+    //
+    // Two things deliberately withheld. The metadata, which is the operator's
+    // working notes and was never selected here anyway. And the acting
+    // person's email: their name is on the row, because in a disagreement
+    // about who changed what a name is the point of an audit trail, but a
+    // customer does not need staff addresses.
     const { rows } = await pgDb.query(
       `SELECT al.id, al.action, al.entity, al.entity_id, al.created_at,
-              u.full_name AS actor_name, u.email AS actor_email
+              u.full_name AS actor_name,
+              CASE WHEN u.organization_id = $1 THEN u.email END AS actor_email,
+              (u.organization_id IS DISTINCT FROM $1) AS by_platform
          FROM audit_logs al JOIN users u ON u.id = al.actor_id
         WHERE u.organization_id = $1
+           OR (
+             u.organization_id IS DISTINCT FROM $1
+             AND (
+               (al.entity IN ('organizations', 'fleet_wallets') AND al.entity_id = $1)
+               OR (al.entity = 'users'
+                   AND al.entity_id IN (SELECT id FROM users WHERE organization_id = $1))
+             )
+           )
         ORDER BY al.created_at DESC LIMIT 200`, [org.id]);
     res.json({ entries: rows });
   } catch (error) {

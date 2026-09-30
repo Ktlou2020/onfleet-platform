@@ -2,12 +2,20 @@ import { useCallback, useEffect, useState } from 'react';
 import api from '../../api';
 import toast from 'react-hot-toast';
 import { Badge, EmptyState, Loading, fmtDateTime } from '../../components/ui';
+import { brandName } from '../../brand';
+import { Building2 } from 'lucide-react';
 
-// What this fleet's own people did, and what was sent to its riders.
+// What this fleet's own people did, what the platform did to them, and what
+// was sent to their riders.
 //
-// Only this fleet's own users appear. Actions a platform operator took on the
-// account are not here on purpose: that is the operator's audit trail, and
-// showing a tenant half of it is worse than showing none.
+// The middle one used to be left out, on the grounds that a partial view of
+// the operator's audit trail is worse than none. The opposite is truer:
+// somebody signed into the account, changed the plan or adjusted the wallet,
+// and the only record of it was on a screen the customer cannot reach.
+//
+// What is shown is every platform action that names this account — the
+// organisation, its wallet, or one of its people. Not the whole of what the
+// operator does, and the page says so rather than implying otherwise.
 
 export default function FleetActivity() {
   const [entries, setEntries] = useState([]);
@@ -36,20 +44,34 @@ export default function FleetActivity() {
     <>
       <h1>Activity</h1>
       <p className="muted" style={{ marginTop: -8 }}>
-        What your team changed, and what your riders were sent.
+        What your team changed, what {brandName} did to your account, and what your
+        riders were sent.
       </p>
 
-      <h2 style={{ marginTop: 22 }}>Your team&apos;s changes</h2>
+      <h2 style={{ marginTop: 22 }}>Changes to your account</h2>
+      <p className="muted text-sm" style={{ marginTop: -6 }}>
+        Your own team&apos;s, and anything {brandName} did that names your account —
+        your plan, your wallet, or one of your people.
+      </p>
       {entries.length === 0 ? (
-        <EmptyState title="Nothing yet" sub="Changes your team makes will be recorded here." />
+        <EmptyState title="Nothing yet" sub={`Changes your team makes, and anything ${brandName} does to your account, will be recorded here.`} />
       ) : (
         <div className="card" style={{ overflowX: 'auto' }}>
           <table className="table" style={{ width: '100%' }}>
             <thead><tr><th>Who</th><th>Did what</th><th>To</th><th>When</th></tr></thead>
             <tbody>
               {entries.map((e) => (
-                <tr key={e.id}>
-                  <td><strong>{e.actor_name}</strong><div className="text-xs muted">{e.actor_email}</div></td>
+                <tr key={e.id} style={e.by_platform ? { background: 'rgba(30,136,209,0.06)' } : undefined}>
+                  <td>
+                    <strong>{e.actor_name}</strong>
+                    {e.by_platform ? (
+                      <div className="text-xs" style={{ color: 'var(--primary-light)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <Building2 size={11} /> {brandName}
+                      </div>
+                    ) : (
+                      <div className="text-xs muted">{e.actor_email}</div>
+                    )}
+                  </td>
                   <td>{String(e.action).replace(/[._]/g, ' ')}</td>
                   <td className="text-sm muted">{e.entity}{e.entity_id ? ` #${e.entity_id}` : ''}</td>
                   <td>{fmtDateTime(e.created_at)}</td>

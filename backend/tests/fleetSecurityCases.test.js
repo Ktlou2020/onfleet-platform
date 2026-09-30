@@ -15,8 +15,19 @@ const app = buildApp();
 // a case or a claim is attached to. The tests that matter most are the ones
 // where a fleet reaches for a case that is not theirs.
 
+// Weeks laid out from today, the shape buildPaymentSchedule produces, so the
+// waiving and restoring have something real to act on.
+async function buildSchedule(agreementId, weeks, weekly) {
+  for (let i = 0; i < weeks; i += 1) {
+    await pgDb.query(
+      `INSERT INTO payment_schedules (agreement_id, week_number, due_date, amount_due)
+       VALUES ($1,$2, CURRENT_DATE + ($3 || ' days')::interval, $4)`,
+      [agreementId, i + 1, String(i * 7), weekly]);
+  }
+}
+
 describe.skipIf(!process.env.DATABASE_URL)('a fleet working its own theft cases', () => {
-  let rapid, kasi, rapidOwner, kasiOwner, viewer, rapidBike, kasiBike;
+  let rapid, kasi, rapidOwner, kasiOwner, viewer, rapidBike, kasiBike, rider;
 
   const report = (user, body) =>
     request(app).post('/api/fleet/theft-cases').set(authHeader(user)).send(body);
@@ -36,6 +47,7 @@ describe.skipIf(!process.env.DATABASE_URL)('a fleet working its own theft cases'
     rapidOwner = await createPgUser({ role: 'fleet_owner_admin', organization_id: rapid.id });
     kasiOwner = await createPgUser({ role: 'fleet_owner_admin', organization_id: kasi.id });
     viewer = await createPgUser({ role: 'fleet_owner_viewer', organization_id: rapid.id });
+    rider = await createPgUser({ role: 'rider', organization_id: rapid.id });
 
     rapidBike = await createPgBike({ registration: 'RAP001GP', organization_id: rapid.id });
     kasiBike = await createPgBike({ registration: 'KAS001GP', organization_id: kasi.id });
@@ -142,6 +154,136 @@ describe.skipIf(!process.env.DATABASE_URL)('a fleet working its own theft cases'
       const res = await request(app).get(`/api/fleet/theft-cases/${caseId}`).set(authHeader(rapidOwner.user));
       expect(res.status).toBe(200);
       expect(res.body.events.map((e) => e.kind)).toEqual(['opened', 'status', 'note']);
+    });
+  });
+
+  // Closing a case and the bike it is about are one thing, not two.
+  //
+  // Before this, a fleet could close a case as "gone for good" and the rider
+  // would carry on being billed every week for a bike that no longer existed,
+  // because the bike's own screen was the only place that knew.
+  describe('what closing it does to the bike', () => {
+    let caseId, agreement;
+
+    beforeEach(async () => {
+      agreement = await createPgAgreement({
+        bike_id: rapidBike.id, user_id: rider.user.id, status: 'active',
+        weekly_amount: 850, total_weeks: 8,
+      });
+      await buildSchedule(agreement.id, 8, 850);
+      await pgDb.query(`UPDATE bikes SET status='active' WHERE id=$1`, [rapidBike.id]);
+      const res = await report(rapidOwner.user, { bike_id: rapidBike.id, reason: 'Taken overnight' });
+      caseId = res.body.case.id;
+    });
+
+    describe('gone for good', () => {
+      it('marks the bike stolen and stops the agreement', async () => {
+        const res = await setStatus(rapidOwner.user, caseId, { status: 'written_off' });
+        expect(res.status).toBe(200);
+        expect(res.body.effects).toMatchObject({
+          bike_status: 'stolen',
+          discontinued_agreement_id: agreement.id,
+          discontinued_agreement_no: agreement.agreement_no,
+        });
+
+        const { rows: bike } = await pgDb.query('SELECT status FROM bikes WHERE id=$1', [rapidBike.id]);
+        expect(bike[0].status).toBe('stolen');
+        const { rows: agr } = await pgDb.query(
+          'SELECT status, discontinued_reason FROM agreements WHERE id=$1', [agreement.id]);
+        expect(agr[0]).toMatchObject({ status: 'discontinued', discontinued_reason: 'bike_stolen' });
+      });
+
+      // The point of the whole thing: nobody is billed for a bike that is gone.
+      it('and waives the weeks still to come', async () => {
+        const res = await setStatus(rapidOwner.user, caseId, { status: 'written_off' });
+        expect(res.body.effects.waived_weeks).toBeGreaterThan(0);
+        const { rows } = await pgDb.query(
+          `SELECT COUNT(*)::int n FROM payment_schedules
+            WHERE agreement_id = $1 AND due_date >= CURRENT_DATE AND status <> 'waived'`, [agreement.id]);
+        expect(rows[0].n, 'a rider is still being billed for a bike that is gone').toBe(0);
+      });
+
+      it('writes what it did onto the case', async () => {
+        await setStatus(rapidOwner.user, caseId, { status: 'written_off' });
+        const { rows } = await pgDb.query(
+          `SELECT summary FROM theft_case_events WHERE case_id = $1 AND kind = 'bike'`, [caseId]);
+        expect(rows[0].summary).toMatch(new RegExp(`${agreement.agreement_no} discontinued`));
+      });
+
+      it('and copes with a bike nobody was riding', async () => {
+        await pgDb.query(`UPDATE agreements SET status='completed' WHERE id=$1`, [agreement.id]);
+        const res = await setStatus(rapidOwner.user, caseId, { status: 'written_off' });
+        expect(res.status).toBe(200);
+        expect(res.body.effects).toMatchObject({ bike_status: 'stolen', discontinued_agreement_id: null });
+      });
+    });
+
+    describe('recovered', () => {
+      // A case that went all the way to written off and then the bike turns
+      // up. Both halves have to come back, or the rider is off the hook for a
+      // bike they have back.
+      beforeEach(async () => {
+        await setStatus(rapidOwner.user, caseId, { status: 'written_off' });
+        const res = await report(rapidOwner.user, { bike_id: rapidBike.id, reason: 'Found, closing properly' });
+        caseId = res.body.case.id;
+      });
+
+      it('puts the bike back and the agreement with it', async () => {
+        const res = await setStatus(rapidOwner.user, caseId, { status: 'recovered', note: 'Found in Katlehong' });
+        expect(res.status).toBe(200);
+        expect(res.body.effects).toMatchObject({
+          bike_status: 'active', reinstated_agreement_no: agreement.agreement_no,
+        });
+
+        const { rows: agr } = await pgDb.query('SELECT status FROM agreements WHERE id=$1', [agreement.id]);
+        expect(agr[0].status).toBe('active');
+        const { rows: sched } = await pgDb.query(
+          `SELECT COUNT(*)::int n FROM payment_schedules
+            WHERE agreement_id = $1 AND due_date >= CURRENT_DATE AND status = 'waived'`, [agreement.id]);
+        expect(sched[0].n, 'the weeks stayed waived on a bike that came back').toBe(0);
+      });
+
+      it('or leaves the agreement alone when told to', async () => {
+        const res = await setStatus(rapidOwner.user, caseId, { status: 'recovered', reinstate: false });
+        expect(res.body.effects.bike_status).toBe('ready_to_go');
+        expect(res.body.effects.reinstate_skipped).toBeTruthy();
+        const { rows } = await pgDb.query('SELECT status FROM agreements WHERE id=$1', [agreement.id]);
+        expect(rows[0].status).toBe('discontinued');
+      });
+
+      // While the bike was gone the rider was put on another one. Reinstating
+      // would leave them on two agreements at once, which is worse than the
+      // problem being fixed.
+      it('and will not put a rider on two agreements at once', async () => {
+        const spare = await createPgBike({ registration: 'RAP009GP', organization_id: rapid.id, status: 'active' });
+        const replacement = await createPgAgreement({ bike_id: spare.id, user_id: rider.user.id, status: 'active' });
+
+        const res = await setStatus(rapidOwner.user, caseId, { status: 'recovered' });
+        expect(res.body.effects.reinstate_skipped).toMatch(new RegExp(replacement.agreement_no));
+        const { rows } = await pgDb.query(
+          `SELECT COUNT(*)::int n FROM agreements WHERE user_id = $1 AND status = 'active'`, [rider.user.id]);
+        expect(rows[0].n, 'the rider ended up on two agreements').toBe(1);
+      });
+
+      it('a false alarm undoes it the same way', async () => {
+        const res = await setStatus(rapidOwner.user, caseId, { status: 'false_alarm' });
+        expect(res.body.effects.reinstated_agreement_no).toBe(agreement.agreement_no);
+      });
+    });
+
+    // A case that never touched the bike must not touch it on the way out.
+    it('recovering a bike that was never marked stolen changes nothing', async () => {
+      const res = await setStatus(rapidOwner.user, caseId, { status: 'recovered' });
+      expect(res.body.effects).toEqual({});
+      const { rows } = await pgDb.query('SELECT status FROM bikes WHERE id=$1', [rapidBike.id]);
+      expect(rows[0].status).toBe('active');
+    });
+
+    it('and the case detail says in advance what closing will cost', async () => {
+      const res = await request(app).get(`/api/fleet/theft-cases/${caseId}`).set(authHeader(rapidOwner.user));
+      expect(res.body.bike).toMatchObject({ registration: 'RAP001GP', status: 'active' });
+      expect(res.body.bike.agreement).toMatchObject({ agreement_no: agreement.agreement_no });
+      expect(res.body.bike.agreement.unpaid_weeks).toBeGreaterThan(0);
     });
   });
 

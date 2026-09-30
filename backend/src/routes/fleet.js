@@ -3944,6 +3944,115 @@ async function scopedClaim(org, claimId) {
   return rows[0];
 }
 
+// What closing a case would do to the bike, so the screen can say it in
+// advance rather than springing it on somebody afterwards.
+async function bikeStateForCase(bikeId) {
+  const { rows: bike } = await pgDb.query(
+    'SELECT id, registration, status FROM bikes WHERE id = $1', [bikeId]);
+  if (!bike[0]) return null;
+
+  const { rows: live } = await pgDb.query(
+    `SELECT a.id, a.agreement_no, a.status, a.user_id, u.full_name AS rider_name,
+            (SELECT COUNT(*)::int FROM payment_schedules ps
+              WHERE ps.agreement_id = a.id AND ps.status NOT IN ('paid','waived')) AS unpaid_weeks
+       FROM agreements a LEFT JOIN users u ON u.id = a.user_id
+      WHERE a.bike_id = $1 AND a.status IN ('active','paused')
+      ORDER BY a.id DESC LIMIT 1`, [bikeId]);
+
+  // One this case already discontinued, which recovering the bike would undo.
+  const { rows: undoable } = await pgDb.query(
+    `SELECT a.id, a.agreement_no, a.user_id, u.full_name AS rider_name,
+            (SELECT COUNT(*)::int FROM payment_schedules ps
+              WHERE ps.agreement_id = a.id AND ps.status = 'waived' AND ps.due_date >= CURRENT_DATE) AS waived_weeks
+       FROM agreements a LEFT JOIN users u ON u.id = a.user_id
+      WHERE a.bike_id = $1 AND a.status = 'discontinued' AND a.discontinued_reason = 'bike_stolen'
+      ORDER BY a.id DESC LIMIT 1`, [bikeId]);
+
+  return { ...bike[0], agreement: live[0] || null, reinstatable: undoable[0] || null };
+}
+
+// Closing a case does something to the bike, because otherwise the two records
+// disagree: a bike written off in one place is still out with a rider who is
+// still being billed weekly for it in another.
+//
+//   gone for good   the bike is stolen and the rider's agreement is
+//                   discontinued, waiving what was still to come. This is
+//                   exactly what marking a bike stolen already does on the
+//                   Bikes screen — same call, reached from the other end.
+//
+//   recovered or    the bike comes back off stolen, and the agreement this
+//   a false alarm   case discontinued is put back with it unless the fleet
+//                   owner says not to.
+//
+// The discontinuation is done before the status change on purpose. Neither
+// order is atomic, so the question is which half-done state is worse: a bike
+// marked stolen while its rider is still billed weekly for it, or an agreement
+// stopped while the bike still reads active. The second is visible and
+// harmless; the first quietly takes money.
+async function applyCaseOutcome({ theftCase, status, actorId, ip, reinstate = true }) {
+  const bikeId = Number(theftCase.bike_id);
+
+  if (status === 'written_off') {
+    const stopped = await discontinueAgreementForStolenBike({ bikeId, actorId, ip });
+    const moved = await setBikeStatus(bikeId, 'stolen');
+    const effects = {
+      bike_status: moved.next_status,
+      discontinued_agreement_id: stopped.agreement?.id || null,
+      discontinued_agreement_no: stopped.agreement?.agreement_no || null,
+      waived_weeks: stopped.waived_rows || 0,
+    };
+    await theftCases.addEvent(theftCase.id, 'bike',
+      stopped.agreement
+        ? `Bike marked stolen; agreement ${stopped.agreement.agreement_no} discontinued and ${effects.waived_weeks} week(s) waived`
+        : 'Bike marked stolen',
+      effects, actorId);
+    return effects;
+  }
+
+  if (!['recovered', 'false_alarm'].includes(status)) return {};
+
+  const { rows: bike } = await pgDb.query('SELECT id, status FROM bikes WHERE id = $1', [bikeId]);
+  if (bike[0]?.status !== 'stolen') return {};   // nothing this case did, nothing to undo
+
+  // Off stolen first: reinstating refuses while the bike still reads stolen,
+  // and sets it active itself once the agreement is back.
+  const moved = await setBikeStatus(bikeId, 'ready_to_go');
+  const effects = { bike_status: moved.next_status };
+
+  const { rows: undoable } = await pgDb.query(
+    `SELECT id, agreement_no, user_id FROM agreements
+      WHERE bike_id = $1 AND status = 'discontinued' AND discontinued_reason = 'bike_stolen'
+      ORDER BY id DESC LIMIT 1`, [bikeId]);
+
+  if (undoable[0] && reinstate) {
+    // The rider may have been put on another bike while this one was gone.
+    // Reinstating would leave them on two agreements at once, which is a worse
+    // problem than the one being fixed, so it is refused and said out loud.
+    const { rows: elsewhere } = await pgDb.query(
+      `SELECT agreement_no FROM agreements
+        WHERE user_id = $1 AND id <> $2 AND status IN ('active','paused') LIMIT 1`,
+      [undoable[0].user_id, undoable[0].id]);
+    if (elsewhere[0]) {
+      effects.reinstate_skipped = `That rider is already on agreement ${elsewhere[0].agreement_no}.`;
+    } else {
+      const back = await reinstateDiscontinuedAgreement({ agreementId: undoable[0].id, actorId, ip });
+      effects.reinstated_agreement_id = back.agreement_id;
+      effects.reinstated_agreement_no = undoable[0].agreement_no;
+      effects.restored_weeks = back.restored_rows;
+      effects.bike_status = 'active';
+    }
+  } else if (undoable[0]) {
+    effects.reinstate_skipped = 'Left discontinued, as asked.';
+  }
+
+  await theftCases.addEvent(theftCase.id, 'bike',
+    effects.reinstated_agreement_no
+      ? `Bike back on the road; agreement ${effects.reinstated_agreement_no} reinstated`
+      : 'Bike taken off stolen',
+    effects, actorId);
+  return effects;
+}
+
 // The story so far: what opened the case, what was marked, what was noted.
 router.get('/theft-cases/:id', fleetSection('security', 'view'), async (req, res) => {
   const org = await getOrganizationOrThrow(req);
@@ -3953,7 +4062,7 @@ router.get('/theft-cases/:id', fleetSection('security', 'view'), async (req, res
     `SELECT e.id, e.kind, e.summary, e.created_at, u.full_name AS actor_name
        FROM theft_case_events e LEFT JOIN users u ON u.id = e.actor_id
       WHERE e.case_id = $1 ORDER BY e.created_at, e.id`, [theftCase.id]);
-  res.json({ case: theftCase, events });
+  res.json({ case: theftCase, events, bike: await bikeStateForCase(theftCase.bike_id) });
 });
 
 // Reporting a theft by hand. Most cases open themselves off a tamper or a
@@ -4012,9 +4121,15 @@ router.put('/theft-cases/:id/status', fleetSection('security', 'manage'), async 
       ? await theftCases.closeCase({ caseId: theftCase.id, status, note, policeReference: police, actorId: req.user.id })
       : await theftCases.setStatus({ caseId: theftCase.id, status, policeReference: police, actorId: req.user.id });
     if (!updated) return res.status(409).json({ error: 'That case is already closed' });
+
+    const effects = await applyCaseOutcome({
+      theftCase: updated, status, actorId: req.user.id, ip: req.ip,
+      reinstate: req.body.reinstate !== false,
+    });
+
     await logAudit(req.user.id, 'fleet_owner.theft_case_status', 'theft_cases', theftCase.id,
-      { organization_id: org.id, status, police_reference: police, note }, req.ip);
-    res.json(updated);
+      { organization_id: org.id, status, police_reference: police, note, ...effects }, req.ip);
+    res.json({ ...updated, effects });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }

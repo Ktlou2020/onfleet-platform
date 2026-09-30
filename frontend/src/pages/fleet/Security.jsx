@@ -60,6 +60,56 @@ function BikePicker({ bikes, value, onChange }) {
   );
 }
 
+// Closing a case does something to the bike, and it is said before the button
+// is pressed rather than discovered in a toast afterwards. Discontinuing
+// somebody's agreement and waiving what they owe is not a thing to spring on
+// the person doing it.
+function CaseOutcome({ bike, status, form, setForm }) {
+  if (!bike) return null;
+
+  if (status === 'written_off') {
+    return (
+      <div className="card" style={{ background: 'var(--surface-2)', borderColor: 'rgba(239,68,68,0.4)', marginBottom: 12 }}>
+        <strong className="text-sm">Closing this way also:</strong>
+        <ul className="text-sm muted" style={{ margin: '6px 0 0 18px' }}>
+          <li>marks {bike.registration} stolen</li>
+          {bike.agreement ? (
+            <li>
+              stops {bike.agreement.agreement_no}
+              {bike.agreement.rider_name ? ` (${bike.agreement.rider_name})` : ''} and waives the{' '}
+              {bike.agreement.unpaid_weeks} week{bike.agreement.unpaid_weeks === 1 ? '' : 's'} still owing
+            </li>
+          ) : (
+            <li>leaves no agreement to stop</li>
+          )}
+        </ul>
+      </div>
+    );
+  }
+
+  if (!['recovered', 'false_alarm'].includes(status) || bike.status !== 'stolen') return null;
+
+  return (
+    <div className="card" style={{ background: 'var(--surface-2)', marginBottom: 12 }}>
+      <strong className="text-sm">{bike.registration} comes back off stolen.</strong>
+      {bike.reinstatable ? (
+        <label className="row text-sm" style={{ gap: 8, alignItems: 'flex-start', marginTop: 8 }}>
+          <input type="checkbox" checked={form.reinstate} style={{ marginTop: 3 }}
+                 onChange={(e) => setForm((f) => ({ ...f, reinstate: e.target.checked }))} />
+          <span>
+            Put {bike.reinstatable.agreement_no}
+            {bike.reinstatable.rider_name ? ` (${bike.reinstatable.rider_name})` : ''} back on,
+            restoring the {bike.reinstatable.waived_weeks} waived week
+            {bike.reinstatable.waived_weeks === 1 ? '' : 's'}.
+          </span>
+        </label>
+      ) : (
+        <div className="text-sm muted" style={{ marginTop: 4 }}>No agreement to put back.</div>
+      )}
+    </div>
+  );
+}
+
 export default function FleetSecurity() {
   const { user } = useAuth();
   const canManage = canManageFleetSection(user?.role, 'security');
@@ -72,7 +122,7 @@ export default function FleetSecurity() {
 
   const [reporting, setReporting] = useState(null);      // { bike_id, reason }
   const [openCase, setOpenCase] = useState(null);        // { case, events }
-  const [caseForm, setCaseForm] = useState({ status: '', police_reference: '', note: '' });
+  const [caseForm, setCaseForm] = useState({ status: '', police_reference: '', note: '', reinstate: true });
   const [newNote, setNewNote] = useState('');
   const [filing, setFiling] = useState(null);            // new claim draft
   const [outcome, setOutcome] = useState(null);          // { claim, status, payout_amount, notes }
@@ -106,7 +156,12 @@ export default function FleetSecurity() {
     try {
       const { data } = await api.get(`/fleet/theft-cases/${id}`);
       setOpenCase(data);
-      setCaseForm({ status: data.case.status, police_reference: data.case.police_reference || '', note: '' });
+      setCaseForm({
+        status: data.case.status,
+        police_reference: data.case.police_reference || '',
+        note: '',
+        reinstate: true,
+      });
       setNewNote('');
     } catch (err) {
       toast.error(err.response?.data?.error || 'Could not open that case');
@@ -135,12 +190,24 @@ export default function FleetSecurity() {
   const saveCase = async () => {
     setBusy(true);
     try {
-      await api.put(`/fleet/theft-cases/${openCase.case.id}/status`, {
+      const { data } = await api.put(`/fleet/theft-cases/${openCase.case.id}/status`, {
         status: caseForm.status,
         police_reference: caseForm.police_reference || undefined,
         note: caseForm.note || undefined,
+        reinstate: caseForm.reinstate,
       });
-      toast.success('Case updated');
+      // What happened to the bike is the part somebody needs to hear, not
+      // that a row changed.
+      const e = data.effects || {};
+      if (e.discontinued_agreement_no) {
+        toast.success(`${e.discontinued_agreement_no} discontinued, ${e.waived_weeks} week(s) waived`);
+      } else if (e.reinstated_agreement_no) {
+        toast.success(`${e.reinstated_agreement_no} reinstated, ${e.restored_weeks} week(s) back on`);
+      } else if (e.reinstate_skipped) {
+        toast(e.reinstate_skipped);
+      } else {
+        toast.success('Case updated');
+      }
       await load();
       await showCase(openCase.case.id);
     } catch (err) {
@@ -350,6 +417,7 @@ export default function FleetSecurity() {
                 <input value={caseForm.police_reference} placeholder="CAS 114/09/2026" style={{ width: '100%' }}
                        onChange={(e) => setCaseForm((f) => ({ ...f, police_reference: e.target.value }))} />
               </Field>
+              <CaseOutcome bike={openCase.bike} status={caseForm.status} form={caseForm} setForm={setCaseForm} />
               {CLOSING_STATUSES.some((s) => s.value === caseForm.status) && (
                 <Field label="Closing note" hint="— what actually happened">
                   <textarea rows="2" style={{ width: '100%' }} value={caseForm.note}

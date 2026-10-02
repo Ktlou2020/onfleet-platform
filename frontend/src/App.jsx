@@ -29,6 +29,7 @@ const FleetWorkshop = lazy(() => import('./pages/fleet/Workshop'));
 const FleetWorkshopDiary = lazy(() => import('./pages/fleet/WorkshopDiary'));
 const NotOnThisConsole = lazy(() => import('./pages/admin/NotOnThisConsole'));
 const AdminDeviceImport = lazy(() => import('./pages/admin/DeviceImport'));
+const AdminWorkshopOpportunities = lazy(() => import('./pages/admin/WorkshopOpportunities'));
 const FleetApplications = lazy(() => import('./pages/fleet/Applications'));
 const FleetSecurity = lazy(() => import('./pages/fleet/Security'));
 const FleetActivity = lazy(() => import('./pages/fleet/Activity'));
@@ -256,6 +257,7 @@ export default function App() {
             <Route path="signup-stats" element={fleetConsoleOnly(<AdminSignupStats />)} />
             <Route path="integrations" element={<AdminIntegrations />} />
             <Route path="workshop" element={fleetConsoleOnly(<AdminWorkshop />)} />
+            <Route path="workshop/opportunities" element={fleetConsoleOnly(<AdminWorkshopOpportunities />)} />
             <Route path="users" element={<AdminUsers />} />
             <Route path="audit" element={<AdminAuditLogs />} />
           </Route>

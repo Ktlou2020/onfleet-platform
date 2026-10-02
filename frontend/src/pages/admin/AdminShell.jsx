@@ -36,6 +36,7 @@ const FLEET_CONSOLE_NAV = [
   { to: '/admin/fleet-payouts', label: 'Payout requests', icon: PiggyBank },
   { section: 'Workshop' },
   { to: '/admin/workshop', label: 'Workshop', icon: Wrench },
+  { to: '/admin/workshop/opportunities', label: 'Opportunities', icon: TrendingUp },
   { section: 'System' },
   { to: '/admin/users', label: 'Users', icon: Users },
   { to: '/admin/integrations', label: 'Integrations', icon: Plug, superadminOnly: true },

@@ -1377,6 +1377,193 @@ router.delete('/admin/jobs/:id', authRequired, async (req, res) => {
 });
 
 // Admin: per-technician performance
+// What the workshop could be earning, as opposed to what it is earning.
+//
+// The existing dashboard answers "what is in the shop": jobs open, revenue
+// billed, who is working on what. This answers the other question — where is
+// there money sitting that nobody has gone and got — because that is the one
+// you cannot see by walking around the workshop.
+//
+// Five things count as an opportunity here, and each is a list somebody can
+// act on this afternoon rather than a number to admire:
+//
+//   service due        a motorcycle past its service with no job card open
+//                      and no booking made. Nobody has asked them in.
+//   quotes waiting     work quoted and not yet approved. The customer has
+//                      been told the price and has not said yes, and the
+//                      longer that sits the less likely it becomes.
+//   stalled            accepted work nobody has started.
+//   parts on order     money committed to a supplier and not yet on a shelf.
+//   gone quiet         a fleet whose motorcycles have stopped coming in. The
+//                      easiest to miss, because nothing happening is not an
+//                      event.
+//
+// On the dealership side this reports what it can prove and says what it
+// cannot. Margin is charged-minus-catalogue, and only on lines carrying a
+// part number — so the coverage is reported beside it rather than a margin
+// figure that quietly covers two thirds of the sales.
+router.get('/admin/opportunities', authRequired, async (req, res) => {
+  try {
+    if (!['admin', 'superadmin'].includes(req.user.role)) return res.status(403).json({ error: 'Admin only' });
+    const days = Math.min(Math.max(Number(req.query.days) || 90, 7), 365);
+
+    // What a service is worth here, from what services have actually billed,
+    // rather than a number typed into a config file.
+    const { rows: avgRows } = await pgDb.query(`
+      SELECT COALESCE(AVG(total), 0)::numeric AS average_service
+        FROM (
+          SELECT jc.id, COALESCE(SUM(i.quantity * i.unit_cost), 0) AS total
+            FROM job_cards jc
+            LEFT JOIN job_card_items i ON i.job_card_id = jc.id
+           WHERE jc.status = 'completed' AND jc.job_type = 'service'
+             AND jc.completed_at > NOW() - ($1 || ' days')::interval
+           GROUP BY jc.id
+        ) t`, [String(days)]);
+    const averageService = Number(avgRows[0]?.average_service) || 0;
+
+    // Past its service, nobody has asked them in. The two NOT EXISTS are the
+    // whole point: a bike with a job card open or a booking made is already
+    // being dealt with, and is work rather than opportunity.
+    const { rows: serviceDue } = await pgDb.query(`
+      SELECT b.id, b.registration, b.make, b.model, b.odometer_km, b.next_service_date,
+             o.name AS fleet,
+             CASE WHEN b.next_service_date < CURRENT_DATE THEN 'overdue' ELSE 'due_soon' END AS state,
+             (CURRENT_DATE - b.next_service_date)::int AS days_past
+        FROM bikes b
+        LEFT JOIN organizations o ON o.id = b.organization_id
+       WHERE b.status NOT IN ('sold','paid_off','written_off','stolen')
+         AND b.next_service_date IS NOT NULL
+         AND b.next_service_date <= CURRENT_DATE + 14
+         AND NOT EXISTS (SELECT 1 FROM job_cards jc
+                          WHERE jc.bike_id = b.id AND jc.status NOT IN ('completed','cancelled'))
+         AND NOT EXISTS (SELECT 1 FROM service_bookings sb
+                          WHERE sb.bike_id = b.id AND sb.status IN ('booked','arrived'))
+       ORDER BY b.next_service_date
+       LIMIT 100`);
+
+    const { rows: quotes } = await pgDb.query(`
+      SELECT jc.id, jc.quote_amount, jc.created_at,
+             COALESCE(b.registration, jc.registration) AS registration,
+             o.name AS fleet,
+             FLOOR(EXTRACT(EPOCH FROM (NOW() - jc.created_at))/86400)::int AS days_waiting
+        FROM job_cards jc
+        LEFT JOIN bikes b ON b.id = jc.bike_id
+        LEFT JOIN organizations o ON o.id = COALESCE(b.organization_id, jc.fleet_org_id)
+       WHERE jc.quote_amount IS NOT NULL AND jc.quote_approved_at IS NULL
+         AND jc.status NOT IN ('completed','cancelled')
+       ORDER BY jc.created_at
+       LIMIT 50`);
+
+    const { rows: stalled } = await pgDb.query(`
+      SELECT jc.id, COALESCE(b.registration, jc.registration) AS registration, jc.job_type,
+             FLOOR(EXTRACT(EPOCH FROM (NOW() - jc.created_at))/86400)::int AS days_open
+        FROM job_cards jc
+        LEFT JOIN bikes b ON b.id = jc.bike_id
+       WHERE jc.status = 'open' AND jc.started_at IS NULL
+         AND jc.created_at < NOW() - INTERVAL '7 days'
+       ORDER BY jc.created_at
+       LIMIT 50`);
+
+    // The parts counter, as far as the records go.
+    //
+    // unit_cost is what the customer was charged; parts_catalog.price_ex_vat
+    // is the Hero list price. The difference is the margin on a fitted part —
+    // but only where the line carries a part number, so how much of the money
+    // that covers is reported with it.
+    const { rows: partsRows } = await pgDb.query(`
+      SELECT
+        COALESCE(SUM(i.quantity * i.unit_cost), 0)::numeric AS charged,
+        COALESCE(SUM(CASE WHEN pc.price_ex_vat IS NOT NULL
+                          THEN i.quantity * i.unit_cost END), 0)::numeric AS charged_with_cost,
+        COALESCE(SUM(CASE WHEN pc.price_ex_vat IS NOT NULL
+                          THEN i.quantity * pc.price_ex_vat END), 0)::numeric AS cost,
+        COUNT(*)::int AS lines,
+        COUNT(pc.price_ex_vat)::int AS lines_costed
+        FROM job_card_items i
+        JOIN job_cards jc ON jc.id = i.job_card_id
+        LEFT JOIN LATERAL (
+          SELECT price_ex_vat FROM parts_catalog
+           WHERE UPPER(REGEXP_REPLACE(part_number, '[^A-Za-z0-9]', '', 'g'))
+               = UPPER(REGEXP_REPLACE(COALESCE(i.part_number, ''), '[^A-Za-z0-9]', '', 'g'))
+             AND price_ex_vat IS NOT NULL
+           ORDER BY id LIMIT 1
+        ) pc ON TRUE
+       WHERE i.item_type = 'part'
+         AND jc.completed_at > NOW() - ($1 || ' days')::interval`, [String(days)]);
+    const p = partsRows[0] || {};
+
+    const { rows: topParts } = await pgDb.query(`
+      SELECT i.part_number, MIN(i.description) AS description,
+             SUM(i.quantity)::numeric AS qty,
+             SUM(i.quantity * i.unit_cost)::numeric AS charged
+        FROM job_card_items i
+        JOIN job_cards jc ON jc.id = i.job_card_id
+       WHERE i.item_type = 'part' AND i.part_number IS NOT NULL
+         AND jc.completed_at > NOW() - ($1 || ' days')::interval
+       GROUP BY i.part_number
+       ORDER BY SUM(i.quantity * i.unit_cost) DESC
+       LIMIT 15`, [String(days)]);
+
+    const { rows: onOrder } = await pgDb.query(`
+      SELECT po.id, po.reference, po.supplier, po.status, po.quoted_total_ex_vat, po.created_at,
+             FLOOR(EXTRACT(EPOCH FROM (NOW() - po.created_at))/86400)::int AS days_out,
+             (SELECT COUNT(*)::int FROM parts_order_items WHERE order_id = po.id) AS lines
+        FROM parts_orders po
+       WHERE po.status IN ('sent','quoted','ordered') AND po.received_at IS NULL
+       ORDER BY po.created_at
+       LIMIT 50`);
+
+    const { rows: quiet } = await pgDb.query(`
+      SELECT o.id, o.name, COUNT(b.id)::int AS bikes,
+             MAX(jc.completed_at) AS last_seen,
+             COALESCE(FLOOR(EXTRACT(EPOCH FROM (NOW() - MAX(jc.completed_at)))/86400), 9999)::int AS days_quiet
+        FROM organizations o
+        JOIN bikes b ON b.organization_id = o.id
+         AND b.status NOT IN ('sold','paid_off','written_off','stolen')
+        LEFT JOIN job_cards jc ON jc.bike_id = b.id AND jc.status = 'completed'
+       GROUP BY o.id, o.name
+      HAVING MAX(jc.completed_at) IS NULL
+          OR MAX(jc.completed_at) < NOW() - ($1 || ' days')::interval
+       ORDER BY days_quiet DESC
+       LIMIT 25`, [String(days)]);
+
+    const overdue = serviceDue.filter((b) => b.state === 'overdue');
+    res.json({
+      window_days: days,
+      service_due: {
+        bikes: serviceDue,
+        overdue: overdue.length,
+        due_soon: serviceDue.length - overdue.length,
+        average_service: averageService,
+        worth: +(overdue.length * averageService).toFixed(2),
+      },
+      quotes: {
+        items: quotes,
+        count: quotes.length,
+        worth: +quotes.reduce((sum, q) => sum + Number(q.quote_amount || 0), 0).toFixed(2),
+      },
+      stalled: { items: stalled, count: stalled.length },
+      parts: {
+        charged: Number(p.charged) || 0,
+        cost: Number(p.cost) || 0,
+        margin: +((Number(p.charged_with_cost) || 0) - (Number(p.cost) || 0)).toFixed(2),
+        lines: Number(p.lines) || 0,
+        lines_costed: Number(p.lines_costed) || 0,
+        charged_costed: Number(p.charged_with_cost) || 0,
+        top: topParts,
+      },
+      on_order: {
+        items: onOrder,
+        count: onOrder.length,
+        worth: +onOrder.reduce((sum, o) => sum + Number(o.quoted_total_ex_vat || 0), 0).toFixed(2),
+      },
+      gone_quiet: quiet,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.get('/admin/technician-stats', authRequired, async (req, res) => {
   try {
     if (!['admin', 'superadmin'].includes(req.user.role)) return res.status(403).json({ error: 'Admin only' });

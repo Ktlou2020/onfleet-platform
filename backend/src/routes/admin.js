@@ -644,6 +644,9 @@ router.post('/parts-orders/:id/send', async (req, res) => {
 router.put('/parts-orders/:id/status', async (req, res) => {
   const { setStatus, getOrder } = require('../services/partsOrdering');
   try {
+    const { rows: before } = await pgDb.query(
+      'SELECT status FROM parts_orders WHERE id = $1', [Number(req.params.id)]);
+    const previousStatus = before[0]?.status || null;
     const updated = await setStatus({
       orderId: Number(req.params.id),
       status: String(req.body.status || ''),
@@ -651,8 +654,37 @@ router.put('/parts-orders/:id/status', async (req, res) => {
       quotedTotal: req.body.quoted_total_ex_vat || null,
     });
     if (!updated) return res.status(404).json({ error: 'Order not found' });
+
+    // Received means the parts are on a shelf, so the shelf has to say so.
+    // Done here rather than inside setStatus because the ordering service is
+    // about talking to a supplier and this is about stock — and done only on
+    // the transition, so marking an order received twice does not count the
+    // delivery twice.
+    let received = 0;
+    if (updated.status === 'received' && previousStatus !== 'received') {
+      const partsStock = require('../services/partsStock');
+      const { rows: lines } = await pgDb.query(
+        'SELECT part_number, description, qty FROM parts_order_items WHERE order_id = $1', [updated.id]);
+      for (const line of lines) {
+        await partsStock.move({
+          partNumber: line.part_number,
+          // A parts order has no workshop on it, so a delivery lands on the
+          // main shelf. When ordering learns about locations this is the one
+          // line that changes.
+          locationId: null,
+          quantity: Number(line.qty),
+          reason: 'receipt',
+          sourceType: 'parts_orders',
+          sourceId: updated.id,
+          actorId: req.user.id,
+          description: line.description,
+        });
+        received += 1;
+      }
+    }
+
     await logAudit(req.user.id, 'parts_order.status', 'parts_orders', updated.id,
-      { status: updated.status, quote_reference: updated.quote_reference }, req.ip);
+      { status: updated.status, quote_reference: updated.quote_reference, stocked_lines: received }, req.ip);
     res.json(await getOrder(updated.id));
   } catch (error) {
     res.status(400).json({ error: error.message });

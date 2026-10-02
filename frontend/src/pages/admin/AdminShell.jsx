@@ -4,7 +4,7 @@ import { useAuth } from '../../auth';
 import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
 import NotificationBell from '../../components/NotificationBell';
-import { LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell, Briefcase, ShieldCheck, PiggyBank, MapPin, UserCheck, Wrench, ShieldAlert, Gauge, Star, TrendingUp, Plug, Inbox, Repeat, MoreHorizontal, X, Siren, BookOpen } from 'lucide-react';
+import { Package, LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell, Briefcase, ShieldCheck, PiggyBank, MapPin, UserCheck, Wrench, ShieldAlert, Gauge, Star, TrendingUp, Plug, Inbox, Repeat, MoreHorizontal, X, Siren, BookOpen } from 'lucide-react';
 import { brandFullName, isTelematicsConsole } from '../../brand';
 
 // The console for a company that runs its own motorcycles: the whole business
@@ -37,6 +37,7 @@ const FLEET_CONSOLE_NAV = [
   { section: 'Workshop' },
   { to: '/admin/workshop', label: 'Workshop', icon: Wrench },
   { to: '/admin/workshop/opportunities', label: 'Opportunities', icon: TrendingUp },
+  { to: '/admin/workshop/parts', label: 'Parts counter', icon: Package },
   { section: 'System' },
   { to: '/admin/users', label: 'Users', icon: Users },
   { to: '/admin/integrations', label: 'Integrations', icon: Plug, superadminOnly: true },

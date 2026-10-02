@@ -12,6 +12,7 @@ const asyncRouter = require('../utils/asyncRouter');
 const { hybridStorage } = require('../utils/hybridStorage');
 const storageService = require('../services/storageService');
 const { workshopScope, bikeScopeSql } = require('../services/workshopScope');
+const partsStock = require('../services/partsStock');
 const deviceCommissioning = require('../services/deviceCommissioning');
 const partPhotos = require('../services/partPhotos');
 const router = asyncRouter(express.Router());
@@ -737,13 +738,38 @@ router.post('/job-cards/:id/items', authRequired, workshopOnly, async (req, res)
     // than a second oil filter: a request that reached the server and lost its
     // reply is indistinguishable from one that never arrived, and only the
     // database can tell them apart.
-    await pgDb.query(
+    const { rows: inserted } = await pgDb.query(
       `INSERT INTO job_card_items (job_card_id, item_type, description, quantity, unit_cost, part_number, client_request_id)
        VALUES ($1,$2,$3,$4,$5,$6,$7)
-       ON CONFLICT (client_request_id) WHERE client_request_id IS NOT NULL DO NOTHING`,
+       ON CONFLICT (client_request_id) WHERE client_request_id IS NOT NULL DO NOTHING
+       RETURNING id`,
       [id, req.body.item_type || 'labor', req.body.description, Number(req.body.quantity) || 1,
         Number(req.body.unit_cost) || 0, String(req.body.part_number || '').trim() || null,
         clientRequestId(req)]);
+
+    // A part fitted to a motorcycle came off a shelf, so the shelf has to say
+    // so — otherwise stock is wrong the first time anybody uses it.
+    //
+    // Only when a row was actually inserted: the ON CONFLICT above makes a
+    // replayed offline write a no-op, and it has to be a no-op here too or a
+    // phone with bad signal quietly eats the stock twice.
+    //
+    // Fitting is never refused for want of stock. The part is already in the
+    // technician's hand; refusing the paperwork does not put it back, it just
+    // means the job card is wrong as well as the count.
+    const partNumber = String(req.body.part_number || '').trim();
+    if (inserted[0] && (req.body.item_type === 'part') && partNumber) {
+      await partsStock.move({
+        partNumber,
+        locationId: null,
+        quantity: -(Number(req.body.quantity) || 1),
+        reason: 'fitted',
+        sourceType: 'job_cards',
+        sourceId: id,
+        actorId: req.user.id,
+        description: req.body.description,
+      }).catch((e) => console.error('[workshop] stock move on fit failed:', e.message));
+    }
 
     res.json({ ok: true, job_card: await getJobCard(id) });
   } catch (error) {
@@ -1377,6 +1403,355 @@ router.delete('/admin/jobs/:id', authRequired, async (req, res) => {
 });
 
 // Admin: per-technician performance
+// ─── Stock and the parts counter ─────────────────────────────────────────────
+//
+// A part could only leave the building fitted to a motorcycle. These are the
+// other ways: sold across the counter, sold to a fleet on account, received
+// from a supplier, or counted and found to be wrong.
+//
+// Everything that moves a number goes through partsStock.move, which writes
+// the movement and the cached total together. Nothing here adjusts on_hand
+// directly, and a sale that touches four parts does all of it in one
+// transaction — half a sale is worse than none.
+
+function salesReference() {
+  const now = new Date();
+  const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
+  return `PS-${stamp}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
+}
+
+// What is on the shelves, what it is worth, and what is running out.
+router.get('/stock', authRequired, workshopOnly, async (req, res) => {
+  const scope = workshopScope(req);
+  if (scope.refuse) return res.status(scope.refuse.status).json(scope.refuse);
+
+  const locationId = req.query.location_id ? Number(req.query.location_id) : null;
+  const search = String(req.query.search || '').trim();
+  const params = [];
+  const where = [];
+  if (locationId) { params.push(locationId); where.push(`st.location_id = $${params.length}`); }
+  if (search) {
+    params.push(`%${search}%`);
+    where.push(`(st.part_number ILIKE $${params.length} OR pr.description ILIKE $${params.length})`);
+  }
+  if (req.query.low === '1') where.push('st.on_hand <= st.reorder_level');
+
+  const { rows } = await pgDb.query(`
+    SELECT st.id, st.part_number, st.location_id, st.on_hand, st.reorder_level, st.bin,
+           wl.name AS location_name,
+           COALESCE(pr.description, cat.description) AS description,
+           COALESCE(pr.cost_price_ex_vat, cat.price_ex_vat) AS cost_price_ex_vat,
+           pr.sell_price_ex_vat,
+           (pr.cost_price_ex_vat IS NULL AND cat.price_ex_vat IS NOT NULL) AS cost_is_catalogue,
+           (st.on_hand <= st.reorder_level AND st.reorder_level > 0) AS low
+      FROM parts_stock st
+      LEFT JOIN workshop_locations wl ON wl.id = st.location_id
+      LEFT JOIN parts_pricing pr ON pr.part_number_key = st.part_number_key
+      LEFT JOIN LATERAL (
+        SELECT price_ex_vat, description FROM parts_catalog
+         WHERE UPPER(REGEXP_REPLACE(part_number, '[^A-Za-z0-9]', '', 'g')) = st.part_number_key
+         ORDER BY id LIMIT 1
+      ) cat ON TRUE
+     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+     ORDER BY (st.on_hand <= st.reorder_level AND st.reorder_level > 0) DESC, st.part_number
+     LIMIT 500`, params);
+
+  const value = rows.reduce((sum, r) => sum + Number(r.on_hand) * Number(r.cost_price_ex_vat || 0), 0);
+  res.json({
+    stock: rows,
+    summary: {
+      lines: rows.length,
+      low: rows.filter((r) => r.low).length,
+      // What is sitting on the shelves at what it cost — the number a dealer
+      // means by "money on the floor".
+      value_at_cost: +value.toFixed(2),
+    },
+  });
+});
+
+// Counting a shelf, or correcting one. Not a sale and not a delivery, so it
+// is recorded as neither — an adjustment says who and why.
+router.post('/stock/adjust', authRequired, workshopOnly, async (req, res) => {
+  const scope = workshopScope(req);
+  if (scope.refuse) return res.status(scope.refuse.status).json(scope.refuse);
+  if (!['admin', 'superadmin'].includes(req.user.role) && !scope.all) {
+    return res.status(403).json({ error: 'Only the workshop can adjust stock' });
+  }
+
+  const partNumber = String(req.body.part_number || '').trim();
+  if (!partNumber) return res.status(400).json({ error: 'Which part?' });
+  const note = String(req.body.note || '').trim();
+  if (!note) return res.status(400).json({ error: 'Say why the count is changing' });
+  const locationId = req.body.location_id ? Number(req.body.location_id) : null;
+
+  try {
+    let movement;
+    if (req.body.counted != null) {
+      // A stock take: the shelf says this many, whatever the system thought.
+      // Recorded as the difference so the ledger still adds up to the count.
+      const counted = Number(req.body.counted);
+      if (!Number.isFinite(counted) || counted < 0) return res.status(400).json({ error: 'A count is a number of parts' });
+      const current = await partsStock.onHand(partNumber, locationId);
+      if (counted === current) return res.json({ ok: true, on_hand: current, unchanged: true });
+      movement = await partsStock.move({
+        partNumber, locationId, quantity: counted - current, reason: 'count',
+        note, actorId: req.user.id, description: req.body.description || null,
+      });
+    } else {
+      movement = await partsStock.move({
+        partNumber, locationId, quantity: Number(req.body.quantity), reason: 'adjustment',
+        note, actorId: req.user.id, description: req.body.description || null,
+      });
+    }
+    await logAudit(req.user.id, 'workshop.stock_adjust', 'parts_stock', null,
+      { part_number: partNumber, location_id: locationId, note, on_hand: movement.on_hand }, req.ip);
+    res.json({ ok: true, ...movement });
+  } catch (e) {
+    res.status(e.status || 400).json({ error: e.message });
+  }
+});
+
+// What a part costs and what it sells for.
+router.put('/stock/pricing', authRequired, workshopOnly, async (req, res) => {
+  const scope = workshopScope(req);
+  if (scope.refuse) return res.status(scope.refuse.status).json(scope.refuse);
+  if (!['admin', 'superadmin'].includes(req.user.role)) {
+    return res.status(403).json({ error: 'Pricing is set by the workshop manager' });
+  }
+  const partNumber = String(req.body.part_number || '').trim();
+  if (!partNumber) return res.status(400).json({ error: 'Which part?' });
+
+  const num = (v) => (v === undefined || v === null || v === '' ? null : Number(v));
+  const cost = num(req.body.cost_price_ex_vat);
+  const sell = num(req.body.sell_price_ex_vat);
+  for (const [label, v] of [['cost', cost], ['sell', sell]]) {
+    if (v !== null && (!Number.isFinite(v) || v < 0)) {
+      return res.status(400).json({ error: `The ${label} price is an amount of money` });
+    }
+  }
+
+  const { rows } = await pgDb.query(
+    `INSERT INTO parts_pricing (part_number, part_number_key, description, cost_price_ex_vat, sell_price_ex_vat, updated_by)
+     VALUES ($1,$2,$3,$4,$5,$6)
+     ON CONFLICT (part_number_key) DO UPDATE SET
+       description = COALESCE(EXCLUDED.description, parts_pricing.description),
+       cost_price_ex_vat = COALESCE(EXCLUDED.cost_price_ex_vat, parts_pricing.cost_price_ex_vat),
+       sell_price_ex_vat = COALESCE(EXCLUDED.sell_price_ex_vat, parts_pricing.sell_price_ex_vat),
+       updated_by = EXCLUDED.updated_by, updated_at = NOW()
+     RETURNING *`,
+    [partNumber, partsStock.partKey(partNumber), req.body.description || null, cost, sell, req.user.id]);
+
+  // Reorder level and bin belong to a shelf, not to a price list.
+  if (req.body.reorder_level != null || req.body.bin !== undefined) {
+    await pgDb.query(
+      `INSERT INTO parts_stock (part_number, part_number_key, location_id, on_hand, reorder_level, bin)
+       VALUES ($1,$2,$3,0,COALESCE($4,0),$5)
+       ON CONFLICT (part_number_key, location_id) DO UPDATE SET
+         reorder_level = COALESCE($4, parts_stock.reorder_level),
+         bin = COALESCE($5, parts_stock.bin), updated_at = NOW()`,
+      [partNumber, partsStock.partKey(partNumber),
+       req.body.location_id ? Number(req.body.location_id) : null,
+       req.body.reorder_level != null ? Number(req.body.reorder_level) : null,
+       req.body.bin !== undefined ? String(req.body.bin || '').trim() || null : null]);
+  }
+  res.json({ ok: true, pricing: rows[0] });
+});
+
+// A sale: across the counter, or to a fleet on account.
+router.post('/sales', authRequired, workshopOnly, async (req, res) => {
+  const scope = workshopScope(req);
+  if (scope.refuse) return res.status(scope.refuse.status).json(scope.refuse);
+
+  const channel = String(req.body.channel || 'counter');
+  if (!['counter', 'account'].includes(channel)) {
+    return res.status(400).json({ error: 'A sale is over the counter or on account' });
+  }
+  const locationId = req.body.location_id ? Number(req.body.location_id) : null;
+  const lines = Array.isArray(req.body.items) ? req.body.items : [];
+  if (!lines.length) return res.status(400).json({ error: 'A sale needs something on it' });
+
+  let organizationId = null;
+  if (channel === 'account') {
+    organizationId = Number(req.body.organization_id);
+    // Checked before it reaches the query: an account sale with no fleet on
+    // it sent NaN into WHERE id = $1, which is a 500 where the caller
+    // deserves a sentence telling them what is missing.
+    if (!Number.isInteger(organizationId) || organizationId <= 0) {
+      return res.status(400).json({ error: 'An account sale needs a fleet to put it on' });
+    }
+    const { rows: org } = await pgDb.query('SELECT id FROM organizations WHERE id = $1', [organizationId]);
+    if (!org[0]) return res.status(404).json({ error: 'Which fleet is this going on?' });
+  }
+
+  // Priced and costed before anything moves, so a sale that is going to be
+  // refused for want of stock has not already half-happened.
+  const priced = [];
+  for (const line of lines) {
+    const partNumber = String(line.part_number || '').trim();
+    if (!partNumber) return res.status(400).json({ error: 'Every line needs a part number' });
+    const quantity = Number(line.quantity);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      return res.status(400).json({ error: `How many ${partNumber}?` });
+    }
+    const known = await partsStock.priceFor(partNumber);
+    const unitPrice = line.unit_price_ex_vat != null ? Number(line.unit_price_ex_vat) : known.sell_price_ex_vat;
+    if (unitPrice == null || !Number.isFinite(unitPrice) || unitPrice < 0) {
+      return res.status(400).json({ error: `No selling price for ${partNumber}. Set one, or put it on the line.` });
+    }
+    priced.push({
+      part_number: partNumber,
+      part_number_key: partsStock.partKey(partNumber),
+      description: String(line.description || known.description || partNumber).slice(0, 300),
+      quantity,
+      unit_price_ex_vat: unitPrice,
+      // The cost at the moment it goes out, so last year's margin stays last
+      // year's margin when this year's prices change.
+      unit_cost_ex_vat: known.cost_price_ex_vat != null ? known.cost_price_ex_vat : 0,
+    });
+  }
+
+  // Selling into a negative is refused by default — a shelf that says minus
+  // three is a shelf nobody believes afterwards — but it is overridable,
+  // because the part is in somebody's hand and the count is what is wrong.
+  if (req.body.allow_negative !== true) {
+    for (const line of priced) {
+      const have = await partsStock.onHand(line.part_number, locationId);
+      if (have < line.quantity) {
+        return res.status(409).json({
+          error: `Only ${have} of ${line.part_number} on the shelf, ${line.quantity} on the sale.`,
+          code: 'NOT_ENOUGH_STOCK',
+          part_number: line.part_number,
+          on_hand: have,
+        });
+      }
+    }
+  }
+
+  const totals = partsStock.priceLines(priced);
+  const reference = salesReference();
+
+  const sale = await pgDb.withTransaction(async (tx) => {
+    const { rows } = await tx.query(
+      `INSERT INTO parts_sales
+         (reference, location_id, channel, organization_id, customer_name, customer_phone,
+          payment_method, subtotal_ex_vat, vat, total, cost_total_ex_vat, note, sold_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+      [reference, locationId, channel, organizationId,
+       String(req.body.customer_name || '').trim() || null,
+       String(req.body.customer_phone || '').trim() || null,
+       channel === 'account' ? 'account' : (String(req.body.payment_method || 'cash')),
+       totals.subtotal_ex_vat, totals.vat, totals.total, totals.cost_total_ex_vat,
+       String(req.body.note || '').trim() || null, req.user.id]);
+    const created = rows[0];
+
+    for (const line of priced) {
+      await tx.query(
+        `INSERT INTO parts_sale_items
+           (sale_id, part_number, part_number_key, description, quantity, unit_price_ex_vat, unit_cost_ex_vat)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [created.id, line.part_number, line.part_number_key, line.description,
+         line.quantity, line.unit_price_ex_vat, line.unit_cost_ex_vat]);
+      await partsStock.move({
+        partNumber: line.part_number, locationId, quantity: -line.quantity, reason: 'sale',
+        sourceType: 'parts_sales', sourceId: created.id, actorId: req.user.id,
+        description: line.description, db: tx,
+      });
+    }
+    return created;
+  });
+
+  await logAudit(req.user.id, 'workshop.parts_sale', 'parts_sales', sale.id,
+    { reference, channel, organization_id: organizationId, total: totals.total, lines: priced.length }, req.ip);
+
+  res.status(201).json({
+    ok: true,
+    sale: { ...sale, items: priced },
+    margin: +(totals.subtotal_ex_vat - totals.cost_total_ex_vat).toFixed(2),
+  });
+});
+
+router.get('/sales', authRequired, workshopOnly, async (req, res) => {
+  const scope = workshopScope(req);
+  if (scope.refuse) return res.status(scope.refuse.status).json(scope.refuse);
+  const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 365);
+
+  const { rows } = await pgDb.query(`
+    SELECT ps.*, o.name AS organization_name, u.full_name AS sold_by_name,
+           wl.name AS location_name,
+           (SELECT COUNT(*)::int FROM parts_sale_items WHERE sale_id = ps.id) AS lines
+      FROM parts_sales ps
+      LEFT JOIN organizations o ON o.id = ps.organization_id
+      LEFT JOIN users u ON u.id = ps.sold_by
+      LEFT JOIN workshop_locations wl ON wl.id = ps.location_id
+     WHERE ps.sold_at > NOW() - ($1 || ' days')::interval
+     ORDER BY ps.sold_at DESC LIMIT 200`, [String(days)]);
+
+  const live = rows.filter((r) => r.status === 'completed');
+  res.json({
+    sales: rows,
+    summary: {
+      count: live.length,
+      sold_ex_vat: +live.reduce((s, r) => s + Number(r.subtotal_ex_vat), 0).toFixed(2),
+      cost: +live.reduce((s, r) => s + Number(r.cost_total_ex_vat), 0).toFixed(2),
+      margin: +live.reduce((s, r) => s + Number(r.subtotal_ex_vat) - Number(r.cost_total_ex_vat), 0).toFixed(2),
+      counter: live.filter((r) => r.channel === 'counter').length,
+      account: live.filter((r) => r.channel === 'account').length,
+    },
+  });
+});
+
+router.get('/sales/:id', authRequired, workshopOnly, async (req, res) => {
+  const scope = workshopScope(req);
+  if (scope.refuse) return res.status(scope.refuse.status).json(scope.refuse);
+  const { rows } = await pgDb.query(
+    `SELECT ps.*, o.name AS organization_name, u.full_name AS sold_by_name
+       FROM parts_sales ps
+       LEFT JOIN organizations o ON o.id = ps.organization_id
+       LEFT JOIN users u ON u.id = ps.sold_by
+      WHERE ps.id = $1`, [toInt(req.params.id)]);
+  if (!rows[0]) return res.status(404).json({ error: 'Sale not found' });
+  const { rows: items } = await pgDb.query(
+    'SELECT * FROM parts_sale_items WHERE sale_id = $1 ORDER BY id', [rows[0].id]);
+  res.json({ sale: rows[0], items });
+});
+
+// Undoing a sale puts the parts back. A reversal rather than a deletion: what
+// happened still happened, and a till that can forget a sale is a till nobody
+// can audit.
+router.post('/sales/:id/void', authRequired, workshopOnly, async (req, res) => {
+  const scope = workshopScope(req);
+  if (scope.refuse) return res.status(scope.refuse.status).json(scope.refuse);
+  if (!['admin', 'superadmin'].includes(req.user.role)) {
+    return res.status(403).json({ error: 'Only a manager can void a sale' });
+  }
+  const id = toInt(req.params.id);
+  const reason = String(req.body.reason || '').trim();
+  if (!reason) return res.status(400).json({ error: 'Say why it is being voided' });
+
+  const { rows } = await pgDb.query('SELECT * FROM parts_sales WHERE id = $1', [id]);
+  const sale = rows[0];
+  if (!sale) return res.status(404).json({ error: 'Sale not found' });
+  if (sale.status === 'void') return res.status(409).json({ error: 'That sale is already void' });
+
+  const { rows: items } = await pgDb.query('SELECT * FROM parts_sale_items WHERE sale_id = $1', [id]);
+  await pgDb.withTransaction(async (tx) => {
+    await tx.query(
+      `UPDATE parts_sales SET status = 'void', voided_at = NOW(), voided_by = $1, void_reason = $2 WHERE id = $3`,
+      [req.user.id, reason, id]);
+    for (const item of items) {
+      await partsStock.move({
+        partNumber: item.part_number, locationId: sale.location_id, quantity: Number(item.quantity),
+        reason: 'sale_void', sourceType: 'parts_sales', sourceId: id, note: reason,
+        actorId: req.user.id, db: tx,
+      });
+    }
+  });
+
+  await logAudit(req.user.id, 'workshop.parts_sale_void', 'parts_sales', id,
+    { reference: sale.reference, reason, total: Number(sale.total) }, req.ip);
+  res.json({ ok: true, restored: items.length });
+});
+
 // What the workshop could be earning, as opposed to what it is earning.
 //
 // The existing dashboard answers "what is in the shop": jobs open, revenue
@@ -1527,8 +1902,86 @@ router.get('/admin/opportunities', authRequired, async (req, res) => {
        ORDER BY days_quiet DESC
        LIMIT 25`, [String(days)]);
 
+    // The counter, now that there is one. Sales carry the cost at the moment
+    // they went out, so this margin is the real thing rather than the
+    // charged-minus-catalogue estimate the fitted-parts figure has to use.
+    const { rows: salesRows } = await pgDb.query(`
+      SELECT COUNT(*)::int AS count,
+             COALESCE(SUM(subtotal_ex_vat), 0)::numeric AS sold,
+             COALESCE(SUM(cost_total_ex_vat), 0)::numeric AS cost,
+             COUNT(*) FILTER (WHERE channel = 'counter')::int AS counter,
+             COUNT(*) FILTER (WHERE channel = 'account')::int AS account
+        FROM parts_sales
+       WHERE status = 'completed' AND sold_at > NOW() - ($1 || ' days')::interval`, [String(days)]);
+    const sales = salesRows[0] || {};
+
+    // Below the line somebody set, so it is about to stop being sellable.
+    const { rows: lowStock } = await pgDb.query(`
+      SELECT st.part_number, st.on_hand, st.reorder_level, st.bin, wl.name AS location,
+             COALESCE(pr.description, cat.description) AS description
+        FROM parts_stock st
+        LEFT JOIN workshop_locations wl ON wl.id = st.location_id
+        LEFT JOIN parts_pricing pr ON pr.part_number_key = st.part_number_key
+        LEFT JOIN LATERAL (
+          SELECT description FROM parts_catalog
+           WHERE UPPER(REGEXP_REPLACE(part_number, '[^A-Za-z0-9]', '', 'g')) = st.part_number_key
+           ORDER BY id LIMIT 1
+        ) cat ON TRUE
+       WHERE st.reorder_level > 0 AND st.on_hand <= st.reorder_level
+       ORDER BY (st.on_hand - st.reorder_level)
+       LIMIT 50`);
+
+    // On a shelf, paid for, and not moving. The other half of a stock
+    // problem, and the half nobody chases because nothing is going wrong.
+    const { rows: deadStock } = await pgDb.query(`
+      SELECT st.part_number, st.on_hand,
+             COALESCE(pr.description, cat.description) AS description,
+             COALESCE(pr.cost_price_ex_vat, cat.price_ex_vat) AS cost_price_ex_vat,
+             (st.on_hand * COALESCE(pr.cost_price_ex_vat, cat.price_ex_vat, 0))::numeric AS tied_up,
+             (SELECT MAX(created_at) FROM parts_stock_movements m
+               WHERE m.part_number_key = st.part_number_key AND m.quantity < 0) AS last_out
+        FROM parts_stock st
+        LEFT JOIN parts_pricing pr ON pr.part_number_key = st.part_number_key
+        LEFT JOIN LATERAL (
+          SELECT price_ex_vat, description FROM parts_catalog
+           WHERE UPPER(REGEXP_REPLACE(part_number, '[^A-Za-z0-9]', '', 'g')) = st.part_number_key
+           ORDER BY id LIMIT 1
+        ) cat ON TRUE
+       WHERE st.on_hand > 0
+         AND NOT EXISTS (
+           SELECT 1 FROM parts_stock_movements m
+            WHERE m.part_number_key = st.part_number_key AND m.quantity < 0
+              AND m.created_at > NOW() - ($1 || ' days')::interval)
+       ORDER BY tied_up DESC NULLS LAST
+       LIMIT 25`, [String(days)]);
+
+    const { rows: shelfValue } = await pgDb.query(`
+      SELECT COALESCE(SUM(st.on_hand * COALESCE(pr.cost_price_ex_vat, cat.price_ex_vat, 0)), 0)::numeric AS value
+        FROM parts_stock st
+        LEFT JOIN parts_pricing pr ON pr.part_number_key = st.part_number_key
+        LEFT JOIN LATERAL (
+          SELECT price_ex_vat FROM parts_catalog
+           WHERE UPPER(REGEXP_REPLACE(part_number, '[^A-Za-z0-9]', '', 'g')) = st.part_number_key
+           ORDER BY id LIMIT 1
+        ) cat ON TRUE
+       WHERE st.on_hand > 0`);
+
     const overdue = serviceDue.filter((b) => b.state === 'overdue');
     res.json({
+      counter: {
+        count: Number(sales.count) || 0,
+        sold: Number(sales.sold) || 0,
+        cost: Number(sales.cost) || 0,
+        margin: +((Number(sales.sold) || 0) - (Number(sales.cost) || 0)).toFixed(2),
+        counter_sales: Number(sales.counter) || 0,
+        account_sales: Number(sales.account) || 0,
+      },
+      stock: {
+        value_at_cost: Number(shelfValue[0]?.value) || 0,
+        low: lowStock,
+        dead: deadStock,
+        tied_up_dead: +deadStock.reduce((sum, d) => sum + Number(d.tied_up || 0), 0).toFixed(2),
+      },
       window_days: days,
       service_due: {
         bikes: serviceDue,

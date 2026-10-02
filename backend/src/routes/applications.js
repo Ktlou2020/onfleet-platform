@@ -19,6 +19,7 @@ const { hybridStorage } = require('../utils/hybridStorage');
 
 const router = asyncRouter(express.Router());
 const { applications: uploadDir } = require('../uploadPaths');
+const { brand } = require('../brand');
 
 const upload = multer({
   storage: hybridStorage(uploadDir, 'applications', (req, file) =>
@@ -116,7 +117,7 @@ async function recalcApplicationDecision(applicationId) {
       userId: application.user_id,
       channel: 'email',
       type: 'application_auto_declined',
-      title: 'OnFleet application update',
+      title: `${brand.name} application update`,
       message: `Hi ${application.full_name.split(' ')[0]}, your application has been auto-declined because the latest 3 payslips show average weekly earnings of R${average.toFixed(2)}, below the minimum R1000 threshold. You may retry after ${retryAfter}.`
     }).catch((e) => console.error('[application] auto-decline email failed:', e.message));
     return { total, average, decision: 'auto_declined', retry_after_date: retryAfter };
@@ -129,7 +130,7 @@ async function recalcApplicationDecision(applicationId) {
     userId: application.user_id,
     channel: 'email',
     type: 'application_preapproved',
-    title: 'OnFleet application pre-approved',
+    title: `${brand.name} application pre-approved`,
     message: `Hi ${application.full_name.split(' ')[0]}, great news — your application has been pre-approved based on average weekly earnings of R${average.toFixed(2)}. Our team will now allocate a bike and send your electronic contract.`
   }).catch((e) => console.error('[application] pre-approval email failed:', e.message));
   return { total, average, decision: 'pre_approved' };
@@ -222,7 +223,7 @@ async function approveApplication({ applicationId, bikeId, weeklyAmount, totalWe
     userId: app.user_id,
     channel: 'email',
     type: 'application_approved',
-    title: 'OnFleet application approved',
+    title: `${brand.name} application approved`,
     message: `Hi ${rider.full_name.split(' ')[0]}, your application has been approved. Your bike has been allocated and your agreement ${agreementNo} is now ready for review and signature on the platform.`
   }).catch((e) => console.error('[application] approval email failed:', e.message));
 
@@ -244,8 +245,8 @@ async function rejectApplication({ applicationId, reviewerId, reason }) {
     userId: app.user_id,
     channel: 'email',
     type: 'application_rejected',
-    title: 'OnFleet application update',
-    message: `Hi ${app.full_name.split(' ')[0]}, your application has been declined. ${reason || 'Please contact OnFleet support for more information.'}`
+    title: `${brand.name} application update`,
+    message: `Hi ${app.full_name.split(' ')[0]}, your application has been declined. ${reason || `Please contact ${brand.name} support for more information.`}`
   }).catch((e) => console.error('[application] rejection email failed:', e.message));
   await logAudit(reviewerId, 'application.reject', 'applications', Number(applicationId), { reason: reason || null });
   return { ok: true };

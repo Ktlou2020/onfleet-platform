@@ -46,6 +46,7 @@ const FLEET_ROLE_VALUES = ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_
 // Was defined here and again in routes/pilot.js. It now lives beside the
 // transaction that uses it, in services/fleetOnboarding.js.
 const { FLEET_PLAN_ENTITLEMENTS } = require('../services/fleetOnboarding');
+const { brand } = require('../brand');
 
 const profileUpload = multer({
   storage: hybridStorage(profileUploadDir, 'profiles', (req, file) =>
@@ -269,8 +270,8 @@ router.post('/forgot-password',
         userId: user.id,
         channel: 'email',
         type: 'password_reset',
-        title: 'Reset your OnFleet password',
-        message: `Hi ${firstName},\n\nWe received a request to reset your OnFleet password.\n\nReset link: ${resetUrl}\n\nThis link expires in ${readEnv('PASSWORD_RESET_TOKEN_TTL_MINUTES', '60') || 60} minutes. If you did not request this, you can ignore this email.\n\nKind Regards\nOnFleet Team`
+        title: `Reset your ${brand.name} password`,
+        message: `Hi ${firstName},\n\nWe received a request to reset your ${brand.name} password.\n\nReset link: ${resetUrl}\n\nThis link expires in ${readEnv('PASSWORD_RESET_TOKEN_TTL_MINUTES', '60') || 60} minutes. If you did not request this, you can ignore this email.\n\nKind Regards\n${brand.name} Team`
       }).catch((emailErr) => console.error('[forgot-password] email delivery failed:', emailErr.message));
 
       await logAudit(user.id, 'user.password_reset_requested', 'users', user.id, {}, req.ip);

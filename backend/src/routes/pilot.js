@@ -89,6 +89,22 @@ async function slugifyCompanyName(value) {
 // Was a third copy of this, offering an `empire` plan the organizations
 // table has never accepted. One table now, in services/fleetOnboarding.js.
 const { FLEET_PLAN_ENTITLEMENTS } = require('../services/fleetOnboarding');
+const { brand } = require('../brand');
+
+// How a sales email signs off.
+//
+// The address and the telephone number belong to the company that actually
+// trades under this brand, and brand.legalEntity is deliberately null on a
+// deployment that owns no motorcycles — a contract naming the wrong company
+// is one nobody notices, and so is an email sending somebody to the wrong
+// door. Where there is no legal entity the sign-off is the name alone, which
+// is true on any deployment, rather than an address invented to fill a line.
+function signOff() {
+  const lines = [`The ${brand.fullName} team`];
+  if (brand.legalEntity?.address) lines.push(brand.legalEntity.address.split(',').slice(-2).join(',').trim());
+  if (brand.legalEntity?.phone) lines.push(`WhatsApp: ${brand.legalEntity.phone}`);
+  return lines;
+}
 
 router.get('/stats', async (req, res) => {
   const { rows: bikeRows } = await pgDb.query('SELECT COUNT(*) c FROM bikes');
@@ -353,11 +369,9 @@ router.post('/leads/:id/contact', authRequired, adminOnly, async (req, res) => {
       '',
       message,
       '',
-      'The OnFleet Africa team',
-      'Kya Sand, Johannesburg',
-      'WhatsApp: 081 539 5612',
+      ...signOff(),
     ].join('\n');
-    await sendEmail(lead.email, `OnFleet Fleet — following up on your request`, body).catch(() => {});
+    await sendEmail(lead.email, `${brand.name} — following up on your request`, body).catch(() => {});
   }
 
   const { rows: updatedRows } = await pgDb.query('SELECT * FROM fleet_owner_pilot_leads WHERE id = $1', [leadId]);
@@ -399,10 +413,9 @@ router.post('/leads/:id/schedule-demo', authRequired, adminOnly, async (req, res
       '',
       `See you there.`,
       '',
-      'The OnFleet Africa team',
-      'Kya Sand, Johannesburg',
+      ...signOff(),
     ].filter((l) => l !== null).join('\n');
-    await sendEmail(lead.email, `OnFleet demo confirmed — ${humanDate}`, body).catch(() => {});
+    await sendEmail(lead.email, `${brand.name} demo confirmed — ${humanDate}`, body).catch(() => {});
   }
 
   const { rows: updatedRows } = await pgDb.query('SELECT * FROM fleet_owner_pilot_leads WHERE id = $1', [leadId]);
@@ -494,7 +507,7 @@ router.post('/leads/:id/convert', authRequired, adminOnly, async (req, res) => {
   const welcomeBody = [
     `Hi ${full_name},`,
     '',
-    `${intro}Your OnFleet Fleet account is ready. Here are your login details:`,
+    `${intro}Your ${brand.name} account is ready. Here are your login details:`,
     '',
     `Email: ${email}`,
     `Plan: ${plan_key} (14-day trial)`,
@@ -504,15 +517,16 @@ router.post('/leads/:id/convert', authRequired, adminOnly, async (req, res) => {
     '',
     `Once you've logged in, head to the Fleet dashboard to add your first bike.`,
     '',
-    `If you get stuck or have questions, WhatsApp us on 081 539 5612.`,
+    brand.legalEntity?.phone
+      ? `If you get stuck or have questions, WhatsApp us on ${brand.legalEntity.phone}.`
+      : `If you get stuck or have questions, reply to this email.`,
     '',
     'Welcome aboard.',
     '',
-    'The OnFleet Africa team',
-    'Kya Sand, Johannesburg',
+    ...signOff(),
   ].join('\n');
 
-  await sendEmail(email, 'Your OnFleet Fleet account is ready', welcomeBody).catch(() => {});
+  await sendEmail(email, `Your ${brand.name} account is ready`, welcomeBody).catch(() => {});
 
   const { rows: updatedLeadRows } = await pgDb.query('SELECT * FROM fleet_owner_pilot_leads WHERE id = $1', [leadId]);
   const { rows: orgRows } = await pgDb.query('SELECT id, name, slug, status, plan_key, created_at FROM organizations WHERE id = $1', [created.organizationId]);

@@ -1245,8 +1245,8 @@ router.post('/fleet-owners/:id/send-password-reset', superadminOnly, async (req,
       userId: target.id,
       channel: 'email',
       type: 'password_reset',
-      title: 'Reset your OnFleet password',
-      message: buildBulkResetMessage(target, resetUrl, req.user.full_name || req.user.email || 'OnFleet', req.body.message)
+      title: `Reset your ${brand.name} password`,
+      message: buildBulkResetMessage(target, resetUrl, req.user.full_name || req.user.email || brand.name, req.body.message)
     });
   } catch (emailErr) {
     console.error('[admin] fleet-owner password reset email failed:', emailErr.message);
@@ -1461,7 +1461,7 @@ router.post('/users/bulk-password-reset', async (req, res) => {
         userId: target.id,
         channel: 'email',
         type: 'password_reset',
-        title: 'Reset your OnFleet password',
+        title: `Reset your ${brand.name} password`,
         message: buildBulkResetMessage(target, resetUrl, actorName, customMessage)
       });
       emailed += 1;
@@ -1737,7 +1737,7 @@ router.post('/fleet-owners/email', superadminOnly, async (req, res) => {
         subject = tpl.subject;
         html = tpl.html;
       } else {
-        subject = custom_subject || 'Message from OnFleet';
+        subject = custom_subject || `Message from ${brand.name}`;
         html = `<p style="font-family:Arial,sans-serif;font-size:15px;line-height:1.7;color:#1a2b42">${String(custom_message).replace(/\n/g, '</p><p style="font-family:Arial,sans-serif;font-size:15px;line-height:1.7;color:#1a2b42;margin:0 0 12px">').replace(/</g, (m, i) => i === 0 ? m : m)}</p>`;
       }
       await sendHtmlEmail(org.contact_email, subject, html);

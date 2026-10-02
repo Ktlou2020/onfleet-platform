@@ -245,7 +245,9 @@ async function approveFleetApplication({ organization, applicationId, bikeId, we
     userId: application.user_id,
     channel: 'email',
     type: 'application_approved',
-    title: 'OnFleet application approved',
+    // Named for the fleet rather than for the platform: the rider applied to
+    // them, was approved by them, and will be riding their motorcycle.
+    title: `${organization.name} application approved`,
     message: `Hi ${rider.full_name.split(' ')[0]}, your application has been approved. Your bike has been allocated and your agreement ${agreementNo} is now ready for review and signature on the platform.`
   }).catch((e) => console.error('[fleet] approval email failed:', e.message));
 
@@ -277,7 +279,7 @@ async function rejectFleetApplication({ organization, applicationId, reviewerId,
     userId: application.user_id,
     channel: 'email',
     type: 'application_rejected',
-    title: 'OnFleet application update',
+    title: `${organization.name} application update`,
     message: `Hi ${application.full_name.split(' ')[0]}, your application has been declined. ${cleanReason || 'Please contact your fleet owner for more information.'}`
   }).catch((e) => console.error('[fleet] rejection email failed:', e.message));
 

@@ -19,6 +19,7 @@ const PAYSTACK_BASE = 'https://api.paystack.co';
 // Paystack fees: 2.9% + R1 per transaction — fee is ADDED on top of rider's payment
 const { calcPaystackFee, calcGrossAmount } = require('../utils/paystackFees');
 const { queueCharge: queuePaystackCharge } = require('../services/paystackChargeQueue');
+const { brand } = require('../brand');
 function creditedAmount(payment) {
   return Number(payment?.net_amount) || Number(payment?.amount) || 0;
 }
@@ -557,8 +558,8 @@ async function handlePaystackWebhook(req, res) {
             userId: admin.id,
             channel: 'email',
             type: 'billing_payment_failed',
-            title: 'OnFleet subscription payment failed',
-            message: `Hi ${admin.full_name.split(' ')[0]}, your OnFleet fleet subscription payment failed and your account has been suspended. Log in to update your payment method and restore access to your fleet.`
+            title: `${brand.name} subscription payment failed`,
+            message: `Hi ${admin.full_name.split(' ')[0]}, your ${brand.name} subscription payment failed and your account has been suspended. Log in to update your payment method and restore access to your fleet.`
           }).catch((e) => console.error(`[webhook] billing_payment_failed notify failed for org ${org.id}:`, e.message));
         }
       }

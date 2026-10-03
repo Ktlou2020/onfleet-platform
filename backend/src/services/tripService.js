@@ -336,7 +336,13 @@ async function processPing(bikeId, deviceId, lat, lng, speed, ignition, recorded
   // rider at speed, and a bad fix reporting 0 km/h on a bike doing 80 would
   // defeat exactly that.
   if (trusted && nightCurfew.isArmed(bikeId)) {
-    await nightCurfew.cutIfSlowEnough(bikeId, speed);
+    // The ignition reading goes with the speed, because a bike that is
+    // switched off is safe to cut whatever its last speed reading said — and
+    // a tracker that reports no ignition signal at all passes null, which
+    // leaves the decision to speed alone as before.
+    await nightCurfew.cutIfSlowEnough(bikeId, speed, {
+      ignitionOn: hasIgnitionSignal ? ignitionOn : null,
+    });
   }
 
   // Ignition off + real sustained road distance can only mean the bike is

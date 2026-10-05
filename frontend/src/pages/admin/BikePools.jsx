@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
   Layers, Plus, RefreshCw, Banknote, TrendingDown, AlertTriangle,
-  X, KeyRound, Copy, Check, ChevronRight,
+  X, KeyRound, Copy, Check, ChevronRight, Webhook,
 } from 'lucide-react';
 import api from '../../api';
 import { Loading, Modal, EmptyState, SearchInput, fmt, fmtDate, matchesSearch } from '../../components/ui';
@@ -264,6 +264,9 @@ export default function BikePools() {
   const [busy, setBusy] = useState(false);
   const [keyFor, setKeyFor] = useState(null);
   const [issuedKey, setIssuedKey] = useState(null);
+  const [hookFor, setHookFor] = useState(null);
+  const [hookUrl, setHookUrl] = useState('');
+  const [issuedSecret, setIssuedSecret] = useState(null);
 
   const load = useCallback(() => api.get('/admin/pools').then((r) => setPools(r.data.pools))
     .catch((e) => toast.error(e.response?.data?.error || 'Could not load pools')), []);
@@ -295,6 +298,22 @@ export default function BikePools() {
       setKeyFor(null);
     } catch (e) {
       toast.error(e.response?.data?.error || 'Could not issue that key');
+    } finally { setBusy(false); }
+  };
+
+  const registerHook = async (pool) => {
+    const url = hookUrl.trim();
+    if (!url) return toast.error('Where should events be sent?');
+    setBusy(true);
+    try {
+      const { data } = await api.post('/admin/integrations/webhooks', {
+        name: `${pool.funder} — ${pool.name}`, url, scope: 'funder', pool_ids: [pool.id],
+      });
+      setIssuedSecret(data.secret);
+      setHookFor(null);
+      setHookUrl('');
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Could not register that endpoint');
     } finally { setBusy(false); }
   };
 
@@ -346,6 +365,9 @@ export default function BikePools() {
             <div className="row" style={{ gap: 6 }}>
               <button className="btn btn-sm btn-secondary" onClick={() => setKeyFor(p)}>
                 <KeyRound size={12} /> Issue API key
+              </button>
+              <button className="btn btn-sm btn-secondary" onClick={() => { setHookUrl(''); setHookFor(p); }}>
+                <Webhook size={12} /> Push updates
               </button>
               <button className="btn btn-sm" onClick={() => setOpenPool(p.id)}>
                 Open <ChevronRight size={12} />
@@ -436,6 +458,41 @@ export default function BikePools() {
       {issuedKey && (
         <Modal onClose={() => setIssuedKey(null)} title="Funder API key">
           <SecretReveal value={issuedKey} onDone={() => setIssuedKey(null)} />
+        </Modal>
+      )}
+
+      {hookFor && (
+        <Modal onClose={() => !busy && setHookFor(null)} title={`Push updates to ${hookFor.funder}`}>
+          <div style={{ minWidth: 400, maxWidth: 540 }}>
+            <p className="text-sm mb-3">
+              We POST to this URL as things happen on <strong>{hookFor.name}</strong>, signed so the
+              receiver can prove it came from us. Failed deliveries retry for about six hours.
+            </p>
+            <ul className="text-sm muted mb-3" style={{ paddingLeft: 18, lineHeight: 1.7 }}>
+              <li><code>pool.payment_received</code> — a rider paid, with the fee broken out</li>
+              <li><code>pool.composition_changed</code> — bikes moved into or out of the tranche</li>
+              <li><code>pool.daily_summary</code> — the whole position, 06:00 SAST</li>
+            </ul>
+            <label className="label">Endpoint URL</label>
+            <input className="input mb-1" value={hookUrl} placeholder="https://svcapital.co.za/hooks/onfleet"
+              onChange={(e) => setHookUrl(e.target.value)} />
+            <div className="muted text-xs mb-3">
+              HTTPS only. This endpoint receives money and never an alarm, so no rider name or
+              phone number is sent to it.
+            </div>
+            <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
+              <button className="btn btn-secondary" disabled={busy} onClick={() => setHookFor(null)}>Cancel</button>
+              <button className="btn" disabled={busy} onClick={() => registerHook(hookFor)}>
+                <Webhook size={14} /> Register endpoint
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {issuedSecret && (
+        <Modal onClose={() => setIssuedSecret(null)} title="Signing secret">
+          <SecretReveal value={issuedSecret} onDone={() => setIssuedSecret(null)} />
         </Modal>
       )}
 

@@ -400,6 +400,25 @@ function start() {
   }, SAST);
   cron.schedule('30 6 1 * *', () => runMonthlyStatements().catch((error) => console.error('monthly statements failed', error)));
 
+  // Pool finance pushed to the funders who paid for the bikes.
+  //
+  // The payment sweep is deliberately repetitive rather than hooked into each
+  // of the five places a payment can become successful: re-queueing an
+  // already-delivered payment is a no-op on the dedup index, and a path added
+  // later is covered without anybody remembering to wire it.
+  //
+  // The daily summary is on Johannesburg time for the same reason the night
+  // lock is — "the position on the 5th" must mean the same thing to us and to
+  // the funder reading it, and a UTC container would send it at 08:00 SAST
+  // one half of the year and 09:00 the other.
+  const poolWebhooks = require('./poolWebhooks');
+  setInterval(() => {
+    poolWebhooks.sweepPayments().catch((e) => console.error('[pool-webhooks] payment sweep failed:', e.message));
+  }, 60_000).unref();
+  cron.schedule('0 6 * * *', () => {
+    poolWebhooks.sendDailySummaries().catch((e) => console.error('[pool-webhooks] daily summary failed:', e.message));
+  }, SAST);
+
   // Device offline detection — runs every 5 minutes
   const { checkOfflineDevices, closeStaleTrips } = require('./tripService');
   const runOfflineCheck = () => checkOfflineDevices().catch(e => console.error('[offline-check]', e.message));

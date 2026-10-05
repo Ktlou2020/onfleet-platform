@@ -18,6 +18,7 @@ const { brand } = require('../brand');
 const { getTemplate, listTemplates, previewTemplate } = require('../services/emailTemplates');
 const asyncRouter = require('../utils/asyncRouter');
 const poolFinance = require('../services/poolFinance');
+const poolWebhooks = require('../services/poolWebhooks');
 
 const router = asyncRouter(express.Router());
 const { branding: brandingUploadDir } = require('../uploadPaths');
@@ -2666,6 +2667,18 @@ router.post('/pools/:id/bikes', superadminOnly, async (req, res) => {
     count: moved.length,
     reassigned_from: before.map((b) => ({ registration: b.registration, pool_id: b.pool_id })),
   }, req.ip);
+
+  // Both funders hear about it: the one gaining the bikes and any losing
+  // them. A tranche quietly shrinking is exactly the sort of thing a funder
+  // should not have to notice for themselves.
+  poolWebhooks.emitCompositionChanged(poolId, { added: moved })
+    .catch((e) => console.error('[pool-webhooks] composition event failed:', e.message));
+  for (const lostFrom of new Set(before.map((b) => b.pool_id))) {
+    poolWebhooks.emitCompositionChanged(lostFrom, {
+      removed: before.filter((b) => b.pool_id === lostFrom),
+    }).catch((e) => console.error('[pool-webhooks] composition event failed:', e.message));
+  }
+
   res.json({ ok: true, added: moved.length, bikes: moved, reassigned: before.length });
 });
 
@@ -2681,6 +2694,8 @@ router.delete('/pools/:id/bikes/:bikeId', superadminOnly, async (req, res) => {
   if (!rows[0]) return res.status(404).json({ error: 'That bike is not in this pool' });
   await logAudit(req.user.id, 'admin.pool_bikes_remove', 'bike_pools', poolId,
     { registration: rows[0].registration }, req.ip);
+  poolWebhooks.emitCompositionChanged(poolId, { removed: rows })
+    .catch((e) => console.error('[pool-webhooks] composition event failed:', e.message));
   res.json({ ok: true, bike: rows[0] });
 });
 
@@ -2762,15 +2777,20 @@ const { ALERT_SEVERITY: WEBHOOK_ALERT_SEVERITY, ALL_ALERT_TYPES: WEBHOOK_ALERT_T
 // added later; a list means only those. An empty list is refused rather than
 // stored: "send nothing" is what Pause is for, and an active webhook that never
 // delivers looks like a broken integration to whoever runs the other end.
-function normaliseWebhookEventTypes(input) {
+function normaliseWebhookEventTypes(input, scope = 'platform') {
+  // A funder endpoint picks from the pool events; everything else picks from
+  // the alarm catalogue. The two vocabularies do not overlap, and validating
+  // a funder's choice against the alarm list would reject every valid answer.
+  const catalogue = scope === 'funder' ? poolWebhooks.ALL_POOL_EVENTS : WEBHOOK_ALERT_TYPES;
+  const noun = scope === 'funder' ? 'pool event' : 'alert type';
   if (input === null || input === undefined || input === 'all') return { value: null };
-  if (!Array.isArray(input)) return { error: 'event_types must be a list of alert types, or null for every type' };
+  if (!Array.isArray(input)) return { error: `event_types must be a list of ${noun}s, or null for every type` };
   const chosen = [...new Set(input.map((t) => String(t).trim()).filter(Boolean))];
-  if (!chosen.length) return { error: 'Choose at least one alert type, or pause the webhook to stop deliveries' };
-  const unknown = chosen.filter((t) => !WEBHOOK_ALERT_TYPES.includes(t));
-  if (unknown.length) return { error: `Unknown alert type${unknown.length === 1 ? '' : 's'}: ${unknown.join(', ')}` };
+  if (!chosen.length) return { error: `Choose at least one ${noun}, or pause the webhook to stop deliveries` };
+  const unknown = chosen.filter((t) => !catalogue.includes(t));
+  if (unknown.length) return { error: `Unknown ${noun}${unknown.length === 1 ? '' : 's'}: ${unknown.join(', ')}` };
   // Catalogue order, so the stored value is the same however the list arrived.
-  return { value: WEBHOOK_ALERT_TYPES.filter((t) => chosen.includes(t)).join(',') };
+  return { value: catalogue.filter((t) => chosen.includes(t)).join(',') };
 }
 
 // The alert catalogue with how often each type fired recently, so choosing what
@@ -2790,7 +2810,7 @@ router.get('/integrations/alert-types', superadminOnly, async (req, res) => {
 
 router.get('/integrations/webhooks', superadminOnly, async (req, res) => {
   const { rows } = await pgDb.query(
-    `SELECT e.id, e.name, e.url, e.scope, e.event_types, e.active,
+    `SELECT e.id, e.name, e.url, e.scope, e.pool_ids, e.event_types, e.active,
             e.last_success_at, e.last_failure_at, e.last_error, e.created_at,
             (SELECT COUNT(*) FROM webhook_deliveries d WHERE d.endpoint_id = e.id AND d.status = 'pending') AS pending,
             (SELECT COUNT(*) FROM webhook_deliveries d WHERE d.endpoint_id = e.id AND d.status = 'failed')  AS failed,
@@ -2813,22 +2833,49 @@ router.post('/integrations/webhooks', superadminOnly, async (req, res) => {
   if (parsed.protocol !== 'https:') {
     return res.status(400).json({ error: 'Webhook URL must use HTTPS — event payloads carry rider names and phone numbers' });
   }
+
+  // A funder endpoint receives pool finance for named pools and never an
+  // alarm, which is what carries a rider's name and number. Separate scopes
+  // rather than a filter, so the alert dispatcher's own `scope = 'platform'`
+  // excludes these without anybody having to remember to.
+  const scope = req.body.scope === 'funder' ? 'funder' : 'platform';
+  const poolIds = Array.isArray(req.body.pool_ids)
+    ? [...new Set(req.body.pool_ids.map(Number).filter(Number.isInteger))] : [];
+  if (scope === 'funder') {
+    if (!poolIds.length) return res.status(400).json({ error: 'A funder webhook must name at least one pool' });
+    const { rows: found } = await pgDb.query('SELECT id FROM bike_pools WHERE id = ANY($1)', [poolIds]);
+    if (found.length !== poolIds.length) {
+      return res.status(400).json({ error: 'One or more of those pools does not exist' });
+    }
+  }
+
   // Caller may pin specific events; omitting the list means "send everything",
   // which is what a control room normally wants.
-  const { value: eventTypes, error: eventTypesError } = normaliseWebhookEventTypes(req.body.event_types);
+  const { value: eventTypes, error: eventTypesError } = normaliseWebhookEventTypes(req.body.event_types, scope);
   if (eventTypesError) return res.status(400).json({ error: eventTypesError });
   const secret = `whsec_${crypto.randomBytes(24).toString('hex')}`;
   const { rows } = await pgDb.query(
-    `INSERT INTO webhook_endpoints (name, url, secret, scope, event_types, created_by)
-     VALUES ($1,$2,$3,'platform',$4,$5) RETURNING id`,
-    [name, url, secret, eventTypes, req.user.id]);
-  await logAudit(req.user.id, 'admin.webhook_create', 'webhook_endpoints', rows[0].id, { name, url }, req.ip);
-  res.status(201).json({ ok: true, id: rows[0].id, name, url, secret, event_types: eventTypes });
+    `INSERT INTO webhook_endpoints (name, url, secret, scope, event_types, pool_ids, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+    [name, url, secret, scope, eventTypes, scope === 'funder' ? poolIds : null, req.user.id]);
+  await logAudit(req.user.id, 'admin.webhook_create', 'webhook_endpoints', rows[0].id,
+    { name, url, scope, pool_ids: scope === 'funder' ? poolIds : null }, req.ip);
+  res.status(201).json({
+    ok: true, id: rows[0].id, name, url, secret, scope, event_types: eventTypes,
+    pool_ids: scope === 'funder' ? poolIds : null,
+  });
 });
 
 // Pause/resume, and choose which alert types the endpoint receives. The
 // dispatcher reads this on every alert, so a change applies to the next one.
 router.put('/integrations/webhooks/:id', superadminOnly, async (req, res) => {
+  // Read first: which vocabulary event_types is validated against depends on
+  // whether this endpoint is a funder's or a control room's, and validating a
+  // funder's pool events against the alarm catalogue rejects every valid one.
+  const { rows: beforeRows } = await pgDb.query(
+    'SELECT active, event_types, scope FROM webhook_endpoints WHERE id = $1', [req.params.id]);
+  if (!beforeRows[0]) return res.status(404).json({ error: 'Webhook not found' });
+
   const sets = [];
   const params = [];
   const after = {};
@@ -2838,7 +2885,7 @@ router.put('/integrations/webhooks/:id', superadminOnly, async (req, res) => {
     after.active = !!req.body.active;
   }
   if (Object.prototype.hasOwnProperty.call(req.body, 'event_types')) {
-    const { value, error } = normaliseWebhookEventTypes(req.body.event_types);
+    const { value, error } = normaliseWebhookEventTypes(req.body.event_types, beforeRows[0].scope);
     if (error) return res.status(400).json({ error });
     params.push(value);
     sets.push(`event_types = $${params.length}`);
@@ -2846,8 +2893,6 @@ router.put('/integrations/webhooks/:id', superadminOnly, async (req, res) => {
   }
   if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
 
-  const { rows: beforeRows } = await pgDb.query('SELECT active, event_types FROM webhook_endpoints WHERE id = $1', [req.params.id]);
-  if (!beforeRows[0]) return res.status(404).json({ error: 'Webhook not found' });
   params.push(req.params.id);
   const { rows } = await pgDb.query(
     `UPDATE webhook_endpoints SET ${sets.join(', ')} WHERE id = $${params.length} RETURNING id, name, active, event_types`, params);

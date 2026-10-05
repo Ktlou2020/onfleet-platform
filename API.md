@@ -389,6 +389,95 @@ discard these in production handling.
 
 ---
 
+## 3b. Webhooks — pool finance push
+
+A **funder** endpoint receives pool finance as it happens, so SV Capital's
+platform does not have to poll. Registered per pool, signed the same way as
+alarm webhooks, and retried on the same schedule.
+
+**It never receives an alarm.** Alarm payloads carry a rider's name and phone
+number; a funder endpoint is outside the company. The two feeds are separate
+scopes and a test enforces that removing the separation fails the build.
+
+### Events
+
+| Event | Kind | When |
+|---|---|---|
+| `pool.payment_received` | delta | A rider on a pooled bike paid, within about a minute |
+| `pool.composition_changed` | delta | Bikes moved into or out of the tranche, immediately |
+| `pool.daily_summary` | position | 06:00 SAST daily — the whole `summary` block from `GET /pools/{id}` |
+
+**Deltas do not carry the position, and the position does not carry deltas.**
+Putting a freshly computed summary on every payment would mean two events
+arriving a second apart disagreeing about the same pool. To get the position
+after a payment, read `GET /pools/{id}`, or wait for the morning summary.
+
+```json
+{
+  "event_id": "pool-payment-9",
+  "event_type": "pool.payment_received",
+  "occurred_at": "2026-10-05T05:49:40.763Z",
+  "sent_at": "2026-10-05T05:49:49.784Z",
+  "pool": { "id": 2, "name": "Tranche 1 — Soweto delivery", "reference": "SVC-2026-01", "funder": "SV Capital" },
+  "payment": {
+    "id": 9, "paid_at": "2026-10-05T05:49:40.763Z",
+    "amount_gross": 850.00, "processing_fee": 25.50, "amount_net": 824.50,
+    "method": "paystack", "reference": "HOOK-TEST-1", "provider_reference": null
+  },
+  "vehicle": { "id": 1, "registration": "REG45" },
+  "agreement_no": "OF-2026-548317",
+  "week_number": 12,
+  "week_due_date": "2026-09-28"
+}
+```
+
+### What is *not* pushed
+
+There is no per-event push for a bike being stolen or written off, or an
+agreement defaulting. Those move `capital_at_risk`, `arrears_total` and
+`collection_rate_pct` in the **next morning's** `pool.daily_summary`, which is
+how a funder learns about them — up to 24 hours later.
+
+If that latency matters for a specific event, say so and it can be added; it
+needs change detection on bike and agreement status, which the schema does not
+currently support cleanly. Anything needing a response within the hour should
+reach a person, not a webhook.
+
+### Delivery is at-least-once
+
+Verify the signature exactly as for alarm webhooks (§3), then **dedupe on
+`event_id`**, which is also sent as `X-OnFleet-Event-Id`.
+
+A duplicate is not hypothetical. The payload is POSTed and the result recorded
+as two steps; a container restarting between them re-sends on the next sweep.
+Observed in testing: the same `pool-payment-9` was delivered twice after a
+process was killed mid-flight, and a receiver keying on `event_id` treats the
+second as a no-op.
+
+- `pool-payment-{payment_id}` — one per payment, forever
+- `pool-summary-{pool_id}-{YYYY-MM-DD}` — one per pool per day
+- `pool-composition-{pool_id}-{epoch_ms}` — one per move
+
+Payments are swept on a rolling 7-day window rather than fired at the moment
+of insert, because a payment can become successful through several paths and
+some settle hours after they were created. An endpoint never receives anything
+that happened before it was registered, so adding a URL does not replay
+history you have already reconciled.
+
+### Registering one
+
+Admin → **Bike pools** → *Push updates*, or:
+
+```
+POST /api/admin/integrations/webhooks
+{ "name": "SV Capital", "url": "https://...", "scope": "funder", "pool_ids": [2] }
+```
+
+HTTPS only. The signing secret is shown once. Omitting `event_types` sends
+every pool event, including ones added later; pin the list to opt out of that.
+
+---
+
 ## 4. Alarm reference
 
 | Event type | Severity | Meaning |

@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 import { Stat, Loading, SearchInput } from '../../components/ui';
 import { fmt, matchesSearch } from '../../components/ui';
 import { useAuth } from '../../auth';
+import NightLockBoard from '../../components/NightLockBoard';
 import { Users, Bike, AlertCircle, TrendingUp, FileCheck, ShieldCheck, Wrench, ImagePlus, ClipboardList, BadgeCheck, Shield, CreditCard } from 'lucide-react';
 
 // Rates below 75% read as a problem to act on this week rather than a blip.
@@ -216,6 +217,12 @@ export default function AdminDashboard() {
       </div>
 
       <KpiPanel kpis={kpis} />
+
+      {/* What is immobilised right now, and the switch that decides whether
+          anything is immobilised at all. On the dashboard rather than buried
+          in tracking because on the morning after a night of locks, this is
+          the first question asked. */}
+      <NightLockBoard variant="panel" canToggle />
 
       {user?.role === 'superadmin' && (
         <div className="card mb-4">

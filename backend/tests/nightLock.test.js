@@ -275,6 +275,95 @@ describe.skipIf(!process.env.DATABASE_URL)('the overnight fleet lock', () => {
     });
   });
 
+  // The two screens built on top of all this: the control room's list of
+  // locked bikes, and the admin switch that decides whether anything is
+  // locked at all.
+  describe('the board the control room works from', () => {
+    beforeEach(async () => {
+      await ping(bike.id, { speed: 0, ignition: 0 });
+      await nightLock.lockAll({ at: inWindow });
+    });
+
+    it('moves a released bike out of the locked list and onto the pass list', async () => {
+      await request(app).post(`/api/tracking/night-lock/${bike.id}/release`)
+        .set(authHeader(control.user)).send({ reason: 'Late shift' });
+
+      // release() writes a pass that runs to 04:00 SAST, so whether it is
+      // still live depends on when the suite happens to run. The board only
+      // ever shows live passes — correct in the small hours, where releases
+      // actually happen — so put the clock where a real release would be.
+      await pgDb.query(
+        `UPDATE bikes SET night_lock_released_until = NOW() + interval '1 hour' WHERE id = $1`, [bike.id]);
+
+      const res = await request(app).get('/api/tracking/night-lock').set(authHeader(control.user));
+      expect(res.body.count).toBe(0);
+      expect(res.body.released_count).toBe(1);
+      expect(res.body.released[0]).toMatchObject({ registration: 'RAP001GP', rider_name: rider.user.full_name });
+      // Without this the screen cannot tell anybody how long the pass lasts.
+      expect(res.body.released[0].night_lock_released_until).toBeTruthy();
+    });
+
+    it('and drops a spent pass off the board once the night is over', async () => {
+      await request(app).post(`/api/tracking/night-lock/${bike.id}/release`)
+        .set(authHeader(control.user)).send({});
+      await pgDb.query(
+        `UPDATE bikes SET night_lock_released_until = NOW() - interval '1 hour' WHERE id = $1`, [bike.id]);
+
+      const res = await request(app).get('/api/tracking/night-lock').set(authHeader(control.user));
+      expect(res.body.released_count, 'last night\'s passes were still on the board').toBe(0);
+    });
+
+    it('says whether the lock is on and when the window runs', async () => {
+      const res = await request(app).get('/api/tracking/night-lock').set(authHeader(control.user));
+      expect(res.body.enabled).toBe(true);
+      expect(res.body.window).toMatchObject({ start_hour: 0, end_hour: 4 });
+      expect(typeof res.body.in_window).toBe('boolean');
+    });
+
+    it('a rider cannot read the board', async () => {
+      const res = await request(app).get('/api/tracking/night-lock').set(authHeader(rider.user));
+      expect(res.status).toBe(403);
+    });
+  });
+
+  describe('the switch', () => {
+    it('an admin turns the lock off and nothing is locked that night', async () => {
+      const off = await request(app).put('/api/tracking/night-lock')
+        .set(authHeader(admin.user)).send({ enabled: false });
+      expect(off.status).toBe(200);
+      expect(off.body.enabled).toBe(false);
+
+      await ping(bike.id, { speed: 0, ignition: 0 });
+      await nightLock.lockAll({ at: inWindow });
+      expect(await lockState(), 'the sweep locked a bike after the feature was switched off').toBe(false);
+    });
+
+    it('and turns it back on', async () => {
+      await request(app).put('/api/tracking/night-lock').set(authHeader(admin.user)).send({ enabled: false });
+      await request(app).put('/api/tracking/night-lock').set(authHeader(admin.user)).send({ enabled: true });
+
+      await ping(bike.id, { speed: 0, ignition: 0 });
+      await nightLock.lockAll({ at: inWindow });
+      expect(await lockState()).toBe(true);
+    });
+
+    // The control room may let one bike out. Deciding the fleet is not locked
+    // tonight is a different decision and not theirs.
+    it('the control room cannot touch it', async () => {
+      const res = await request(app).put('/api/tracking/night-lock')
+        .set(authHeader(control.user)).send({ enabled: false });
+      expect(res.status).toBe(403);
+      expect(await nightLock.isEnabled(), 'the control room switched the whole feature off').toBe(true);
+    });
+
+    it('and the change is on the audit trail', async () => {
+      await request(app).put('/api/tracking/night-lock').set(authHeader(admin.user)).send({ enabled: false });
+      const { rows } = await pgDb.query(
+        `SELECT action FROM audit_logs WHERE action = 'night_lock.disabled'`);
+      expect(rows).toHaveLength(1);
+    });
+  });
+
   // Restoring by hand is somebody deciding this bike may run.
   it('restoring an engine by hand clears the lock too', async () => {
     await ping(bike.id, { speed: 0, ignition: 0 });

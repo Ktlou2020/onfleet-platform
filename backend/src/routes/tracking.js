@@ -531,7 +531,13 @@ router.post('/night-lock/:bikeId/release', authRequired, trackingReadOnly, async
 });
 
 // Which bikes are locked tonight, for the control room's own screen.
+//
+// Two lists, because at two in the morning the question is rarely only
+// "what is locked" — it is also "who have we already let out, and are they
+// going to be locked again before dawn". Released bikes carry the pass
+// until the window closes, so they are listed with it.
 router.get('/night-lock', authRequired, trackingReadOnly, async (req, res) => {
+  const nightCurfew = require('../services/nightCurfew');
   const { rows } = await pgDb.query(`
     SELECT b.id AS bike_id, b.registration, b.make, b.model, d.imei, d.night_locked_at,
            o.name AS fleet, u.full_name AS rider_name, u.phone AS rider_phone
@@ -542,7 +548,35 @@ router.get('/night-lock', authRequired, trackingReadOnly, async (req, res) => {
       LEFT JOIN users u ON u.id = a.user_id
      WHERE d.night_lock_active = TRUE
      ORDER BY d.night_locked_at DESC NULLS LAST, b.registration`);
-  res.json({ locked: rows, count: rows.length, enabled: await nightLock.isEnabled() });
+  const { rows: released } = await pgDb.query(`
+    SELECT b.id AS bike_id, b.registration, b.make, b.model, b.night_lock_released_until,
+           o.name AS fleet, u.full_name AS rider_name, u.phone AS rider_phone
+      FROM bikes b
+      LEFT JOIN organizations o ON o.id = b.organization_id
+      LEFT JOIN agreements a ON a.bike_id = b.id AND a.status = 'active'
+      LEFT JOIN users u ON u.id = a.user_id
+     WHERE b.night_lock_released_until > NOW()
+     ORDER BY b.registration`);
+  res.json({
+    locked: rows,
+    count: rows.length,
+    released,
+    released_count: released.length,
+    enabled: await nightLock.isEnabled(),
+    in_window: nightCurfew.inCurfew(),
+    window: { start_hour: nightCurfew.CURFEW_START_HOUR, end_hour: nightCurfew.CURFEW_END_HOUR },
+  });
+});
+
+// Turning the overnight lock on and off. Admin only — the control room can
+// release a bike but cannot decide to stop locking the fleet. Audited for the
+// same reason the curfew toggle is.
+router.put('/night-lock', authRequired, adminOnly, async (req, res) => {
+  const enabled = !!req.body.enabled;
+  await nightLock.setEnabled(enabled);
+  await logAudit(req.user.id, enabled ? 'night_lock.enabled' : 'night_lock.disabled',
+    'app_settings', null, { enabled }, req.ip);
+  res.json({ ok: true, enabled });
 });
 
 router.post('/devices/:id/commands', authRequired, adminOnly, async (req, res) => {

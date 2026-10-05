@@ -99,6 +99,7 @@ const Privacy = lazy(() => import('./pages/Privacy'));
 const Terms = lazy(() => import('./pages/Terms'));
 const ControlRoom = lazy(() => import('./pages/ControlRoom'));
 const ControlRoomAlerts = lazy(() => import('./pages/ControlRoomAlerts'));
+const NightLockBoard = lazy(() => import('./components/NightLockBoard'));
 const TrackingGuide = lazy(() => import('./components/TrackingGuidePage'));
 
 const WORKSHOP_ROLES = ['technician', 'admin', 'superadmin'];
@@ -267,6 +268,7 @@ export default function App() {
           <Route path="/control-room" element={<PrivateRoute role="control_room"><ControlRoom /></PrivateRoute>}>
             <Route index element={<AdminTracking readOnly />} />
             <Route path="alerts" element={<ControlRoomAlerts />} />
+            <Route path="night-lock" element={<NightLockBoard />} />
             <Route path="guide" element={<TrackingGuide portal="control-room" />} />
           </Route>
 

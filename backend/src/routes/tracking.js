@@ -563,6 +563,11 @@ router.get('/night-lock', authRequired, trackingReadOnly, async (req, res) => {
     released,
     released_count: released.length,
     enabled: await nightLock.isEnabled(),
+    // The lock shares the curfew's idea of which bikes it may touch, and that
+    // check fails closed. With the curfew off, the lock is switched on and
+    // locks nothing — so the screen has to be able to say so rather than
+    // reporting "armed" at a fleet that will not be locked.
+    curfew_enabled: await nightCurfew.isEnabled(),
     in_window: nightCurfew.inCurfew(),
     window: { start_hour: nightCurfew.CURFEW_START_HOUR, end_hour: nightCurfew.CURFEW_END_HOUR },
   });

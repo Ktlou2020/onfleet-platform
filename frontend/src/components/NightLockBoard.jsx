@@ -1,6 +1,6 @@
 'use strict';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Lock, Unlock, RefreshCw, Phone, Moon, ShieldCheck } from 'lucide-react';
+import { Lock, Unlock, RefreshCw, Phone, Moon, ShieldCheck, AlertTriangle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api';
 import { EmptyState, formatPhoneDisplay } from './ui';
@@ -91,12 +91,33 @@ export default function NightLockBoard({ variant = 'console', canToggle = false 
     ? `${fmtHour(data.window.start_hour)}–${fmtHour(data.window.end_hour)}`
     : '00:00–04:00';
 
+  // The lock reuses the curfew's rule for which bikes it may touch, and that
+  // rule fails closed. Switched on with the curfew off, it locks nothing —
+  // and a screen reading "Armed" over a fleet that will never be locked is
+  // worse than one that says plainly that it is doing nothing.
+  const blockedByCurfew = !!data?.enabled && data?.curfew_enabled === false;
+
   const statusChip = (() => {
     if (!data) return null;
     if (!data.enabled) return { text: 'Off', color: 'var(--muted)', note: 'No bikes are being locked' };
+    if (blockedByCurfew) return { text: 'Not locking', color: 'var(--danger)', note: 'The night curfew is off' };
     if (data.in_window) return { text: 'Locking now', color: 'var(--warn)', note: `Window ${windowLabel} SAST` };
     return { text: 'Armed', color: 'var(--success)', note: `Locks again at ${fmtHour(data.window?.start_hour ?? 0)} SAST` };
   })();
+
+  const curfewWarning = blockedByCurfew && (
+    <div style={{
+      display: 'flex', gap: 8, alignItems: 'flex-start', padding: '10px 12px', borderRadius: 8,
+      border: '1px solid var(--danger)', background: 'rgba(229,57,53,0.08)', fontSize: 13,
+    }}>
+      <AlertTriangle size={15} color="var(--danger)" style={{ flexShrink: 0, marginTop: 1 }} />
+      <div>
+        <strong>Switched on, but nothing will be locked.</strong>{' '}
+        The overnight lock decides which bikes it may touch using the night curfew&apos;s rule, and the
+        curfew is off. Turn the curfew on under GPS Tracking and this starts working at the next midnight.
+      </div>
+    </div>
+  );
 
   const lockedTable = (
     <div className="table-wrap">
@@ -220,6 +241,7 @@ export default function NightLockBoard({ variant = 'console', canToggle = false 
             </button>
           </div>
         </div>
+        {curfewWarning && <div className="mt-3">{curfewWarning}</div>}
         {locked.length > 0 && <div className="mt-3">{lockedTable}</div>}
         {releasedList}
       </div>
@@ -253,6 +275,7 @@ export default function NightLockBoard({ variant = 'console', canToggle = false 
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto' }}>
+        {curfewWarning && <div style={{ padding: '16px 16px 0' }}>{curfewWarning}</div>}
         {loading && !data ? (
           <div className="muted" style={{ padding: 24, fontSize: 13 }}>Loading…</div>
         ) : locked.length ? (

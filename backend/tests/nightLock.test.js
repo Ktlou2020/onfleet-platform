@@ -26,11 +26,18 @@ describe.skipIf(!process.env.DATABASE_URL)('the overnight fleet lock', () => {
 
   // ignition is an integer in gps_pings: 1 on, 0 off, null for a tracker
   // with no ignition wire. The fixture speaks the column's language.
-  const ping = async (bikeId, { speed = 0, ignition = 0, minutesAgo = 5 } = {}) =>
+  //
+  // recorded_at is anchored to the same fake clock the sweep is handed, not
+  // to the database's NOW(). Anchoring it to NOW() made the age of a fix
+  // depend on what time the suite happened to run: "too old to believe" was
+  // 97 minutes old at 03:23 UTC and 76 minutes old at 03:44, so the test
+  // asserting a stale fix is ignored only tested anything for about an hour
+  // a day and passed by luck the rest of the time.
+  const ping = async (bikeId, { speed = 0, ignition = 0, minutesAgo = 5, at = inWindow } = {}) =>
     pgDb.query(
       `INSERT INTO gps_pings (bike_id, lat, lng, speed_kmh, ignition, satellites, recorded_at)
-       VALUES ($1, -26.1, 28.0, $2, $3, 9, NOW() - ($4 || ' minutes')::interval)`,
-      [bikeId, speed, ignition, String(minutesAgo)]);
+       VALUES ($1, -26.1, 28.0, $2, $3, 9, $4::timestamptz - ($5 || ' minutes')::interval)`,
+      [bikeId, speed, ignition, at.toISOString(), String(minutesAgo)]);
 
   beforeEach(async () => {
     await resetAllPgTables();
@@ -318,6 +325,28 @@ describe.skipIf(!process.env.DATABASE_URL)('the overnight fleet lock', () => {
       expect(res.body.enabled).toBe(true);
       expect(res.body.window).toMatchObject({ start_hour: 0, end_hour: 4 });
       expect(typeof res.body.in_window).toBe('boolean');
+    });
+
+    // The lock borrows the curfew's rule for which bikes it may touch, and
+    // that rule fails closed. Switched on with the curfew off it locks
+    // nothing, so the board has to be able to say so.
+    it('says when it is switched on but the curfew leaves it doing nothing', async () => {
+      const nightCurfew = createRequire(import.meta.url)('../src/services/nightCurfew.js');
+      await nightCurfew.setEnabled(false);
+      nightCurfew.reloadSettings();
+
+      const res = await request(app).get('/api/tracking/night-lock').set(authHeader(control.user));
+      expect(res.body.enabled).toBe(true);
+      expect(res.body.curfew_enabled, 'the board would have read "armed" over a fleet nothing can lock').toBe(false);
+
+      // And it really does lock nothing, which is the thing the board is warning about.
+      await pgDb.query('UPDATE tracking_devices SET night_lock_active = FALSE');
+      await ping(bike.id, { speed: 0, ignition: 0 });
+      await nightLock.lockAll({ at: inWindow });
+      expect(await lockState()).toBe(false);
+
+      await nightCurfew.setEnabled(true);
+      nightCurfew.reloadSettings();
     });
 
     it('a rider cannot read the board', async () => {

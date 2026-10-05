@@ -25,9 +25,17 @@ Authorization: Bearer onfleet_plat_xxxxxxxxxxxxxxxxxxxxxxxxxxxx
 |---|---|
 | `platform` | Every vehicle, group, rider and alarm across all fleet owners **and** platform-owned stock |
 | `organization` | Only the vehicles belonging to one fleet owner |
+| `funder` | **Only** the finance of named bike pools — nothing else at all |
 
 A control room monitoring the whole estate needs a **platform** key. Endpoints
 marked *platform-only* below return `403` for an organization key.
+
+A **funder** key is deliberately the narrowest thing we issue. It reaches
+`/pools`, `/pools/{id}` and `/pools/{id}/payments` for the pools it was issued
+against and returns `403 FUNDER_KEY_SCOPE` on every other endpoint, including
+ones added after the key was created. It can read nothing about riders: no
+name, no phone number, no email appears in any response it can reach. It
+cannot write anything.
 
 ### Errors
 
@@ -162,6 +170,134 @@ backfill after downtime, or to reconcile what you received against what we sent.
   ]
 }
 ```
+
+### `GET /pools` — bike pool finance
+
+A pool is a set of bikes financed together — one funder's tranche — and this
+is its position: what was advanced, what has come back, what is late and how
+late, and what is unlikely to come back at all.
+
+```
+GET /api/v1/pools?status=open
+```
+
+```json
+{
+  "count": 1,
+  "as_at": "2026-10-05T04:47:07.707Z",
+  "pools": [{
+    "id": 1,
+    "name": "Tranche 1 — Soweto delivery",
+    "reference": "SVC-2026-01",
+    "funder": "SV Capital",
+    "status": "open",
+    "advanced_on": "2026-02-01",
+    "summary": {
+      "bikes": 2,
+      "bikes_by_status": { "active": 2 },
+      "bikes_earning": 1,
+
+      "capital_advanced": 90000.00,
+      "cost_basis": 56000.00,
+      "capital_recovery_pct": 5.5,
+      "recovered_against_capital": -85053.00,
+
+      "contracted_total": 66300.00,
+      "collected_gross": 5100.00,
+      "collected_net": 4947.00,
+      "processing_fees": 153.00,
+      "outstanding": 61200.00,
+      "paid_off_pct": 7.7,
+
+      "billed_to_date": 2550.00,
+      "collected_against_billed": 0.00,
+      "collection_rate_pct": 0.0,
+      "arrears_total": 2550.00,
+      "arrears_by_age": {
+        "days_1_30": 2550.00, "days_31_60": 0.00,
+        "days_61_90": 0.00,   "days_90_plus": 0.00
+      },
+
+      "collected_allocated": 0.00,
+      "unallocated_cash": 5100.00,
+      "capital_at_risk": 0.00,
+      "weeks_contracted": 78,
+      "weeks_paid": 0,
+      "last_payment_at": "2026-09-28T06:00:00.000Z"
+    }
+  }]
+}
+```
+
+**Reading these numbers.** Several pairs look redundant and are not.
+
+| Field | Means |
+|---|---|
+| `capital_advanced` | What the funder wired. Null if it was never recorded. |
+| `cost_basis` | What the bikes cost **us**. Differs from the above by deposits, delivery and PDI — a funder reconciling their own books wants `capital_advanced`. |
+| `collected_gross` | What riders paid. |
+| `collected_net` | What landed in the bank after the payment processor's fee. **Reconcile bank statements against this one.** |
+| `contracted_total` | The sum of every live agreement on these bikes. Not a forecast — what riders are contractually committed to. |
+| `billed_to_date` | Of that, how much has actually fallen due. Waived weeks are excluded. |
+| `collection_rate_pct` | `collected_against_billed ÷ billed_to_date`. Performance against what was owed, not against the whole contract. |
+| `collected_allocated` | Cash applied to a specific week of a rider's schedule. |
+| `unallocated_cash` | `collected_gross − collected_allocated`. See the warning below. |
+| `capital_at_risk` | Outstanding on bikes that are stolen or written off. Not money that is merely late. |
+
+> **`unallocated_cash` above zero.** A pool can truthfully report money
+> collected and a collection rate of zero at the same time: a payment is cash
+> that arrived, an allocation is that cash applied to a week. A rider paying
+> four weeks ahead puts this legitimately above zero. A large or growing
+> figure means receipts are not being reconciled and the collection rate is
+> understating the pool. If the two disagree, `collected_gross` is the cash.
+
+### `GET /pools/{id}` — one pool, with its bikes
+
+Same `summary`, plus a `bikes` array carrying the same fields per vehicle:
+registration, VIN, status, cost basis, current agreement number, contracted
+total, collected, outstanding, arrears and weeks paid.
+
+**Every total equals the sum of the rows beneath it.** This is a property the
+test suite enforces, so the breakdown can be used to explain the headline.
+
+A pool this key may not read returns `404`, not `403` — the distinction would
+otherwise let you discover which other tranches exist by walking the ids.
+
+### `GET /pools/{id}/payments` — transaction feed
+
+One row per successful payment, for reconciling against a bank statement.
+
+```
+GET /api/v1/pools/1/payments?since=2026-09-01T00:00:00Z&limit=500
+```
+
+```json
+{
+  "count": 1,
+  "payments": [{
+    "id": 4821,
+    "paid_at": "2026-09-28T06:00:00.000Z",
+    "amount_gross": 850.00,
+    "processing_fee": 25.50,
+    "amount_net": 824.50,
+    "method": "paystack",
+    "reference": "DEV-P1",
+    "provider_reference": "ps_8f2a...",
+    "vehicle": { "id": 1, "registration": "REG45" },
+    "agreement_no": "OF-2026-548317",
+    "week_number": 12,
+    "week_due_date": "2026-09-28"
+  }]
+}
+```
+
+`since` makes it incremental: a nightly job asks for everything after its last
+successful run rather than re-pulling the pool's history. An unparseable
+`since` is a `400` rather than a silent full dump. `limit` defaults to 500 and
+caps at 2000.
+
+No rider appears on these rows. A funder is owed an account of the money, not
+of the people.
 
 ### Also available
 

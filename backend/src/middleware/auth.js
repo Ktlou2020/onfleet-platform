@@ -74,6 +74,10 @@ const TENANT_OPERATING_PATHS = [
   '/api/admin/reports',
   '/api/admin/parts-catalog',
   '/api/admin/parts-orders',
+  // Financing pools of bikes against a rider's weekly payments is the
+  // lessor's business, which only exists where the operator collects that
+  // money. A telematics console has no pools.
+  '/api/admin/pools',
 ];
 
 const isTelematicsDeployment = brand.adminConsole === CONSOLES.TELEMATICS;

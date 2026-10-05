@@ -4,6 +4,7 @@ const pgDb = require('../pgDb');
 const asyncRouter = require('../utils/asyncRouter');
 const { ALERT_SEVERITY, ALL_ALERT_TYPES } = require('../constants/alertTypes');
 const { alertContact } = require('../services/alertContact');
+const poolFinance = require('../services/poolFinance');
 
 const router = asyncRouter(express.Router());
 
@@ -25,10 +26,30 @@ async function apiKeyAuth(req, res, next) {
   req.apiKey = key;
   req.orgId = key.org_id;
   req.isPlatformKey = key.scope === 'platform';
+  req.isFunderKey = key.scope === 'funder';
+  // NULL means unrestricted; an array means exactly these pools and no others.
+  // Kept as null rather than [] so that "no restriction" and "restricted to
+  // nothing" cannot be confused by a truthiness check downstream.
+  req.poolIds = Array.isArray(key.pool_ids) ? key.pool_ids.map(Number) : null;
   next();
 }
 
 router.use(apiKeyAuth);
+
+// A funder key is for money, and only for money. It exists so that somebody
+// financing a pool of bikes can read what that pool has collected without
+// also being handed every rider's name and phone number across the estate —
+// which is what a platform key would give them. Default-deny: anything that
+// is not a pool endpoint is refused, so a route added later is out of a
+// funder's reach until somebody decides otherwise on purpose.
+router.use((req, res, next) => {
+  if (!req.isFunderKey) return next();
+  if (req.path === '/pools' || req.path.startsWith('/pools/')) return next();
+  return res.status(403).json({
+    error: 'This key may only read bike pool finance endpoints',
+    code: 'FUNDER_KEY_SCOPE',
+  });
+});
 
 // Scope clause + params for a query over bikes. A platform key sees every
 // vehicle including platform-owned stock (organization_id IS NULL); an
@@ -206,6 +227,82 @@ router.get('/alerts', async (req, res) => {
       detail: (() => { try { return JSON.parse(r.payload || '{}'); } catch { return {}; } })(),
       };
     }),
+  });
+});
+
+// ── Bike pools (finance) ────────────────────────────────────────────────────
+// What a funder who advanced money against a set of delivery bikes needs to
+// know: how much has come back, how much is late and how late, and what is
+// unlikely ever to come back. The arithmetic lives in services/poolFinance.js
+// so that these numbers cannot drift from the ones the admin screens show.
+//
+// No rider appears anywhere in these responses. A funder is owed an account
+// of the money, not of the people, and names and phone numbers shared once
+// cannot be unshared.
+
+// Which pools this key may read at all.
+//   platform, unrestricted  → every pool
+//   platform/funder + pool_ids → exactly those
+//   organization            → pools belonging to that fleet owner
+function poolScope(req) {
+  if (req.poolIds) return { poolIds: req.poolIds };
+  if (req.isPlatformKey) return {};
+  return { orgId: req.orgId };
+}
+
+function canSeePool(req, pool) {
+  if (req.poolIds) return req.poolIds.includes(Number(pool.id));
+  if (req.isPlatformKey) return true;
+  return pool.organization_id != null && Number(pool.organization_id) === Number(req.orgId);
+}
+
+router.get('/pools', async (req, res) => {
+  const status = req.query.status ? String(req.query.status) : null;
+  if (status && !['open', 'closed'].includes(status)) {
+    return res.status(400).json({ error: 'Invalid `status` — expected open or closed' });
+  }
+  const pools = await poolFinance.list({ ...poolScope(req), status });
+  res.json({ count: pools.length, as_at: new Date().toISOString(), pools });
+});
+
+router.get('/pools/:id', async (req, res) => {
+  const poolId = Number(req.params.id);
+  if (!Number.isInteger(poolId) || poolId <= 0) {
+    return res.status(400).json({ error: 'Invalid pool id' });
+  }
+  const pool = await poolFinance.getPool(poolId);
+  // 404 rather than 403 for a pool this key may not read. A funder probing
+  // ids should not be able to learn which other tranches exist from the
+  // difference between "forbidden" and "no such thing".
+  if (!pool || !canSeePool(req, pool)) return res.status(404).json({ error: 'Pool not found' });
+
+  const full = await poolFinance.position(poolId);
+  res.json({ as_at: new Date().toISOString(), ...full });
+});
+
+// The transaction feed, for reconciling against a bank statement. `since`
+// makes it incremental: a nightly job asks for everything after its last
+// successful run rather than re-pulling the pool's whole history.
+router.get('/pools/:id/payments', async (req, res) => {
+  const poolId = Number(req.params.id);
+  if (!Number.isInteger(poolId) || poolId <= 0) {
+    return res.status(400).json({ error: 'Invalid pool id' });
+  }
+  const pool = await poolFinance.getPool(poolId);
+  if (!pool || !canSeePool(req, pool)) return res.status(404).json({ error: 'Pool not found' });
+
+  const since = req.query.since ? new Date(req.query.since) : null;
+  if (req.query.since && Number.isNaN(since.getTime())) {
+    return res.status(400).json({ error: 'Invalid `since` — expected an ISO 8601 timestamp' });
+  }
+  const limit = Math.min(Number(req.query.limit) || 500, 2000);
+
+  const rows = await poolFinance.payments(poolId, { since, limit });
+  res.json({
+    pool: poolFinance.poolShape(pool),
+    count: rows.length,
+    as_at: new Date().toISOString(),
+    payments: rows,
   });
 });
 

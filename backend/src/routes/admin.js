@@ -17,6 +17,7 @@ const { sendNotification } = require('../services/notifierPg');
 const { brand } = require('../brand');
 const { getTemplate, listTemplates, previewTemplate } = require('../services/emailTemplates');
 const asyncRouter = require('../utils/asyncRouter');
+const poolFinance = require('../services/poolFinance');
 
 const router = asyncRouter(express.Router());
 const { branding: brandingUploadDir } = require('../uploadPaths');
@@ -2547,6 +2548,154 @@ router.get('/login-attempts', async (req, res) => {
   res.json({ count: rows.length, attempts: rows });
 });
 
+// ---------- Bike pools: the financing layer ----------
+// A funder advances money against a set of bikes and is repaid out of what
+// the riders on them pay each week. These endpoints are how a pool comes to
+// exist and how bikes get into it; /api/v1/pools is how the funder reads it.
+//
+// Superadmin-only. Which bikes sit in whose pool decides who gets paid what,
+// and that is not a thing an ordinary admin should be able to move.
+
+router.get('/pools', superadminOnly, async (req, res) => {
+  const pools = await poolFinance.list({
+    status: ['open', 'closed'].includes(req.query.status) ? req.query.status : null,
+  });
+  res.json({ count: pools.length, pools });
+});
+
+router.get('/pools/:id', superadminOnly, async (req, res) => {
+  const poolId = Number(req.params.id);
+  if (!Number.isInteger(poolId)) return res.status(400).json({ error: 'Invalid pool id' });
+  const full = await poolFinance.position(poolId);
+  if (!full) return res.status(404).json({ error: 'Pool not found' });
+  res.json(full);
+});
+
+router.post('/pools', superadminOnly, async (req, res) => {
+  const name = String(req.body.name || '').trim();
+  const funder = String(req.body.funder || '').trim();
+  if (!name) return res.status(400).json({ error: 'Pool name is required' });
+  if (!funder) return res.status(400).json({ error: 'Funder is required' });
+
+  const reference = String(req.body.reference || '').trim() || null;
+  const capital = req.body.capital_advanced === '' || req.body.capital_advanced == null
+    ? null : Number(req.body.capital_advanced);
+  if (capital != null && !Number.isFinite(capital)) {
+    return res.status(400).json({ error: 'Capital advanced must be a number' });
+  }
+
+  try {
+    const { rows } = await pgDb.query(
+      `INSERT INTO bike_pools (name, reference, funder, capital_advanced, advanced_on,
+                               organization_id, notes, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [name, reference, funder, capital, req.body.advanced_on || null,
+       req.body.organization_id || null, req.body.notes || null, req.user.id]);
+    await logAudit(req.user.id, 'admin.pool_create', 'bike_pools', rows[0].id,
+      { name, funder, reference, capital_advanced: capital }, req.ip);
+    res.status(201).json({ ok: true, pool: rows[0] });
+  } catch (e) {
+    // The reference is unique case-insensitively, because two pools whose
+    // references differ only in case is a reconciliation problem rather than
+    // two pools.
+    if (e.code === '23505') return res.status(409).json({ error: 'That pool reference is already in use' });
+    throw e;
+  }
+});
+
+router.put('/pools/:id', superadminOnly, async (req, res) => {
+  const poolId = Number(req.params.id);
+  if (!Number.isInteger(poolId)) return res.status(400).json({ error: 'Invalid pool id' });
+
+  const fields = [];
+  const params = [];
+  const set = (column, value) => { params.push(value); fields.push(`${column} = $${params.length}`); };
+  if (req.body.name !== undefined) set('name', String(req.body.name).trim());
+  if (req.body.reference !== undefined) set('reference', String(req.body.reference).trim() || null);
+  if (req.body.funder !== undefined) set('funder', String(req.body.funder).trim());
+  if (req.body.capital_advanced !== undefined) {
+    set('capital_advanced', req.body.capital_advanced === '' || req.body.capital_advanced == null
+      ? null : Number(req.body.capital_advanced));
+  }
+  if (req.body.advanced_on !== undefined) set('advanced_on', req.body.advanced_on || null);
+  if (req.body.notes !== undefined) set('notes', req.body.notes || null);
+  if (req.body.status !== undefined) {
+    if (!['open', 'closed'].includes(req.body.status)) {
+      return res.status(400).json({ error: 'Status must be open or closed' });
+    }
+    set('status', req.body.status);
+  }
+  if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
+
+  params.push(poolId);
+  const { rows } = await pgDb.query(
+    `UPDATE bike_pools SET ${fields.join(', ')}, updated_at = NOW()
+      WHERE id = $${params.length} RETURNING *`, params);
+  if (!rows[0]) return res.status(404).json({ error: 'Pool not found' });
+  await logAudit(req.user.id, 'admin.pool_update', 'bike_pools', poolId, req.body, req.ip);
+  res.json({ ok: true, pool: rows[0] });
+});
+
+// Moving bikes in and out. Audited by registration rather than by id,
+// because the question asked afterwards is always "when did REG45 leave
+// tranche 2", and an id in a log is one join away from being an answer.
+router.post('/pools/:id/bikes', superadminOnly, async (req, res) => {
+  const poolId = Number(req.params.id);
+  if (!Number.isInteger(poolId)) return res.status(400).json({ error: 'Invalid pool id' });
+  const bikeIds = Array.isArray(req.body.bike_ids) ? req.body.bike_ids.map(Number).filter(Number.isInteger) : [];
+  if (!bikeIds.length) return res.status(400).json({ error: 'Select at least one bike' });
+
+  const { rows: pool } = await pgDb.query('SELECT id FROM bike_pools WHERE id = $1', [poolId]);
+  if (!pool[0]) return res.status(404).json({ error: 'Pool not found' });
+
+  // A bike belongs to one pool at a time, so some of these may be moving off
+  // another funder's book. Read that before the update rather than trying to
+  // get it out of RETURNING, and name it in the audit record — money that
+  // moved between funders should not be a silent gap in the first one's.
+  const { rows: before } = await pgDb.query(
+    `SELECT id, registration, pool_id FROM bikes
+      WHERE id = ANY($1) AND pool_id IS NOT NULL AND pool_id <> $2`, [bikeIds, poolId]);
+
+  const { rows: moved } = await pgDb.query(
+    `UPDATE bikes SET pool_id = $1
+      WHERE id = ANY($2) AND workshop_only = FALSE
+      RETURNING id, registration`, [poolId, bikeIds]);
+
+  await logAudit(req.user.id, 'admin.pool_bikes_add', 'bike_pools', poolId, {
+    registrations: moved.map((b) => b.registration),
+    count: moved.length,
+    reassigned_from: before.map((b) => ({ registration: b.registration, pool_id: b.pool_id })),
+  }, req.ip);
+  res.json({ ok: true, added: moved.length, bikes: moved, reassigned: before.length });
+});
+
+router.delete('/pools/:id/bikes/:bikeId', superadminOnly, async (req, res) => {
+  const poolId = Number(req.params.id);
+  const bikeId = Number(req.params.bikeId);
+  if (!Number.isInteger(poolId) || !Number.isInteger(bikeId)) {
+    return res.status(400).json({ error: 'Invalid id' });
+  }
+  const { rows } = await pgDb.query(
+    `UPDATE bikes SET pool_id = NULL WHERE id = $1 AND pool_id = $2 RETURNING id, registration`,
+    [bikeId, poolId]);
+  if (!rows[0]) return res.status(404).json({ error: 'That bike is not in this pool' });
+  await logAudit(req.user.id, 'admin.pool_bikes_remove', 'bike_pools', poolId,
+    { registration: rows[0].registration }, req.ip);
+  res.json({ ok: true, bike: rows[0] });
+});
+
+// Bikes with no pool, for the assignment picker.
+router.get('/pools-unassigned-bikes', superadminOnly, async (req, res) => {
+  const { rows } = await pgDb.query(
+    `SELECT b.id, b.registration, b.vin, b.make, b.model, b.status, b.purchase_price,
+            o.name AS organization_name
+       FROM bikes b
+       LEFT JOIN organizations o ON o.id = b.organization_id
+      WHERE b.pool_id IS NULL AND b.workshop_only = FALSE
+      ORDER BY b.registration ASC LIMIT 500`);
+  res.json({ count: rows.length, bikes: rows });
+});
+
 // ---------- Platform integrations: API keys + outbound webhooks ----------
 // Superadmin-only. These grant visibility across every organisation and every
 // platform-owned vehicle, so they deliberately sit outside the fleet-owner
@@ -2554,7 +2703,7 @@ router.get('/login-attempts', async (req, res) => {
 
 router.get('/integrations/api-keys', superadminOnly, async (req, res) => {
   const { rows } = await pgDb.query(
-    `SELECT ak.id, ak.name, ak.key_prefix, ak.scope, ak.organization_id,
+    `SELECT ak.id, ak.name, ak.key_prefix, ak.scope, ak.organization_id, ak.pool_ids,
             o.name AS organization_name, ak.last_used_at, ak.revoked_at, ak.created_at
        FROM api_keys ak LEFT JOIN organizations o ON o.id = ak.organization_id
       ORDER BY ak.revoked_at NULLS FIRST, ak.created_at DESC`);
@@ -2564,16 +2713,38 @@ router.get('/integrations/api-keys', superadminOnly, async (req, res) => {
 router.post('/integrations/api-keys', superadminOnly, async (req, res) => {
   const name = String(req.body.name || '').trim();
   if (!name) return res.status(400).json({ error: 'Key name is required' });
-  const rawKey = `onfleet_plat_${crypto.randomBytes(32).toString('hex')}`;
+
+  // A funder key reads the finance of named pools and nothing else. Issued
+  // here rather than anywhere a fleet owner can reach, because it crosses
+  // organisation boundaries by design — a tranche can hold bikes from more
+  // than one fleet.
+  const poolIds = Array.isArray(req.body.pool_ids)
+    ? [...new Set(req.body.pool_ids.map(Number).filter(Number.isInteger))] : [];
+  const scope = req.body.scope === 'funder' ? 'funder' : 'platform';
+  if (scope === 'funder' && !poolIds.length) {
+    return res.status(400).json({ error: 'A funder key must name at least one pool' });
+  }
+  if (scope === 'funder') {
+    const { rows: found } = await pgDb.query('SELECT id FROM bike_pools WHERE id = ANY($1)', [poolIds]);
+    if (found.length !== poolIds.length) {
+      return res.status(400).json({ error: 'One or more of those pools does not exist' });
+    }
+  }
+
+  const rawKey = `onfleet_${scope === 'funder' ? 'fund' : 'plat'}_${crypto.randomBytes(32).toString('hex')}`;
   const prefix = rawKey.slice(0, 21);
   const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
   const { rows } = await pgDb.query(
-    `INSERT INTO api_keys (organization_id, created_by, name, key_hash, key_prefix, scope)
-     VALUES (NULL, $1, $2, $3, $4, 'platform') RETURNING id`,
-    [req.user.id, name, keyHash, prefix]);
-  await logAudit(req.user.id, 'admin.platform_api_key_create', 'api_keys', rows[0].id, { name }, req.ip);
+    `INSERT INTO api_keys (organization_id, created_by, name, key_hash, key_prefix, scope, pool_ids)
+     VALUES (NULL, $1, $2, $3, $4, $5, $6) RETURNING id`,
+    [req.user.id, name, keyHash, prefix, scope, scope === 'funder' ? poolIds : null]);
+  await logAudit(req.user.id, 'admin.platform_api_key_create', 'api_keys', rows[0].id,
+    { name, scope, pool_ids: scope === 'funder' ? poolIds : null }, req.ip);
   // The raw key is returned exactly once — only its hash is stored.
-  res.status(201).json({ ok: true, key: rawKey, key_id: rows[0].id, prefix, name, scope: 'platform' });
+  res.status(201).json({
+    ok: true, key: rawKey, key_id: rows[0].id, prefix, name, scope,
+    pool_ids: scope === 'funder' ? poolIds : null,
+  });
 });
 
 router.delete('/integrations/api-keys/:id', superadminOnly, async (req, res) => {

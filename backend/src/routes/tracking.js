@@ -455,6 +455,96 @@ router.get('/devices/:id/positions', authRequired, trackingReadOnly, async (req,
 
 // ---------- Commands ----------
 
+// ─── The overnight lock, and the two ways out of it ──────────────────────────
+//
+// A fleet-wide immobiliser is only acceptable if nobody can be stranded by
+// it, so there are three releases and they are deliberately different:
+//
+//   the rider      lets their own bike out, from the app, at one in the
+//                  morning, without waking anybody. This is the one that
+//                  matters — a delivery rider finishing a late shift should
+//                  not need to phone anyone to get home.
+//   the control    lets any bike out. Somebody is always awake, and a rider
+//   room           with a flat phone still needs to get home.
+//   the bike       lets itself out, by reporting in after the window while
+//                  still locked. See nightLock.onPosition.
+//
+// None of them can release an engine cut. A bike stopped for theft or arrears
+// was stopped by a person's decision, and a button in a rider's app is not
+// the place to overturn it — that release answers 409 and says to call.
+
+// A rider releasing their own bike. The bike comes from their agreement, not
+// from the request, so there is nothing to tamper with.
+router.post('/night-lock/release', authRequired, async (req, res) => {
+  if (req.user.role !== 'rider') {
+    return res.status(403).json({ error: 'This releases your own bike. Use the control room release for somebody else\'s.' });
+  }
+  const { rows } = await pgDb.query(
+    `SELECT b.id, b.registration FROM agreements a JOIN bikes b ON b.id = a.bike_id
+      WHERE a.user_id = $1 AND a.status = 'active' ORDER BY a.id DESC LIMIT 1`, [req.user.id]);
+  const bike = rows[0];
+  if (!bike) return res.status(404).json({ error: 'You do not have a bike on the road' });
+
+  const result = await nightLock.release(bike.id, { actorId: req.user.id, by: 'rider' });
+  if (!result.ok) return res.status(result.status).json(result);
+
+  await logAudit(req.user.id, 'night_lock.released_by_rider', 'bikes', bike.id,
+    { registration: bike.registration, released_until: result.released_until }, req.ip);
+  res.json({ ok: true, registration: bike.registration, released_until: result.released_until });
+});
+
+// Whether the rider's bike is locked right now, so the app can offer the
+// button only when it is of any use.
+router.get('/night-lock/mine', authRequired, async (req, res) => {
+  const { rows } = await pgDb.query(
+    `SELECT b.id, b.registration, d.night_lock_active, d.engine_cut_active, d.engine_cut_reason,
+            b.night_lock_released_until
+       FROM agreements a
+       JOIN bikes b ON b.id = a.bike_id
+       LEFT JOIN tracking_devices d ON d.bike_id = b.id
+      WHERE a.user_id = $1 AND a.status = 'active' ORDER BY a.id DESC LIMIT 1`, [req.user.id]);
+  const bike = rows[0];
+  if (!bike) return res.json({ bike: null });
+  res.json({
+    bike: { id: bike.id, registration: bike.registration },
+    night_locked: !!bike.night_lock_active,
+    // Said separately because the rider can do something about one of these
+    // and not the other.
+    stopped_for_another_reason: !!bike.engine_cut_active,
+    released_until: bike.night_lock_released_until,
+  });
+});
+
+// The control room, for anybody's bike. trackingReadOnly rather than
+// adminOnly: the control room is otherwise read-only, and this is the one
+// write it has to be able to make at two in the morning.
+router.post('/night-lock/:bikeId/release', authRequired, trackingReadOnly, async (req, res) => {
+  const bikeId = Number(req.params.bikeId);
+  if (!Number.isInteger(bikeId) || bikeId <= 0) return res.status(400).json({ error: 'Which bike?' });
+
+  const result = await nightLock.release(bikeId, { actorId: req.user.id, by: 'control room' });
+  if (!result.ok) return res.status(result.status).json(result);
+
+  await logAudit(req.user.id, 'night_lock.released_by_staff', 'bikes', bikeId,
+    { released_until: result.released_until, reason: req.body.reason || null }, req.ip);
+  res.json({ ok: true, released_until: result.released_until });
+});
+
+// Which bikes are locked tonight, for the control room's own screen.
+router.get('/night-lock', authRequired, trackingReadOnly, async (req, res) => {
+  const { rows } = await pgDb.query(`
+    SELECT b.id AS bike_id, b.registration, b.make, b.model, d.imei, d.night_locked_at,
+           o.name AS fleet, u.full_name AS rider_name, u.phone AS rider_phone
+      FROM tracking_devices d
+      JOIN bikes b ON b.id = d.bike_id
+      LEFT JOIN organizations o ON o.id = b.organization_id
+      LEFT JOIN agreements a ON a.bike_id = b.id AND a.status = 'active'
+      LEFT JOIN users u ON u.id = a.user_id
+     WHERE d.night_lock_active = TRUE
+     ORDER BY d.night_locked_at DESC NULLS LAST, b.registration`);
+  res.json({ locked: rows, count: rows.length, enabled: await nightLock.isEnabled() });
+});
+
 router.post('/devices/:id/commands', authRequired, adminOnly, async (req, res) => {
   const { rows: devRows } = await pgDb.query('SELECT * FROM tracking_devices WHERE id=$1', [req.params.id]);
   if (!devRows[0]) return res.status(404).json({ error: 'Device not found' });
@@ -494,8 +584,12 @@ router.post('/devices/:id/commands', authRequired, adminOnly, async (req, res) =
     notifyRiderEngineState(device.bike_id, 'cut', { reason: req.body.reason || null })
       .catch((e) => console.error('[EngineCut] rider notify failed:', e.message));
   } else if (req.body.preset === 'restore_engine') {
+    // night_lock_active goes with it: somebody has just decided this bike may
+    // run, and leaving the flag set would have the next sweep put it straight
+    // back to sleep.
     await pgDb.query(
-      `UPDATE tracking_devices SET engine_cut_active=FALSE, engine_cut_reason=NULL, engine_cut_at=NULL, engine_cut_by=NULL WHERE id=$1`,
+      `UPDATE tracking_devices SET engine_cut_active=FALSE, engine_cut_reason=NULL, engine_cut_at=NULL, engine_cut_by=NULL,
+                                   night_lock_active=FALSE, night_locked_at=NULL WHERE id=$1`,
       [device.id]
     );
     // Required here rather than at module scope, as elsewhere in this file:
@@ -1100,6 +1194,7 @@ router.post('/devices/:id/commission', authRequired, adminOnly, async (req, res)
 // open, and closes with an outcome. That is where the recovery rate comes from.
 
 const theftCases = require('../services/theftCaseService');
+const nightLock = require('../services/nightLock');
 const deviceHealth = require('../services/deviceHealth');
 
 router.get('/theft-cases', authRequired, trackingReadOnly, async (req, res) => {

@@ -6,6 +6,7 @@ const pgDb = require('../pgDb');
 const { sendNotification } = require('./notifierPg');
 const { recalcScheduleStatuses } = require('../utils/helpersPg');
 const { brand } = require('../brand');
+const nightLock = require('./nightLock');
 
 function creditedAmount(payment) {
   return Number(payment?.amount ?? payment?.net_amount ?? 0);
@@ -377,6 +378,26 @@ async function runScheduleRecalc() {
 function start() {
   cron.schedule('0 6 * * *', () => runDailyReminders().catch((error) => console.error('daily reminders failed', error)));
   cron.schedule('5 0 * * *', () => runScheduleRecalc().catch((error) => console.error('schedule recalc failed', error)));
+
+  // The overnight fleet lock, in Johannesburg time rather than the
+  // container's. Every other job here runs on the container clock, which is
+  // fine for a daily report an hour either way. It is not fine for this: a
+  // UTC container would lock the fleet at 02:00 SAST and wake it at 06:00,
+  // which is two hours of bikes that should have been working.
+  const SAST = { timezone: 'Africa/Johannesburg' };
+  cron.schedule('0 0 * * *', () => {
+    nightLock.lockAll().catch((error) => console.error('night lock failed', error));
+  }, SAST);
+  // Twice, ten minutes apart. The sweep that wakes the fleet is the one
+  // failure that keeps riders off the road in the morning, so it gets a
+  // second go before anybody notices — and the bikes themselves release on
+  // their first daylight report if both somehow miss.
+  cron.schedule('0 4 * * *', () => {
+    nightLock.unlockAll().catch((error) => console.error('night unlock failed', error));
+  }, SAST);
+  cron.schedule('10 4 * * *', () => {
+    nightLock.unlockAll().catch((error) => console.error('night unlock retry failed', error));
+  }, SAST);
   cron.schedule('30 6 1 * *', () => runMonthlyStatements().catch((error) => console.error('monthly statements failed', error)));
 
   // Device offline detection — runs every 5 minutes

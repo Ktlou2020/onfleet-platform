@@ -5,6 +5,7 @@ const trackingEvents = require('../trackingEvents');
 const { sendNotification } = require('./notifierPg');
 const { ALERT_SEVERITY } = require('../constants/alertTypes');
 const nightCurfew = require('./nightCurfew');
+const nightLock = require('./nightLock');
 const ignitionTrust = require('./ignitionTrust');
 
 // In-memory trip state per bike
@@ -335,6 +336,18 @@ async function processPing(bikeId, deviceId, lat, lng, speed, ignition, recorded
   // noise one: the cut waits for walking pace so the engine never dies under a
   // rider at speed, and a bad fix reporting 0 km/h on a bike doing 80 would
   // defeat exactly that.
+  // A locked bike reporting in. Inside the window this re-asserts a lock that
+  // did not take; outside it, the bike releases itself, so a four o'clock
+  // sweep that failed cannot keep the fleet off the road.
+  if (deviceId) {
+    nightLock.onPosition({
+      deviceId,
+      speedKmh: trusted ? speed : null,
+      ignitionOn: hasIgnitionSignal ? ignitionOn : null,
+      at: new Date(ts),
+    }).catch((e) => console.error('[night-lock] position hook failed:', e.message));
+  }
+
   if (trusted && nightCurfew.isArmed(bikeId)) {
     // The ignition reading goes with the speed, because a bike that is
     // switched off is safe to cut whatever its last speed reading said — and

@@ -1,11 +1,21 @@
 import { useState } from 'react';
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 
-export default function TourModal({ steps, storageKey, onFinish }) {
+export default function TourModal({ steps, storageKey, onFinish, deferUntil = null }) {
   const [step, setStep] = useState(0);
   const [visible, setVisible] = useState(() => {
     try { return !localStorage.getItem(storageKey); } catch { return true; }
   });
+
+  // Something on the page needs the rider more than a welcome carousel does.
+  //
+  // A first-time rider whose first app open happens to be at one in the
+  // morning, next to a bike immobilised by the overnight lock, was shown
+  // five slides about bookmarking the page on top of the one button that
+  // would get them home. Deferred rather than dismissed: the tour is still
+  // waiting once the urgent thing is dealt with, because it has not been
+  // marked as seen.
+  if (deferUntil) return null;
 
   if (!visible || !steps?.length) return null;
 

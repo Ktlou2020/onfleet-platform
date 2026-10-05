@@ -4,6 +4,7 @@ import api from '../../api';
 import { Stat, Badge, DashboardSkeleton, fmt, fmtDate, EmptyState } from '../../components/ui';
 import { Bike, TrendingUp, Calendar, AlertCircle, CreditCard, FileText, UserCircle, CheckCircle2 } from 'lucide-react';
 import TourModal from '../../components/TourModal';
+import { useNightLockUrgent } from '../../components/NightLockBanner';
 import SupportContact from '../../components/SupportContact';
 
 const RIDER_TOUR_STEPS = [
@@ -43,6 +44,8 @@ const monthLabel = (monthKey) => new Date(`${monthKey}-01T00:00:00`).toLocaleDat
 const creditedAmount = (payment) => Number(payment?.net_amount ?? payment?.amount ?? 0);
 
 export default function RiderDashboard() {
+  // The welcome tour waits while the rider is looking at a locked bike.
+  const nightLockUrgent = useNightLockUrgent();
   const [data, setData] = useState(null);
   const [apps, setApps] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -64,7 +67,7 @@ export default function RiderDashboard() {
     const pending = apps.find((application) => application.status === 'submitted' || application.status === 'under_review');
     return (
       <>
-        <TourModal steps={RIDER_TOUR_STEPS} storageKey="onfleet_tour_rider_v1" />
+        <TourModal steps={RIDER_TOUR_STEPS} storageKey="onfleet_tour_rider_v1" deferUntil={nightLockUrgent} />
         <h1 className="page-title">Dashboard</h1>
         <p className="page-sub">Get started on your rent-to-own journey</p>
         {pending ? (
@@ -102,7 +105,7 @@ export default function RiderDashboard() {
 
   return (
     <>
-      <TourModal steps={RIDER_TOUR_STEPS} storageKey="onfleet_tour_rider_v1" />
+      <TourModal steps={RIDER_TOUR_STEPS} storageKey="onfleet_tour_rider_v1" deferUntil={nightLockUrgent} />
       <h1 className="page-title">Dashboard</h1>
       <p className="page-sub">Track your rent-to-own progress</p>
 

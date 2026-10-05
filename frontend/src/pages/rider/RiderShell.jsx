@@ -4,6 +4,7 @@ import { useAuth } from '../../auth';
 import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
 import { LayoutDashboard, FileText, Bike, CreditCard, User, LogOut, Bell, MoreHorizontal, X, CalendarDays } from 'lucide-react';
+import NightLockBanner from '../../components/NightLockBanner';
 
 const navItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -137,7 +138,9 @@ export default function RiderShell() {
             )}
           </div>
         </div>
-        <div className="content"><Outlet /></div>
+        {/* Above the page rather than on the dashboard: a rider standing
+            next to a bike that will not start is not going to navigate. */}
+        <div className="content"><NightLockBanner /><Outlet /></div>
       </div>
     </div>
   );

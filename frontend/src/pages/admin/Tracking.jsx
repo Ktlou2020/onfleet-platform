@@ -260,7 +260,8 @@ function BikeCombobox({ bikes, value, onChange }) {
   const filtered = bikes.filter(b => {
     if (!query) return true;
     const q = query.toLowerCase();
-    return [b.registration, b.make, b.model].some(v => v && String(v).toLowerCase().includes(q));
+    return [b.registration, b.make, b.model, b.owner?.name]
+      .some(v => v && String(v).toLowerCase().includes(q));
   }).slice(0, 80);
 
   return (
@@ -292,8 +293,18 @@ function BikeCombobox({ bikes, value, onChange }) {
                   color: String(value) === String(b.id) ? '#fff' : 'var(--text)',
                 }}
               >
-                <strong>{b.registration}</strong>
-                <span style={{ opacity: .7, marginLeft: 6 }}>{b.make} {b.model}</span>
+                <div>
+                  <strong>{b.registration}</strong>
+                  <span style={{ opacity: .7, marginLeft: 6 }}>{b.make} {b.model}</span>
+                </div>
+                {/* Whose bike it is, and whether it already has a tracker.
+                    Without the owner, two customers' registrations look the
+                    same; without the tracker, you find out by 409 after
+                    typing an IMEI. */}
+                <div style={{ fontSize: 11, opacity: .65, marginTop: 1 }}>
+                  {b.owner?.name || 'Platform stock'}
+                  {b.tracker && ` · already fitted with ${b.tracker.imei}`}
+                </div>
               </div>
             ))
           }
@@ -618,8 +629,12 @@ export default function Tracking({ readOnly = false }) {
 
   const loadBikes = useCallback(async () => {
     try {
-      const { data } = await api.get('/bikes?limit=500');
-      setBikes(data.bikes || data || []);
+      // Not /bikes: that list answers "which bikes does the platform own",
+      // which excludes every bike belonging to a fleet owner. On Pillion the
+      // operator owns none of them, so this picker was simply empty and a
+      // tracker could not be allocated to anything at all.
+      const { data } = await api.get('/tracking/allocatable-bikes');
+      setBikes(data.bikes || []);
     } catch { /* silent */ }
   }, []);
 

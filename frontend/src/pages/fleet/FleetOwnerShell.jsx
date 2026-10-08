@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Bike, FileText, CreditCard, HelpCircle, LogOut, Users, Wallet, AlertTriangle, PiggyBank, AlertCircle, MapPin, Key, Clock, CheckCircle2, ArrowRight, X, MoreHorizontal, BarChart2, UserCog, Eye, Lock, Wrench, ClipboardList, Siren, History } from 'lucide-react';
+import { LayoutDashboard, Bike, FileText, CreditCard, HelpCircle, LogOut, Users, Wallet, AlertTriangle, PiggyBank, AlertCircle, MapPin, Navigation, Key, Clock, CheckCircle2, ArrowRight, X, MoreHorizontal, BarChart2, UserCog, Eye, Lock, Wrench, ClipboardList, Siren, History } from 'lucide-react';
 import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
 import { useAuth } from '../../auth';
@@ -11,7 +11,10 @@ import { fmt } from '../../components/ui';
 const navIconMap = {
   dashboard: LayoutDashboard,
   bikes: Bike,
-  tracking: MapPin,
+  // Not MapPin: that is Hubs. This map already had `tracking: MapPin` further
+  // down, which would have won on the duplicate key and shown the same glyph
+  // twice — the exact thing the note below records happening before.
+  tracking: Navigation,
   agreements: FileText,
   payments: CreditCard,
   riders: Users,

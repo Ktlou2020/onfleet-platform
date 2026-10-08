@@ -245,10 +245,23 @@ describe.skipIf(!process.env.DATABASE_URL)('pool webhooks', () => {
       expect(await deliveries(funder.id)).toHaveLength(1);
     });
 
+    // Both days are relative to now, and the endpoint is created well before
+    // them. Pinning them to absolute dates made this pass on the day it was
+    // written and fail afterwards: the endpoint fixture is created relative to
+    // NOW(), the summary skips anything older than its endpoint, and so by the
+    // following week both runs were being skipped and the test was asserting
+    // nothing. The same mistake as anchoring a fixture to the database clock
+    // while handing the code under test a fake one.
     it('sends a fresh one the next day', async () => {
-      const funder = await endpoint({ poolIds: [pool.id] });
-      await poolWebhooks.sendDailySummaries({ at: new Date('2026-10-05T06:00:00Z') });
-      await poolWebhooks.sendDailySummaries({ at: new Date('2026-10-06T06:00:00Z') });
+      const funder = await endpoint({
+        poolIds: [pool.id],
+        createdAt: new Date(Date.now() - 30 * 86400_000).toISOString(),
+      });
+      const yesterday = new Date(Date.now() - 86400_000);
+      const today = new Date();
+
+      await poolWebhooks.sendDailySummaries({ at: yesterday });
+      await poolWebhooks.sendDailySummaries({ at: today });
       expect(await deliveries(funder.id)).toHaveLength(2);
     });
   });

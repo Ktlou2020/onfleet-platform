@@ -184,16 +184,94 @@ async function bikePlate(bikeId) {
   return rows[0]?.registration || null;
 }
 
+// Which bikes a tracker can be fitted to.
+//
+// The device form used to populate this from GET /api/bikes, which applies
+// adminVisibleBikeClause — and that clause requires organization_id IS NULL,
+// because it exists to answer "which bikes does the platform itself own".
+// That is the right question for a fleet list and the wrong one here.
+//
+// On Pillion it is not merely the wrong question, it is fatal: Pillion owns
+// no motorcycles at all, every bike on the platform belongs to a customer,
+// so the dropdown was empty and a tracker could not be allocated to anything.
+// The operator's whole job on that deployment is fitting trackers to other
+// people's bikes.
+//
+// So this is deliberately cross-tenant, and says which fleet each bike
+// belongs to so the operator can tell two customers' bikes apart. No rider
+// appears on it: fitting a tracker is about the vehicle.
+router.get('/allocatable-bikes', authRequired, adminOnly, async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  const unassignedOnly = req.query.unassigned_only === 'true';
+
+  const params = [];
+  const clauses = ['b.workshop_only = FALSE'];
+  if (q) {
+    params.push(`%${q.toLowerCase()}%`);
+    clauses.push(`(LOWER(b.registration) LIKE $${params.length}
+                   OR LOWER(b.vin) LIKE $${params.length}
+                   OR LOWER(COALESCE(o.name, '')) LIKE $${params.length})`);
+  }
+  if (unassignedOnly) clauses.push('d.id IS NULL');
+
+  const { rows } = await pgDb.query(
+    `SELECT b.id, b.registration, b.vin, b.make, b.model, b.status,
+            b.organization_id, o.name AS fleet_name,
+            d.id AS device_id, d.imei AS device_imei
+       FROM bikes b
+       LEFT JOIN organizations o ON o.id = b.organization_id
+       LEFT JOIN tracking_devices d ON d.bike_id = b.id
+      WHERE ${clauses.join(' AND ')}
+      ORDER BY o.name NULLS FIRST, b.registration ASC
+      LIMIT 1000`, params);
+
+  res.json({
+    count: rows.length,
+    bikes: rows.map((r) => ({
+      id: r.id,
+      registration: r.registration,
+      vin: r.vin,
+      make: r.make,
+      model: r.model,
+      status: r.status,
+      owner: r.organization_id
+        ? { type: 'fleet_owner', id: r.organization_id, name: r.fleet_name }
+        : { type: 'platform', id: null, name: null },
+      // So the operator can see at a glance that a bike already has a tracker
+      // rather than discovering it on a 409 after typing an IMEI.
+      tracker: r.device_id ? { id: r.device_id, imei: r.device_imei } : null,
+    })),
+  });
+});
+
+// A bike_id that does not exist, or belongs to a walk-in the workshop
+// registered, used to go straight into the insert. The foreign key caught the
+// first case as a 500 and nothing caught the second.
+async function allocatableBikeOrError(bikeId) {
+  if (bikeId === null || bikeId === undefined || bikeId === '') return { ok: true, bikeId: null };
+  const id = Number(bikeId);
+  if (!Number.isInteger(id) || id <= 0) return { ok: false, error: 'Invalid bike' };
+  const { rows } = await pgDb.query(
+    'SELECT id, workshop_only FROM bikes WHERE id = $1', [id]);
+  if (!rows[0]) return { ok: false, error: 'That bike does not exist' };
+  if (rows[0].workshop_only) {
+    return { ok: false, error: 'That is a walk-in workshop bike, not a fleet vehicle' };
+  }
+  return { ok: true, bikeId: id };
+}
+
 router.post('/devices', authRequired, adminOnly, async (req, res) => {
   const { imei, model, bike_id, label } = req.body;
   if (!imei || String(imei).trim().length < 10) return res.status(400).json({ error: 'Valid IMEI required' });
   const validModels = ['FMB920', 'FMB965', 'FMC920', 'other'];
   if (model && !validModels.includes(model)) return res.status(400).json({ error: `Model must be one of: ${validModels.join(', ')}` });
   const cleanImei = String(imei).trim();
+  const target = await allocatableBikeOrError(bike_id);
+  if (!target.ok) return res.status(400).json({ error: target.error });
   try {
     const { rows } = await pgDb.query(
       `INSERT INTO tracking_devices (imei, model, bike_id, label) VALUES ($1,$2,$3,$4) RETURNING id`,
-      [cleanImei, model || 'other', bike_id || null, label || null]
+      [cleanImei, model || 'other', target.bikeId, label || null]
     );
     await logAudit(req.user.id, 'tracking.device_register', 'tracking_devices', rows[0].id, {
       imei: cleanImei, model: model || 'other', label: label || null,
@@ -371,9 +449,11 @@ router.put('/devices/:id', authRequired, adminOnly, async (req, res) => {
   if (!rows[0]) return res.status(404).json({ error: 'Device not found' });
   const before = rows[0];
   if ('bike_id' in req.body) {
+    const target = await allocatableBikeOrError(req.body.bike_id);
+    if (!target.ok) return res.status(400).json({ error: target.error });
     await pgDb.query(
       `UPDATE tracking_devices SET model=COALESCE($1,model), bike_id=$2, label=COALESCE($3,label), speed_limit_kmh=COALESCE($4,speed_limit_kmh), updated_at=NOW() WHERE id=$5`,
-      [model || null, req.body.bike_id || null, label || null, speedLimit, rows[0].id]
+      [model || null, target.bikeId, label || null, speedLimit, rows[0].id]
     );
   } else {
     await pgDb.query(

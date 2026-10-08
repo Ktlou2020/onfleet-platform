@@ -89,6 +89,12 @@ export const FLEET_RESOURCE_ACCESS = {
 export const FLEET_NAV_ITEMS = [
   { key: 'dashboard',  to: '/fleet/app',              label: 'Dashboard' },
   { key: 'bikes',      to: '/fleet/app/bikes',         label: 'Bikes' },
+  // The page, the route, the permissions and the API have all existed since
+  // fleet tracking was built — this line had not, so the whole section was
+  // unreachable unless somebody typed the URL. Sits under Bikes because it
+  // answers a question about them, which is also where the admin console
+  // puts it.
+  { key: 'tracking',   to: '/fleet/app/tracking',      label: 'GPS Tracking' },
   { key: 'agreements', to: '/fleet/app/agreements',    label: 'Agreements' },
   { key: 'payments',   to: '/fleet/app/payments',      label: 'Payments' },
   { key: 'riders',     to: '/fleet/app/riders',        label: 'Riders' },

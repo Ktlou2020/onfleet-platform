@@ -60,6 +60,16 @@ const BRANDS = {
     emailAccent: '#93c5fd',
     emailHeaderBg: '#1E3A5F',
     emailKicker: 'Fleet Management',
+    // A blue mark on white: it disappears into the navy, so this brand gets a
+    // white header band with an accent rule beneath it instead.
+    emailLogoBackground: 'light',
+    // logo.png is a 500x500 square whose wordmark is only 303x76 of it — 15%
+    // of the height — so setting a header height of 40 rendered the lettering
+    // about six pixels tall. This is the same mark trimmed to its ink, which
+    // is what a header needs and what a favicon does not, hence a separate
+    // file rather than a change to logo.png.
+    emailLogo: '/brand/onfleet-logo-email.png',
+    emailLogoHeight: 40,
     // The company that lets bikes out under its own name, for agreements on
     // bikes that belong to no fleet operator — which on this deployment means
     // OnFleet Africa's own fleet. It is deliberately not the same thing as the
@@ -108,6 +118,12 @@ const BRANDS = {
     emailAccent: '#9BDCEE',
     emailHeaderBg: '#0C4A5A',
     emailKicker: 'Fleet Management',
+    // The wordmark is a cream fill with an amber dot, drawn to sit on
+    // something dark. On a white header it would be invisible rather than
+    // merely wrong, which is why this is a per-brand decision and not a
+    // layout choice.
+    emailLogoBackground: 'dark',
+    emailLogoHeight: 30,
     // Served by the brand routes out of frontend/public/brand, which Vite
     // copies into dist, so no Dockerfile or build change is involved.
     logo: '/brand/pillion-logo.png',

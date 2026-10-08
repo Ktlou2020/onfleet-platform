@@ -2,63 +2,10 @@
 
 const { brand } = require('../brand');
 
-// ── Shared layout wrapper ─────────────────────────────────────────────────────
-//
-// The header, the footer and every sign-off read the brand rather than naming
-// it, so a deployment that is not OnFleet does not sign its emails OnFleet.
-function layout({ preheader = '', body }) {
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${brand.name}</title>
-  <!--[if mso]><style>td,th,div,p,a,h1,h2,h3,h4,h5,h6{font-family:Arial,sans-serif!important}</style><![endif]-->
-</head>
-<body style="margin:0;padding:0;background:#f4f6f9;font-family:Arial,Helvetica,sans-serif;-webkit-text-size-adjust:100%">
-  ${preheader ? `<div style="display:none;max-height:0;overflow:hidden;mso-hide:all">${preheader}&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;</div>` : ''}
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f9;padding:32px 0">
-    <tr><td align="center">
-      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 16px rgba(0,0,0,.08)">
-        <!-- Header -->
-        <tr>
-          <td style="background:${brand.emailHeaderBg};padding:24px 32px">
-            <span style="font-size:22px;font-weight:700;color:#ffffff;letter-spacing:-.3px">${brand.name}</span>
-            <span style="font-size:13px;color:${brand.emailAccent};margin-left:8px">${brand.emailKicker}</span>
-          </td>
-        </tr>
-        <!-- Body -->
-        <tr>
-          <td style="padding:32px;color:#1a2b42;font-size:15px;line-height:1.7">
-            ${body}
-          </td>
-        </tr>
-        <!-- Footer -->
-        <tr>
-          <td style="background:#f4f6f9;padding:20px 32px;border-top:1px solid #e5e7eb;font-size:12px;color:#6b7280;line-height:1.6">
-            ${brand.fullName} &nbsp;·&nbsp; <a href="${brand.portalUrl}" style="color:${brand.emailHeaderBg};text-decoration:none">${brand.domain}</a>
-            <br />You're receiving this because you registered for a ${brand.name} trial.
-            If this email reached you in error, please ignore it.
-          </td>
-        </tr>
-      </table>
-    </td></tr>
-  </table>
-</body>
-</html>`;
-}
-
-function btn(label, url) {
-  return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px 0">
-    <tr><td style="background:#2563EB;border-radius:8px">
-      <a href="${url}" style="display:inline-block;padding:14px 28px;color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;border-radius:8px">${label}</a>
-    </td></tr>
-  </table>`;
-}
-
-function divider() {
-  return `<hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0" />`;
-}
+// The shell, the button and the rule now live in emailLayout.js, because
+// every transactional email needs them too and this file only ever covered
+// the five marketing templates below.
+const { layout, btn, divider } = require('./emailLayout');
 
 // ── Templates ─────────────────────────────────────────────────────────────────
 

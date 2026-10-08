@@ -111,10 +111,18 @@ async function issuePasswordResetToken(userId, req) {
   return buildResetUrl(rawToken);
 }
 
+// Named the brand three times in a message Pillion also sends, so a Pillion
+// customer resetting their password was told to contact the OnFleet team
+// about their OnFleet password. Reads the brand now, like everything else.
 function buildBulkResetMessage(user, resetUrl, actorName, customMessage) {
   const firstName = user.full_name?.split(' ')?.[0] || 'there';
   const intro = customMessage ? `${String(customMessage).trim()}\n\n` : '';
-  return `Hi ${firstName},\n\n${intro}We received a request to reset your OnFleet password.\n\nReset link: ${resetUrl}\n\nThis link expires in ${readEnv('PASSWORD_RESET_TOKEN_TTL_MINUTES', '60') || 60} minutes. If you were not expecting this email, please contact the OnFleet team.\n\nKind Regards\nOnFleet Team`;
+  const minutes = Number(readEnv('PASSWORD_RESET_TOKEN_TTL_MINUTES', '60') || 60);
+  return `Hi ${firstName},\n\n${intro}We received a request to reset your ${brand.name} password.\n\n`
+    + `Reset link: ${resetUrl}\n\n`
+    + `This link expires in ${minutes} minutes and can only be used once. `
+    + `If you did not ask for this, you can ignore this email — your password will not change.\n\n`
+    + `Kind regards\nThe ${brand.name} team`;
 }
 
 async function getSetting(key) {
@@ -1117,14 +1125,32 @@ router.post('/fleet-owners', async (req, res) => {
   if (req.body.send_invite !== false) {
     try {
       const resetUrl = await issuePasswordResetToken(created.userId, req);
+      // The first thing a new client ever receives from us, so it does the
+      // three things a first email has to: say who it is from and why it
+      // arrived, give one obvious thing to do, and say what happens next so
+      // nobody has to ask. The bare "the link is single use and expires" said
+      // neither how long nor what to do when it had.
+      const firstName = String(created.user.full_name || '').trim().split(/\s+/)[0];
+      // Read from the same env var the token itself is issued against, so the
+      // email cannot promise a window the token does not honour.
+      const ttlMinutes = Number(readEnv('PASSWORD_RESET_TOKEN_TTL_MINUTES', '60') || 60);
+      const ttlLabel = ttlMinutes >= 120 ? `${Math.round(ttlMinutes / 60)} hours`
+        : ttlMinutes === 60 ? 'an hour'
+        : `${ttlMinutes} minutes`;
       await sendNotification({
         userId: created.userId,
         channel: 'email',
         type: 'password_reset',
         title: `Set up your ${brand.name} account`,
-        message: `${created.user.full_name}, an account has been created for ${created.organization.name} on ${brand.name}.\n\n`
+        message: `Welcome${firstName ? `, ${firstName}` : ''} — ${created.organization.name} is now on ${brand.name}.\n\n`
           + `Set your password to get started: ${resetUrl}\n\n`
-          + 'The link is single use and expires.',
+          + `This link works once and expires in ${ttlLabel}. If it has expired by the time you open it, `
+          + `use "Forgot password" on the sign-in page and a fresh one will be sent.\n\n`
+          + `Once you are in, the first three things worth doing:\n`
+          + `1. Add your bikes — or import them from a spreadsheet\n`
+          + `2. Invite the rest of your team and set what each person can see\n`
+          + `3. Fit and pair your trackers, so the live map starts filling in\n\n`
+          + `Any questions, reply to this email and a person will answer.`,
       });
       invited = true;
     } catch (err) {

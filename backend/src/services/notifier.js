@@ -106,6 +106,9 @@ function getTransporter() {
   return transporter;
 }
 
+// The fallback when a caller reaches a provider directly without going
+// through sendEmail. Bare paragraphs and no branding — which is what every
+// transactional email looked like until sendEmail started wrapping them.
 function toHtml(body) {
   return String(body || '')
     .split('\n')
@@ -113,7 +116,7 @@ function toHtml(body) {
     .join('');
 }
 
-async function sendWithBrevo(to, subject, body) {
+async function sendWithBrevo(to, subject, body, html = null) {
   const apiKey = readEnv('BREVO_API_KEY', '');
   if (!apiKey) throw new Error('BREVO_API_KEY is not configured');
 
@@ -124,7 +127,7 @@ async function sendWithBrevo(to, subject, body) {
     to: [{ email: to }],
     subject,
     textContent: body,
-    htmlContent: toHtml(body)
+    htmlContent: html || toHtml(body)
   };
   if (replyTo?.email) payload.replyTo = replyTo;
 
@@ -144,7 +147,7 @@ async function sendWithBrevo(to, subject, body) {
   }
 }
 
-async function sendWithSmtp(to, subject, body) {
+async function sendWithSmtp(to, subject, body, html = null) {
   const mailer = getTransporter();
   if (!mailer) throw new Error('SMTP is not configured');
   const sender = getSenderIdentity();
@@ -156,22 +159,37 @@ async function sendWithSmtp(to, subject, body) {
     replyTo: replyTo?.email ? `${replyTo.name} <${replyTo.email}>` : undefined,
     subject,
     text: body,
-    html: toHtml(body)
+    html: html || toHtml(body)
   });
 }
 
-async function sendEmail(to, subject, body) {
+/**
+ * Every plain-text notification, dressed.
+ *
+ * Callers pass the text they want to say and get a branded email. They used to
+ * pass the same text and get it posted to the provider verbatim, which is why
+ * the first email a new fleet owner received was three unstyled lines and a
+ * raw reset token.
+ *
+ * The text is still sent as the plain-text alternative. That is not courtesy:
+ * an HTML-only email scores worse with spam filters, and some clients and most
+ * watches show the text part.
+ */
+async function sendEmail(to, subject, body, { footerNote = null } = {}) {
   const emailTo = String(to || '').trim().replace(/[\r\n]/g, '');
   if (!emailTo) return;
 
+  const { renderTransactional } = require('./emailLayout');
+  const html = renderTransactional({ subject, message: body, footerNote });
+
   const provider = detectEmailProvider();
   if (provider.name === 'brevo' && provider.configured) {
-    await sendWithBrevo(emailTo, subject, body);
+    await sendWithBrevo(emailTo, subject, body, html);
     return;
   }
 
   if (provider.name === 'smtp' && provider.configured) {
-    await sendWithSmtp(emailTo, subject, body);
+    await sendWithSmtp(emailTo, subject, body, html);
     return;
   }
 

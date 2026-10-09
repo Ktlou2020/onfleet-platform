@@ -411,12 +411,20 @@ function EmailModal({ orgs, onClose }) {
   );
 }
 
-const PLAN_OPTIONS = [
-  { key: 'trial',      label: 'Trial',       defaultStatus: 'trialing', maxBikes: 10,  maxAdmins: 2  },
-  { key: 'small',      label: 'Small',       defaultStatus: 'active',   maxBikes: 20,  maxAdmins: 3  },
-  { key: 'medium',     label: 'Medium',      defaultStatus: 'active',   maxBikes: 60,  maxAdmins: 5  },
-  { key: 'large',      label: 'Large',       defaultStatus: 'active',   maxBikes: 100, maxAdmins: 10 },
-  { key: 'enterprise', label: 'Enterprise',  defaultStatus: 'active',   maxBikes: 999, maxAdmins: 50 }
+// The per-bike tiers, which are what a fleet is actually served and billed
+// on. This list used to be the flat plans — Small/Medium/Large — and setting
+// one changed a label while leaving the customer on the Basic feature set,
+// because nothing reads plan_key.
+//
+// Max bikes is gone with them. Nothing in the platform enforces a bike cap,
+// and under per-bike pricing a cap on bikes would be a cap on revenue.
+// Admin seats stay, because routes/fleet.js really does refuse to add a team
+// member past that number.
+const TIER_OPTIONS = [
+  { key: 'basic',    label: 'Basic — R95/bike',      seats: 3  },
+  { key: 'workshop', label: 'Workshop — R195/bike',  seats: 5  },
+  { key: 'fleet',    label: 'Fleet — R295/bike',     seats: 10 },
+  { key: 'complete', label: 'Complete — R375/bike',  seats: 50 },
 ];
 const ORG_STATUS_OPTIONS = ['trialing', 'active', 'past_due', 'suspended', 'cancelled'];
 
@@ -602,27 +610,26 @@ function BillingModal({ org, onClose, onSaved }) {
   );
 }
 
-function ChangePlanModal({ orgId, orgName, currentPlan, currentStatus, onClose, onSaved }) {
-  const plan = PLAN_OPTIONS.find((p) => p.key === currentPlan) || PLAN_OPTIONS[0];
-  const [selectedPlan, setSelectedPlan] = useState(plan.key);
-  const [selectedStatus, setSelectedStatus] = useState(currentStatus || plan.defaultStatus);
-  const [maxBikes, setMaxBikes] = useState(String(plan.maxBikes));
-  const [maxAdmins, setMaxAdmins] = useState(String(plan.maxAdmins));
+function ChangePlanModal({ orgId, orgName, currentTier, currentStatus, currentSeats, onClose, onSaved }) {
+  const tier = TIER_OPTIONS.find((t) => t.key === currentTier) || TIER_OPTIONS[0];
+  const [selectedTier, setSelectedTier] = useState(tier.key);
+  const [selectedStatus, setSelectedStatus] = useState(currentStatus || 'active');
+  const [maxAdmins, setMaxAdmins] = useState(String(currentSeats || tier.seats));
   const [busy, setBusy] = useState(false);
 
-  const onPlanChange = (key) => {
-    const p = PLAN_OPTIONS.find((o) => o.key === key);
-    setSelectedPlan(key);
-    setSelectedStatus(p.defaultStatus);
-    setMaxBikes(String(p.maxBikes));
-    setMaxAdmins(String(p.maxAdmins));
+  const onTierChange = (key) => {
+    const t = TIER_OPTIONS.find((o) => o.key === key);
+    setSelectedTier(key);
+    setMaxAdmins(String(t.seats));
   };
 
   const submit = async () => {
     setBusy(true);
     try {
-      await api.post(`/admin/organizations/${orgId}/plan`, { plan_key: selectedPlan, status: selectedStatus, max_bikes: Number(maxBikes), max_admin_users: Number(maxAdmins) });
-      toast.success(`${orgName} plan updated to ${selectedPlan}`);
+      await api.post(`/admin/organizations/${orgId}/plan`, {
+        subscription_tier: selectedTier, status: selectedStatus, max_admin_users: Number(maxAdmins),
+      });
+      toast.success(`${orgName} moved to ${TIER_OPTIONS.find((t) => t.key === selectedTier)?.label || selectedTier}`);
       onSaved();
     } catch (e) {
       toast.error(e.response?.data?.error || 'Could not update plan');
@@ -636,9 +643,13 @@ function ChangePlanModal({ orgId, orgName, currentPlan, currentStatus, onClose, 
       <div className="muted text-sm mb-3">{orgName}</div>
       <div className="field">
         <label className="label">Plan</label>
-        <select value={selectedPlan} onChange={(e) => onPlanChange(e.target.value)}>
-          {PLAN_OPTIONS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+        <select value={selectedTier} onChange={(e) => onTierChange(e.target.value)}>
+          {TIER_OPTIONS.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
         </select>
+        <div className="muted text-xs mt-1">
+          Decides what this fleet can see and what it is billed. Priced per bike, so the
+          monthly amount follows their fleet size.
+        </div>
       </div>
       <div className="field">
         <label className="label">Status</label>
@@ -646,15 +657,10 @@ function ChangePlanModal({ orgId, orgName, currentPlan, currentStatus, onClose, 
           {ORG_STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
         </select>
       </div>
-      <div className="grid grid-2">
-        <div className="field">
-          <label className="label">Max bikes</label>
-          <input type="number" min="1" value={maxBikes} onChange={(e) => setMaxBikes(e.target.value)} />
-        </div>
-        <div className="field">
-          <label className="label">Max admin users</label>
-          <input type="number" min="1" value={maxAdmins} onChange={(e) => setMaxAdmins(e.target.value)} />
-        </div>
+      <div className="field">
+        <label className="label">Max admin users</label>
+        <input type="number" min="1" value={maxAdmins} onChange={(e) => setMaxAdmins(e.target.value)} />
+        <div className="muted text-xs mt-1">Team seats. Adding a member past this is refused.</div>
       </div>
       <div className="row">
         <button className="btn" onClick={submit} disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button>
@@ -996,8 +1002,9 @@ export default function AdminFleetOwners() {
         <ChangePlanModal
           orgId={planModal.orgId}
           orgName={planModal.orgName}
-          currentPlan={planModal.currentPlan}
+          currentTier={planModal.currentTier}
           currentStatus={planModal.currentStatus}
+          currentSeats={planModal.currentSeats}
           onClose={() => setPlanModal(null)}
           onSaved={() => { setPlanModal(null); load(); }}
         />
@@ -1190,7 +1197,7 @@ export default function AdminFleetOwners() {
                       </button>
                       <button
                         className="btn btn-sm btn-secondary"
-                        onClick={() => setPlanModal({ orgId: org.id, orgName: org.name, currentPlan: org.plan_key, currentStatus: org.status })}
+                        onClick={() => setPlanModal({ orgId: org.id, orgName: org.name, currentTier: org.subscription_tier, currentStatus: org.status, currentSeats: org.max_admin_users })}
                         style={{ display: 'flex', alignItems: 'center', gap: 4 }}
                       >
                         <Settings size={13} /> Plan

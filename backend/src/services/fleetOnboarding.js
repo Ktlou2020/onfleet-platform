@@ -40,12 +40,27 @@ const pgDb = require('../pgDb');
 // `status` travels with the plan for the same reason. A fleet put on a paid
 // plan is active; a trial is trialing. Keeping that beside the limits stops
 // the two being set from different places and disagreeing.
+// What a plan grants on day one. plan_key stays because the column is NOT
+// NULL and the Paystack webhook still reads it for legacy subscriptions, but
+// it decides nothing about features any more — subscription_tier does, and
+// onboarding sets that too now.
+//
+// It did not, and that was where the whole problem started: a fleet onboarded
+// onto 'medium' got plan_key 'medium' and no tier at all, so effectiveTier
+// fell through to 'basic' and an operator-onboarded customer was locked out
+// of the product they had just been sold, from the moment the account existed.
+//
+// max_bikes is kept on the row but caps nothing. Nothing enforces it, and
+// under per-bike pricing a cap on bikes would be a cap on revenue.
 const FLEET_PLAN_ENTITLEMENTS = {
-  trial: { status: 'trialing', max_bikes: 10, max_admin_users: 2 },
-  small: { status: 'active', max_bikes: 20, max_admin_users: 3 },
-  medium: { status: 'active', max_bikes: 60, max_admin_users: 5 },
-  large: { status: 'active', max_bikes: 100, max_admin_users: 10 },
-  enterprise: { status: 'active', max_bikes: 999, max_admin_users: 50 },
+  // tier is the per-bike tier the fleet is actually served on. A trial gets
+  // none: effectiveTier already gives a trialing account everything, and
+  // writing one would silently keep it after the trial ended.
+  trial:      { status: 'trialing', tier: null,       max_bikes: 10,  max_admin_users: 2 },
+  small:      { status: 'active',   tier: 'fleet',    max_bikes: 20,  max_admin_users: 3 },
+  medium:     { status: 'active',   tier: 'fleet',    max_bikes: 60,  max_admin_users: 5 },
+  large:      { status: 'active',   tier: 'fleet',    max_bikes: 100, max_admin_users: 10 },
+  enterprise: { status: 'active',   tier: 'complete', max_bikes: 999, max_admin_users: 50 },
 };
 
 const FLEET_ROLE_VALUES = ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'];
@@ -131,12 +146,13 @@ async function createFleetOrganisation({
     const { rows: orgRows } = await tx.query(
       `INSERT INTO organizations
          (name, slug, contact_email, contact_phone, city, fleet_size, plan_key, status,
-          trial_started_at, trial_ends_at, max_bikes, max_admin_users)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id, name, slug, status, plan_key`,
+          trial_started_at, trial_ends_at, max_bikes, max_admin_users, subscription_tier)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       RETURNING id, name, slug, status, plan_key, subscription_tier`,
       [name, slug, mail, phone || null, city || null, Math.max(0, Number(fleetSize) || 0), plan, status,
         status === 'trialing' ? now.toISOString() : null,
         trialEnds ? trialEnds.toISOString() : null,
-        ent.max_bikes, ent.max_admin_users]);
+        ent.max_bikes, ent.max_admin_users, ent.tier]);
     const organization = orgRows[0];
 
     const { rows: userRows } = await tx.query(

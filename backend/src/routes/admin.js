@@ -281,6 +281,9 @@ async function listFleetOwnerUsers() {
       o.slug AS organization_slug,
       o.status AS organization_status,
       o.plan_key,
+      -- What the fleet is actually served and billed on. plan_key is the
+      -- retired flat plan and is kept only for legacy Paystack subscriptions.
+      o.subscription_tier,
       o.contact_email,
       o.contact_phone,
       o.fleet_size,
@@ -1039,7 +1042,7 @@ router.post('/impersonate/:org_id', superadminOnly, async (req, res) => {
 // onboarding also read. The copy that used to live here disagreed with both
 // of theirs, and its numbers were the ones that won on a live account — so
 // they are the ones that survived.
-const { FLEET_PLAN_ENTITLEMENTS } = require('../services/fleetOnboarding');
+const pricing = require('../services/subscriptionPricing');
 
 router.post('/organizations/:id/plan', superadminOnly, async (req, res) => {
   const orgId = Number(req.params.id);
@@ -1049,32 +1052,46 @@ router.post('/organizations/:id/plan', superadminOnly, async (req, res) => {
   const org = orgRows[0];
   if (!org) return res.status(404).json({ error: 'Organization not found' });
 
-  const planKey = String(req.body.plan_key || '').trim();
-  if (!FLEET_PLAN_ENTITLEMENTS[planKey]) {
-    return res.status(400).json({ error: `Invalid plan. Valid options: ${Object.keys(FLEET_PLAN_ENTITLEMENTS).join(', ')}` });
+  // The tier, not the flat plan. This used to set plan_key, which decides
+  // nothing: feature gating, the billing run, invoices and dunning all read
+  // subscription_tier, so an operator moving a customer onto "Medium" here
+  // changed the label and left them on the Basic feature set.
+  //
+  // plan_key is deliberately not touched. The column is NOT NULL and the
+  // Paystack webhook still reads it for the flat subscriptions customers
+  // already bought; rewriting it from here would detach a live subscription
+  // from the row that describes it.
+  const tier = String(req.body.subscription_tier || '').trim().toLowerCase();
+  const validTiers = pricing.allTiers().map((t) => t.key);
+  if (!validTiers.includes(tier)) {
+    return res.status(400).json({ error: `Invalid plan. Valid options: ${validTiers.join(', ')}` });
   }
 
-  const defaults = FLEET_PLAN_ENTITLEMENTS[planKey];
-  const newStatus = String(req.body.status || defaults.status).trim();
+  const newStatus = String(req.body.status || 'active').trim();
   const validStatuses = ['trialing', 'active', 'past_due', 'suspended', 'cancelled'];
   if (!validStatuses.includes(newStatus)) return res.status(400).json({ error: 'Invalid status' });
 
-  const maxBikes = Number(req.body.max_bikes) || defaults.max_bikes;
-  const maxAdmins = Number(req.body.max_admin_users) || defaults.max_admin_users;
+  // Seats are still a real limit — routes/fleet.js refuses to add a team
+  // member past it. A bike cap is not: nothing enforces one, and charging
+  // per bike makes a cap on bikes a cap on revenue.
+  const maxAdmins = Number(req.body.max_admin_users) || org.max_admin_users || 2;
+  if (!Number.isFinite(maxAdmins) || maxAdmins < 1) {
+    return res.status(400).json({ error: 'Admin seats must be at least 1' });
+  }
 
-  await pgDb.query(`UPDATE organizations SET plan_key = $1, status = $2, max_bikes = $3, max_admin_users = $4, updated_at = NOW() WHERE id = $5`,
-    [planKey, newStatus, maxBikes, maxAdmins, orgId]);
+  await pgDb.query(
+    `UPDATE organizations SET subscription_tier = $1, status = $2, max_admin_users = $3, updated_at = NOW()
+      WHERE id = $4`, [tier, newStatus, maxAdmins, orgId]);
 
   await logAudit(req.user.id, 'organization.plan_changed', 'organizations', orgId, {
-    from_plan: org.plan_key,
-    to_plan: planKey,
+    from_tier: org.subscription_tier,
+    to_tier: tier,
     from_status: org.status,
     to_status: newStatus,
-    max_bikes: maxBikes,
-    max_admin_users: maxAdmins
+    max_admin_users: maxAdmins,
   }, req.ip);
 
-  res.json({ ok: true, plan_key: planKey, status: newStatus, max_bikes: maxBikes, max_admin_users: maxAdmins });
+  res.json({ ok: true, subscription_tier: tier, status: newStatus, max_admin_users: maxAdmins });
 });
 
 // Onboarding a fleet from this side of the table.

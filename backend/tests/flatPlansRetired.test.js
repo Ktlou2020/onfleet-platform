@@ -1,9 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import request from 'supertest';
 import buildApp from '../src/app.js';
+import { createRequire } from 'node:module';
 import {
   pgDb, resetAllPgTables, createPgOrg, createPgUser, authHeader,
 } from './helpers/testPgDb.js';
+
+const onboarding = createRequire(import.meta.url)('../src/services/fleetOnboarding.js');
 
 const app = buildApp();
 
@@ -86,6 +89,98 @@ describe.skipIf(!process.env.DATABASE_URL)('the retired flat plans', () => {
       // matters here is that the route still exists and is not 410.
       expect(res.status).not.toBe(404);
       expect(res.status).not.toBe(410);
+    });
+  });
+
+  // Changing a customer's plan from the operator's side.
+  //
+  // This set plan_key, which decides nothing. An operator moving a customer
+  // to "Medium" changed a label and left them on the Basic feature set — the
+  // same disconnect, from the other end of the business.
+  describe('an operator changing the plan', () => {
+    let superadmin;
+    beforeEach(async () => {
+      superadmin = await createPgUser({ role: 'superadmin' });
+      await setOrg({ subscription_tier: 'basic', plan_key: 'medium' });
+    });
+
+    const changePlan = (body) => request(app).post(`/api/admin/organizations/${org.id}/plan`)
+      .set(authHeader(superadmin.user)).send(body);
+
+    it('changes what the fleet can actually reach', async () => {
+      const before = await request(app).get('/api/fleet/agreements').set(authHeader(owner.user));
+      expect(before.status, 'a basic fleet could already see agreements').toBe(403);
+
+      const res = await changePlan({ subscription_tier: 'fleet', status: 'active', max_admin_users: 10 });
+      expect(res.status).toBe(200);
+
+      const after = await request(app).get('/api/fleet/agreements').set(authHeader(owner.user));
+      expect(after.status, 'the plan changed and the fleet still could not see agreements').toBe(200);
+    });
+
+    it('refuses a retired flat plan key', async () => {
+      const res = await changePlan({ subscription_tier: 'medium' });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('basic, workshop, fleet, complete');
+    });
+
+    // plan_key still ties a live Paystack subscription to this row.
+    it('leaves plan_key alone', async () => {
+      await changePlan({ subscription_tier: 'complete', status: 'active' });
+      const { rows } = await pgDb.query('SELECT plan_key, subscription_tier FROM organizations WHERE id = $1', [org.id]);
+      expect(rows[0].plan_key, 'a live legacy subscription was detached from its row').toBe('medium');
+      expect(rows[0].subscription_tier).toBe('complete');
+    });
+
+    it('keeps the seat limit, which is the one limit that bites', async () => {
+      const res = await changePlan({ subscription_tier: 'fleet', max_admin_users: 4 });
+      expect(res.status).toBe(200);
+      const { rows } = await pgDb.query('SELECT max_admin_users FROM organizations WHERE id = $1', [org.id]);
+      expect(rows[0].max_admin_users).toBe(4);
+    });
+
+    it('records the tier it moved between', async () => {
+      await changePlan({ subscription_tier: 'workshop' });
+      const { rows } = await pgDb.query(
+        `SELECT metadata FROM audit_logs WHERE action = 'organization.plan_changed' ORDER BY id DESC LIMIT 1`);
+      const meta = typeof rows[0].metadata === 'string' ? JSON.parse(rows[0].metadata) : rows[0].metadata;
+      expect(meta).toMatchObject({ from_tier: 'basic', to_tier: 'workshop' });
+    });
+  });
+
+  // Where the whole problem started: a fleet onboarded by an operator got a
+  // plan_key and no tier, so it was locked out of the product it had just
+  // been sold from the moment the account existed.
+  describe('onboarding a fleet', () => {
+    it('gives a paid plan a tier, not just a label', async () => {
+      const created = await onboarding.createFleetOrganisation({
+        companyName: 'Tier At Birth', fullName: 'A Owner',
+        email: `tier-${Date.now()}@example.test`, planKey: 'medium', status: 'active',
+      });
+      const { rows } = await pgDb.query(
+        'SELECT plan_key, subscription_tier FROM organizations WHERE id = $1', [created.organizationId]);
+      expect(rows[0].subscription_tier, 'a fleet was onboarded onto no tier and born locked out').toBe('fleet');
+    });
+
+    it('and the largest plan gets the top tier', async () => {
+      const created = await onboarding.createFleetOrganisation({
+        companyName: 'Big Co', fullName: 'B Owner',
+        email: `big-${Date.now()}@example.test`, planKey: 'enterprise', status: 'active',
+      });
+      const { rows } = await pgDb.query('SELECT subscription_tier FROM organizations WHERE id = $1', [created.organizationId]);
+      expect(rows[0].subscription_tier).toBe('complete');
+    });
+
+    // effectiveTier already gives a trialing account everything; writing a
+    // tier here would silently keep it after the trial ended.
+    it('leaves a trial without one', async () => {
+      const created = await onboarding.createFleetOrganisation({
+        companyName: 'Trial Co', fullName: 'C Owner',
+        email: `trial-${Date.now()}@example.test`, planKey: 'trial', status: 'trialing',
+      });
+      const { rows } = await pgDb.query('SELECT subscription_tier, status FROM organizations WHERE id = $1', [created.organizationId]);
+      expect(rows[0].status).toBe('trialing');
+      expect(rows[0].subscription_tier).toBeNull();
     });
   });
 

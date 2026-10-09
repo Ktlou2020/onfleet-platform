@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Bike, FileText, CreditCard, HelpCircle, LogOut, Users, Wallet, AlertTriangle, PiggyBank, AlertCircle, MapPin, Navigation, Key, Clock, CheckCircle2, ArrowRight, X, MoreHorizontal, BarChart2, UserCog, Eye, Lock, Wrench, ClipboardList, Siren, History } from 'lucide-react';
+import { LayoutDashboard, Bike, FileText, CreditCard, HelpCircle, LogOut, Users, Wallet, AlertTriangle, PiggyBank, AlertCircle, MapPin, Navigation, Key, Clock, X, MoreHorizontal, BarChart2, UserCog, Eye, Lock, Wrench, ClipboardList, Siren, History } from 'lucide-react';
 import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
 import { useAuth } from '../../auth';
 import { FLEET_NAV_ITEMS, canAccessFleetRoute, getFleetRoleLabel } from './access';
 import api from '../../api';
-import { fmt } from '../../components/ui';
 
 const navIconMap = {
   dashboard: LayoutDashboard,
@@ -37,42 +36,22 @@ const navIconMap = {
 
 const BLOCKED_STATUSES = ['past_due', 'suspended', 'cancelled'];
 
-const PLAN_ACCENT = {
-  small:  '#10b981',
-  medium: '#3b82f6',
-  large:  '#8b5cf6',
-  empire: '#f59e0b',
-};
-
 function SubscriptionGate({ billingData }) {
   const { logout } = useAuth();
   const nav = useNavigate();
-  const [busy, setBusy] = useState('');
 
   const org = billingData?.organization;
-  const plans = billingData?.plans || [];
   const status = org?.status;
 
   const headings = {
-    past_due:  'Your 14-day free trial has ended',
-    suspended: 'Payment failed — access suspended',
+    past_due:  'Your free trial has ended',
+    suspended: 'Payment failed — access paused',
     cancelled: 'Subscription cancelled',
   };
   const sublines = {
-    past_due:  'Subscribe to a plan below to restore full access. Paystack securely captures your card — billing starts immediately.',
-    suspended: 'Your last payment was not collected. Update your payment method by subscribing again below.',
-    cancelled: 'Your subscription was cancelled. Choose a plan below to regain access.',
-  };
-
-  const subscribe = async (planKey) => {
-    try {
-      setBusy(planKey);
-      const { data } = await api.post('/fleet/billing/subscribe', { plan_key: planKey });
-      window.location.href = data.authorization_url;
-    } catch (err) {
-      setBusy('');
-      alert(err.response?.data?.error || 'Could not start checkout — please try again.');
-    }
+    past_due:  'Choose a plan to restore full access. Pricing is per bike, so what you pay follows the size of your fleet.',
+    suspended: 'Your last payment was not collected. Nothing has been deleted — settle it and access comes straight back.',
+    cancelled: 'Your subscription was cancelled. Choose a plan to regain access.',
   };
 
   return (
@@ -83,7 +62,7 @@ function SubscriptionGate({ billingData }) {
     }}>
       <div style={{ marginBottom: 32 }}><Logo size="lg" /></div>
 
-      <div style={{ maxWidth: 640, width: '100%', textAlign: 'center', marginBottom: 40 }}>
+      <div style={{ maxWidth: 640, width: '100%', textAlign: 'center', marginBottom: 32 }}>
         <div style={{
           width: 56, height: 56, borderRadius: '50%',
           background: 'rgba(239,68,68,0.12)',
@@ -94,76 +73,28 @@ function SubscriptionGate({ billingData }) {
         </div>
         <h2 style={{ marginBottom: 10, fontSize: 22 }}>{headings[status] || 'Subscription required'}</h2>
         <p className="muted" style={{ maxWidth: 480, margin: '0 auto' }}>
-          {sublines[status] || 'Please subscribe to continue.'}
+          {sublines[status] || 'Please choose a plan to continue.'}
         </p>
       </div>
 
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: `repeat(${Math.min(plans.length, 2)}, minmax(220px, 1fr))`,
-        gap: 16, width: '100%', maxWidth: 900, marginBottom: 32
-      }}>
-        {plans.map((plan) => {
-          const accent = PLAN_ACCENT[plan.key] || 'var(--primary-light)';
-          return (
-            <div key={plan.key} className="card" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 700, color: accent, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>
-                  {plan.name}
-                </div>
-                <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--primary-light)', lineHeight: 1 }}>
-                  {plan.key === 'empire' ? 'Custom' : fmt(plan.monthly_price)}
-                  {plan.key !== 'empire' && <span className="muted text-sm" style={{ fontWeight: 400 }}>/mo</span>}
-                </div>
-              </div>
-              <ul style={{ listStyle: 'none', display: 'grid', gap: 6, flex: 1 }}>
-                {plan.features.map((f) => (
-                  <li key={f} className="row" style={{ gap: 7, alignItems: 'flex-start' }}>
-                    <CheckCircle2 size={13} style={{ color: 'var(--success)', flexShrink: 0, marginTop: 2 }} />
-                    <span className="text-sm">{f}</span>
-                  </li>
-                ))}
-              </ul>
-              {plan.key === 'empire' ? (
-                <a
-                  href="https://wa.me/27815395612?text=Hi%2C+I'm+interested+in+the+Empire+fleet+plan"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="btn btn-sm btn-secondary"
-                  style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'center' }}
-                >
-                  Contact us for a quote
-                </a>
-              ) : (
-                <button
-                  className="btn btn-sm"
-                  onClick={() => subscribe(plan.key)}
-                  disabled={!!busy}
-                  style={{ background: busy === plan.key ? undefined : accent, borderColor: accent, display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'center' }}
-                >
-                  {busy === plan.key ? 'Redirecting…' : <><span>Subscribe</span><ArrowRight size={13} /></>}
-                </button>
-              )}
-            </div>
-          );
-        })}
+      {/* This used to show the flat plan cards and post straight to
+          /billing/subscribe. That endpoint is gone, so the buttons would
+          have failed; and the plans it sold were the ones that left paying
+          customers on the Basic feature set. One way out now, to the page
+          that actually prices and charges. */}
+      <div className="row" style={{ gap: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
+        <button className="btn" onClick={() => nav('/fleet/app/subscription')}>
+          {status === 'suspended' ? 'Settle and restore access' : 'Choose a plan'}
+        </button>
+        <button className="btn btn-secondary" onClick={logout}>Sign out</button>
       </div>
 
-      <div className="muted text-xs" style={{ marginBottom: 24, textAlign: 'center' }}>
-        All billing via Paystack — card details captured securely. Cancel any time.
-      </div>
-
-      <button
-        onClick={() => { logout(); nav('/fleet/login'); }}
-        className="btn btn-secondary btn-sm"
-        style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-      >
-        <LogOut size={13} /> Sign out
-      </button>
+      <p className="muted text-sm" style={{ marginTop: 20, maxWidth: 420, textAlign: 'center' }}>
+        Nothing has been deleted. Your bikes, riders and history are exactly where you left them.
+      </p>
     </div>
   );
 }
-
 function TrialBanner({ daysLeft, onSubscribe, onDismiss }) {
   const urgent = daysLeft <= 3;
   return (
@@ -199,7 +130,12 @@ export default function FleetOwnerShell() {
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
 
-  const onBillingPage = location.pathname.endsWith('/billing');
+  // The one page a blocked account may still reach, so it can pay its way
+  // out. It has to list every path that can take money: billing now
+  // redirects to subscription, and if only '/billing' were exempt the
+  // redirect would land the customer back in this gate with no way through.
+  const onBillingPage = ['/billing', '/subscription']
+    .some((path) => location.pathname.endsWith(path));
 
   const loadBilling = useCallback(() => {
     api.get('/fleet/billing/status')

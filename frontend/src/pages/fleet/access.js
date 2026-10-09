@@ -107,7 +107,11 @@ export const FLEET_NAV_ITEMS = [
   { key: 'security',   to: '/fleet/app/security',      label: 'Theft & claims' },
   { key: 'team',       to: '/fleet/app/team',          label: 'Team' },
   { key: 'activity',   to: '/fleet/app/activity',      label: 'Activity' },
-  { key: 'billing',    to: '/fleet/app/billing',       label: 'Billing' },
+  // Keyed 'billing' on purpose. That is the section key the role permissions
+  // and the tier gate are written against, and it is in the never-gated list
+  // so a fleet that stops paying can still see its own bill. Only the label
+  // and the destination changed when the flat plans were retired.
+  { key: 'billing',    to: '/fleet/app/subscription',  label: 'Subscription' },
   { key: 'help',       to: '/fleet/app/help',          label: 'Help' },
 ];
 

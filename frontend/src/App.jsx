@@ -34,7 +34,6 @@ const AdminPartsCounter = lazy(() => import('./pages/admin/PartsCounter'));
 const FleetApplications = lazy(() => import('./pages/fleet/Applications'));
 const FleetSecurity = lazy(() => import('./pages/fleet/Security'));
 const FleetActivity = lazy(() => import('./pages/fleet/Activity'));
-const FleetBilling = lazy(() => import('./pages/fleet/Billing'));
 const FleetPaystackAccount = lazy(() => import('./pages/fleet/PaystackAccount'));
 const FleetSubscription = lazy(() => import('./pages/fleet/Subscription'));
 const FleetWallet = lazy(() => import('./pages/fleet/Wallet'));
@@ -195,7 +194,11 @@ export default function App() {
             <Route path="payments" element={<FleetRouteGate section="payments"><FleetOwnerPayments /></FleetRouteGate>} />
             <Route path="riders" element={<FleetRouteGate section="riders"><FleetOwnerRiders /></FleetRouteGate>} />
             <Route path="wallet" element={<FleetRouteGate section="wallet"><FleetWallet /></FleetRouteGate>} />
-            <Route path="billing" element={<FleetRouteGate section="billing"><FleetBilling /></FleetRouteGate>} />
+            {/* The flat-plan billing page is gone; per-bike Subscription is the
+                one place a fleet deals with what it pays. Redirected rather
+                than removed so bookmarks and the old Paystack callback_url
+                still land somewhere that works. */}
+            <Route path="billing" element={<Navigate to="/fleet/app/subscription" replace />} />
             <Route path="payment-account" element={<FleetRouteGate section="billing"><FleetPaystackAccount /></FleetRouteGate>} />
             <Route path="subscription" element={<FleetRouteGate section="billing"><FleetSubscription /></FleetRouteGate>} />
             <Route path="collections" element={<FleetRouteGate section="collections"><FleetCollections /></FleetRouteGate>} />

@@ -630,14 +630,24 @@ async function getOrganizationOrThrow(req, { allowExpired = false } = {}) {
 // were sold and billed for and never enforced, so Basic and Complete bought
 // the same product. Keeping the two checks in one helper is what stops the
 // next section being added with a role gate and no price attached.
+// Billing is how a blocked account stops being blocked, so the paywall must
+// not stand in front of it. Every fleetSection endpoint answers 402 for a
+// past_due, suspended or cancelled org — including, before this, the billing
+// ones. The effect was a dead end: the paywall offered plans, the request to
+// load them answered 402, the shell swallowed it and rendered an empty list,
+// and the customer had no way to pay. Checked here rather than per route so
+// a billing endpoint added later cannot reintroduce it.
+const SECTIONS_A_BLOCKED_ACCOUNT_MAY_STILL_USE = ['billing'];
+
 function fleetSection(sectionKey, level = 'view') {
   const roles = (FLEET_RESOURCE_ACCESS[sectionKey] || {})[level] || [];
   const roleGate = companyRoleAllowed(roles);
+  const allowExpired = SECTIONS_A_BLOCKED_ACCOUNT_MAY_STILL_USE.includes(sectionKey);
 
   return (req, res, next) => {
     roleGate(req, res, async () => {
       try {
-        const organization = await getOrganizationOrThrow(req);
+        const organization = await getOrganizationOrThrow(req, { allowExpired });
         const tier = tierFeatures.effectiveTier(organization);
         if (!tierFeatures.tierAllows(tier, sectionKey)) {
           const required = tierFeatures.minimumTierFor(sectionKey);
@@ -2549,6 +2559,17 @@ router.post('/payments/import', fleetSection('payments', 'manage'), csvUpload.si
 
 const PAYSTACK_API = 'https://api.paystack.co';
 
+// The flat plans, retired. Nothing can subscribe to one any more: the
+// catalogue is kept because organizations.plan_key still holds these values
+// for customers who bought one, and cancelling or describing an existing
+// subscription needs to know what they are.
+//
+// They were retired because they were a second, parallel billing system.
+// Feature gating, our billing run, invoices, dunning, EFT and suspension all
+// read subscription_tier and the ladder basic -> workshop -> fleet ->
+// complete; plan_key is on none of it, so effectiveTier fell through to
+// 'basic' and a customer paying R750 a month for Growth was served the
+// cheapest feature set we have.
 const FLEET_BILLING_PLANS = {
   small:  { key: 'small',  name: 'Starter',      monthly_price: 200,   max_bikes: 6,    max_admin_users: 2,  features: ['1–6 bikes', 'R200 flat monthly', '2 admin users', 'Standard support'] },
   medium: { key: 'medium', name: 'Growth',        monthly_price: 750,   max_bikes: 20,   max_admin_users: 3,  features: ['7–20 bikes', 'R750 flat monthly', '3 admin users', 'Advanced filters', 'Performance reporting'] },
@@ -2556,12 +2577,8 @@ const FLEET_BILLING_PLANS = {
   empire: { key: 'empire', name: 'Empire',        monthly_price: 2800,  max_bikes: 9999, max_admin_users: 20, features: ['36+ bikes', 'R2 800 flat monthly', '20 admin users', 'Dedicated onboarding', 'Custom integrations', 'SLA support'] }
 };
 
-function getTierForBikeCount(count) {
-  if (count <= 6)  return 'small';
-  if (count <= 20) return 'medium';
-  if (count <= 35) return 'large';
-  return 'empire';
-}
+// getTierForBikeCount suggested a flat plan from a bike count. Per-bike
+// pricing needs no suggestion: the quote is the fleet's own bike count.
 
 function getPlanPaystackCode(planKey) {
   const raw = process.env[`PAYSTACK_PLAN_${String(planKey).toUpperCase()}`];
@@ -2570,26 +2587,13 @@ function getPlanPaystackCode(planKey) {
   return cleaned || null;
 }
 
-function getKeyForPlanCode(planCode) {
-  for (const key of Object.keys(FLEET_BILLING_PLANS)) {
-    if (getPlanPaystackCode(key) === planCode) return key;
-  }
-  return null;
-}
-
-async function applyPlanToOrg(orgId, planKey, subscriptionCode) {
-  const plan = FLEET_BILLING_PLANS[planKey];
-  if (!plan) return;
-  const updates = [plan.max_bikes, plan.max_admin_users, planKey];
-  const subUpdate = subscriptionCode ? `, paystack_subscription_code = $${updates.length + 1}` : '';
-  const subParams = subscriptionCode ? [subscriptionCode] : [];
-  const allParams = [...updates, ...subParams, orgId];
-  await pgDb.query(`UPDATE organizations SET
-    max_bikes = $1, max_admin_users = $2, plan_key = $3,
-    status = 'active'${subUpdate},
-    updated_at = NOW()
-    WHERE id = $${allParams.length}`, allParams);
-}
+// getKeyForPlanCode and applyPlanToOrg lived here to serve the flat
+// checkout. With nothing able to start one they have no caller left.
+//
+// routes/payments.js keeps its own copy of getKeyForPlanCode and still uses
+// it in the Paystack webhook, deliberately: the subscriptions customers
+// already bought keep renewing and keep sending events until somebody
+// cancels them at Paystack, and those renewals must still be recorded.
 
 async function cancelPaystackSubscription(subscriptionCode) {
   const subResp = await axios.get(`${PAYSTACK_API}/subscription/${encodeURIComponent(subscriptionCode)}`,
@@ -2642,6 +2646,7 @@ router.get('/subscription', fleetSection('billing', 'view'), async (req, res) =>
     `SELECT subscription_tier, subscription_cycle, subscription_status, next_billing_date,
             billing_card_last4, billing_card_brand, billing_card_expiry, billing_failure_count,
             billing_retry_at, billing_grace_until, status,
+            plan_key, paystack_subscription_code,
             (billing_authorization_encrypted IS NOT NULL) AS has_card
        FROM organizations WHERE id = $1`, [orgId]);
   const org = rows[0];
@@ -2671,6 +2676,15 @@ router.get('/subscription', fleetSection('billing', 'view'), async (req, res) =>
     } : null,
     tiers: pricing.allTiers(),
     minimum_bikes: pricing.MINIMUM_BILLABLE_BIKES,
+    // A flat plan this fleet bought before they were retired. Its Paystack
+    // subscription keeps charging every month until somebody cancels it at
+    // Paystack, so the fleet needs to be told it exists and given the
+    // button — otherwise they quietly pay for two things at once.
+    legacy_subscription: org.paystack_subscription_code ? {
+      plan_key: org.plan_key,
+      name: FLEET_BILLING_PLANS[org.plan_key]?.name || org.plan_key,
+      monthly_price: FLEET_BILLING_PLANS[org.plan_key]?.monthly_price || null,
+    } : null,
     // What they would pay on each tier, at their real bike count — so the
     // choice is made against their own number rather than an example.
     quotes: await Promise.all(pricing.allTiers().map(async (t) => ({
@@ -2874,20 +2888,19 @@ router.get('/billing/status', fleetSection('billing', 'view'), async (req, res) 
       : null;
     const { rows: bikeCountRows } = await pgDb.query(`SELECT COUNT(*) c FROM bikes WHERE organization_id = $1 AND status NOT IN ('retired','sold')`, [org.id]);
     const bikeCount = Number(bikeCountRows[0]?.c) || 0;
-    const suggestedTier = getTierForBikeCount(bikeCount);
-    const currentPlan = FLEET_BILLING_PLANS[org.plan_key] || null;
-    const approachingLimit = currentPlan && bikeCount >= currentPlan.max_bikes * 0.8;
+    // What this endpoint no longer returns: the flat plan catalogue, a
+    // suggested flat plan, and that plan's monthly price. They are a retired
+    // product, and an API that still hands them out is how a retired product
+    // gets rendered again by the next person to build a billing screen.
+    // Per-bike pricing and the quotes live on GET /fleet/subscription.
     res.json({
       organization: {
         id: org.id, name: org.name, plan_key: org.plan_key, status: org.status,
         trial_ends_at: org.trial_ends_at, trial_days_left: trialDaysLeft,
         paystack_subscription_code: org.paystack_subscription_code,
         max_bikes: org.max_bikes, max_admin_users: org.max_admin_users,
-        bike_count: bikeCount, monthly_price: currentPlan?.monthly_price || null,
-        suggested_tier: suggestedTier, approaching_limit: approachingLimit
+        bike_count: bikeCount
       },
-      plans: Object.values(FLEET_BILLING_PLANS),
-      can_subscribe: ['trialing', 'past_due', 'cancelled', 'suspended', 'active'].includes(org.status),
       is_active_subscriber: org.status === 'active' && !!org.paystack_subscription_code,
       // What this fleet's subscription actually includes. The shell draws the
       // menu from it, and a locked section is shown with what it would take
@@ -2914,95 +2927,24 @@ router.get('/billing/status', fleetSection('billing', 'view'), async (req, res) 
   }
 });
 
-// POST /fleet/billing/subscribe — initialise Paystack subscription checkout
+// The flat plans are retired, so nothing may start one. Answered as Gone
+// rather than deleted outright: a stale tab or a bookmarked checkout gets a
+// sentence telling it where billing moved to, instead of a 404 that looks
+// like the platform is broken.
 router.post('/billing/subscribe', fleetSection('billing', 'manage'), async (req, res) => {
-  try {
-    const org = await getOrganizationOrThrow(req, { allowExpired: true });
-    const { plan_key } = req.body;
-    if (!FLEET_BILLING_PLANS[plan_key]) return res.status(400).json({ error: 'Invalid plan key.', valid_keys: Object.keys(FLEET_BILLING_PLANS) });
-
-    if (!process.env.PAYSTACK_SECRET_KEY || process.env.PAYSTACK_SECRET_KEY.includes('xxxx')) {
-      return res.status(500).json({ error: 'Paystack is not configured on this server. Please set PAYSTACK_SECRET_KEY.' });
-    }
-
-    const planCode = getPlanPaystackCode(plan_key);
-    if (!planCode || planCode.includes('xxxx')) {
-      return res.status(400).json({ error: `The ${plan_key} plan is not yet linked to a Paystack plan code. Please set PAYSTACK_PLAN_${plan_key.toUpperCase()} in the server environment.` });
-    }
-
-    const plan = FLEET_BILLING_PLANS[plan_key];
-    const amountCents = plan.monthly_price * 100;
-    const reference = `OF-SUB-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
-    const initResp = await axios.post(`${PAYSTACK_API}/transaction/initialize`,
-      {
-        email: req.user.email,
-        amount: amountCents,
-        plan: planCode,
-        reference,
-        callback_url: `${process.env.FRONTEND_URL}/fleet/app/billing`,
-        metadata: { organization_id: org.id, plan_key, type: 'fleet_subscription' }
-      },
-      { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } }
-    );
-
-    if (!initResp.data?.status) {
-      return res.status(400).json({ error: `Paystack rejected the request: ${initResp.data?.message || 'Unknown error'}` });
-    }
-
-    await logAudit(req.user.id, 'fleet_owner.billing.subscribe_init', 'organizations', org.id, { plan_key, reference }, req.ip);
-    res.json({
-      authorization_url: initResp.data.data.authorization_url,
-      reference,
-      plan_key,
-      plan: FLEET_BILLING_PLANS[plan_key]
-    });
-  } catch (error) {
-    const paystackMsg = error.response?.data?.message || error.response?.data?.error;
-    const detail = paystackMsg || error.message;
-    res.status(error.response?.status || 500).json({
-      error: paystackMsg ? `Paystack: ${paystackMsg}` : 'Could not initiate subscription checkout',
-      details: detail
-    });
-  }
+  res.status(410).json({
+    error: 'Flat monthly plans have been replaced by per-bike pricing. Open Subscription to choose a plan.',
+    code: 'FLAT_PLANS_RETIRED',
+    moved_to: '/fleet/app/subscription',
+  });
 });
 
-// GET /fleet/billing/verify?reference=xxx — verify subscription after redirect
 router.get('/billing/verify', fleetSection('billing', 'manage'), async (req, res) => {
-  try {
-    const { reference } = req.query;
-    if (!reference) return res.status(400).json({ error: 'Reference is required' });
-    const org = await getOrganizationOrThrow(req, { allowExpired: true });
-
-    const verifyResp = await axios.get(
-      `${PAYSTACK_API}/transaction/verify/${encodeURIComponent(reference)}`,
-      { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } }
-    );
-    const txn = verifyResp.data.data;
-    if (txn.status !== 'success') {
-      return res.status(400).json({ error: `Payment was not completed (status: ${txn.status})`, txn_status: txn.status });
-    }
-
-    const planKey = txn.metadata?.plan_key
-      || (txn.plan?.plan_code ? getKeyForPlanCode(txn.plan.plan_code) : null);
-
-    const oldSubCode = org.paystack_subscription_code || null;
-    const newSubCode = txn.subscription?.subscription_code || null;
-
-    if (planKey && FLEET_BILLING_PLANS[planKey]) {
-      await applyPlanToOrg(org.id, planKey, newSubCode);
-    }
-
-    // Cancel the previous subscription when switching plans
-    if (oldSubCode && newSubCode && oldSubCode !== newSubCode) {
-      cancelPaystackSubscription(oldSubCode).catch((e) =>
-        console.error(`[billing] Could not cancel old subscription ${oldSubCode}:`, e.message));
-    }
-
-    await logAudit(req.user.id, 'fleet_owner.billing.subscribe_verified', 'organizations', org.id, { reference, plan_key: planKey, switched_from: oldSubCode ? 'existing' : null }, req.ip);
-    res.json({ ok: true, plan_key: planKey, txn_status: txn.status });
-  } catch (error) {
-    res.status(500).json({ error: 'Could not verify subscription', details: error.response?.data || error.message });
-  }
+  res.status(410).json({
+    error: 'Flat monthly plans have been replaced by per-bike pricing. Open Subscription to choose a plan.',
+    code: 'FLAT_PLANS_RETIRED',
+    moved_to: '/fleet/app/subscription',
+  });
 });
 
 // ---------- RIDER PAYMENT PLAN HELPERS ----------

@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { CheckCircle2, CreditCard, AlertTriangle, Bike, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../api';
+import { brandName } from '../../brand';
 import { ConfirmModal, Loading, fmt, fmtDate } from '../../components/ui';
 
 // Choosing and paying for a Pillion plan.
@@ -147,6 +148,18 @@ export default function Subscription() {
     }
   };
 
+  const cancelLegacy = async () => {
+    if (!window.confirm('Cancel the old flat monthly plan? Your per-bike plan is unaffected.')) return;
+    setBusy(true);
+    try {
+      await api.post('/fleet/billing/cancel');
+      toast.success('Old plan cancelled — Paystack will stop charging it');
+      await load();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Could not cancel that plan');
+    } finally { setBusy(false); }
+  };
+
   if (loading) return <Loading />;
 
   const active = state.status === 'active';
@@ -160,11 +173,33 @@ export default function Subscription() {
 
   return (
     <div>
-      <h1>Your Pillion plan</h1>
+      <h1>Your {brandName} plan</h1>
       <p className="muted" style={{ marginTop: 4 }}>
         Priced per bike, so what you pay follows the size of your fleet. Everything below is your own
         price at your own bike count. Rates are quoted excluding VAT; the total charged includes it.
       </p>
+
+      {state.legacy_subscription && (
+        <div className="card mt-3" style={{ borderColor: 'var(--warn)' }}>
+          <div className="flex-between" style={{ gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+            <div>
+              <div style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: 7 }}>
+                <AlertTriangle size={15} style={{ color: 'var(--warn)' }} />
+                You still have an old flat monthly plan
+              </div>
+              <div className="text-sm muted" style={{ marginTop: 3 }}>
+                {state.legacy_subscription.name}
+                {state.legacy_subscription.monthly_price != null && <> · {fmt(state.legacy_subscription.monthly_price)}/mo</>}
+                {' '}— billed separately by Paystack. It keeps charging until it is cancelled,
+                so cancel it once the per-bike plan below is set up.
+              </div>
+            </div>
+            <button className="btn btn-secondary" disabled={busy} onClick={cancelLegacy}>
+              Cancel the old plan
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="card mt-3">
         <div className="flex-between" style={{ gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }}>

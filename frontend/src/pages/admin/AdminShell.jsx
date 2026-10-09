@@ -4,7 +4,7 @@ import { useAuth } from '../../auth';
 import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
 import NotificationBell from '../../components/NotificationBell';
-import { Package, LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell, Briefcase, ShieldCheck, PiggyBank, MapPin, UserCheck, Wrench, ShieldAlert, Gauge, Star, TrendingUp, Plug, Inbox, Repeat, MoreHorizontal, X, Siren, BookOpen, Layers } from 'lucide-react';
+import { Package, LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell, Briefcase, ShieldCheck, PiggyBank, MapPin, UserCheck, Wrench, ShieldAlert, Gauge, Star, TrendingUp, Plug, Inbox, Repeat, MoreHorizontal, X, Siren, BookOpen, Layers, Landmark } from 'lucide-react';
 import { brandFullName, isTelematicsConsole } from '../../brand';
 
 // The console for a company that runs its own motorcycles: the whole business
@@ -41,6 +41,7 @@ const FLEET_CONSOLE_NAV = [
   { to: '/admin/pools', label: 'Bike pools', icon: Layers, superadminOnly: true },
   { section: 'System' },
   { to: '/admin/users', label: 'Users', icon: Users },
+  { to: '/admin/billing-settings', label: 'Banking details', icon: Landmark, superadminOnly: true },
   { to: '/admin/integrations', label: 'Integrations', icon: Plug, superadminOnly: true },
   { to: '/admin/audit', label: 'Audit Logs', icon: ClipboardList }
 ];
@@ -73,6 +74,7 @@ const TELEMATICS_CONSOLE_NAV = [
   { to: '/admin/fleet-payouts', label: 'Payout requests', icon: PiggyBank },
   { section: 'System' },
   { to: '/admin/users', label: 'Users', icon: Users },
+  { to: '/admin/billing-settings', label: 'Banking details', icon: Landmark, superadminOnly: true },
   { to: '/admin/integrations', label: 'Integrations', icon: Plug, superadminOnly: true },
   { to: '/admin/audit', label: 'Audit Logs', icon: ClipboardList },
 ];

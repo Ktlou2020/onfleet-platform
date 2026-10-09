@@ -69,6 +69,7 @@ const AdminPayments = lazy(() => import('./pages/admin/Payments'));
 const AdminNotifications = lazy(() => import('./pages/admin/Notifications'));
 const AdminUsers = lazy(() => import('./pages/admin/Users'));
 const AdminBikePools = lazy(() => import('./pages/admin/BikePools'));
+const AdminBillingSettings = lazy(() => import('./pages/admin/BillingSettings'));
 const AdminRiders = lazy(() => import('./pages/admin/Riders'));
 const AdminSignupStats = lazy(() => import('./pages/admin/SignupStats'));
 const AdminIntegrations = lazy(() => import('./pages/admin/Integrations'));
@@ -263,6 +264,7 @@ export default function App() {
             <Route path="workshop/opportunities" element={fleetConsoleOnly(<AdminWorkshopOpportunities />)} />
             <Route path="workshop/parts" element={fleetConsoleOnly(<AdminPartsCounter />)} />
             <Route path="pools" element={fleetConsoleOnly(<AdminBikePools />)} />
+            <Route path="billing-settings" element={<AdminBillingSettings />} />
             <Route path="users" element={<AdminUsers />} />
             <Route path="audit" element={<AdminAuditLogs />} />
           </Route>

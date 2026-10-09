@@ -338,6 +338,82 @@ describe.skipIf(!process.env.DATABASE_URL)('EFT billing', () => {
     });
   });
 
+  describe('the banking details screen', () => {
+    const put = (body) => request(app).put('/api/admin/billing-settings')
+      .set(authHeader(superadmin.user)).send(body);
+
+    const full = {
+      eft_account_name: 'SV Capital (Pty) Ltd', eft_bank_name: 'FNB',
+      eft_account_number: '62012345678', eft_branch_code: '250655',
+    };
+
+    it('saves all four and reports them as complete', async () => {
+      const res = await put(full);
+      expect(res.status).toBe(200);
+      expect(res.body.complete).toBe(true);
+
+      const bank = await dunning.bankDetails();
+      expect(bank.eft_account_number).toBe('62012345678');
+      expect(bank.complete).toBe(true);
+    });
+
+    // An invoice naming a bank with no account number reads as a phishing
+    // attempt, which is worse than the "reply for our details" fallback.
+    it('refuses a half-filled set and says which field is missing', async () => {
+      const res = await put({ ...full, eft_account_number: '' });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('account number');
+    });
+
+    it('allows clearing all four together', async () => {
+      await put(full);
+      const res = await put({ eft_account_name: '', eft_bank_name: '', eft_account_number: '', eft_branch_code: '' });
+      expect(res.status).toBe(200);
+      expect(res.body.complete).toBe(false);
+      expect((await dunning.bankDetails()).complete).toBe(false);
+    });
+
+    it('rejects a branch code that is not digits', async () => {
+      const res = await put({ ...full, eft_branch_code: 'FNB-250655' });
+      expect(res.status).toBe(400);
+    });
+
+    // Somebody who reaches an admin session and edits this quietly redirects
+    // every invoice from then on. What it was matters as much as what it is.
+    it('records the previous account number alongside the new one', async () => {
+      await put(full);
+      await put({ ...full, eft_account_number: '62099999999' });
+
+      const { rows } = await pgDb.query(
+        `SELECT metadata FROM audit_logs WHERE action = 'admin.billing_settings_update' ORDER BY id DESC LIMIT 1`);
+      const meta = typeof rows[0].metadata === 'string' ? JSON.parse(rows[0].metadata) : rows[0].metadata;
+      const change = meta.changed.find((c) => c.field === 'eft_account_number');
+      expect(change, 'the account number changed and nothing recorded it').toBeTruthy();
+      expect(change.from, 'the previous account number was not kept').toBe('62012345678');
+      expect(change.to).toBe('62099999999');
+    });
+
+    it('says how many clients the details actually matter to', async () => {
+      const res = await request(app).get('/api/admin/billing-settings').set(authHeader(superadmin.user));
+      expect(res.status).toBe(200);
+      // The org in beforeEach is on EFT.
+      expect(res.body.eft_organizations).toBe(1);
+    });
+
+    it('says who changed them last', async () => {
+      await put(full);
+      const res = await request(app).get('/api/admin/billing-settings').set(authHeader(superadmin.user));
+      expect(res.body.last_changed.by).toBe(superadmin.user.full_name);
+    });
+
+    it.each([['read', 'get'], ['change', 'put']])('an ordinary admin cannot %s them', async (_l, method) => {
+      const admin = await createPgUser({ role: 'admin' });
+      const res = await request(app)[method]('/api/admin/billing-settings')
+        .set(authHeader(admin.user)).send(full);
+      expect(res.status).toBe(403);
+    });
+  });
+
   describe('the invoice email', () => {
     it('carries the bank details and the reference to pay under', async () => {
       for (const [k, v] of Object.entries({

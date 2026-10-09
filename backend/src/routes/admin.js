@@ -2576,6 +2576,84 @@ router.get('/login-attempts', async (req, res) => {
   res.json({ count: rows.length, attempts: rows });
 });
 
+// ---------- Where clients send money ----------
+// The account printed on every EFT invoice we issue.
+//
+// Changing it is audited with the old values alongside the new, and the
+// screen shows who changed it last. That is not bookkeeping: an attacker who
+// reaches an admin session and quietly edits this redirects every invoice
+// from then on, and the first anybody notices is a client insisting they
+// paid. A diff in the audit trail and a name on the screen are what make
+// that a short conversation.
+
+const BANK_FIELDS = ['eft_bank_name', 'eft_account_name', 'eft_account_number', 'eft_branch_code'];
+
+router.get('/billing-settings', superadminOnly, async (req, res) => {
+  const { rows } = await pgDb.query(
+    'SELECT setting_key, setting_value, updated_at FROM app_settings WHERE setting_key = ANY($1)',
+    [BANK_FIELDS]);
+  const map = Object.fromEntries(rows.map((r) => [r.setting_key, r.setting_value]));
+
+  const { rows: last } = await pgDb.query(
+    `SELECT a.created_at, u.full_name
+       FROM audit_logs a LEFT JOIN users u ON u.id = a.actor_id
+      WHERE a.action = 'admin.billing_settings_update'
+      ORDER BY a.id DESC LIMIT 1`);
+
+  // How many fleets this actually matters to right now, so an empty form on
+  // a deployment with EFT clients reads as a problem rather than a blank.
+  const { rows: eftCount } = await pgDb.query(
+    "SELECT COUNT(*)::int AS n FROM organizations WHERE billing_method = 'eft'");
+
+  res.json({
+    settings: Object.fromEntries(BANK_FIELDS.map((k) => [k, map[k] || ''])),
+    complete: BANK_FIELDS.every((k) => String(map[k] || '').trim()),
+    eft_organizations: eftCount[0].n,
+    last_changed: last[0] ? { at: last[0].created_at, by: last[0].full_name } : null,
+  });
+});
+
+router.put('/billing-settings', superadminOnly, async (req, res) => {
+  const next = {};
+  for (const key of BANK_FIELDS) {
+    if (!(key in req.body)) continue;
+    next[key] = String(req.body[key] ?? '').trim();
+  }
+  if (!Object.keys(next).length) return res.status(400).json({ error: 'Nothing to update' });
+
+  // Either all four or none. A half-filled set produces an invoice with a
+  // bank name and no account number, which reads as a phishing attempt and
+  // is worse than the "reply for our banking details" fallback.
+  const { rows: existing } = await pgDb.query(
+    'SELECT setting_key, setting_value FROM app_settings WHERE setting_key = ANY($1)', [BANK_FIELDS]);
+  const before = Object.fromEntries(BANK_FIELDS.map((k) => [k, '']));
+  for (const row of existing) before[row.setting_key] = row.setting_value || '';
+
+  const merged = { ...before, ...next };
+  const filled = BANK_FIELDS.filter((k) => merged[k]);
+  if (filled.length && filled.length !== BANK_FIELDS.length) {
+    const missing = BANK_FIELDS.filter((k) => !merged[k]).map((k) => k.replace('eft_', '').replace(/_/g, ' '));
+    return res.status(400).json({ error: `Fill in all of the banking details or clear them all — still missing: ${missing.join(', ')}` });
+  }
+  if (merged.eft_branch_code && !/^\d{4,8}$/.test(merged.eft_branch_code)) {
+    return res.status(400).json({ error: 'Branch code should be digits only' });
+  }
+  if (merged.eft_account_number && !/^[\d\s-]{6,20}$/.test(merged.eft_account_number)) {
+    return res.status(400).json({ error: 'Account number should be digits' });
+  }
+
+  for (const key of BANK_FIELDS) await setSetting(key, merged[key] || null);
+
+  // Old alongside new. "Changed the account number" is not an answer; what it
+  // was and what it became is.
+  const changed = BANK_FIELDS
+    .filter((k) => before[k] !== merged[k])
+    .map((k) => ({ field: k, from: before[k] || null, to: merged[k] || null }));
+  await logAudit(req.user.id, 'admin.billing_settings_update', 'app_settings', null, { changed }, req.ip);
+
+  res.json({ ok: true, settings: merged, complete: filled.length === BANK_FIELDS.length });
+});
+
 // ---------- Paying by EFT ----------
 // A client who pays by bank transfer has no card, so nothing can be presented
 // and nothing can be auto-detected. These three endpoints are what stands in

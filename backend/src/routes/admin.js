@@ -19,6 +19,7 @@ const { getTemplate, listTemplates, previewTemplate } = require('../services/ema
 const asyncRouter = require('../utils/asyncRouter');
 const poolFinance = require('../services/poolFinance');
 const poolWebhooks = require('../services/poolWebhooks');
+const subscriptionDunning = require('../services/subscriptionDunning');
 
 const router = asyncRouter(express.Router());
 const { branding: brandingUploadDir } = require('../uploadPaths');
@@ -2573,6 +2574,130 @@ router.get('/login-attempts', async (req, res) => {
       ORDER BY a.created_at DESC
       LIMIT $${params.length}`, params);
   res.json({ count: rows.length, attempts: rows });
+});
+
+// ---------- Paying by EFT ----------
+// A client who pays by bank transfer has no card, so nothing can be presented
+// and nothing can be auto-detected. These three endpoints are what stands in
+// for that: say how a client pays, record the money when it arrives, and —
+// when it has arrived but nobody has matched it yet — hold the account open
+// so the gap between paying and being seen to pay does not lock anybody out.
+
+router.put('/fleet-owners/:id/billing-method', superadminOnly, async (req, res) => {
+  const orgId = Number(req.params.id);
+  if (!Number.isInteger(orgId)) return res.status(400).json({ error: 'Invalid organisation id' });
+  const method = req.body.method;
+  if (!['card', 'eft'].includes(method)) {
+    return res.status(400).json({ error: 'Billing method must be card or eft' });
+  }
+
+  const { rows } = await pgDb.query(
+    `UPDATE organizations SET billing_method = $2, updated_at = NOW()
+      WHERE id = $1 RETURNING id, name, billing_method`, [orgId, method]);
+  if (!rows[0]) return res.status(404).json({ error: 'Organisation not found' });
+
+  await logAudit(req.user.id, 'admin.billing_method_set', 'organizations', orgId,
+    { method, name: rows[0].name }, req.ip);
+  res.json({ ok: true, organization: rows[0] });
+});
+
+// A dated instruction not to block this account. Dated and not a flag: "never
+// suspend this client" is not something anybody should be able to set once
+// and forget, and a hold that expires by itself is the difference between a
+// decision and a hole.
+router.put('/fleet-owners/:id/billing-hold', superadminOnly, async (req, res) => {
+  const orgId = Number(req.params.id);
+  if (!Number.isInteger(orgId)) return res.status(400).json({ error: 'Invalid organisation id' });
+
+  const until = req.body.until ? String(req.body.until) : null;
+  if (until && Number.isNaN(new Date(until).getTime())) {
+    return res.status(400).json({ error: 'Invalid date' });
+  }
+  if (until && new Date(until) < new Date(new Date().toISOString().slice(0, 10))) {
+    return res.status(400).json({ error: 'A hold in the past would do nothing — pick a future date' });
+  }
+  const reason = String(req.body.reason || '').trim() || null;
+  if (until && !reason) {
+    // Whoever finds this account still running in three weeks needs to know
+    // why somebody decided that was correct.
+    return res.status(400).json({ error: 'Say why the account is being held open' });
+  }
+
+  const { rows } = await pgDb.query(
+    `UPDATE organizations SET billing_hold_until = $2, billing_hold_reason = $3, updated_at = NOW()
+      WHERE id = $1 RETURNING id, name, billing_hold_until, billing_hold_reason`,
+    [orgId, until, reason]);
+  if (!rows[0]) return res.status(404).json({ error: 'Organisation not found' });
+
+  await logAudit(req.user.id, until ? 'admin.billing_hold_set' : 'admin.billing_hold_cleared',
+    'organizations', orgId, { until, reason }, req.ip);
+  res.json({ ok: true, organization: rows[0] });
+});
+
+router.get('/fleet-owners/:id/invoices', superadminOnly, async (req, res) => {
+  const orgId = Number(req.params.id);
+  if (!Number.isInteger(orgId)) return res.status(400).json({ error: 'Invalid organisation id' });
+  const { rows } = await pgDb.query(
+    `SELECT i.id, i.reference, i.description, i.amount, i.status, i.period_start, i.period_end,
+            i.settlement_method, i.settlement_reference, i.settled_at, i.failure_reason,
+            u.full_name AS settled_by_name
+       FROM subscription_invoices i
+       LEFT JOIN users u ON u.id = i.settled_by
+      WHERE i.organization_id = $1
+      ORDER BY i.period_start DESC, i.id DESC LIMIT 60`, [orgId]);
+  const { rows: org } = await pgDb.query(
+    `SELECT id, name, billing_method, billing_hold_until, billing_hold_reason,
+            subscription_status, status, billing_grace_until, next_billing_date
+       FROM organizations WHERE id = $1`, [orgId]);
+  if (!org[0]) return res.status(404).json({ error: 'Organisation not found' });
+  res.json({ organization: org[0], invoices: rows });
+});
+
+// Matching a bank statement line to an invoice. This is the "payment detected"
+// step that no card client needs and no EFT client can do without.
+router.post('/subscription-invoices/:id/settle', superadminOnly, async (req, res) => {
+  const invoiceId = Number(req.params.id);
+  if (!Number.isInteger(invoiceId)) return res.status(400).json({ error: 'Invalid invoice id' });
+
+  const method = req.body.method || 'eft';
+  if (!['eft', 'cash', 'other'].includes(method)) {
+    // Not 'paystack': a card payment settles itself, and recording one by
+    // hand would mean an invoice marked paid with no transaction behind it.
+    return res.status(400).json({ error: 'Settlement method must be eft, cash or other' });
+  }
+  const reference = String(req.body.reference || '').trim();
+  if (!reference) return res.status(400).json({ error: 'Record the bank reference the payment came in under' });
+
+  const { rows: found } = await pgDb.query(
+    'SELECT id, organization_id, status, amount, period_end FROM subscription_invoices WHERE id = $1', [invoiceId]);
+  const invoice = found[0];
+  if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+  if (invoice.status === 'paid') return res.status(409).json({ error: 'That invoice is already settled' });
+
+  const paidAt = req.body.paid_at ? new Date(req.body.paid_at) : new Date();
+  if (Number.isNaN(paidAt.getTime())) return res.status(400).json({ error: 'Invalid payment date' });
+
+  await pgDb.query(
+    `UPDATE subscription_invoices
+        SET status = 'paid', settlement_method = $2, settlement_reference = $3,
+            settled_by = $4, settled_at = $5, charged_at = COALESCE(charged_at, $5)
+      WHERE id = $1`, [invoiceId, method, reference, req.user.id, paidAt.toISOString()]);
+
+  // The same call a successful card charge makes: active, counters cleared,
+  // grace dropped, next billing date moved on. An EFT that is recorded has to
+  // restore an account exactly as a card payment would, or a client who paid
+  // stays locked out for a reason nobody can see.
+  const restored = await subscriptionDunning.recordSuccess({
+    organizationId: invoice.organization_id,
+    nextBillingDate: invoice.period_end,
+  });
+
+  await logAudit(req.user.id, 'admin.invoice_settled', 'subscription_invoices', invoiceId, {
+    organization_id: invoice.organization_id, amount: invoice.amount,
+    method, reference, paid_at: paidAt.toISOString(),
+  }, req.ip);
+
+  res.json({ ok: true, organization: restored });
 });
 
 // ---------- Bike pools: the financing layer ----------

@@ -77,9 +77,15 @@ describe('what a fleet is charged', () => {
     expect(() => pricing.quote({ tierKey: '', bikes: 10 })).toThrow();
   });
 
-  it('spells out what the charge is for', () => {
+  // Reads the brand rather than naming one. This asserted the literal string
+  // "Pillion", which passed because the description hardcoded it — and that
+  // hardcoding put "Pillion Complete" on every OnFleet invoice and in every
+  // OnFleet invoice email. Pinning either name here would just re-assert the
+  // bug from the other side.
+  it('spells out what the charge is for, under this deployment\'s own name', () => {
+    const { brand } = load('../src/brand.js');
     expect(pricing.quote({ tierKey: 'complete', bikes: 40 }).description)
-      .toBe('Pillion Complete — 40 bikes x R375, ex VAT');
+      .toBe(`${brand.name} Complete — 40 bikes x R375, ex VAT`);
   });
 });
 

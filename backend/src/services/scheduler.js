@@ -490,10 +490,13 @@ function start() {
   // period — that is claimed in the database before any card is touched.
   const { runBillingRun } = require('./subscriptionBilling');
   cron.schedule('0 6 * * *', () => runBillingRun()
-    .then(({ charges, suspended }) => {
+    .then(({ charges, suspended, chasedEft = [] }) => {
       const paid = charges.filter((x) => x.charged).length;
-      const failed = charges.filter((x) => x.charged === false).length;
-      console.log(`[billing] ${paid} charged, ${failed} failed, ${charges.length - paid - failed} skipped`
+      const awaitingEft = charges.filter((x) => x.awaiting_eft).length;
+      const failed = charges.filter((x) => x.charged === false && !x.awaiting_eft).length;
+      console.log(`[billing] ${paid} charged, ${failed} failed, ${charges.length - paid - failed - awaitingEft} skipped`
+        + `${awaitingEft ? `, ${awaitingEft} invoiced for EFT` : ''}`
+        + `${chasedEft.length ? `, ${chasedEft.length} EFT overdue` : ''}`
         + `${suspended.length ? `, ${suspended.length} suspended` : ''}`);
     })
     .catch(e => console.error('[billing]', e.message)), { timezone: 'Africa/Johannesburg' });

@@ -585,13 +585,35 @@ async function getOrganizationOrThrow(req, { allowExpired = false } = {}) {
   // Auto-expire trial on every request so the status is always accurate
   if (organization.status === 'trialing' && organization.trial_ends_at) {
     if (new Date(organization.trial_ends_at) < new Date()) {
-      await pgDb.query("UPDATE organizations SET status = 'past_due', updated_at = NOW() WHERE id = $1", [organization.id]);
-      organization.status = 'past_due';
+      if (organization.billing_method === 'eft') {
+        // An EFT client's trial ending means "start invoicing them", not
+        // "lock them out". There is no card to charge and nothing has gone
+        // wrong, so flipping them to past_due here left them blocked by a
+        // paywall while the billing run skipped them for having no card —
+        // they could pay in full and nothing would ever let them back in.
+        // The billing run raises their first invoice; the terms window and
+        // the chase take it from there.
+        await pgDb.query(
+          `UPDATE organizations SET status = 'active', subscription_status = 'active',
+                  updated_at = NOW() WHERE id = $1`, [organization.id]);
+        organization.status = 'active';
+        organization.subscription_status = 'active';
+      } else {
+        await pgDb.query("UPDATE organizations SET status = 'past_due', updated_at = NOW() WHERE id = $1", [organization.id]);
+        organization.status = 'past_due';
+      }
     }
   }
+
+  // An explicit, dated instruction not to block this account — proof of
+  // payment is in hand, or terms were agreed. Checked before the paywall so
+  // that it covers every reason a client would otherwise be stopped.
+  const holdUntil = organization.billing_hold_until;
+  const onHold = holdUntil && new Date(holdUntil) >= new Date(new Date().toISOString().slice(0, 10));
+
   // A superadmin viewing the account via impersonation should see it as it
   // really is, not hit the same paywall a locked-out real owner would.
-  if (!allowExpired && !req.user.is_impersonated && ['past_due', 'suspended', 'cancelled'].includes(organization.status)) {
+  if (!allowExpired && !onHold && !req.user.is_impersonated && ['past_due', 'suspended', 'cancelled'].includes(organization.status)) {
     const error = new Error('Your subscription has ended. Go to Billing to upgrade your plan.');
     error.status = 402;
     error.code = 'SUBSCRIPTION_REQUIRED';

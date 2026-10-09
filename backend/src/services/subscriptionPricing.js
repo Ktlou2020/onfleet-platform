@@ -1,6 +1,7 @@
 'use strict';
 
 const pgDb = require('../pgDb');
+const { brand } = require('../brand');
 
 // What a fleet owes us each month.
 //
@@ -221,8 +222,11 @@ function quote({ tierKey, bikes, cycle = 'monthly' }) {
     // explicit so a future rate with cents cannot silently lose one.
     amount_kobo: Math.round(total * 100),
     description: cycle === 'annual'
-      ? `Pillion ${plan.name} — ${chargedBikes} bikes x R${plan.per_bike_monthly} x ${monthsCharged} months, ex VAT`
-      : `Pillion ${plan.name} — ${chargedBikes} bikes x R${plan.per_bike_monthly}, ex VAT`,
+      // The brand, not the literal word Pillion: this is the same module
+      // OnFleet runs, and it was putting "Pillion Fleet" on every OnFleet
+      // invoice and in every invoice email.
+      ? `${brand.name} ${plan.name} — ${chargedBikes} bikes x R${plan.per_bike_monthly} x ${monthsCharged} months, ex VAT`
+      : `${brand.name} ${plan.name} — ${chargedBikes} bikes x R${plan.per_bike_monthly}, ex VAT`,
   };
 }
 

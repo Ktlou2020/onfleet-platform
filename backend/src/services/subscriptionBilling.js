@@ -131,6 +131,31 @@ async function markInvoice(invoiceId, fields, db = pgDb) {
 }
 
 /**
+ * Raise an invoice for a client who pays by EFT.
+ *
+ * The invoice is left `pending`, which is exactly what it is: issued and not
+ * yet settled. Somebody in the office matches a bank statement line to it
+ * later, which is what /admin/subscription-invoices/:id/settle records.
+ *
+ * The terms window is written to billing_grace_until so that one column still
+ * answers "when does this become a problem" for both kinds of client, which
+ * is the column the suspension actually reads.
+ */
+async function invoiceForEft(org, { when = new Date(), db = pgDb } = {}) {
+  const quote = await pricing.quoteForOrganization(org.id, {}, db);
+  const period = periodFor(org.subscription_cycle || 'monthly', when);
+
+  const invoice = await claimPeriod({ organizationId: org.id, quote, period, db });
+  if (!invoice) return { skipped: 'already invoiced for this period' };
+
+  const dueBy = await dunning.awaitEftSettlement({
+    organizationId: org.id, invoice, when, db,
+  });
+
+  return { invoice, charged: false, awaiting_eft: true, due_by: dueBy, amount: quote.total };
+}
+
+/**
  * Charge one fleet for the current period.
  *
  * Every early return is a reason not to take money, and each says which, so a
@@ -140,12 +165,21 @@ async function markInvoice(invoiceId, fields, db = pgDb) {
 async function chargeOrganization(organizationId, { when = new Date(), db = pgDb } = {}) {
   const { rows } = await db.query(
     `SELECT id, name, subscription_tier, subscription_cycle, subscription_status,
-            billing_authorization_encrypted, billing_email, contact_email
+            billing_authorization_encrypted, billing_email, contact_email, billing_method
        FROM organizations WHERE id = $1`, [organizationId]);
   const org = rows[0];
   if (!org) return { skipped: 'no such organisation' };
   if (org.subscription_status === 'cancelled') return { skipped: 'subscription cancelled' };
   if (!org.subscription_tier) return { skipped: 'no plan chosen' };
+
+  // An EFT client is invoiced and then waited for. Nothing is presented to
+  // Paystack, so none of the decline/retry/suspend machinery below applies to
+  // them — being unpaid on day one is the normal state of an invoice, not a
+  // failure to chase.
+  if (org.billing_method === 'eft') {
+    return invoiceForEft(org, { when, db });
+  }
+
   if (!org.billing_authorization_encrypted) return { skipped: 'no card on file' };
 
   const authorization = readAuthorization(org.billing_authorization_encrypted);
@@ -213,7 +247,11 @@ async function organizationsDue({ when = new Date(), db = pgDb } = {}) {
   const { rows } = await db.query(
     `SELECT id FROM organizations
       WHERE subscription_tier IS NOT NULL
-        AND billing_authorization_encrypted IS NOT NULL
+        -- A card is required to charge, and an EFT client has none. Requiring
+        -- one here is what made an EFT client invisible to the billing run:
+        -- never charged, which is correct, but also never invoiced, so there
+        -- was no record of what they owed and nothing to settle against.
+        AND (billing_authorization_encrypted IS NOT NULL OR billing_method = 'eft')
         AND (
           (subscription_status = 'active'
              AND (next_billing_date IS NULL OR next_billing_date <= $1))
@@ -245,6 +283,17 @@ async function runBillingRun({ when = new Date(), db = pgDb } = {}) {
     }
   }
 
+  // EFT clients whose terms have lapsed become past_due here, before the
+  // suspension pass below reads that status. Running it after the charges so
+  // that an EFT invoice settled this morning is already out of the pending
+  // list by the time anybody is chased for it.
+  let chasedEft = [];
+  try {
+    chasedEft = await dunning.chaseEftInvoices({ when, db });
+  } catch (e) {
+    console.error('[billing] EFT chase failed:', e.message);
+  }
+
   let suspended = [];
   try {
     suspended = await dunning.suspendExpired({ when, db });
@@ -254,7 +303,7 @@ async function runBillingRun({ when = new Date(), db = pgDb } = {}) {
     console.error('[billing] suspension pass failed:', e.message);
   }
 
-  return { charges, suspended };
+  return { charges, suspended, chasedEft };
 }
 
 module.exports = {

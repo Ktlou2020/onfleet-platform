@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import api from '../../api';
@@ -6,7 +6,7 @@ import { useAuth } from '../../auth';
 import { Badge, ConfirmModal, CopyableContactValue, EmptyState, Loading, Modal, Pagination, SearchInput, Stat, fmt, fmtDate, matchesSearch, paginateItems } from '../../components/ui';
 import { getFleetRoleLabel } from '../fleet/access';
 import { isTelematicsConsole } from '../../brand';
-import { Building2, ShieldCheck, Users, Wallet, Settings, ChevronDown, ChevronRight, Mail, MapPin, CreditCard, KeyRound, Trash2, Send, Eye, Phone, TrendingUp, AlertTriangle, CheckCircle2, Circle, Zap, RefreshCw } from 'lucide-react';
+import { Building2, ShieldCheck, Users, Wallet, Settings, ChevronDown, ChevronRight, Mail, MapPin, CreditCard, KeyRound, Trash2, Send, Eye, Phone, TrendingUp, AlertTriangle, CheckCircle2, Circle, Zap, RefreshCw, Banknote } from 'lucide-react';
 
 const EMAIL_TEMPLATES = [
   { key: 'demo_invite',     label: 'Demo / call invite' },
@@ -420,6 +420,188 @@ const PLAN_OPTIONS = [
 ];
 const ORG_STATUS_OPTIONS = ['trialing', 'active', 'past_due', 'suspended', 'cancelled'];
 
+// How a client pays, whether to hold the account open, and the invoices.
+//
+// All three in one place because they are one conversation: a client pays by
+// EFT, the money takes days to arrive and longer to be matched, and somebody
+// has to be able to say "do not lock them out while I sort this" and then
+// record the payment when it lands.
+function BillingModal({ org, onClose, onSaved }) {
+  const [data, setData] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [holdUntil, setHoldUntil] = useState('');
+  const [holdReason, setHoldReason] = useState('');
+  const [settling, setSettling] = useState(null);
+  const [reference, setReference] = useState('');
+  const [paidAt, setPaidAt] = useState(new Date().toISOString().slice(0, 10));
+
+  const load = useCallback(() => api.get(`/admin/fleet-owners/${org.id}/invoices`)
+    .then((r) => {
+      setData(r.data);
+      setHoldUntil(r.data.organization.billing_hold_until?.slice(0, 10) || '');
+      setHoldReason(r.data.organization.billing_hold_reason || '');
+    })
+    .catch((e) => toast.error(e.response?.data?.error || 'Could not load billing')), [org.id]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const setMethod = async (method) => {
+    setBusy(true);
+    try {
+      await api.put(`/admin/fleet-owners/${org.id}/billing-method`, { method });
+      toast.success(method === 'eft'
+        ? 'Invoiced by EFT — no card will be charged'
+        : 'Charged to a card on file');
+      await load();
+      onSaved?.();
+    } catch (e) { toast.error(e.response?.data?.error || 'Could not change that'); }
+    finally { setBusy(false); }
+  };
+
+  const saveHold = async (clear = false) => {
+    setBusy(true);
+    try {
+      await api.put(`/admin/fleet-owners/${org.id}/billing-hold`,
+        clear ? { until: null } : { until: holdUntil, reason: holdReason });
+      toast.success(clear ? 'Hold removed' : 'Account held open');
+      await load();
+      onSaved?.();
+    } catch (e) { toast.error(e.response?.data?.error || 'Could not save that'); }
+    finally { setBusy(false); }
+  };
+
+  const settle = async () => {
+    if (!reference.trim()) return toast.error('Record the bank reference it came in under');
+    setBusy(true);
+    try {
+      await api.post(`/admin/subscription-invoices/${settling.id}/settle`,
+        { method: 'eft', reference: reference.trim(), paid_at: paidAt });
+      toast.success('Payment recorded — the account is active again');
+      setSettling(null);
+      setReference('');
+      await load();
+      onSaved?.();
+    } catch (e) { toast.error(e.response?.data?.error || 'Could not record that'); }
+    finally { setBusy(false); }
+  };
+
+  if (!data) return <Modal title={`Billing · ${org.name}`} onClose={onClose}><Loading /></Modal>;
+
+  const o = data.organization;
+  const isEft = o.billing_method === 'eft';
+  const holdLive = o.billing_hold_until && new Date(o.billing_hold_until) >= new Date(new Date().toISOString().slice(0, 10));
+
+  return (
+    <Modal title={`Billing · ${org.name}`} onClose={busy ? undefined : onClose} style={{ maxWidth: 760 }}>
+      <div className="row mb-3" style={{ gap: 8 }}>
+        {['card', 'eft'].map((m) => (
+          <button
+            key={m}
+            className={`btn btn-sm ${o.billing_method === m ? '' : 'btn-secondary'}`}
+            disabled={busy}
+            onClick={() => setMethod(m)}
+          >
+            {m === 'card' ? 'Card on file' : 'Invoice · EFT'}
+          </button>
+        ))}
+        <div style={{ flex: 1 }} />
+        <span className="muted text-sm">
+          {o.subscription_status} · {o.status}
+        </span>
+      </div>
+
+      <div className="muted text-sm mb-4">
+        {isEft
+          ? 'We raise an invoice each period and wait. No card is ever presented, and the account is not blocked while the payment terms run.'
+          : 'The card on file is charged each period, with automatic retries and a grace period if it declines.'}
+      </div>
+
+      {/* The escape hatch. Separate from the payment method because it applies
+          whatever the method is: proof of payment in hand, or terms agreed. */}
+      <div className="card mb-4" style={{ background: 'var(--surface-2)' }}>
+        <h3 style={{ fontSize: 14, marginBottom: 6 }}>Hold the account open</h3>
+        <div className="muted text-xs mb-3">
+          Stops this account being blocked or suspended until the date, whatever billing says.
+          For when the money is in flight and somebody still has to match it.
+          {holdLive && <strong style={{ color: 'var(--warn)' }}> Currently held until {fmtDate(o.billing_hold_until)}.</strong>}
+        </div>
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div>
+            <label className="label" style={{ fontSize: 12 }}>Until</label>
+            <input className="input" type="date" value={holdUntil} style={{ width: 170 }}
+              onChange={(e) => setHoldUntil(e.target.value)} />
+          </div>
+          <div style={{ flex: '1 1 260px' }}>
+            <label className="label" style={{ fontSize: 12 }}>Why</label>
+            <input className="input" value={holdReason} placeholder="POP received, matching Monday"
+              onChange={(e) => setHoldReason(e.target.value)} />
+          </div>
+          <button className="btn btn-sm" disabled={busy || !holdUntil} onClick={() => saveHold(false)}>Hold</button>
+          {holdLive && (
+            <button className="btn btn-sm btn-secondary" disabled={busy} onClick={() => saveHold(true)}>Remove</button>
+          )}
+        </div>
+      </div>
+
+      <h3 style={{ fontSize: 14, marginBottom: 8 }}>Invoices</h3>
+      {!data.invoices.length ? (
+        <div className="muted text-sm">No invoices yet.</div>
+      ) : (
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr><th>Period</th><th>Reference</th><th style={{ textAlign: 'right' }}>Amount</th><th>Status</th><th>Settled</th><th /></tr>
+            </thead>
+            <tbody>
+              {data.invoices.map((inv) => (
+                <tr key={inv.id}>
+                  <td className="text-sm">{fmtDate(inv.period_start)}</td>
+                  <td className="text-sm" style={{ fontFamily: 'monospace', fontSize: 12 }}>{inv.reference}</td>
+                  <td style={{ textAlign: 'right' }}>{fmt(inv.amount)}</td>
+                  <td><Badge status={inv.status} /></td>
+                  <td className="muted text-xs">
+                    {inv.settled_at
+                      ? `${inv.settlement_method} · ${inv.settlement_reference}${inv.settled_by_name ? ` · ${inv.settled_by_name}` : ''}`
+                      : inv.failure_reason || '—'}
+                  </td>
+                  <td style={{ textAlign: 'right' }}>
+                    {inv.status === 'pending' && (
+                      <button className="btn btn-sm" disabled={busy} onClick={() => setSettling(inv)}>
+                        Mark paid
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {settling && (
+        <Modal title={`Record payment · ${fmt(settling.amount)}`} onClose={busy ? undefined : () => setSettling(null)}>
+          <div style={{ minWidth: 360 }}>
+            <p className="muted text-sm mb-3">
+              Matching a line on the bank statement to invoice <strong>{settling.reference}</strong>.
+              This marks it settled and brings the account back to active straight away.
+            </p>
+            <label className="label">Bank reference</label>
+            <input className="input mb-1" value={reference} placeholder="FNB-8842 / the reference they paid under"
+              onChange={(e) => setReference(e.target.value)} />
+            <div className="muted text-xs mb-3">Recorded against your name, so the payment can be traced later.</div>
+            <label className="label">Date received</label>
+            <input className="input mb-3" type="date" value={paidAt} onChange={(e) => setPaidAt(e.target.value)} />
+            <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
+              <button className="btn btn-secondary" disabled={busy} onClick={() => setSettling(null)}>Cancel</button>
+              <button className="btn" disabled={busy} onClick={settle}>Record payment</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </Modal>
+  );
+}
+
 function ChangePlanModal({ orgId, orgName, currentPlan, currentStatus, onClose, onSaved }) {
   const plan = PLAN_OPTIONS.find((p) => p.key === currentPlan) || PLAN_OPTIONS[0];
   const [selectedPlan, setSelectedPlan] = useState(plan.key);
@@ -584,6 +766,7 @@ export default function AdminFleetOwners() {
   const [busyKey, setBusyKey] = useState('');
   const [roleEdits, setRoleEdits] = useState({});
   const [planModal, setPlanModal] = useState(null);
+  const [billingModal, setBillingModal] = useState(null);
   const [expanded, setExpanded] = useState(new Set());
   const [confirmModal, setConfirmModal] = useState(null);
   const [emailModal, setEmailModal] = useState(null);
@@ -802,6 +985,13 @@ export default function AdminFleetOwners() {
           onClose={() => setConfirmModal(null)}
         />
       )}
+      {billingModal && (
+        <BillingModal
+          org={billingModal}
+          onClose={() => setBillingModal(null)}
+          onSaved={load}
+        />
+      )}
       {planModal && (
         <ChangePlanModal
           orgId={planModal.orgId}
@@ -1004,6 +1194,14 @@ export default function AdminFleetOwners() {
                         style={{ display: 'flex', alignItems: 'center', gap: 4 }}
                       >
                         <Settings size={13} /> Plan
+                      </button>
+                      <button
+                        className="btn btn-sm btn-secondary"
+                        onClick={() => setBillingModal(org)}
+                        title="Payment method, holds and invoices"
+                        style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+                      >
+                        <Banknote size={13} /> Billing
                       </button>
                       <button
                         className="btn btn-sm btn-secondary"

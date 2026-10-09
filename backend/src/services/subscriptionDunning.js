@@ -1,6 +1,7 @@
 'use strict';
 
 const pgDb = require('../pgDb');
+const { brand } = require('../brand');
 // Called through the module rather than destructured so the send path can
 // be observed in tests without a real mailbox being involved.
 const notifier = require('./notifierPg');
@@ -32,6 +33,14 @@ const RETRY_DAY_OFFSETS = [3, 7, 12];
 const GRACE_DAYS = 14;
 
 const MAX_ATTEMPTS = RETRY_DAY_OFFSETS.length + 1;
+
+// Payment terms for a client who pays by EFT, and how long after they lapse
+// before access stops. Longer than the card windows on purpose: a transfer
+// takes days to clear and is matched to an invoice by a person reading a bank
+// statement, so the gap between "paid" and "we know it is paid" is real and
+// nobody should be locked out inside it.
+const EFT_TERMS_DAYS = Number(process.env.EFT_TERMS_DAYS || 14);
+const EFT_FINAL_DAYS = Number(process.env.EFT_FINAL_DAYS || 10);
 
 function asDate(d) {
   return d.toISOString().slice(0, 10);
@@ -116,7 +125,7 @@ function noticeBody({ org, invoice, reason, attemptsLeft, graceUntil, suspended 
     return [
       `Hi ${org.name},`,
       '',
-      `We were not able to collect ${money(invoice?.amount)} for your Pillion subscription, after four attempts on ${card}.`,
+      `We were not able to collect ${money(invoice?.amount)} for your ${brand.name} subscription, after four attempts on ${card}.`,
       '',
       'Your account is now paused. Tracking carries on in the background and nothing has been deleted — your bikes, agreements and history are all exactly where you left them — but nobody at your fleet can sign in until the payment goes through.',
       '',
@@ -133,7 +142,7 @@ function noticeBody({ org, invoice, reason, attemptsLeft, graceUntil, suspended 
   return [
     `Hi ${org.name},`,
     '',
-    `We could not collect ${money(invoice?.amount)} for your Pillion subscription${invoice?.description ? ` — ${invoice.description}` : ''}.`,
+    `We could not collect ${money(invoice?.amount)} for your ${brand.name} subscription${invoice?.description ? ` — ${invoice.description}` : ''}.`,
     '',
     reason ? `The bank declined it: ${reason}` : 'The charge was declined.',
     '',
@@ -162,11 +171,13 @@ async function sendNotice({ org, invoice, reason, attemptsLeft, graceUntil, susp
     return { skipped: 'no billing contact', noticeKey };
   }
 
+  // Named the brand literally, so an OnFleet fleet owner was emailed about
+  // their Pillion subscription being paused.
   const title = suspended
-    ? 'Your Pillion account has been paused'
+    ? `Your ${brand.name} account has been paused`
     : attemptsLeft > 0
-      ? 'We could not take your Pillion payment'
-      : `Final notice — Pillion access pauses on ${humanDate(graceUntil)}`;
+      ? `We could not take your ${brand.name} payment`
+      : `Final notice — ${brand.name} access pauses on ${humanDate(graceUntil)}`;
 
   const message = noticeBody({ org, invoice, reason, attemptsLeft, graceUntil, suspended });
 
@@ -281,6 +292,165 @@ async function recordSuccess({ organizationId, nextBillingDate = null, db = pgDb
  * untouched and the tracker keeps reporting, so restoring an account is one
  * successful charge rather than a restore.
  */
+// Where to pay. Held in app_settings rather than an env var because the
+// person who needs to change it is in finance, not in a deploy pipeline, and
+// an invoice that names the wrong account is worse than one that names none.
+const BANK_KEYS = ['eft_bank_name', 'eft_account_name', 'eft_account_number', 'eft_branch_code'];
+
+async function bankDetails(db = pgDb) {
+  const { rows } = await db.query(
+    'SELECT setting_key, setting_value FROM app_settings WHERE setting_key = ANY($1)', [BANK_KEYS]);
+  const map = Object.fromEntries(rows.map((r) => [r.setting_key, r.setting_value]));
+  const complete = BANK_KEYS.every((k) => String(map[k] || '').trim());
+  return { ...map, complete };
+}
+
+function eftInvoiceBody({ org, invoice, dueBy, bank }) {
+  const lines = [
+    `Hi ${org.name},`,
+    '',
+    `Your ${brand.name} invoice for ${invoice.description || 'this period'} is ${money(invoice.amount)}.`,
+    '',
+    `Payment is due by ${humanDate(dueBy)}.`,
+    '',
+  ];
+
+  if (bank.complete) {
+    lines.push(
+      'Bank details:',
+      `  Account name:   ${bank.eft_account_name}`,
+      `  Bank:           ${bank.eft_bank_name}`,
+      `  Account number: ${bank.eft_account_number}`,
+      `  Branch code:    ${bank.eft_branch_code}`,
+      '',
+      // Without this the payment lands as an unidentifiable line on a bank
+      // statement and somebody spends an afternoon working out whose it is.
+      `Please use ${invoice.reference} as the payment reference so we can match it to your account.`,
+    );
+  } else {
+    // Said plainly rather than sending an invoice with a blank account
+    // number, which looks like a phishing attempt and gets ignored.
+    lines.push('Reply to this email for our banking details.');
+  }
+
+  lines.push('', 'Once the payment reflects we will mark the invoice as settled. Nothing changes on your account in the meantime.');
+  return lines.join('\n');
+}
+
+/**
+ * An invoice has been raised for an EFT client. Set the terms window and tell
+ * them where to pay.
+ *
+ * Deliberately does not touch subscription_status. An unpaid invoice on the
+ * day it is issued is not a client in arrears, and marking them past_due here
+ * is precisely the bug this whole change exists to fix — it is what locked an
+ * EFT client out of a platform they had done nothing wrong on.
+ */
+async function awaitEftSettlement({ organizationId, invoice, when = new Date(), db = pgDb }) {
+  const dueBy = asDate(addDays(parseDate(invoice?.period_start, when), EFT_TERMS_DAYS));
+
+  const { rows } = await db.query(
+    `UPDATE organizations
+        SET billing_grace_until = $2, billing_last_notice = NULL, updated_at = NOW()
+      WHERE id = $1
+      RETURNING id, name`, [organizationId, dueBy]);
+  const org = rows[0];
+  if (!org) return dueBy;
+
+  const bank = await bankDetails(db);
+  const contacts = await billingContacts(organizationId, db);
+  for (const contact of contacts) {
+    try {
+      await notifier.sendNotification({
+        userId: contact.id,
+        channel: 'email',
+        type: 'subscription_invoice_eft',
+        title: `Your ${brand.name} invoice — ${money(invoice.amount)} due ${humanDate(dueBy)}`,
+        message: eftInvoiceBody({ org, invoice, dueBy, bank }),
+        entityType: 'organizations',
+        entityId: organizationId,
+        throwOnError: false,
+      });
+    } catch (e) {
+      console.error(`[subscription-dunning] could not send EFT invoice to user ${contact.id}:`, e.message);
+    }
+  }
+  if (!bank.complete) {
+    console.warn('[subscription-dunning] EFT invoice sent without banking details — set them in app_settings');
+  }
+  return dueBy;
+}
+
+/**
+ * EFT clients whose payment terms have run out without the money arriving.
+ *
+ * Only now do they become past_due, and only now does a second clock start.
+ * Runs daily alongside the charge run.
+ */
+async function chaseEftInvoices({ when = new Date(), db = pgDb } = {}) {
+  const today = asDate(when);
+  const { rows } = await db.query(
+    `SELECT o.id, o.name, o.billing_grace_until, o.billing_failure_count,
+            o.billing_card_last4, o.billing_card_brand, o.billing_last_notice,
+            i.id AS invoice_id, i.amount, i.description, i.reference, i.period_start
+       FROM organizations o
+       JOIN LATERAL (
+         SELECT * FROM subscription_invoices
+          WHERE organization_id = o.id AND status = 'pending'
+          ORDER BY period_start ASC LIMIT 1
+       ) i ON TRUE
+      WHERE o.billing_method = 'eft'
+        AND o.subscription_status <> 'cancelled'
+        AND o.status <> 'suspended'
+        AND o.billing_grace_until IS NOT NULL
+        AND o.billing_grace_until < $1
+        AND o.subscription_status <> 'past_due'
+      ORDER BY o.id`, [today]);
+
+  const chased = [];
+  for (const row of rows) {
+    const finalDate = asDate(addDays(when, EFT_FINAL_DAYS));
+    try {
+      await db.query(
+        `UPDATE organizations
+            SET subscription_status = 'past_due', billing_grace_until = $2,
+                billing_last_notice = NULL, updated_at = NOW()
+          WHERE id = $1`, [row.id, finalDate]);
+
+      const bank = await bankDetails(db);
+      const contacts = await billingContacts(row.id, db);
+      for (const contact of contacts) {
+        await notifier.sendNotification({
+          userId: contact.id,
+          channel: 'email',
+          type: 'subscription_payment_overdue',
+          title: `Overdue — ${brand.name} access pauses on ${humanDate(finalDate)}`,
+          message: [
+            `Hi ${row.name},`,
+            '',
+            `We have not yet received ${money(row.amount)} for ${row.description || 'your subscription'}, which was due on ${humanDate(row.billing_grace_until)}.`,
+            '',
+            `If it has not reached us by ${humanDate(finalDate)}, the account is paused until it does.`,
+            '',
+            bank.complete
+              ? `Reference ${row.reference}, paid to ${bank.eft_account_name} at ${bank.eft_bank_name}, account ${bank.eft_account_number}, branch ${bank.eft_branch_code}.`
+              : `Reference ${row.reference}. Reply to this email for our banking details.`,
+            '',
+            'If you have already paid, reply with the proof of payment and we will hold the account while we match it.',
+          ].join('\n'),
+          entityType: 'organizations',
+          entityId: row.id,
+          throwOnError: false,
+        });
+      }
+      chased.push(row.id);
+    } catch (e) {
+      console.error(`[subscription-dunning] could not chase organisation ${row.id}:`, e.message);
+    }
+  }
+  return chased;
+}
+
 async function suspendExpired({ when = new Date(), db = pgDb } = {}) {
   const today = asDate(when);
   const { rows } = await db.query(
@@ -291,6 +461,11 @@ async function suspendExpired({ when = new Date(), db = pgDb } = {}) {
         AND billing_grace_until IS NOT NULL
         AND billing_grace_until < $1
         AND status <> 'suspended'
+        -- Somebody has said in as many words that this account is not to be
+        -- cut off yet: proof of payment is in hand, or terms were agreed. A
+        -- dated override rather than a flag, so it expires by itself instead
+        -- of quietly exempting a client forever.
+        AND (billing_hold_until IS NULL OR billing_hold_until < $1)
       ORDER BY id`, [today]);
 
   const suspended = [];
@@ -323,4 +498,6 @@ module.exports = {
   RETRY_DAY_OFFSETS, GRACE_DAYS, MAX_ATTEMPTS,
   scheduleAfterFailure, recordFailure, recordSuccess, suspendExpired,
   billingContacts, noticeBody, sendNotice,
+  awaitEftSettlement, chaseEftInvoices, bankDetails, eftInvoiceBody,
+  EFT_TERMS_DAYS, EFT_FINAL_DAYS, BANK_KEYS,
 };

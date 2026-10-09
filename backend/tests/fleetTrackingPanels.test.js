@@ -57,12 +57,14 @@ describe.skipIf(!process.env.DATABASE_URL)('fleet tracking panels', () => {
       expect(Number(res.body[0].distance_km)).toBe(12.5);
     });
 
-    it('summarises the week', async () => {
+    // Same shape as /api/tracking/trips/stats, field for field. The first
+    // version of this endpoint returned a tidier shape of its own invention,
+    // and the shared component crashed reading a key that was not there.
+    it('summarises today and the week in the shape the screen reads', async () => {
       const res = await request(app).get(`/api/fleet/tracking/trips/stats?bike_id=${bikeA.id}`).set(asA());
       expect(res.status).toBe(200);
-      expect(res.body.trips).toBe(1);
-      expect(res.body.minutes).toBe(60);
-      expect(res.body.top_speed_kmh).toBe(68);
+      expect(res.body.week).toMatchObject({ trips: 1, km: 12.5, sec: 3600, top_speed_kmh: 68 });
+      expect(res.body.today).toBeDefined();
     });
 
     it.each([
@@ -83,7 +85,7 @@ describe.skipIf(!process.env.DATABASE_URL)('fleet tracking panels', () => {
       const res = await request(app).get(`/api/fleet/tracking/bikes/${bikeA.id}/notes`).set(asA());
       expect(res.body).toHaveLength(1);
       expect(res.body[0].note).toBe('Chain needs tensioning');
-      expect(res.body[0].author).toBe(ownerA.user.full_name);
+      expect(res.body[0].author_name, 'the field the shared component reads').toBe(ownerA.user.full_name);
     });
 
     it('refuses an empty note rather than storing a blank', async () => {
@@ -134,21 +136,42 @@ describe.skipIf(!process.env.DATABASE_URL)('fleet tracking panels', () => {
       [deviceA.id]));
 
     it('shows what was sent to its own device', async () => {
-      const res = await request(app).get(`/api/fleet/tracking/devices/${deviceA.id}/command-log`).set(asA());
+      const res = await request(app).get(`/api/fleet/tracking/devices/${deviceA.id}/commands`).set(asA());
       expect(res.status).toBe(200);
       expect(res.body[0].command).toBe('setdigout 1');
     });
 
     it('cannot read another fleet\'s', async () => {
-      const res = await request(app).get(`/api/fleet/tracking/devices/${deviceB.id}/command-log`).set(asA());
+      const res = await request(app).get(`/api/fleet/tracking/devices/${deviceB.id}/commands`).set(asA());
       expect(res.status).toBe(404);
     });
 
     // A device with no bike has no owner, so it belongs to nobody's fleet.
     it('cannot read an unassigned device\'s', async () => {
       const loose = await addDevice(null, '350000000000009');
-      const res = await request(app).get(`/api/fleet/tracking/devices/${loose.id}/command-log`).set(asA());
+      const res = await request(app).get(`/api/fleet/tracking/devices/${loose.id}/commands`).set(asA());
       expect(res.status).toBe(404);
+    });
+  });
+
+  // The fleet mount and the platform mount feed the same component, so a
+  // field present in one response and absent from the other is a blank panel
+  // or a crash. These pin the keys the screen actually reads.
+  describe('shapes the shared screen depends on', () => {
+    it('the device list carries a status the markers can use', async () => {
+      const res = await request(app).get('/api/fleet/tracking/devices').set(asA());
+      expect(res.status).toBe(200);
+      expect(res.body[0]).toHaveProperty('device_status');
+      expect(['active', 'sleeping', 'offline']).toContain(res.body[0].device_status);
+    });
+
+    it('the single device carries the same, plus its bike', async () => {
+      const res = await request(app).get(`/api/fleet/tracking/devices/${deviceA.id}`).set(asA());
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveProperty('device_status');
+      expect(res.body.registration).toBe('RAP001GP');
+      // The join column is internal and should not leak into the response.
+      expect(res.body.bike_org_id).toBeUndefined();
     });
   });
 

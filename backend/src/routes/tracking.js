@@ -1688,4 +1688,10 @@ router.post('/gps-import', authRequired, adminOnly, gpsImportUpload.single('file
   }
 });
 
+// deviceStatus is exported because the fleet portal's tracking screen is the
+// same component against org-scoped routes, and it keys its markers off this
+// value. A second copy of the grace thresholds would mean the same bike
+// reading "sleeping" to the operator and "offline" to the customer looking at
+// it — one definition, one answer.
 module.exports = router;
+module.exports.deviceStatus = deviceStatus;

@@ -3598,6 +3598,9 @@ router.delete('/api-keys/:id', fleetSection('api_keys', 'manage'), async (req, r
 // ─── Fleet Tracking (GPS) ────────────────────────────────────────────────────
 
 const teltonikaServer = require('../tcp/teltonikaServer');
+// One definition of active / sleeping / offline, shared with the platform
+// console so the same bike never reads differently in the two places.
+const { deviceStatus } = require('./tracking');
 const trackingEvents  = require('../trackingEvents');
 const { cutCommandForModel, restoreCommandForModel } = require('../services/engineCommands');
 const FLEET_TRACKING_PRESETS = {
@@ -3692,10 +3695,10 @@ router.get('/tracking/map', fleetSection('tracking', 'view'), async (req, res) =
     [orgBikeIds]
   );
 
-  const result = rows.map(r => ({
-    ...r,
-    connected: connected.includes(r.imei) ? 1 : 0,
-  }));
+  const result = rows.map(r => {
+    const status = deviceStatus(r.imei, r.last_seen_at, connected);
+    return { ...r, device_status: status, connected: status !== 'offline' ? 1 : 0 };
+  });
   res.json(result);
 });
 
@@ -3718,10 +3721,10 @@ router.get('/tracking/devices', fleetSection('tracking', 'view'), async (req, re
      ORDER BY td.connected DESC, td.last_seen_at DESC`,
     [orgBikeIds]
   );
-  const result = rows.map(r => ({
-    ...r,
-    connected: connected.includes(r.imei) ? 1 : 0,
-  }));
+  const result = rows.map(r => {
+    const status = deviceStatus(r.imei, r.last_seen_at, connected);
+    return { ...r, device_status: status, connected: status !== 'offline' ? 1 : 0 };
+  });
   res.json(result);
 });
 
@@ -3729,30 +3732,66 @@ router.get('/tracking/devices', fleetSection('tracking', 'view'), async (req, re
 // org-scoped twin of a /api/tracking route, and each goes through
 // fleetDeviceOr404 or fleetBikeOr404 rather than re-deriving ownership.
 
+// GET /fleet/tracking/devices/:id — the one the detail panel opens on.
+router.get('/tracking/devices/:id', fleetSection('tracking', 'view'), async (req, res) => {
+  const device = await fleetDeviceOr404(req, req.params.id);
+  if (!device) return res.status(404).json({ error: 'Device not found' });
+  // Same shape the platform twin returns — the device row, the bike fields
+  // spread onto it, and the live connection status the list and the detail
+  // panel both key off.
+  const { rows: bikeRows } = await pgDb.query(
+    `SELECT b.registration, b.make, b.model, b.last_known_lat, b.last_known_lng, b.last_location_at
+       FROM bikes b WHERE b.id = $1`, [device.bike_id]);
+  const connImeis = teltonikaServer.getConnectedIMEIs();
+  const status = deviceStatus(device.imei, device.last_seen_at, connImeis);
+  const { bike_org_id: _ignored, ...row } = device;
+  res.json({ ...row, device_status: status, connected: status !== 'offline' ? 1 : 0, ...(bikeRows[0] || {}) });
+});
+
 // GET /fleet/tracking/trips
+//
+// Same response shape as /api/tracking/trips, down to the field names. These
+// feed the same component, and an endpoint that returns its own idea of the
+// shape is a screen that renders blank or throws — which is exactly what the
+// first version of this did, with a tidier shape the caller had never heard
+// of.
 router.get('/tracking/trips', fleetSection('tracking', 'view'), async (req, res) => {
   const bike = await fleetBikeOr404(req, req.query.bike_id);
   if (!bike) return res.status(404).json({ error: 'Bike not found' });
-  const limit = Math.min(Number(req.query.limit) || 30, 200);
+  const limit = Math.min(Number(req.query.limit) || 50, 200);
   const { rows } = await pgDb.query(
-    `SELECT id, bike_id, started_at, ended_at, distance_km, max_speed_kmh, avg_speed_kmh,
-            start_lat, start_lng, end_lat, end_lng, duration_sec
-       FROM trips WHERE bike_id = $1
-      ORDER BY started_at DESC LIMIT $2`, [bike.id, limit]);
+    'SELECT * FROM trips WHERE bike_id = $1 ORDER BY started_at DESC LIMIT $2', [bike.id, limit]);
+  for (const row of rows) row.registration = bike.registration;
   res.json(rows);
 });
 
-// GET /fleet/tracking/trips/stats
+// GET /fleet/tracking/trips/stats — today and this week, on Johannesburg time.
 router.get('/tracking/trips/stats', fleetSection('tracking', 'view'), async (req, res) => {
   const bike = await fleetBikeOr404(req, req.query.bike_id);
   if (!bike) return res.status(404).json({ error: 'Bike not found' });
+
+  // SAST, like the platform-side twin: "today" has to mean the same day to a
+  // fleet in Johannesburg as it does to the operator watching them.
   const { rows } = await pgDb.query(
-    `SELECT COUNT(*)::int AS trips,
-            COALESCE(SUM(distance_km), 0)::numeric(12,2) AS distance_km,
-            COALESCE(MAX(max_speed_kmh), 0)::int AS top_speed_kmh,
-            (COALESCE(SUM(duration_sec), 0) / 60)::int AS minutes
-       FROM trips WHERE bike_id = $1 AND started_at >= NOW() - interval '7 days'`, [bike.id]);
-  res.json(rows[0]);
+    `WITH bounds AS (
+       SELECT date_trunc('day',  NOW() AT TIME ZONE 'Africa/Johannesburg') AT TIME ZONE 'Africa/Johannesburg' AS day_start,
+              date_trunc('week', NOW() AT TIME ZONE 'Africa/Johannesburg') AT TIME ZONE 'Africa/Johannesburg' AS week_start
+     )
+     SELECT
+       COUNT(*) FILTER (WHERE started_at >= b.day_start)                        AS today_trips,
+       COALESCE(SUM(distance_km) FILTER (WHERE started_at >= b.day_start), 0)   AS today_km,
+       COALESCE(SUM(duration_sec) FILTER (WHERE started_at >= b.day_start), 0)  AS today_sec,
+       COUNT(*) FILTER (WHERE started_at >= b.week_start)                       AS week_trips,
+       COALESCE(SUM(distance_km) FILTER (WHERE started_at >= b.week_start), 0)  AS week_km,
+       COALESCE(SUM(duration_sec) FILTER (WHERE started_at >= b.week_start), 0) AS week_sec,
+       COALESCE(MAX(max_speed_kmh) FILTER (WHERE started_at >= b.week_start), 0) AS week_top_speed_kmh
+     FROM trips, bounds b WHERE bike_id = $1`, [bike.id]);
+
+  const r = rows[0];
+  res.json({
+    today: { trips: Number(r.today_trips), km: Number(r.today_km), sec: Number(r.today_sec) },
+    week: { trips: Number(r.week_trips), km: Number(r.week_km), sec: Number(r.week_sec), top_speed_kmh: Number(r.week_top_speed_kmh) },
+  });
 });
 
 // GET /fleet/tracking/bikes/:bikeId/notes
@@ -3760,8 +3799,11 @@ router.get('/tracking/bikes/:bikeId/notes', fleetSection('tracking', 'view'), as
   const bike = await fleetBikeOr404(req, req.params.bikeId);
   if (!bike) return res.status(404).json({ error: 'Bike not found' });
   const { rows } = await pgDb.query(
-    `SELECT n.id, n.note, n.for_workshop, n.created_at, u.full_name AS author
-       FROM bike_notes n LEFT JOIN users u ON u.id = n.author_id
+    `SELECT n.id, n.bike_id, n.note, n.created_at, n.author_id, u.full_name AS author_name,
+            n.for_workshop, n.resolved_at, r.full_name AS resolved_by_name
+       FROM bike_notes n
+       LEFT JOIN users u ON u.id = n.author_id
+       LEFT JOIN users r ON r.id = n.resolved_by
       WHERE n.bike_id = $1 ORDER BY n.created_at DESC LIMIT 100`, [bike.id]);
   res.json(rows);
 });
@@ -3787,21 +3829,22 @@ router.post('/tracking/bikes/:bikeId/notes', fleetSection('tracking', 'manage'),
 // customer read where another operator's no-go areas are.
 router.get('/tracking/geofences', fleetSection('tracking', 'view'), async (req, res) => {
   const { rows } = await pgDb.query(
-    `SELECT g.* FROM geofences g
+    `SELECT g.*, b.registration FROM geofences g
        JOIN bikes b ON b.id = g.bike_id
       WHERE b.organization_id = $1
-      ORDER BY g.name`, [req.user.organization_id]);
+      ORDER BY g.created_at DESC`, [req.user.organization_id]);
   res.json(rows);
 });
 
 // GET /fleet/tracking/devices/:id/commands — what has been sent to this bike.
-router.get('/tracking/devices/:id/command-log', fleetSection('tracking', 'view'), async (req, res) => {
+// Same path the POST uses and the same path the shared tracking component
+// asks for, so the fleet mount needs no special case.
+router.get('/tracking/devices/:id/commands', fleetSection('tracking', 'view'), async (req, res) => {
   const device = await fleetDeviceOr404(req, req.params.id);
   if (!device) return res.status(404).json({ error: 'Device not found' });
   const { rows } = await pgDb.query(
-    `SELECT id, command, status, response, created_at, sent_at
-       FROM tracking_commands WHERE device_id = $1
-      ORDER BY created_at DESC LIMIT 50`, [device.id]);
+    'SELECT tc.* FROM tracking_commands tc WHERE tc.device_id = $1 ORDER BY tc.created_at DESC LIMIT 100',
+    [device.id]);
   res.json(rows);
 });
 

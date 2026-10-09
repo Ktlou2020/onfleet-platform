@@ -461,7 +461,49 @@ function parseCommandResponse(command, raw) {
 // opens over it, and the selected bike's details sit in a bottom sheet. The
 // desktop three-column layout squeezed a 272px list and a 380px panel onto a
 // 375px screen, leaving no map at all.
-export default function Tracking({ readOnly = false }) {
+/**
+ * The tracking console, shared by three callers.
+ *
+ * The admin portal and the control room both mount this against the
+ * platform's own /api/tracking routes. The fleet portal mounts it against
+ * /api/fleet/tracking, which is the same screen scoped to one customer's
+ * bikes — so a fleet owner gets the structure the operator has rather than a
+ * thinner imitation of it that drifts every time this one is improved.
+ *
+ * apiBase defaults to the platform path, so admin and control room behave
+ * exactly as they did.
+ *
+ * `tier` gates by what the fleet pays for, against the published plan copy:
+ * basic buys the map, trips, the bike, who is on it, alert history and the
+ * immobiliser; workshop adds notes. Null means ungated, which is the
+ * operator looking at their own estate.
+ *
+ * Alert settings stay operator-only for now, tier or not: the dialog picks
+ * who gets notified from platform staff, and a fleet-side version needs its
+ * own notification-users endpoint before the button can do anything but
+ * fail.
+ */
+export default function Tracking({ readOnly = false, apiBase = '/tracking', tier = null }) {
+  // What this fleet's plan includes, against the published copy. A null tier
+  // is the operator looking at their own estate and gates nothing.
+  //
+  // Driver sits in basic deliberately: a telematics customer who buys none
+  // of the rent-to-own machinery still has people riding their bikes, and
+  // "who is on this one" is part of knowing where it is.
+  // Administering devices — registering them, allocating them to a bike,
+  // signing off an installation, commanding them in bulk — is the operator's
+  // job on every deployment. A fleet watches its own vehicles and can stop
+  // one; it does not fit trackers. None of those routes exist under
+  // /api/fleet/tracking either, so this is what keeps the fleet mount from
+  // firing calls that 404.
+  const isOperatorConsole = tier === null;
+
+  const tierAllows = useCallback((needed) => {
+    if (!tier) return true;
+    const ladder = ['basic', 'workshop', 'fleet', 'complete'];
+    const have = ladder.indexOf(String(tier).toLowerCase());
+    return have >= 0 && have >= ladder.indexOf(needed);
+  }, [tier]);
   const isMobile = useIsMobile();
   const [mobileView, setMobileView] = useState('map');   // 'map' | 'list'
   const [sheetSize, setSheetSize] = useState('half');    // 'peek' | 'half' | 'full'
@@ -619,13 +661,13 @@ export default function Tracking({ readOnly = false }) {
   const loadDevices = useCallback(async () => {
     try {
       const [{ data: devs }, { data: map }] = await Promise.all([
-        api.get('/tracking/devices'),
-        api.get('/tracking/map'),
+        api.get(`${apiBase}/devices`),
+        api.get(`${apiBase}/map`),
       ]);
       setDevices(devs);
       setMapDevices(map);
     } catch { /* silent */ }
-  }, []);
+  }, [apiBase]);
 
   const loadBikes = useCallback(async () => {
     try {
@@ -633,24 +675,24 @@ export default function Tracking({ readOnly = false }) {
       // which excludes every bike belonging to a fleet owner. On Pillion the
       // operator owns none of them, so this picker was simply empty and a
       // tracker could not be allocated to anything at all.
-      const { data } = await api.get('/tracking/allocatable-bikes');
+      const { data } = await api.get(`${apiBase}/allocatable-bikes`);
       setBikes(data.bikes || []);
     } catch { /* silent */ }
-  }, []);
+  }, [apiBase]);
 
   const loadGeofences = useCallback(async () => {
     try {
-      const { data } = await api.get('/tracking/geofences');
+      const { data } = await api.get(`${apiBase}/geofences`);
       setGeofences(data);
     } catch { /* silent */ }
-  }, []);
+  }, [apiBase]);
 
   const loadAlerts = useCallback(async () => {
     try {
-      const { data } = await api.get('/tracking/alerts?limit=100');
+      const { data } = await api.get(`${apiBase}/alerts?limit=100`);
       setAlerts(data);
     } catch { /* silent */ }
-  }, []);
+  }, [apiBase]);
 
   // The overnight curfew. Loaded when the panel is opened rather than with the
   // page: it is rarely looked at, but when it is looked at it is usually 01:00
@@ -659,29 +701,29 @@ export default function Tracking({ readOnly = false }) {
     setShowNightCurfew(true);
     setCurfew(null);
     try {
-      const { data } = await api.get('/tracking/night-curfew');
+      const { data } = await api.get(`${apiBase}/night-curfew`);
       setCurfew(data);
     } catch {
       toast.error('Could not load the curfew settings');
       setShowNightCurfew(false);
     }
-  }, []);
+  }, [apiBase]);
 
   const setCurfewEnabled = useCallback(async (enabled) => {
     setCurfew(c => c && { ...c, enabled });          // answer the click immediately
     try {
-      await api.put('/tracking/night-curfew', { enabled });
+      await api.put(`${apiBase}/night-curfew`, { enabled });
       toast.success(enabled ? 'Overnight curfew on' : 'Overnight curfew off — no bike will be cut automatically at night');
     } catch {
       setCurfew(c => c && { ...c, enabled: !enabled }); // put it back; it did not take
       toast.error('Could not change the curfew');
     }
-  }, []);
+  }, [apiBase]);
 
   const setBikeExempt = useCallback(async (bikeId, exempt, registration) => {
     try {
-      await api.put(`/tracking/night-curfew/bike/${bikeId}`, { exempt });
-      const { data } = await api.get('/tracking/night-curfew');
+      await api.put(`${apiBase}/night-curfew/bike/${bikeId}`, { exempt });
+      const { data } = await api.get(`${apiBase}/night-curfew`);
       setCurfew(data);
       toast.success(exempt
         ? `${registration || 'Bike'} may now move at night`
@@ -689,14 +731,14 @@ export default function Tracking({ readOnly = false }) {
     } catch {
       toast.error('Could not change that bike');
     }
-  }, []);
+  }, [apiBase]);
 
   const openAlertSettings = useCallback(async (deviceId = null) => {
     try {
       const url = deviceId ? `/tracking/alert-settings?device_id=${deviceId}` : '/tracking/alert-settings';
       const [{ data: settings }, { data: users }] = await Promise.all([
         api.get(url),
-        api.get('/tracking/notification-users'),
+        api.get(`${apiBase}/notification-users`),
       ]);
       setAlertSettings(settings);
       setNotifUsers(users);
@@ -704,7 +746,7 @@ export default function Tracking({ readOnly = false }) {
       setApplySettingsToAll(false);
       setShowAlertSettings(true);
     } catch { toast.error('Could not load alert settings'); }
-  }, []);
+  }, [apiBase]);
 
   const changeAlertSettingsDevice = useCallback(async (newDeviceId) => {
     try {
@@ -724,41 +766,41 @@ export default function Tracking({ readOnly = false }) {
         : alertSettingsDeviceId
           ? { settings: alertSettings, device_id: alertSettingsDeviceId }
           : { settings: alertSettings };
-      await api.put('/tracking/alert-settings', body);
+      await api.put(`${apiBase}/alert-settings`, body);
       toast.success(applyToAll ? 'Applied to all devices' : 'Alert settings saved');
       setShowAlertSettings(false);
     } catch { toast.error('Failed to save settings'); }
     finally { setSavingAlertSettings(false); }
-  }, [alertSettings, alertSettingsDeviceId]);
+  }, [alertSettings, alertSettingsDeviceId, apiBase]);
 
   const resetDeviceAlertSettings = useCallback(async () => {
     if (!alertSettingsDeviceId) return;
     try {
-      await api.delete(`/tracking/alert-settings/device/${alertSettingsDeviceId}`);
+      await api.delete(`${apiBase}/alert-settings/device/${alertSettingsDeviceId}`);
       // Reload to show inherited global values
-      const { data: settings } = await api.get('/tracking/alert-settings');
+      const { data: settings } = await api.get(`${apiBase}/alert-settings`);
       setAlertSettings(settings.map(s => ({ ...s, device_override: false })));
       toast.success('Reset to global defaults');
     } catch { toast.error('Failed to reset'); }
-  }, [alertSettingsDeviceId]);
+  }, [alertSettingsDeviceId, apiBase]);
 
   const loadTrips = useCallback(async (bikeId) => {
     try {
       const [{ data }, { data: stats }] = await Promise.all([
-        api.get(`/tracking/trips?bike_id=${bikeId}&limit=30`),
-        api.get(`/tracking/trips/stats?bike_id=${bikeId}`),
+        api.get(`${apiBase}/trips?bike_id=${bikeId}&limit=30`),
+        api.get(`${apiBase}/trips/stats?bike_id=${bikeId}`),
       ]);
       setTrips(data);
       setActivityStats(stats);
     } catch { /* silent */ }
-  }, []);
+  }, [apiBase]);
 
   const loadBikeNotes = useCallback(async (bikeId) => {
     try {
-      const { data } = await api.get(`/tracking/bikes/${bikeId}/notes`);
+      const { data } = await api.get(`${apiBase}/bikes/${bikeId}/notes`);
       setBikeNotes(data);
     } catch { /* silent */ }
-  }, []);
+  }, [apiBase]);
 
   // A note ticked for the workshop stops being a note and becomes a standing
   // instruction: it sits at the top of every job card for this bike until a
@@ -770,7 +812,7 @@ export default function Tracking({ readOnly = false }) {
     if (!note) return;
     setSavingNote(true);
     try {
-      const { data } = await api.post(`/tracking/bikes/${bikeId}/notes`, { note, for_workshop: noteForWorkshop });
+      const { data } = await api.post(`${apiBase}/bikes/${bikeId}/notes`, { note, for_workshop: noteForWorkshop });
       setBikeNotes((prev) => [data, ...prev]);
       setNewNoteText('');
       setNoteForWorkshop(false);
@@ -780,21 +822,21 @@ export default function Tracking({ readOnly = false }) {
     } finally {
       setSavingNote(false);
     }
-  }, [newNoteText, noteForWorkshop]);
+  }, [newNoteText, noteForWorkshop, apiBase]);
 
   const loadBikeAlertHistory = useCallback(async (bikeId) => {
     setLoadingBikeAlertHistory(true);
     try {
-      const { data } = await api.get(`/tracking/alerts?bike_id=${bikeId}&limit=50`);
+      const { data } = await api.get(`${apiBase}/alerts?bike_id=${bikeId}&limit=50`);
       setBikeAlertHistory(data);
     } catch { /* silent */ }
     finally { setLoadingBikeAlertHistory(false); }
-  }, []);
+  }, [apiBase]);
 
   useEffect(() => {
     setLoading(true);
-    Promise.all([loadDevices(), ...(readOnly ? [] : [loadBikes()]), loadGeofences()]).finally(() => setLoading(false));
-  }, [loadDevices, loadBikes, loadGeofences, readOnly]);
+    Promise.all([loadDevices(), ...(!readOnly && isOperatorConsole ? [loadBikes()] : []), loadGeofences()]).finally(() => setLoading(false));
+  }, [loadDevices, loadBikes, loadGeofences, readOnly, isOperatorConsole]);
 
   // ── SSE real-time feed ───────────────────────────────────────────
   useEffect(() => {
@@ -804,7 +846,10 @@ export default function Tracking({ readOnly = false }) {
     async function connect() {
       try {
         const token = localStorage.getItem('of_token');
-        const res = await fetch('/api/tracking/live', {
+        // Not api.* but a raw fetch, so the apiBase rewrite missed it and the
+        // fleet mount was streaming from the platform's own endpoint — a 403
+        // and no live updates at all.
+        const res = await fetch(`/api${apiBase}/live`, {
           headers: { Authorization: `Bearer ${token}` },
           signal: abort.signal,
         });
@@ -916,7 +961,7 @@ export default function Tracking({ readOnly = false }) {
     function scheduleRetry() { retryTimer = setTimeout(connect, 5_000); }
     connect();
     return () => { abort.abort(); clearTimeout(retryTimer); setSseOnline(false); };
-  }, []);
+  }, [apiBase]);
 
   // ── Adaptive device-list refresh ─────────────────────────────────
   // Active devices: poll every 10 s. When no movement is detected for
@@ -930,8 +975,8 @@ export default function Tracking({ readOnly = false }) {
     if (!mountedRef.current || document.hidden) return;
     try {
       const [{ data: devs }, { data: map }] = await Promise.all([
-        api.get('/tracking/devices'),
-        api.get('/tracking/map'),
+        api.get(`${apiBase}/devices`),
+        api.get(`${apiBase}/map`),
       ]);
       if (!mountedRef.current) return;
       setDevices(devs);
@@ -941,7 +986,7 @@ export default function Tracking({ readOnly = false }) {
         return { ...incoming, lat: live.lat ?? incoming.lat, lng: live.lng ?? incoming.lng, speed_kmh: live.speed_kmh ?? incoming.speed_kmh, heading: live.heading ?? incoming.heading, satellites: live.satellites ?? incoming.satellites, ignition: live.ignition ?? incoming.ignition, gsm_signal: live.gsm_signal ?? incoming.gsm_signal, battery_mv: live.battery_mv ?? incoming.battery_mv, ext_voltage_mv: live.ext_voltage_mv ?? incoming.ext_voltage_mv };
       }));
     } catch { /* silent */ }
-  }, []);
+  }, [apiBase]);
 
   const scheduleNextPoll = useCallback((forceActive = false) => {
     clearTimeout(adaptivePollRef.current);
@@ -969,12 +1014,12 @@ export default function Tracking({ readOnly = false }) {
     const hours = TRAIL_RANGES.find(r => r.id === range)?.hours || 6;
     const from = new Date(Date.now() - hours * 3_600_000).toISOString();
     try {
-      const { data } = await api.get(`/tracking/devices/${deviceId}/positions?limit=500&from=${encodeURIComponent(from)}`);
+      const { data } = await api.get(`${apiBase}/devices/${deviceId}/positions?limit=500&from=${encodeURIComponent(from)}`);
       if (version === undefined || selectVersionRef.current === version) {
         setTrail(data.map(p => ({ lat: p.lat, lng: p.lng, speed_kmh: p.speed_kmh })));
       }
     } catch { /* silent */ }
-  }, []);
+  }, [apiBase]);
 
   const loadDayPings = useCallback(async (deviceId, dateStr) => {
     if (!deviceId) return;
@@ -982,12 +1027,12 @@ export default function Tracking({ readOnly = false }) {
     try {
       const from = encodeURIComponent(new Date(dateStr + 'T00:00:00+02:00').toISOString());
       const to   = encodeURIComponent(new Date(dateStr + 'T23:59:59+02:00').toISOString());
-      const { data } = await api.get(`/tracking/devices/${deviceId}/positions?limit=1000&from=${from}&to=${to}`);
+      const { data } = await api.get(`${apiBase}/devices/${deviceId}/positions?limit=1000&from=${from}&to=${to}`);
       setDayPings([...data].reverse()); // newest-first
     } catch { /* silent */ } finally {
       setPingDateLoading(false);
     }
-  }, []);
+  }, [apiBase]);
 
   const startReplay = useCallback(async (trip) => {
     if (!selected) return;
@@ -995,7 +1040,7 @@ export default function Tracking({ readOnly = false }) {
     try {
       const from = encodeURIComponent(new Date(trip.started_at).toISOString());
       const to   = trip.ended_at ? `&to=${encodeURIComponent(new Date(trip.ended_at).toISOString())}` : '';
-      const { data } = await api.get(`/tracking/devices/${selected}/positions?limit=1000&from=${from}${to}`);
+      const { data } = await api.get(`${apiBase}/devices/${selected}/positions?limit=1000&from=${from}${to}`);
       if (data.length < 2) { toast.error('Not enough GPS data to replay this trip'); return; }
       setReplayPings(data); // oldest-first from backend
       setReplayIdx(0);
@@ -1004,7 +1049,7 @@ export default function Tracking({ readOnly = false }) {
       setReplayFollow(true);
     } catch { toast.error('Could not load trip data'); }
     finally { setReplayLoading(false); }
-  }, [selected]);
+  }, [selected, apiBase]);
 
   const stopReplay = useCallback(() => {
     setReplayTrip(null);
@@ -1024,11 +1069,11 @@ export default function Tracking({ readOnly = false }) {
     try {
       const from = encodeURIComponent(new Date(trip.started_at).toISOString());
       const to   = trip.ended_at ? `&to=${encodeURIComponent(new Date(trip.ended_at).toISOString())}` : '';
-      const { data } = await api.get(`/tracking/devices/${selected}/positions?limit=1000&from=${from}${to}`);
+      const { data } = await api.get(`${apiBase}/devices/${selected}/positions?limit=1000&from=${from}${to}`);
       setPreviewRoute(data.map(p => [p.lat, p.lng]));
       if (data.length > 0) setFlyTo([data[0].lat, data[0].lng]);
     } catch { setPreviewTripId(null); }
-  }, [previewTripId, selected]);
+  }, [previewTripId, selected, apiBase]);
 
   // Replay tick — advance one ping at a time using real time gaps / speed multiplier
   useEffect(() => {
@@ -1069,9 +1114,9 @@ export default function Tracking({ readOnly = false }) {
       const deviceBikeId = device.bike_id;
       const [, { data: cmds }, tripsRes, statsRes] = await Promise.all([
         loadTrail(device.id, trailRange, version),
-        api.get(`/tracking/devices/${device.id}/commands`),
-        deviceBikeId ? api.get(`/tracking/trips?bike_id=${deviceBikeId}&limit=30`) : Promise.resolve({ data: [] }),
-        deviceBikeId ? api.get(`/tracking/trips/stats?bike_id=${deviceBikeId}`) : Promise.resolve({ data: null }),
+        api.get(`${apiBase}/devices/${device.id}/commands`),
+        deviceBikeId ? api.get(`${apiBase}/trips?bike_id=${deviceBikeId}&limit=30`) : Promise.resolve({ data: [] }),
+        deviceBikeId ? api.get(`${apiBase}/trips/stats?bike_id=${deviceBikeId}`) : Promise.resolve({ data: null }),
       ]);
       if (mountedRef.current && selectVersionRef.current === version) {
         setCommands(cmds);
@@ -1080,7 +1125,7 @@ export default function Tracking({ readOnly = false }) {
       }
     } catch { /* silent */ }
     loadDayPings(device.id, todayStr);
-  }, [loadTrail, loadDayPings, trailRange]);
+  }, [loadTrail, loadDayPings, trailRange, apiBase]);
 
   // Deep link from the notification bell (?bike=<id>) — select that bike's
   // device once the device list has loaded, then drop the param so a
@@ -1106,10 +1151,10 @@ export default function Tracking({ readOnly = false }) {
   const refreshCommands = useCallback(async () => {
     if (!selected) return;
     try {
-      const { data } = await api.get(`/tracking/devices/${selected}/commands`);
+      const { data } = await api.get(`${apiBase}/devices/${selected}/commands`);
       setCommands(data);
     } catch { /* silent */ }
-  }, [selected]);
+  }, [selected, apiBase]);
 
   // ── commands ─────────────────────────────────────────────────────
 
@@ -1121,7 +1166,7 @@ export default function Tracking({ readOnly = false }) {
     }
     setSendingCmd(presetId);
     try {
-      const { data } = await api.post(`/tracking/devices/${selected}/commands`, { preset: presetId });
+      const { data } = await api.post(`${apiBase}/devices/${selected}/commands`, { preset: presetId });
       toast.success(data.note || 'Command queued');
       await refreshCommands();
     } catch (err) {
@@ -1129,14 +1174,14 @@ export default function Tracking({ readOnly = false }) {
     } finally {
       setSendingCmd(null);
     }
-  }, [selected, devices, refreshCommands]);
+  }, [selected, devices, refreshCommands, apiBase]);
 
   const requestPosition = useCallback(async (deviceId) => {
     if (!deviceId) return;
     setRequestingPos(prev => new Set([...prev, deviceId]));
     awaitingPositionRef.current.add(deviceId);
     try {
-      const { data } = await api.post(`/tracking/devices/${deviceId}/commands`, { preset: 'get_gps' });
+      const { data } = await api.post(`${apiBase}/devices/${deviceId}/commands`, { preset: 'get_gps' });
       toast.success(data.note || 'Position request sent');
       if (deviceId === selected) {
         await refreshCommands();
@@ -1148,7 +1193,7 @@ export default function Tracking({ readOnly = false }) {
       awaitingPositionRef.current.delete(deviceId);
     }
     // Note: requestingPos stays set until SSE ping arrives (cleared in SSE handler below)
-  }, [selected, refreshCommands]);
+  }, [selected, refreshCommands, apiBase]);
 
   // ── add device ───────────────────────────────────────────────────
 
@@ -1158,7 +1203,7 @@ export default function Tracking({ readOnly = false }) {
     if (!/^\d{15,17}$/.test(imei)) return toast.error('IMEI must be 15–17 digits');
     setAdding(true);
     try {
-      await api.post('/tracking/devices', { ...addForm, imei, bike_id: addForm.bike_id || null });
+      await api.post(`${apiBase}/devices`, { ...addForm, imei, bike_id: addForm.bike_id || null });
       toast.success('Device registered');
       setShowAdd(false);
       setAddForm(EMPTY_FORM);
@@ -1168,12 +1213,12 @@ export default function Tracking({ readOnly = false }) {
     } finally {
       setAdding(false);
     }
-  }, [addForm, loadDevices]);
+  }, [addForm, loadDevices, apiBase]);
 
   const saveDeviceEdit = useCallback(async () => {
     setSavingEdit(true);
     try {
-      await api.put(`/tracking/devices/${selected}`, { ...editDeviceForm, bike_id: editDeviceForm.bike_id || null });
+      await api.put(`${apiBase}/devices/${selected}`, { ...editDeviceForm, bike_id: editDeviceForm.bike_id || null });
       toast.success('Device updated');
       setShowEditDevice(false);
       await loadDevices();
@@ -1182,20 +1227,20 @@ export default function Tracking({ readOnly = false }) {
     } finally {
       setSavingEdit(false);
     }
-  }, [selected, editDeviceForm, loadDevices]);
+  }, [selected, editDeviceForm, loadDevices, apiBase]);
 
   const deleteDevice = useCallback(async (e, id) => {
     e.stopPropagation();
     const dev = devices.find(d => d.id === id);
     if (!window.confirm(`Remove ${dev?.label || dev?.imei}?`)) return;
     try {
-      await api.delete(`/tracking/devices/${id}`);
+      await api.delete(`${apiBase}/devices/${id}`);
       if (selected === id) { setSelected(null); setTrail([]); setCommands([]); setAddress(null); setTrips([]); setDayPings([]); }
       await loadDevices();
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed');
     }
-  }, [selected, devices, loadDevices]);
+  }, [selected, devices, loadDevices, apiBase]);
 
   // ── bulk device commands ─────────────────────────────────────────
 
@@ -1217,7 +1262,7 @@ export default function Tracking({ readOnly = false }) {
     if (!preset) return;
     setBulkBusy(true);
     try {
-      const { data } = await api.post('/tracking/devices/commands-bulk', { preset, ids: [...bulkSelectedIds] });
+      const { data } = await api.post(`${apiBase}/devices/commands-bulk`, { preset, ids: [...bulkSelectedIds] });
       toast.success(`${preset === 'cut_engine' ? 'Engine cut' : 'Engine restore'} sent to ${data.sent_count} device(s)${data.skipped_count ? `, ${data.skipped_count} skipped` : ''}`);
       exitBulkMode();
       setBulkConfirm(null);
@@ -1227,7 +1272,7 @@ export default function Tracking({ readOnly = false }) {
     } finally {
       setBulkBusy(false);
     }
-  }, [bulkConfirm, bulkSelectedIds, loadDevices, exitBulkMode]);
+  }, [bulkConfirm, bulkSelectedIds, loadDevices, exitBulkMode, apiBase]);
 
   // ── geofences ────────────────────────────────────────────────────
 
@@ -1251,7 +1296,7 @@ export default function Tracking({ readOnly = false }) {
         body.lng = Number(geoForm.lng);
         body.radius_m = Number(geoForm.radius_m);
       }
-      await api.post('/tracking/geofences', body);
+      await api.post(`${apiBase}/geofences`, body);
       toast.success('Geofence created');
       setShowGeoForm(false);
       setGeoForm(EMPTY_GEO);
@@ -1261,17 +1306,17 @@ export default function Tracking({ readOnly = false }) {
     } finally {
       setGeoSubmitting(false);
     }
-  }, [geoForm, loadGeofences]);
+  }, [geoForm, loadGeofences, apiBase]);
 
   const deleteGeofence = useCallback(async (id) => {
     if (!window.confirm('Delete this geofence?')) return;
     try {
-      await api.delete(`/tracking/geofences/${id}`);
+      await api.delete(`${apiBase}/geofences/${id}`);
       setGeofences(prev => prev.filter(g => g.id !== id));
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed');
     }
-  }, []);
+  }, [apiBase]);
 
   const handleMapClick = useCallback((latlng) => {
     if (!pickingCenter) return;
@@ -1317,13 +1362,13 @@ export default function Tracking({ readOnly = false }) {
     setDrawingPolygon(false);
     if (!id || points.length < 3) return;
     try {
-      await api.put(`/tracking/geofences/${id}`, { polygon_coords: points });
+      await api.put(`${apiBase}/geofences/${id}`, { polygon_coords: points });
       toast.success('Polygon saved');
       await loadGeofences();
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to save polygon');
     }
-  }, [loadGeofences]);
+  }, [loadGeofences, apiBase]);
 
   const finishPolygon = useCallback(() => {
     if (editingGeofenceIdRef.current) {
@@ -1341,18 +1386,18 @@ export default function Tracking({ readOnly = false }) {
 
   const acknowledgeAlert = useCallback(async (id) => {
     try {
-      await api.put(`/tracking/alerts/${id}/acknowledge`);
+      await api.put(`${apiBase}/alerts/${id}/acknowledge`);
       setAlerts(prev => prev.map(a => a.id === id ? { ...a, acknowledged_at: new Date().toISOString() } : a));
     } catch { toast.error('Failed'); }
-  }, []);
+  }, [apiBase]);
 
   const acknowledgeAll = useCallback(async () => {
     try {
-      await api.post('/tracking/alerts/acknowledge-all');
+      await api.post(`${apiBase}/alerts/acknowledge-all`);
       setAlerts(prev => prev.map(a => ({ ...a, acknowledged_at: a.acknowledged_at || new Date().toISOString() })));
       setAlertsUnread(0);
     } catch { toast.error('Failed'); }
-  }, []);
+  }, [apiBase]);
 
   // ── derived ──────────────────────────────────────────────────────
 
@@ -1372,36 +1417,36 @@ export default function Tracking({ readOnly = false }) {
   const clearDeviceHealth = useCallback(async (e, deviceId, signature) => {
     e.stopPropagation();
     try {
-      await api.put(`/tracking/devices/${deviceId}/health-ack`, { signature });
+      await api.put(`${apiBase}/devices/${deviceId}/health-ack`, { signature });
       setDevices(prev => prev.map(d => d.id === deviceId ? { ...d, health_ack_signature: signature } : d));
     } catch {
       toast.error('Could not clear');
     }
-  }, []);
+  }, [apiBase]);
 
   const runInstallCheck = useCallback(async (deviceId) => {
     setInstallBusy(true);
     try {
-      const { data } = await api.get(`/tracking/devices/${deviceId}/install-check`);
+      const { data } = await api.get(`${apiBase}/devices/${deviceId}/install-check`);
       setInstallCheck(data);
     } catch (e) {
       toast.error(e.response?.data?.error || 'Could not run the install check');
     } finally { setInstallBusy(false); }
-  }, []);
+  }, [apiBase]);
 
   const commissionDevice = useCallback(async (deviceId, ready) => {
     const overrideReason = ready ? null : window.prompt('Some checks have not passed. Sign off anyway? Say why:');
     if (!ready && !overrideReason) return;
     setInstallBusy(true);
     try {
-      await api.post(`/tracking/devices/${deviceId}/commission`, { override_reason: overrideReason });
+      await api.post(`${apiBase}/devices/${deviceId}/commission`, { override_reason: overrideReason });
       toast.success('Install signed off');
       await runInstallCheck(deviceId);
       loadDevices();
     } catch (e) {
       toast.error(e.response?.data?.error || 'Could not sign off this install');
     } finally { setInstallBusy(false); }
-  }, [runInstallCheck, loadDevices]);
+  }, [runInstallCheck, loadDevices, apiBase]);
 
   if (loading) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 'calc(100vh - 64px)' }}>
@@ -1429,7 +1474,7 @@ export default function Tracking({ readOnly = false }) {
             </div>
             <Link to="/admin/tracking/dashboard" className="btn btn-sm btn-secondary" title="Dashboard"><LayoutDashboard size={12} /></Link>
             <button className="btn btn-sm btn-secondary" title="Refresh" onClick={loadDevices}><RefreshCw size={12} /></button>
-            {!readOnly && <button className="btn btn-sm btn-primary" onClick={() => setShowAdd(true)}><Plus size={12} /> Add</button>}
+            {!readOnly && isOperatorConsole && <button className="btn btn-sm btn-primary" onClick={() => setShowAdd(true)}><Plus size={12} /> Add</button>}
             {isMobile && <button className="btn btn-sm btn-secondary" onClick={() => setMobileView('map')} aria-label="Show map"><MapIcon size={12} /> Map</button>}
           </div>
 
@@ -1524,7 +1569,7 @@ export default function Tracking({ readOnly = false }) {
                     <div style={{ fontSize: 36, marginBottom: 10 }}>📡</div>
                     <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>No trackers yet</div>
                     <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 16, lineHeight: 1.5 }}>Register a Teltonika device to start tracking bikes</div>
-                    {!readOnly && <button className="btn btn-sm btn-primary" onClick={() => setShowAdd(true)}><Plus size={12} /> Register device</button>}
+                    {!readOnly && isOperatorConsole && <button className="btn btn-sm btn-primary" onClick={() => setShowAdd(true)}><Plus size={12} /> Register device</button>}
                   </>
                 ) : (
                   <div style={{ fontSize: 12, color: 'var(--muted)' }}>No devices match "{deviceSearch}"</div>
@@ -1587,7 +1632,7 @@ export default function Tracking({ readOnly = false }) {
                       disabled={requestingPos.has(d.id)}>
                       <MapPin size={10} />
                     </button>
-                    {!readOnly && <button className="btn btn-sm" style={{ padding: '2px 4px', opacity: 0.45, background: 'transparent', minWidth: 0 }}
+                    {!readOnly && isOperatorConsole && <button className="btn btn-sm" style={{ padding: '2px 4px', opacity: 0.45, background: 'transparent', minWidth: 0 }}
                       onClick={e => deleteDevice(e, d.id)} title="Remove"><Trash2 size={10} /></button>}
                   </div>
                   <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2, paddingLeft: 18, fontFamily: 'monospace', letterSpacing: '.3px' }}>{d.imei}</div>
@@ -1674,8 +1719,13 @@ export default function Tracking({ readOnly = false }) {
         {sideTab === 'alerts' && <>
           <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)', display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={{ fontSize: 11, color: 'var(--muted)', flex: 1 }}>Recent events</span>
-            {!readOnly && <button className="btn btn-sm btn-secondary" title="Alert settings" onClick={() => openAlertSettings()}><Settings size={11} /></button>}
-            <button className="btn btn-sm btn-secondary" title="Overnight curfew (00:00–04:00)" onClick={openNightCurfew}><Moon size={11} /></button>
+            {!readOnly && tier === null && <button className="btn btn-sm btn-secondary" title="Alert settings" onClick={() => openAlertSettings()}><Settings size={11} /></button>}
+            {/* Operator-only, whatever the tier. The curfew immobilises bikes
+                fleet-wide on a timer; that is a safety decision the platform
+                takes, not a switch a customer flips. It also has no
+                fleet-scoped endpoint, so for a fleet this opened an empty
+                modal whose toggle would have failed. */}
+            {tier === null && <button className="btn btn-sm btn-secondary" title="Overnight curfew (00:00–04:00)" onClick={openNightCurfew}><Moon size={11} /></button>}
             <button className="btn btn-sm btn-secondary" onClick={loadAlerts}><RefreshCw size={11} /></button>
             {alerts.some(a => !a.acknowledged_at) && (
               <button className="btn btn-sm btn-secondary" style={{ fontSize: 11 }} onClick={acknowledgeAll}>Ack all</button>
@@ -2137,7 +2187,16 @@ export default function Tracking({ readOnly = false }) {
 
             {/* Detail tabs */}
             <div style={{ display: 'flex', marginTop: 10, marginBottom: -14, marginLeft: -14, marginRight: -14, borderTop: '1px solid var(--border)', paddingTop: 2 }}>
-              {[['activity', 'Activity'], ['trips', 'Trips'], ['bike', 'Bike'], ['driver', 'Driver'], ['history', 'History'], ['notes', 'Notes'], ...(!readOnly ? [['info', 'Controls']] : [])].map(([tab, label]) => (
+              {[
+                ['activity', 'Activity'],
+                ['trips', 'Trips'],
+                ['bike', 'Bike'],
+                ['driver', 'Driver'],
+                ['history', 'History'],
+                // Notes are the workshop's channel — a job card in prose.
+                ...(tierAllows('workshop') ? [['notes', 'Notes']] : []),
+                ...(!readOnly ? [['info', 'Controls']] : []),
+              ].map(([tab, label]) => (
                 <button
                   key={tab}
                   onClick={() => {
@@ -2582,8 +2641,9 @@ export default function Tracking({ readOnly = false }) {
           {/* ── Info tab ─────────────────────────────────────────── */}
           {detailTab === 'info' && <>
 
-            {/* Install check — proof the tracker is really installed */}
-            <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
+            {/* Install check — proof the tracker is really installed. The
+                operator's fitment workflow, and its endpoints are adminOnly. */}
+            {isOperatorConsole && <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', flex: 1 }}>Install check</div>
                 <button className="btn btn-sm btn-secondary" style={{ fontSize: 11 }} disabled={installBusy}
@@ -2616,7 +2676,7 @@ export default function Tracking({ readOnly = false }) {
                   </div>
                 </>
               )}
-            </div>
+            </div>}
 
             {/* Location */}
             {selectedMapDevice?.lat && (

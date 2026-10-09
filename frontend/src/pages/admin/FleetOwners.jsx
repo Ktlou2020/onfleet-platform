@@ -428,6 +428,136 @@ const TIER_OPTIONS = [
 ];
 const ORG_STATUS_OPTIONS = ['trialing', 'active', 'past_due', 'suspended', 'cancelled'];
 
+// The flat plans customers bought before they were retired. Their Paystack
+// subscriptions keep charging until somebody stops them.
+//
+// The list leads with who would be left paying nothing, because that is the
+// decision — cancelling a fleet our billing run cannot charge gives away the
+// platform, and it should be a thing somebody chose rather than a thing that
+// happened.
+function LegacyPlansModal({ onClose, onChanged }) {
+  const [data, setData] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [picked, setPicked] = useState(new Set());
+
+  const load = useCallback(() => api.get('/admin/legacy-subscriptions')
+    .then((r) => {
+      setData(r.data);
+      // Pre-select only the ones that are safe to cancel.
+      setPicked(new Set(r.data.fleets.filter((f) => f.ready).map((f) => f.id)));
+    })
+    .catch((e) => toast.error(e.response?.data?.error || 'Could not load the old plans')), []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const cancelPicked = async (force) => {
+    const ids = [...picked];
+    if (!ids.length) return;
+    const notReady = (data.fleets || []).filter((f) => ids.includes(f.id) && !f.ready).length;
+    const warning = notReady
+      ? `\n\n${notReady} of them cannot be billed afterwards and will pay nothing until that is fixed.`
+      : '';
+    if (!window.confirm(
+      `Cancel ${ids.length} old plan${ids.length === 1 ? '' : 's'}?\n\n`
+      + 'Each keeps running until the period they have already paid for ends. '
+      + `Per-bike billing takes over the day after.${warning}`)) return;
+
+    setBusy(true);
+    try {
+      const { data: out } = await api.post('/admin/legacy-subscriptions/cancel',
+        { organization_ids: ids, force });
+      toast.success(`${out.cancelled} cancelled${out.failed ? `, ${out.failed} could not be` : ''}`);
+      if (out.failed) {
+        for (const r of out.results.filter((x) => !x.ok)) {
+          toast.error(`${r.name || `Fleet ${r.id}`}: ${r.error}`, { duration: 6000 });
+        }
+      }
+      await load();
+      onChanged?.();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Could not cancel those');
+    } finally { setBusy(false); }
+  };
+
+  if (!data) return <Modal title="Old flat plans" onClose={onClose}><Loading /></Modal>;
+
+  const toggle = (id) => setPicked((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const pickedNotReady = data.fleets.filter((f) => picked.has(f.id) && !f.ready).length;
+
+  return (
+    <Modal title="Old flat plans" onClose={busy ? undefined : onClose} style={{ maxWidth: 860 }}>
+      {!data.fleets.length ? (
+        <div className="muted text-sm">No fleet is on a flat plan any more.</div>
+      ) : (
+        <>
+          <p className="text-sm mb-3">
+            These fleets still have a Paystack subscription on a retired flat plan. Cancelling
+            stops the next charge and leaves the period they have already paid for alone —
+            per-bike billing takes over the day it ends.
+          </p>
+
+          {data.not_ready > 0 && (
+            <div className="row mb-3" style={{
+              gap: 8, alignItems: 'flex-start', padding: '10px 12px', borderRadius: 8,
+              border: '1px solid var(--warn)', background: 'rgba(255,182,39,0.08)', fontSize: 13,
+            }}>
+              <AlertTriangle size={15} style={{ color: 'var(--warn)', flexShrink: 0, marginTop: 1 }} />
+              <div>
+                <strong>{data.not_ready} of these could not be billed afterwards.</strong>{' '}
+                They have no per-bike plan or no way to pay, so cancelling would leave them on
+                the platform for nothing. Fix that first under Plan and Billing, or cancel
+                deliberately with the forced option.
+              </div>
+            </div>
+          )}
+
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr><th /><th>Fleet</th><th>Old plan</th><th>Bikes</th><th>After cancelling</th></tr>
+              </thead>
+              <tbody>
+                {data.fleets.map((f) => (
+                  <tr key={f.id}>
+                    <td>
+                      <input type="checkbox" checked={picked.has(f.id)} onChange={() => toggle(f.id)} />
+                    </td>
+                    <td><strong>{f.name}</strong></td>
+                    <td className="text-sm">{f.plan_key}</td>
+                    <td className="text-sm">{f.bikes}</td>
+                    <td className="text-sm" style={{ color: f.ready ? 'var(--success)' : 'var(--warn)' }}>
+                      {f.ready
+                        ? `Billed per bike on ${f.subscription_tier}`
+                        : f.blocker}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="row mt-3" style={{ justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
+            <button className="btn btn-secondary" disabled={busy} onClick={onClose}>Close</button>
+            <button className="btn" disabled={busy || !picked.size || pickedNotReady > 0}
+              onClick={() => cancelPicked(false)}>
+              Cancel {picked.size || ''} plan{picked.size === 1 ? '' : 's'} at period end
+            </button>
+            {pickedNotReady > 0 && (
+              <button className="btn btn-danger" disabled={busy} onClick={() => cancelPicked(true)}>
+                Cancel anyway ({pickedNotReady} will pay nothing)
+              </button>
+            )}
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
 // How a client pays, whether to hold the account open, and the invoices.
 //
 // All three in one place because they are one conversation: a client pays by
@@ -773,6 +903,8 @@ export default function AdminFleetOwners() {
   const [roleEdits, setRoleEdits] = useState({});
   const [planModal, setPlanModal] = useState(null);
   const [billingModal, setBillingModal] = useState(null);
+  const [legacyModal, setLegacyModal] = useState(false);
+  const [legacyCount, setLegacyCount] = useState(0);
   const [expanded, setExpanded] = useState(new Set());
   const [confirmModal, setConfirmModal] = useState(null);
   const [emailModal, setEmailModal] = useState(null);
@@ -991,6 +1123,12 @@ export default function AdminFleetOwners() {
           onClose={() => setConfirmModal(null)}
         />
       )}
+      {legacyModal && (
+        <LegacyPlansModal
+          onClose={() => setLegacyModal(false)}
+          onChanged={() => { load(); api.get('/admin/legacy-subscriptions').then((r) => setLegacyCount(r.data.count)).catch(() => {}); }}
+        />
+      )}
       {billingModal && (
         <BillingModal
           org={billingModal}
@@ -1077,6 +1215,20 @@ export default function AdminFleetOwners() {
             )}
           </div>
         </Modal>
+      )}
+
+      {legacyCount > 0 && (
+        <div className="row mb-3" style={{
+          gap: 10, alignItems: 'center', padding: '10px 14px', borderRadius: 8,
+          border: '1px solid var(--warn)', background: 'rgba(255,182,39,0.08)', fontSize: 13,
+        }}>
+          <AlertTriangle size={15} style={{ color: 'var(--warn)', flexShrink: 0 }} />
+          <div style={{ flex: 1 }}>
+            <strong>{legacyCount} fleet{legacyCount === 1 ? ' is' : 's are'} still on a retired flat plan</strong>
+            {' '}— Paystack keeps charging them until the old subscription is cancelled.
+          </div>
+          <button className="btn btn-sm" onClick={() => setLegacyModal(true)}>Review</button>
+        </div>
       )}
 
       <div className="flex-between mb-2" style={{ alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>

@@ -20,6 +20,7 @@ const asyncRouter = require('../utils/asyncRouter');
 const poolFinance = require('../services/poolFinance');
 const poolWebhooks = require('../services/poolWebhooks');
 const subscriptionDunning = require('../services/subscriptionDunning');
+const legacySubscriptions = require('../services/legacySubscriptions');
 
 const router = asyncRouter(express.Router());
 const { branding: brandingUploadDir } = require('../uploadPaths');
@@ -2669,6 +2670,60 @@ router.put('/billing-settings', superadminOnly, async (req, res) => {
   await logAudit(req.user.id, 'admin.billing_settings_update', 'app_settings', null, { changed }, req.ip);
 
   res.json({ ok: true, settings: merged, complete: filled.length === BANK_FIELDS.length });
+});
+
+// ---------- Winding down the flat plans ----------
+// The subscriptions customers bought before the flat plans were retired keep
+// charging at Paystack until somebody stops them. Cancelling one leaves the
+// period already paid for intact and hands billing over to the per-bike run
+// the day it ends.
+
+router.get('/legacy-subscriptions', superadminOnly, async (req, res) => {
+  const fleets = await legacySubscriptions.list();
+  res.json({
+    count: fleets.length,
+    // The number to look at before cancelling anything: fleets our billing
+    // run could not charge once the flat plan stops.
+    not_ready: fleets.filter((f) => !f.ready).length,
+    fleets,
+  });
+});
+
+router.post('/legacy-subscriptions/:orgId/cancel', superadminOnly, async (req, res) => {
+  const orgId = Number(req.params.orgId);
+  if (!Number.isInteger(orgId)) return res.status(400).json({ error: 'Invalid organisation id' });
+
+  const result = await legacySubscriptions.cancelOne(orgId, {
+    actorId: req.user.id,
+    force: req.body.force === true,
+  });
+  if (!result.ok) return res.status(result.status || 400).json(result);
+
+  await logAudit(req.user.id, 'admin.legacy_subscription_cancelled', 'organizations', orgId, {
+    name: result.name, ends_at: result.ends_at, forced: result.forced,
+  }, req.ip);
+  res.json(result);
+});
+
+// Cancelling the lot. Takes an explicit list of ids rather than acting on
+// "all of them": an operator who has just read the list should be cancelling
+// what they read, not whatever the query returns a second time.
+router.post('/legacy-subscriptions/cancel', superadminOnly, async (req, res) => {
+  const ids = Array.isArray(req.body.organization_ids)
+    ? [...new Set(req.body.organization_ids.map(Number).filter(Number.isInteger))] : [];
+  if (!ids.length) return res.status(400).json({ error: 'Name the fleets to cancel' });
+
+  const outcome = await legacySubscriptions.cancelMany(ids, {
+    actorId: req.user.id,
+    force: req.body.force === true,
+  });
+
+  await logAudit(req.user.id, 'admin.legacy_subscriptions_cancelled', 'organizations', null, {
+    requested: ids.length, cancelled: outcome.cancelled, failed: outcome.failed,
+    forced: req.body.force === true,
+    results: outcome.results.map((r) => ({ id: r.id, ok: r.ok, ends_at: r.ends_at, error: r.error })),
+  }, req.ip);
+  res.json(outcome);
 });
 
 // ---------- Paying by EFT ----------

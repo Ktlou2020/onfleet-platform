@@ -3607,6 +3607,43 @@ const FLEET_TRACKING_PRESETS = {
   get_status: () => 'getstatus',
 };
 
+/**
+ * The device, if it is on a bike this fleet owns.
+ *
+ * This check was written out longhand in each handler that touches a device:
+ * load the device, load its bike, compare organization_id, 404. Eight lines
+ * repeated three times, about to be repeated ten more as the fleet tracking
+ * screen gains the panels the admin one has. The copy that gets it wrong is
+ * a fleet reading another fleet's vehicle, so it lives in one place now.
+ *
+ * 404 rather than 403, deliberately: a fleet should not be able to learn
+ * that a device id exists by the way it is refused.
+ */
+async function fleetDeviceOr404(req, deviceId, db = pgDb) {
+  const orgId = req.user.organization_id;
+  const id = Number(deviceId);
+  if (!Number.isInteger(id) || id <= 0) return null;
+  const { rows } = await db.query(
+    `SELECT d.*, b.organization_id AS bike_org_id
+       FROM tracking_devices d
+       LEFT JOIN bikes b ON b.id = d.bike_id
+      WHERE d.id = $1`, [id]);
+  const device = rows[0];
+  if (!device || !device.bike_id) return null;
+  if (Number(device.bike_org_id) !== Number(orgId)) return null;
+  return device;
+}
+
+/** The bike, if this fleet owns it. Same rule, same refusal. */
+async function fleetBikeOr404(req, bikeId, db = pgDb) {
+  const id = Number(bikeId);
+  if (!Number.isInteger(id) || id <= 0) return null;
+  const { rows } = await db.query(
+    'SELECT * FROM bikes WHERE id = $1 AND organization_id = $2',
+    [id, req.user.organization_id]);
+  return rows[0] || null;
+}
+
 async function getOrgBikeIds(organizationId) {
   const { rows } = await pgDb.query(`SELECT id FROM bikes WHERE organization_id = $1`, [organizationId]);
   return rows.map(r => r.id);
@@ -3686,6 +3723,86 @@ router.get('/tracking/devices', fleetSection('tracking', 'view'), async (req, re
     connected: connected.includes(r.imei) ? 1 : 0,
   }));
   res.json(result);
+});
+
+// The panels the admin tracking screen has and this one did not. Each is the
+// org-scoped twin of a /api/tracking route, and each goes through
+// fleetDeviceOr404 or fleetBikeOr404 rather than re-deriving ownership.
+
+// GET /fleet/tracking/trips
+router.get('/tracking/trips', fleetSection('tracking', 'view'), async (req, res) => {
+  const bike = await fleetBikeOr404(req, req.query.bike_id);
+  if (!bike) return res.status(404).json({ error: 'Bike not found' });
+  const limit = Math.min(Number(req.query.limit) || 30, 200);
+  const { rows } = await pgDb.query(
+    `SELECT id, bike_id, started_at, ended_at, distance_km, max_speed_kmh, avg_speed_kmh,
+            start_lat, start_lng, end_lat, end_lng, duration_sec
+       FROM trips WHERE bike_id = $1
+      ORDER BY started_at DESC LIMIT $2`, [bike.id, limit]);
+  res.json(rows);
+});
+
+// GET /fleet/tracking/trips/stats
+router.get('/tracking/trips/stats', fleetSection('tracking', 'view'), async (req, res) => {
+  const bike = await fleetBikeOr404(req, req.query.bike_id);
+  if (!bike) return res.status(404).json({ error: 'Bike not found' });
+  const { rows } = await pgDb.query(
+    `SELECT COUNT(*)::int AS trips,
+            COALESCE(SUM(distance_km), 0)::numeric(12,2) AS distance_km,
+            COALESCE(MAX(max_speed_kmh), 0)::int AS top_speed_kmh,
+            (COALESCE(SUM(duration_sec), 0) / 60)::int AS minutes
+       FROM trips WHERE bike_id = $1 AND started_at >= NOW() - interval '7 days'`, [bike.id]);
+  res.json(rows[0]);
+});
+
+// GET /fleet/tracking/bikes/:bikeId/notes
+router.get('/tracking/bikes/:bikeId/notes', fleetSection('tracking', 'view'), async (req, res) => {
+  const bike = await fleetBikeOr404(req, req.params.bikeId);
+  if (!bike) return res.status(404).json({ error: 'Bike not found' });
+  const { rows } = await pgDb.query(
+    `SELECT n.id, n.note, n.for_workshop, n.created_at, u.full_name AS author
+       FROM bike_notes n LEFT JOIN users u ON u.id = n.author_id
+      WHERE n.bike_id = $1 ORDER BY n.created_at DESC LIMIT 100`, [bike.id]);
+  res.json(rows);
+});
+
+// POST /fleet/tracking/bikes/:bikeId/notes
+router.post('/tracking/bikes/:bikeId/notes', fleetSection('tracking', 'manage'), async (req, res) => {
+  const bike = await fleetBikeOr404(req, req.params.bikeId);
+  if (!bike) return res.status(404).json({ error: 'Bike not found' });
+  const note = String(req.body.note || '').trim();
+  if (!note) return res.status(400).json({ error: 'Write something first' });
+  const { rows } = await pgDb.query(
+    `INSERT INTO bike_notes (bike_id, note, for_workshop, author_id)
+     VALUES ($1,$2,$3,$4) RETURNING id, note, for_workshop, created_at`,
+    [bike.id, note, req.body.for_workshop === true, req.user.id]);
+  res.status(201).json(rows[0]);
+});
+
+// GET /fleet/tracking/geofences
+//
+// geofences has no organization_id — a zone belongs to a bike, or to nobody.
+// So a fleet sees the zones drawn around its own vehicles and not the
+// platform-wide ones, which are the operator's and would otherwise let one
+// customer read where another operator's no-go areas are.
+router.get('/tracking/geofences', fleetSection('tracking', 'view'), async (req, res) => {
+  const { rows } = await pgDb.query(
+    `SELECT g.* FROM geofences g
+       JOIN bikes b ON b.id = g.bike_id
+      WHERE b.organization_id = $1
+      ORDER BY g.name`, [req.user.organization_id]);
+  res.json(rows);
+});
+
+// GET /fleet/tracking/devices/:id/commands — what has been sent to this bike.
+router.get('/tracking/devices/:id/command-log', fleetSection('tracking', 'view'), async (req, res) => {
+  const device = await fleetDeviceOr404(req, req.params.id);
+  if (!device) return res.status(404).json({ error: 'Device not found' });
+  const { rows } = await pgDb.query(
+    `SELECT id, command, status, response, created_at, sent_at
+       FROM tracking_commands WHERE device_id = $1
+      ORDER BY created_at DESC LIMIT 50`, [device.id]);
+  res.json(rows);
 });
 
 // GET /fleet/tracking/devices/:id/positions

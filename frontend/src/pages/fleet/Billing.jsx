@@ -3,6 +3,7 @@ import { useSearchParams, Link } from 'react-router-dom';
 import { AlertTriangle, CheckCircle2, Clock3, CreditCard, RefreshCw, XCircle, Wrench, TrendingUp } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../api';
+import { brandName } from '../../brand';
 import { Badge, ConfirmModal, Loading, fmt, fmtDate } from '../../components/ui';
 import { FleetHelpTip } from './helpSupport';
 
@@ -232,7 +233,7 @@ export default function FleetBilling() {
       <div className="flex-between mb-2" style={{ gap: 16, flexWrap: 'wrap' }}>
         <div>
           <h1 className="page-title">Billing &amp; subscription</h1>
-          <p className="page-sub" style={{ marginBottom: 8 }}>Manage your OnFleet fleet plan and Paystack subscription.</p>
+          <p className="page-sub" style={{ marginBottom: 8 }}>Manage your {brandName} fleet plan and Paystack subscription.</p>
           <FleetHelpTip section="getting-started" tooltip="Start with a 14-day free trial. Upgrade to a flat-rate monthly plan to unlock higher bike and user limits. All billing via Paystack." label="Learn more about plans" />
         </div>
         <button className="btn btn-secondary btn-sm" onClick={() => load().catch(() => {})} disabled={!!busy}>
@@ -346,7 +347,7 @@ export default function FleetBilling() {
           <CreditCard size={20} style={{ color: 'var(--primary-light)', flexShrink: 0 }} />
           <div>
             <div style={{ fontWeight: 600, marginBottom: 4 }}>Need a custom enterprise arrangement?</div>
-            <div className="muted text-sm">For 100+ bikes, multi-city operations, or bespoke integrations — contact the OnFleet team directly.</div>
+            <div className="muted text-sm">For 100+ bikes, multi-city operations, or bespoke integrations — contact the {brandName} team directly.</div>
           </div>
         </div>
       </div>

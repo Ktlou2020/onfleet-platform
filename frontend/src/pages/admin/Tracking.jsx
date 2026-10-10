@@ -1719,7 +1719,7 @@ export default function Tracking({ readOnly = false, apiBase = '/tracking', tier
         {sideTab === 'alerts' && <>
           <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)', display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={{ fontSize: 11, color: 'var(--muted)', flex: 1 }}>Recent events</span>
-            {!readOnly && tier === null && <button className="btn btn-sm btn-secondary" title="Alert settings" onClick={() => openAlertSettings()}><Settings size={11} /></button>}
+            {!readOnly && (isOperatorConsole || tierAllows('complete')) && <button className="btn btn-sm btn-secondary" title="Alert settings" onClick={() => openAlertSettings()}><Settings size={11} /></button>}
             {/* Operator-only, whatever the tier. The curfew immobilises bikes
                 fleet-wide on a timer; that is a safety decision the platform
                 takes, not a switch a customer flips. It also has no
@@ -3442,18 +3442,36 @@ export default function Tracking({ readOnly = false, apiBase = '/tracking', tier
               </div>
             </div>
 
-            {alertSettingsDeviceId && (
+            {(alertSettingsDeviceId || !isOperatorConsole) && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, padding: '10px 12px', borderRadius: 8, background: 'rgba(99,102,241,.07)', border: '1px solid rgba(99,102,241,.18)' }}>
                 <Toggle checked={applySettingsToAll} onChange={setApplySettingsToAll} />
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 600 }}>Apply to all devices</div>
-                  <div style={{ fontSize: 11, color: 'var(--muted)' }}>Save as global default and clear all device overrides</div>
+                  <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+                    {isOperatorConsole
+                      ? 'Save as global default and clear all device overrides'
+                      : 'Save these settings on every bike in your fleet'}
+                  </div>
                 </div>
               </div>
             )}
+            {/* The platform-wide defaults are one table shared by every
+                customer, so a fleet can read them and not write them. With no
+                device chosen there is nothing of theirs to save. */}
+            {!isOperatorConsole && !alertSettingsDeviceId && !applySettingsToAll && (
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 14 }}>
+                These are the defaults your alerts inherit. To change them for a bike, open that
+                bike and choose Alert settings there.
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-              <button className="btn btn-primary" onClick={() => saveAlertSettings(applySettingsToAll)} disabled={savingAlertSettings} style={{ flex: 1 }}>
-                {savingAlertSettings ? 'Saving…' : applySettingsToAll ? 'Apply to all devices' : alertSettingsDeviceId ? 'Save for this device' : 'Save global defaults'}
+              <button className="btn btn-primary" onClick={() => saveAlertSettings(applySettingsToAll)}
+                disabled={savingAlertSettings || (!isOperatorConsole && !alertSettingsDeviceId && !applySettingsToAll)}
+                style={{ flex: 1 }}>
+                {savingAlertSettings ? 'Saving…'
+                  : applySettingsToAll ? 'Apply to all devices'
+                    : alertSettingsDeviceId ? 'Save for this device'
+                      : isOperatorConsole ? 'Save global defaults' : 'Choose a bike to change'}
               </button>
               <button className="btn btn-secondary" onClick={() => setShowAlertSettings(false)}>Cancel</button>
             </div>

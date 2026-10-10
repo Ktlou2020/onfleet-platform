@@ -175,6 +175,118 @@ describe.skipIf(!process.env.DATABASE_URL)('fleet tracking panels', () => {
     });
   });
 
+  // Alert settings, for a fleet.
+  //
+  // alert_settings is one platform-wide table; a fleet writing to it would
+  // change what every other customer is alerted about. device_alert_settings
+  // is per device and a device belongs to one fleet, so that is the only
+  // part a customer owns.
+  describe('alert settings', () => {
+    const settings = [{ alert_type: 'movement', enabled: false, notify_enabled: false, recipient_user_ids: [] }];
+
+    it('shows the inherited defaults and marks them not editable without a device', async () => {
+      const res = await request(app).get('/api/fleet/tracking/alert-settings').set(asA());
+      expect(res.status).toBe(200);
+      expect(res.body.length).toBeGreaterThan(0);
+      expect(res.body[0]).toHaveProperty('alert_type');
+      expect(res.body.every((r) => r.editable === false), 'the platform defaults were offered as editable').toBe(true);
+    });
+
+    it('sets an override on its own device', async () => {
+      const res = await request(app).put('/api/fleet/tracking/alert-settings')
+        .set(asA()).send({ device_id: deviceA.id, settings });
+      expect(res.status).toBe(200);
+
+      const { rows } = await pgDb.query(
+        'SELECT enabled FROM device_alert_settings WHERE device_id = $1 AND alert_type = $2',
+        [deviceA.id, 'movement']);
+      expect(rows[0].enabled).toBe(false);
+    });
+
+    it('reads its own override back as an override', async () => {
+      await request(app).put('/api/fleet/tracking/alert-settings')
+        .set(asA()).send({ device_id: deviceA.id, settings });
+      const res = await request(app).get(`/api/fleet/tracking/alert-settings?device_id=${deviceA.id}`).set(asA());
+      const movement = res.body.find((r) => r.alert_type === 'movement');
+      expect(movement.device_override).toBe(true);
+      expect(movement.enabled).toBe(false);
+      expect(movement.editable).toBe(true);
+    });
+
+    // The one that matters. Without a device this used to mean "write the
+    // platform-wide row", which is every other customer's settings.
+    it('refuses to write without a device rather than falling through to global', async () => {
+      const before = await pgDb.query('SELECT COUNT(*)::int AS n FROM alert_settings');
+      const res = await request(app).put('/api/fleet/tracking/alert-settings').set(asA()).send({ settings });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('DEVICE_REQUIRED');
+
+      const after = await pgDb.query('SELECT COUNT(*)::int AS n FROM alert_settings');
+      expect(after.rows[0].n, 'a fleet wrote to the platform-wide alert settings').toBe(before.rows[0].n);
+    });
+
+    it('cannot set an override on another fleet\'s device', async () => {
+      const res = await request(app).put('/api/fleet/tracking/alert-settings')
+        .set(asA()).send({ device_id: deviceB.id, settings });
+      expect(res.status).toBe(400);
+
+      const { rows } = await pgDb.query(
+        'SELECT COUNT(*)::int AS n FROM device_alert_settings WHERE device_id = $1', [deviceB.id]);
+      expect(rows[0].n, 'a fleet changed another fleet\'s alert settings').toBe(0);
+    });
+
+    // "Apply to all" means every device this fleet owns, not every device on
+    // the platform, which is what it means on the operator's side.
+    it('applies to all of its own devices and none of anybody else\'s', async () => {
+      const second = await createPgBike({ registration: 'RAP002GP', organization_id: orgA.id });
+      const secondDevice = await addDevice(second.id, '350000000000003');
+
+      const res = await request(app).put('/api/fleet/tracking/alert-settings')
+        .set(asA()).send({ apply_to_all: true, settings });
+      expect(res.status).toBe(200);
+      expect(res.body.devices).toBe(2);
+
+      const { rows } = await pgDb.query(
+        'SELECT device_id FROM device_alert_settings WHERE alert_type = $1 ORDER BY device_id', ['movement']);
+      expect(rows.map((r) => r.device_id).sort()).toEqual([deviceA.id, secondDevice.id].sort());
+    });
+
+    it('clears its own device\'s overrides', async () => {
+      await request(app).put('/api/fleet/tracking/alert-settings')
+        .set(asA()).send({ device_id: deviceA.id, settings });
+      const res = await request(app).delete(`/api/fleet/tracking/alert-settings/device/${deviceA.id}`).set(asA());
+      expect(res.status).toBe(200);
+      const { rows } = await pgDb.query(
+        'SELECT COUNT(*)::int AS n FROM device_alert_settings WHERE device_id = $1', [deviceA.id]);
+      expect(rows[0].n).toBe(0);
+    });
+
+    it('cannot clear another fleet\'s', async () => {
+      const res = await request(app).delete(`/api/fleet/tracking/alert-settings/device/${deviceB.id}`).set(asA());
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe('who can be notified', () => {
+    it('lists this fleet\'s own people', async () => {
+      const res = await request(app).get('/api/fleet/tracking/notification-users').set(asA());
+      expect(res.status).toBe(200);
+      expect(res.body.map((u) => u.id)).toContain(ownerA.user.id);
+    });
+
+    // The platform twin lists admins and superadmins. Handing a customer a
+    // directory of the operator's staff is not a feature.
+    it('and not the operator\'s staff, nor another fleet\'s', async () => {
+      const operator = await createPgUser({ role: 'superadmin' });
+      const otherFleet = await createPgUser({ role: 'fleet_owner_admin', organization_id: orgB.id });
+
+      const res = await request(app).get('/api/fleet/tracking/notification-users').set(asA());
+      const ids = res.body.map((u) => u.id);
+      expect(ids, 'a fleet was shown the operator\'s staff').not.toContain(operator.user.id);
+      expect(ids, 'a fleet was shown another fleet\'s people').not.toContain(otherFleet.user.id);
+    });
+  });
+
   describe('still off limits', () => {
     // Fitting trackers is the operator's job; these are the admin routes the
     // fleet screen must never gain.

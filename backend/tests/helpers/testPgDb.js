@@ -61,7 +61,28 @@ async function resetAllPgTables(attempt = 0) {
   );
   if (!rows.length) return;
   const tableList = rows.map((r) => `"${r.tablename}"`).join(', ');
-  await waitForQuiet();
+
+  // waitForQuiet's answer was being thrown away, so a pool that never went
+  // quiet truncated anyway and the next test started against a database
+  // something else was still writing to. That is the shape of the failure
+  // seen twice in full runs and never in isolation: a row created by a
+  // fixture, then removed by a straggler, and a request answering 404 for a
+  // record the test had just made.
+  //
+  // It still truncates in the end — a stuck query should fail on its own
+  // assertion rather than here — but it waits twice as long first and says
+  // so, which turns a mystery into a line in the output naming the file that
+  // leaked the work.
+  if (!(await waitForQuiet())) {
+    const stillBusy = await waitForQuiet(QUIET_TIMEOUT_MS * 2);
+    if (!stillBusy) {
+      console.warn(
+        '[testPgDb] pool still busy after 9s — truncating anyway. A test is leaving '
+        + 'database work running after it finishes (an un-awaited promise, or a '
+        + 'setImmediate the test did not wait for). Expect flakiness here.');
+    }
+  }
+
   try {
     // Plain SET, not SET LOCAL: LOCAL only applies inside a transaction, and
     // this runs outside one, so the timeout it was meant to impose never

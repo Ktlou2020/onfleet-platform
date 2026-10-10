@@ -3601,6 +3601,7 @@ const teltonikaServer = require('../tcp/teltonikaServer');
 // One definition of active / sleeping / offline, shared with the platform
 // console so the same bike never reads differently in the two places.
 const { deviceStatus } = require('./tracking');
+const { ALL_ALERT_TYPES: ALL_TRACKING_ALERT_TYPES } = require('../constants/alertTypes');
 const trackingEvents  = require('../trackingEvents');
 const { cutCommandForModel, restoreCommandForModel } = require('../services/engineCommands');
 const FLEET_TRACKING_PRESETS = {
@@ -3731,6 +3732,130 @@ router.get('/tracking/devices', fleetSection('tracking', 'view'), async (req, re
 // The panels the admin tracking screen has and this one did not. Each is the
 // org-scoped twin of a /api/tracking route, and each goes through
 // fleetDeviceOr404 or fleetBikeOr404 rather than re-deriving ownership.
+
+// ---------- Alert settings, for a fleet ----------
+//
+// alert_settings is a single platform-wide table: one row per alert type for
+// the whole deployment. A fleet writing to it would be changing what every
+// other customer gets alerted about, so from here it is read-only — the
+// defaults a fleet inherits, shown so they can see what they are overriding.
+//
+// device_alert_settings is per device, and a device belongs to a bike that
+// belongs to one fleet. That is the part a customer can safely own, so that
+// is the only part this writes.
+
+const FLEET_ALERT_DEFAULT_OFF = new Set(['panic']);
+
+// GET /fleet/tracking/alert-settings?device_id=
+router.get('/tracking/alert-settings', fleetSection('tracking', 'view'), async (req, res) => {
+  let deviceId = null;
+  if (req.query.device_id) {
+    const device = await fleetDeviceOr404(req, req.query.device_id);
+    if (!device) return res.status(404).json({ error: 'Device not found' });
+    deviceId = device.id;
+  }
+
+  const { rows: globalRows } = await pgDb.query('SELECT * FROM alert_settings');
+  const globalMap = Object.fromEntries(globalRows.map((r) => [r.alert_type, r]));
+
+  let deviceMap = {};
+  if (deviceId) {
+    const { rows } = await pgDb.query(
+      'SELECT * FROM device_alert_settings WHERE device_id = $1', [deviceId]);
+    deviceMap = Object.fromEntries(rows.map((r) => [r.alert_type, r]));
+  }
+
+  // Same shape as the platform twin, so the shared screen reads it without a
+  // special case — plus `editable`, which is what tells the dialog that the
+  // inherited default is not this fleet's to change.
+  res.json(ALL_TRACKING_ALERT_TYPES.map((t) => {
+    const g = globalMap[t];
+    const d = deviceMap[t];
+    const active = d || g;
+    const enabledDefault = !FLEET_ALERT_DEFAULT_OFF.has(t);
+    return {
+      alert_type: t,
+      control_room_visible: g ? g.control_room_visible !== false : true,
+      enabled: active ? active.enabled : enabledDefault,
+      notify_enabled: active ? active.notify_enabled : enabledDefault,
+      recipient_user_ids: (() => {
+        try { return JSON.parse(active?.recipient_user_ids || '[]'); } catch { return []; }
+      })(),
+      device_override: !!d,
+      editable: !!deviceId,
+    };
+  }));
+});
+
+// PUT /fleet/tracking/alert-settings — per device, never global.
+router.put('/tracking/alert-settings', fleetSection('tracking', 'manage'), async (req, res) => {
+  const settings = Array.isArray(req.body) ? req.body : req.body.settings;
+  if (!Array.isArray(settings)) return res.status(400).json({ error: 'Expected settings array' });
+
+  // apply_to_all means "every device I own" here, not every device on the
+  // platform — which is what it means on the operator's side and is exactly
+  // the confusion worth refusing to inherit.
+  const applyToAll = req.body?.apply_to_all === true;
+  let deviceIds = [];
+  if (applyToAll) {
+    const { rows } = await pgDb.query(
+      `SELECT d.id FROM tracking_devices d JOIN bikes b ON b.id = d.bike_id
+        WHERE b.organization_id = $1`, [req.user.organization_id]);
+    deviceIds = rows.map((r) => r.id);
+  } else {
+    const device = await fleetDeviceOr404(req, req.body?.device_id);
+    if (!device) {
+      return res.status(400).json({
+        error: 'Choose a device. A fleet sets alerts per bike; the platform-wide defaults are not yours to change.',
+        code: 'DEVICE_REQUIRED',
+      });
+    }
+    deviceIds = [device.id];
+  }
+  if (!deviceIds.length) return res.json({ ok: true, devices: 0 });
+
+  for (const deviceId of deviceIds) {
+    for (const setting of settings) {
+      if (!ALL_TRACKING_ALERT_TYPES.includes(setting.alert_type)) continue;
+      const recipients = JSON.stringify(
+        Array.isArray(setting.recipient_user_ids) ? setting.recipient_user_ids : []);
+      await pgDb.query(`
+        INSERT INTO device_alert_settings (device_id, alert_type, enabled, notify_enabled, recipient_user_ids, updated_at)
+        VALUES ($1,$2,$3,$4,$5,NOW())
+        ON CONFLICT (device_id, alert_type) DO UPDATE SET
+          enabled = EXCLUDED.enabled, notify_enabled = EXCLUDED.notify_enabled,
+          recipient_user_ids = EXCLUDED.recipient_user_ids, updated_at = NOW()
+      `, [deviceId, setting.alert_type, setting.enabled !== false, setting.notify_enabled !== false, recipients]);
+    }
+  }
+
+  await logAudit(req.user.id, 'fleet.alert_settings_update', 'tracking_devices', deviceIds[0] || null,
+    { devices: deviceIds.length, apply_to_all: applyToAll }, req.ip);
+  res.json({ ok: true, devices: deviceIds.length });
+});
+
+// DELETE — drop this device's overrides and fall back to the defaults.
+router.delete('/tracking/alert-settings/device/:device_id', fleetSection('tracking', 'manage'), async (req, res) => {
+  const device = await fleetDeviceOr404(req, req.params.device_id);
+  if (!device) return res.status(404).json({ error: 'Device not found' });
+  await pgDb.query('DELETE FROM device_alert_settings WHERE device_id = $1', [device.id]);
+  await logAudit(req.user.id, 'fleet.alert_settings_reset', 'tracking_devices', device.id, null, req.ip);
+  res.json({ ok: true });
+});
+
+// GET /fleet/tracking/notification-users — this fleet's own people.
+//
+// The platform twin lists admins and superadmins, which are the operator's
+// staff. A fleet picking who to notify should be picking from its own team,
+// and must not be handed a directory of ours.
+router.get('/tracking/notification-users', fleetSection('tracking', 'view'), async (req, res) => {
+  const { rows } = await pgDb.query(
+    `SELECT id, full_name, email, role FROM users
+      WHERE organization_id = $1 AND deleted_at IS NULL AND status = 'active'
+        AND role LIKE 'fleet_owner_%'
+      ORDER BY full_name`, [req.user.organization_id]);
+  res.json(rows);
+});
 
 // GET /fleet/tracking/devices/:id — the one the detail panel opens on.
 router.get('/tracking/devices/:id', fleetSection('tracking', 'view'), async (req, res) => {

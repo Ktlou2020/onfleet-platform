@@ -143,6 +143,62 @@ describe.skipIf(!process.env.DATABASE_URL)('importing a batch of trackers', () =
     });
   });
 
+  // Which column is which.
+  //
+  // The three fields were read positionally as IMEI, registration, model. A
+  // real supplier list arrived the other way round — registration first —
+  // and every one of its twenty-two lines failed twice over: the plate
+  // rejected for not being digits, and the IMEI reported as a registration
+  // matching no bike. They are not confusable shapes, so order stops
+  // mattering.
+  describe('whatever order the supplier sends', () => {
+    it('takes registration, IMEI, model', async () => {
+      const res = await preview(`RAP001GP,${IMEI(1)},FMC920\nRAP002GP,${IMEI(2)},FMB920`);
+      expect(res.status).toBe(200);
+      expect(res.body.summary, 'a supplier list ordered the other way was rejected entirely')
+        .toMatchObject({ total: 2, ok: 2, problems: 0 });
+      expect(res.body.rows[0]).toMatchObject({ imei: IMEI(1), registration: 'RAP001GP', model: 'FMC920' });
+    });
+
+    it('still takes IMEI, registration, model', async () => {
+      const res = await preview(GOOD);
+      expect(res.body.summary).toMatchObject({ total: 2, ok: 2, problems: 0 });
+      expect(res.body.rows[0]).toMatchObject({ imei: IMEI(1), registration: 'RAP001GP' });
+    });
+
+    it('takes the model first, which no supplier should do but one will', async () => {
+      const res = await preview(`FMB920,${IMEI(1)},RAP001GP`);
+      expect(res.body.rows[0]).toMatchObject({ imei: IMEI(1), registration: 'RAP001GP', model: 'FMB920' });
+    });
+
+    it('takes a tracker with no registration, in either order', async () => {
+      const res = await preview(`${IMEI(1)},FMB920\nFMC920,${IMEI(2)}`);
+      expect(res.body.summary).toMatchObject({ total: 2, ok: 2, problems: 0, to_stock: 2 });
+      expect(res.body.rows[0]).toMatchObject({ imei: IMEI(1), registration: null, model: 'FMB920' });
+      expect(res.body.rows[1]).toMatchObject({ imei: IMEI(2), registration: null, model: 'FMC920' });
+    });
+
+    it('and loads them onto the right bikes', async () => {
+      const res = await load(`RAP001GP,${IMEI(1)},FMC920`);
+      expect(res.status).toBe(201);
+      const { rows } = await pgDb.query(
+        `SELECT d.imei, b.registration FROM tracking_devices d JOIN bikes b ON b.id = d.bike_id`);
+      expect(rows).toEqual([{ imei: IMEI(1), registration: 'RAP001GP' }]);
+    });
+
+    // When nothing is IMEI-shaped the complaint has to land on the field the
+    // operator meant as the IMEI, not on whatever happened to be first.
+    it('still blames the right field when there is no IMEI at all', async () => {
+      // On line two, because a first line with no digits in its first field
+      // is treated as a header — which is the right call and would otherwise
+      // eat this fixture.
+      const res = await preview(`${IMEI(1)},RAP001GP,FMB920\nNOTANIMEI,RAP002GP,FMB920`);
+      const bad = res.body.rows.find((r) => r.line === 2);
+      expect(bad.imei).toBe('NOTANIMEI');
+      expect(bad.problems.join(' ')).toContain('IMEI should be 10 to 20 digits');
+    });
+  });
+
   describe('who may do it', () => {
     it('not a technician', async () => {
       const res = await request(app).post('/api/tracking/devices/import')

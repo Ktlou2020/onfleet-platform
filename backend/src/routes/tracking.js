@@ -308,6 +308,48 @@ router.post('/devices', authRequired, adminOnly, async (req, res) => {
 // what the first pass approved.
 const DEVICE_MODELS = ['FMB920', 'FMB965', 'FMC920', 'other'];
 
+const DEVICE_MODEL_NAMES = ['FMB920', 'FMB965', 'FMC920', 'OTHER'];
+const looksLikeImei  = (v) => /^\d{10,20}$/.test(String(v || '').replace(/\s/g, ''));
+const looksLikeModel = (v) => DEVICE_MODEL_NAMES.includes(String(v || '').trim().toUpperCase());
+
+/**
+ * Work out which field is which, rather than insisting on an order.
+ *
+ * The columns were read positionally as IMEI, registration, model. Suppliers
+ * do not agree on that order — a real list arrived as registration, IMEI,
+ * model and every one of its twenty-two lines failed twice: the plate was
+ * rejected for not being digits, and the IMEI was reported as a registration
+ * matching no bike. The operator's only way out was to re-column a
+ * spreadsheet before every import.
+ *
+ * The three are not confusable. An IMEI is ten to twenty digits and nothing
+ * else is; a model is one of four known names; a registration is whatever is
+ * left. So they are identified by shape and the order stops mattering.
+ *
+ * When nothing looks like an IMEI the first field is used anyway, so the
+ * error the operator sees is still "IMEI should be 10 to 20 digits" against
+ * the thing they actually typed, rather than a silently dropped line.
+ */
+function readDeviceRow(parts) {
+  const fields = parts.filter((p) => p !== '');
+  if (!fields.length) return { imei: null, registration: null, model: null };
+
+  const modelIndex = fields.findIndex(looksLikeModel);
+  const model = modelIndex === -1 ? null : fields[modelIndex];
+  const rest = fields.filter((_, i) => i !== modelIndex);
+
+  const imeiIndex = rest.findIndex(looksLikeImei);
+  if (imeiIndex === -1) {
+    // Nothing is IMEI-shaped. Keep the declared order so the complaint lands
+    // on the field the operator meant as the IMEI.
+    return { imei: rest[0] || null, registration: rest[1] || null, model: model || rest[2] || null };
+  }
+
+  const imei = rest[imeiIndex];
+  const registration = rest.filter((_, i) => i !== imeiIndex)[0] || null;
+  return { imei, registration, model };
+}
+
 function parseDeviceRows(text) {
   // IMEI, registration, model — comma or tab separated, header optional.
   const lines = String(text || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
@@ -327,7 +369,7 @@ function parseDeviceRows(text) {
       headerSkipped = line;
       continue;
     }
-    const [imei, registration, model] = parts;
+    const { imei, registration, model } = readDeviceRow(parts);
     if (!imei) continue;
     out.push({ line: index + 1, imei, registration: registration || null, model: model || null });
   }

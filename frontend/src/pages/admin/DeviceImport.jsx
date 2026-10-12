@@ -144,10 +144,16 @@ export default function DeviceImport() {
         <div className="card">
           <h2 style={{ marginTop: 0 }}>The list</h2>
           <p className="muted text-sm" style={{ marginTop: 0 }}>
-            One tracker a line: <strong>IMEI, registration, model</strong>. Commas, tabs or
-            semicolons. A header line is skipped if it has no digits in it.
+            One tracker a line: <strong>IMEI, registration and model, in any order</strong>.
+            Commas, tabs or semicolons. A header line is skipped if it has no digits in it.
           </p>
           <ul className="text-sm muted" style={{ margin: '0 0 12px 18px' }}>
+            {/* The order used to matter and a supplier list that had it the
+                other way round failed on every line. The three shapes cannot
+                be mistaken for each other, so they are worked out rather
+                than demanded — and saying so saves somebody re-columning a
+                spreadsheet that would have imported fine. */}
+            <li>Paste the supplier&apos;s list as it came — the columns are worked out from what is in them.</li>
             <li>Leave the registration out and the tracker goes into stock.</li>
             <li>Model is one of {MODELS.join(', ')} — blank counts as other.</li>
           </ul>

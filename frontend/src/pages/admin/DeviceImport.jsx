@@ -125,13 +125,24 @@ export default function DeviceImport() {
 
   const summary = preview?.summary;
   const missingBikes = summary?.missing_bikes || 0;
-  const blocked = !!summary?.problems && !skipProblems;
+
+  // Ticking "create the missing bikes" fixes those lines, so they are no
+  // longer lines to fix. Without this the button stayed disabled and read
+  // "22 lines to fix first" over a list where all 22 problems were the
+  // thing the operator had just agreed to resolve — the feature was
+  // unreachable from the screen that offers it.
+  const willCreate = createBikes ? missingBikes : 0;
+  const remainingProblems = Math.max(0, (summary?.problems || 0) - willCreate);
+  const blocked = !!remainingProblems && !skipProblems;
+
   // The number on the button is the number that would actually be written. A
   // list with five bad lines in it used to offer to load all seven, which is
   // the one place on this screen where a wrong number would be believed.
-  const willLoad = summary ? (skipProblems ? summary.ok : summary.total) : 0;
+  const willLoad = !summary ? 0
+    : skipProblems ? summary.ok + willCreate
+      : summary.total;
   const loadLabel = blocked
-    ? `${summary.problems} line${summary.problems === 1 ? '' : 's'} to fix first`
+    ? `${remainingProblems} line${remainingProblems === 1 ? '' : 's'} to fix first`
     : `Load ${willLoad} tracker${willLoad === 1 ? '' : 's'}`;
 
   return (
@@ -243,7 +254,7 @@ export default function DeviceImport() {
                   Skip the {summary.problems} problem line{summary.problems === 1 ? '' : 's'}
                 </label>
               )}
-              <button className="btn" disabled={loading || blocked || !summary.ok} onClick={load}>
+              <button className="btn" disabled={loading || blocked || !willLoad} onClick={load}>
                 {loading ? 'Loading…' : loadLabel}
               </button>
             </div>

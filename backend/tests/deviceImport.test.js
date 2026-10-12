@@ -274,6 +274,28 @@ describe.skipIf(!process.env.DATABASE_URL)('importing a batch of trackers', () =
       expect(res.body.summary.missing_bikes).toBe(1);
     });
 
+    // The screen's own arithmetic, which is where this shipped broken: the
+    // load button read "22 lines to fix first" and stayed disabled over a
+    // list whose every problem was the one the operator had just ticked the
+    // box to fix. The server was right and the button was wrong, so the
+    // feature could not be reached from the page that offers it.
+    //
+    // Asserted on the numbers the button is built from rather than on the
+    // button, because those are what the page gets wrong.
+    it('leaves nothing to fix once the missing bikes are accounted for', async () => {
+      const res = await preview(UNKNOWN);
+      const { problems, missing_bikes: missing } = res.body.summary;
+      expect(problems).toBe(2);
+      expect(missing).toBe(2);
+      expect(problems - missing, 'the screen would still say there are lines to fix').toBe(0);
+    });
+
+    it('and still has something to fix when a line is wrong for another reason', async () => {
+      const res = await preview(`${IMEI(1)},NEWBIKE1GP,FMB920\n${IMEI(1)},NEWBIKE2GP,FMB920`);
+      const { problems, missing_bikes: missing } = res.body.summary;
+      expect(problems - missing, 'a duplicate IMEI is not fixed by creating a bike').toBeGreaterThan(0);
+    });
+
     it('records what it created', async () => {
       await load(UNKNOWN, { create_missing_bikes: true, organization_id: org.id });
       const { rows } = await pgDb.query(

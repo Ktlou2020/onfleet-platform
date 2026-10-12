@@ -199,6 +199,91 @@ describe.skipIf(!process.env.DATABASE_URL)('importing a batch of trackers', () =
     });
   });
 
+  // Bikes a tracker list names that the platform does not have.
+  //
+  // Off unless asked for. A tracker list carries no VIN, make or model, so
+  // each bike created here is a skeleton someone finishes later — and on a
+  // per-bike plan it is a chargeable row, so a mistyped plate would become a
+  // phantom bike that bills.
+  describe('creating the bikes a list names', () => {
+    const UNKNOWN = `${IMEI(1)},NEWBIKE1GP,FMB920\n${IMEI(2)},NEWBIKE2GP,FMB920`;
+
+    it('counts them in the preview without creating anything', async () => {
+      const res = await preview(UNKNOWN);
+      expect(res.body.summary).toMatchObject({ total: 2, ok: 0, problems: 2, missing_bikes: 2 });
+      const { rows } = await pgDb.query("SELECT COUNT(*)::int AS n FROM bikes WHERE registration LIKE 'NEWBIKE%'");
+      expect(rows[0].n, 'a preview created bikes').toBe(0);
+    });
+
+    it('creates nothing unless asked', async () => {
+      await load(UNKNOWN, { skip_problem_rows: true });
+      const { rows } = await pgDb.query("SELECT COUNT(*)::int AS n FROM bikes WHERE registration LIKE 'NEWBIKE%'");
+      expect(rows[0].n).toBe(0);
+    });
+
+    it('creates them and loads the trackers onto them when asked', async () => {
+      const res = await load(UNKNOWN, { create_missing_bikes: true });
+      expect(res.status).toBe(201);
+      expect(res.body.count).toBe(2);
+      expect(res.body.created_bikes.map((b) => b.registration).sort()).toEqual(['NEWBIKE1GP', 'NEWBIKE2GP']);
+
+      const { rows } = await pgDb.query(
+        `SELECT b.registration, b.vin, b.make, d.imei
+           FROM bikes b JOIN tracking_devices d ON d.bike_id = b.id
+          WHERE b.registration LIKE 'NEWBIKE%' ORDER BY b.registration`);
+      expect(rows).toHaveLength(2);
+      // The VIN is required and unique and a tracker list has none, so it
+      // says it is missing rather than inventing something that looks real.
+      expect(rows[0].vin).toBe('AWAITING-VIN-NEWBIKE1GP');
+      expect(rows[0].make).toBe('Unknown');
+    });
+
+    it('puts them on the named fleet', async () => {
+      const res = await load(UNKNOWN, { create_missing_bikes: true, organization_id: org.id });
+      expect(res.status).toBe(201);
+      const { rows } = await pgDb.query(
+        "SELECT organization_id FROM bikes WHERE registration = 'NEWBIKE1GP'");
+      expect(rows[0].organization_id).toBe(org.id);
+    });
+
+    it('leaves them as platform stock when no fleet is named', async () => {
+      await load(UNKNOWN, { create_missing_bikes: true });
+      const { rows } = await pgDb.query(
+        "SELECT organization_id FROM bikes WHERE registration = 'NEWBIKE1GP'");
+      expect(rows[0].organization_id).toBeNull();
+    });
+
+    // Asserting the status alone proved nothing: this handler already
+    // answers 400 when rows cannot load, so the test passed with the fleet
+    // check deleted. It has to name the reason.
+    it('refuses a fleet that does not exist rather than creating orphans', async () => {
+      const res = await load(UNKNOWN, { create_missing_bikes: true, organization_id: 999999 });
+      expect(res.status).toBe(400);
+      expect(res.body.error, 'it failed for some other reason, so this proves nothing')
+        .toBe('That fleet does not exist');
+      const { rows } = await pgDb.query("SELECT COUNT(*)::int AS n FROM bikes WHERE registration LIKE 'NEWBIKE%'");
+      expect(rows[0].n).toBe(0);
+    });
+
+    // Creating a bike does not fix a duplicate IMEI, so that line is not
+    // one of the ones offered.
+    it('does not offer to create for a line that is wrong for another reason too', async () => {
+      const res = await preview(`${IMEI(1)},NEWBIKE1GP,FMB920\n${IMEI(1)},NEWBIKE2GP,FMB920`);
+      const offered = res.body.rows.filter((r) => r.can_create_bike);
+      expect(offered).toHaveLength(1);
+      expect(res.body.summary.missing_bikes).toBe(1);
+    });
+
+    it('records what it created', async () => {
+      await load(UNKNOWN, { create_missing_bikes: true, organization_id: org.id });
+      const { rows } = await pgDb.query(
+        `SELECT metadata FROM audit_logs WHERE action = 'tracking.import_created_bikes'`);
+      expect(rows).toHaveLength(1);
+      const meta = typeof rows[0].metadata === 'string' ? JSON.parse(rows[0].metadata) : rows[0].metadata;
+      expect(meta.registrations.sort()).toEqual(['NEWBIKE1GP', 'NEWBIKE2GP']);
+    });
+  });
+
   describe('who may do it', () => {
     it('not a technician', async () => {
       const res = await request(app).post('/api/tracking/devices/import')

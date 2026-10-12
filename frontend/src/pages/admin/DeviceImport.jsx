@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../api';
 import toast from 'react-hot-toast';
@@ -50,6 +50,9 @@ export default function DeviceImport() {
   const [loading, setLoading] = useState(false);
   const [preview, setPreview] = useState(null);   // { rows, summary, header_skipped }
   const [skipProblems, setSkipProblems] = useState(false);
+  const [createBikes, setCreateBikes] = useState(false);
+  const [bikesFleet, setBikesFleet] = useState('');
+  const [fleets, setFleets] = useState([]);
   const [done, setDone] = useState(null);         // { loaded, count, skipped }
   const fileInput = useRef(null);
 
@@ -72,6 +75,16 @@ export default function DeviceImport() {
     reader.readAsText(file);
   };
 
+
+  // Only for the "belonging to" picker, and only the operator sees this
+  // screen. Failing quietly: an empty list still lets a bike be created as
+  // platform stock, which is the right default anyway.
+  useEffect(() => {
+    api.get('/admin/fleet-owners')
+      .then((r) => setFleets((r.data.organizations || []).map((o) => ({ id: o.id, name: o.name }))))
+      .catch(() => setFleets([]));
+  }, []);
+
   const check = async () => {
     if (!text.trim()) return toast.error('Paste the list first');
     setChecking(true);
@@ -91,12 +104,18 @@ export default function DeviceImport() {
     setLoading(true);
     try {
       const { data } = await api.post('/tracking/devices/import', {
-        text, skip_problem_rows: skipProblems,
+        text,
+        skip_problem_rows: skipProblems,
+        create_missing_bikes: createBikes,
+        organization_id: createBikes ? (bikesFleet || null) : null,
       });
       setDone(data);
       setPreview(null);
       setText('');
-      toast.success(`${data.count} tracker${data.count === 1 ? '' : 's'} loaded`);
+      setCreateBikes(false);
+      toast.success(data.created_bikes?.length
+        ? `${data.count} loaded · ${data.created_bikes.length} bike${data.created_bikes.length === 1 ? '' : 's'} created`
+        : `${data.count} tracker${data.count === 1 ? '' : 's'} loaded`);
     } catch (err) {
       toast.error(err.response?.data?.error || 'Could not load that batch');
     } finally {
@@ -105,6 +124,7 @@ export default function DeviceImport() {
   };
 
   const summary = preview?.summary;
+  const missingBikes = summary?.missing_bikes || 0;
   const blocked = !!summary?.problems && !skipProblems;
   // The number on the button is the number that would actually be written. A
   // list with five bad lines in it used to offer to load all seven, which is
@@ -228,6 +248,45 @@ export default function DeviceImport() {
               </button>
             </div>
           </div>
+
+          {/* Offered only when a missing bike is the one thing wrong, and
+              never ticked by default. A tracker list has no VIN, make or
+              model, so each bike created here is a skeleton someone has to
+              finish — and on a per-bike plan it is a chargeable row, so a
+              mistyped plate becomes a phantom bike that bills. The count and
+              the consequence are both on screen before the choice is made. */}
+          {missingBikes > 0 && (
+            <div style={{
+              padding: '12px 14px', borderRadius: 8, marginBottom: 12,
+              border: '1px solid var(--warn)', background: 'rgba(255,182,39,0.08)',
+            }}>
+              <label className="row text-sm" style={{ gap: 8, alignItems: 'flex-start' }}>
+                <input type="checkbox" checked={createBikes} style={{ marginTop: 3 }}
+                       onChange={(e) => setCreateBikes(e.target.checked)} />
+                <span>
+                  <strong>
+                    Create the {missingBikes} bike{missingBikes === 1 ? '' : 's'} this list names
+                    that are not on the platform yet
+                  </strong>
+                  <div className="muted text-xs" style={{ marginTop: 3 }}>
+                    They are created from the registration alone — no VIN, make or model — so each
+                    needs finishing under Bikes afterwards. On a per-bike plan they are billable
+                    from the moment they exist, so check the plates first.
+                  </div>
+                </span>
+              </label>
+              {createBikes && (
+                <div className="row" style={{ gap: 8, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' }}>
+                  <span className="text-sm">Belonging to</span>
+                  <select className="input" style={{ maxWidth: 280 }} value={bikesFleet}
+                          onChange={(e) => setBikesFleet(e.target.value)}>
+                    <option value="">Platform stock — no fleet</option>
+                    {fleets.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+                  </select>
+                </div>
+              )}
+            </div>
+          )}
 
           {preview.header_skipped && (
             <p className="text-sm muted" style={{ marginTop: 0 }}>

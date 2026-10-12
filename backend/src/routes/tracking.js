@@ -400,13 +400,20 @@ async function checkDeviceRows(rows) {
     // A blank registration is a tracker going into stock, which is fine and
     // not the same as a registration that matches nothing.
     let bike = null;
+    let missingBike = false;
     if (row.registration) {
       const { rows: found } = await pgDb.query(
         `SELECT b.id, b.registration, b.organization_id, o.name AS organization_name
            FROM bikes b LEFT JOIN organizations o ON o.id = b.organization_id
           WHERE UPPER(REPLACE(b.registration, ' ', '')) = UPPER(REPLACE($1, ' ', ''))`,
         [row.registration]);
-      if (!found[0]) problems.push(`No bike with registration ${row.registration}`);
+      if (!found[0]) {
+        problems.push(`No bike with registration ${row.registration}`);
+        // Distinguished from the other problems because it is the only one
+        // the operator can resolve from this screen: the tracker and the
+        // plate are both fine, the bike just is not on the platform yet.
+        missingBike = true;
+      }
       else if (found.length > 1) problems.push(`${row.registration} matches more than one bike`);
       else {
         bike = found[0];
@@ -422,6 +429,9 @@ async function checkDeviceRows(rows) {
       bike_registration: bike?.registration || null,
       organization_name: bike?.organization_name || null,
       model: row.model || 'other',
+      // True when the ONLY thing wrong is that the bike is absent. A line
+      // with a duplicate IMEI as well is not something creating a bike fixes.
+      can_create_bike: missingBike && problems.length === 1,
       problems,
       ok: problems.length === 0,
     });
@@ -442,12 +452,61 @@ router.post('/devices/import/preview', authRequired, adminOnly, async (req, res)
       ok: checked.filter((r) => r.ok).length,
       problems: checked.filter((r) => !r.ok).length,
       to_stock: checked.filter((r) => r.ok && !r.bike_id).length,
+      // How many lines would load if the operator asked for the missing
+      // bikes to be created. Shown as a count so the decision is made with
+      // the number in front of them.
+      missing_bikes: checked.filter((r) => r.can_create_bike).length,
     },
   });
 });
 
 router.post('/devices/import', authRequired, adminOnly, async (req, res) => {
-  const checked = await checkDeviceRows(parseDeviceRows(req.body.text));
+  let checked = await checkDeviceRows(parseDeviceRows(req.body.text));
+
+  // Creating the bikes a tracker list names but the platform does not have.
+  //
+  // Off unless asked for, and asked for with the count in front of you,
+  // because a tracker list carries no VIN, make or model — so each bike
+  // created here is a skeleton someone has to finish, and on a per-bike
+  // plan it is also a chargeable row. A mistyped plate becomes a phantom
+  // bike that bills. That is a decision for the operator looking at the
+  // list, not a convenience to apply on their behalf.
+  let createdBikes = [];
+  if (req.body.create_missing_bikes === true) {
+    const toCreate = checked.filter((r) => r.can_create_bike);
+    const orgId = req.body.organization_id ? Number(req.body.organization_id) : null;
+    if (orgId !== null) {
+      const { rows: orgRows } = await pgDb.query('SELECT id FROM organizations WHERE id = $1', [orgId]);
+      if (!orgRows[0]) return res.status(400).json({ error: 'That fleet does not exist' });
+    }
+
+    for (const row of toCreate) {
+      try {
+        const { rows } = await pgDb.query(
+          `INSERT INTO bikes (vin, registration, make, model, rental_weekly, status, organization_id)
+           VALUES ($1,$2,'Unknown','Unknown',0,'ready_to_go',$3)
+           RETURNING id, registration`,
+          // The VIN is NOT NULL and unique and a tracker list has none, so it
+          // is marked as awaiting one rather than invented to look real.
+          [`AWAITING-VIN-${String(row.registration).toUpperCase().replace(/\s/g, '')}`, row.registration, orgId]);
+        createdBikes.push(rows[0]);
+      } catch (e) {
+        console.error(`[device-import] could not create bike ${row.registration}:`, e.message);
+      }
+    }
+
+    if (createdBikes.length) {
+      await logAudit(req.user.id, 'tracking.import_created_bikes', 'bikes', null, {
+        count: createdBikes.length,
+        registrations: createdBikes.map((b) => b.registration),
+        organization_id: orgId,
+      }, req.ip);
+      // Re-check against the bikes that now exist, so the rest of this
+      // handler sees one consistent picture.
+      checked = await checkDeviceRows(parseDeviceRows(req.body.text));
+    }
+  }
+
   const good = checked.filter((r) => r.ok);
 
   // Nothing is loaded from a batch that has a problem in it, unless the
@@ -478,7 +537,14 @@ router.post('/devices/import', authRequired, adminOnly, async (req, res) => {
     imeis: loaded.map((d) => d.imei),
   }, req.ip);
 
-  res.status(201).json({ loaded, count: loaded.length, skipped: checked.length - good.length });
+  res.status(201).json({
+    loaded,
+    count: loaded.length,
+    skipped: checked.length - good.length,
+    // Named rather than counted: each is a skeleton with no VIN, make or
+    // model, and whoever runs this needs the list to go and finish them.
+    created_bikes: createdBikes,
+  });
 });
 
 router.put('/devices/:id', authRequired, adminOnly, async (req, res) => {

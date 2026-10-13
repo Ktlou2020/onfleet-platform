@@ -2,6 +2,7 @@
 
 const pgDb = require('../pgDb');
 const { autoCut } = require('./autoEngineCut');
+const { MAX_ACTIONABLE_FIX_AGE_MS } = require('../constants/gps');
 
 // The overnight curfew: bikes should be parked between 00:00 and 04:00 SAST,
 // and one that is moving then is treated as stolen — its engine is cut without
@@ -196,11 +197,42 @@ async function covers(bikeId, { at = new Date() } = {}) {
   return CUTTABLE_STATUSES.includes(bike.status);
 }
 
-// Called when night_movement has been confirmed for a bike.
-async function arm(bikeId, deviceId, payload = {}, { at = new Date() } = {}) {
+/**
+ * Called when night_movement has been confirmed for a bike.
+ *
+ * `at` is when the movement happened; `now` is what time it is. They are
+ * usually a second apart and occasionally hours, and the difference decides
+ * whether this arms at all.
+ *
+ * A tracker that loses coverage while it is being ridden buffers the ride and
+ * dumps it when it finds signal again. The movement is real and the window is
+ * real, so the streak upstream confirms it correctly and the alert should
+ * absolutely fire — it is critical, it escalates, and it opens a theft case.
+ * But arming is not a notification. Arming starts a poll that immobilises the
+ * bike at its next stop, and doing that off a reading taken nine hours ago
+ * means cutting a bike at a traffic light on the way to work for having moved
+ * at two in the morning.
+ *
+ * Bike 457 is the one to remember: a 02:03 fix replayed at 11:42, while the
+ * bike was pulling away from a stop at 5, then 19, then 24 km/h. It was one
+ * record short of a streak. Had it armed, the trusted "speed 3" that arrived
+ * thirty seconds later would have satisfied the cut.
+ *
+ * So a confirmation this stale raises the alert and stops there. A bike that
+ * moved in the window and only said so at lunchtime is a case for the control
+ * room to work, with the whole night in front of them, not a timer's call.
+ */
+async function arm(bikeId, deviceId, payload = {}, { at = new Date(), now = new Date() } = {}) {
   if (deviceId == null) return false;
   if (armed.has(bikeId)) return false;
   if (!(await isEnabled())) return false;
+
+  const confirmationAgeMs = now.getTime() - at.getTime();
+  if (Math.abs(confirmationAgeMs) > MAX_ACTIONABLE_FIX_AGE_MS) {
+    console.warn(`[night-curfew] bike ${bikeId} moved in the window but only reported it ${Math.round(confirmationAgeMs / 60000)} minutes later — alert raised, not armed; this one is the control room's to decide`);
+    return false;
+  }
+
   // `at` is passed through to covers so a reprieve is judged against the same
   // moment the movement happened, rather than whenever this happens to run.
   if (!(await covers(bikeId, { at }))) return false;
@@ -221,9 +253,19 @@ async function arm(bikeId, deviceId, payload = {}, { at = new Date() } = {}) {
 // Called on every ping for an armed bike. Once armed the cut stands even if
 // the bike outlasts the window: a bike confirmed as moving at 03:58 does not
 // earn a pass by still moving at 04:02.
-async function cutIfSlowEnough(bikeId, speedKmh, { ignitionOn = null } = {}) {
+async function cutIfSlowEnough(bikeId, speedKmh, { ignitionOn = null, at = new Date(), now = new Date() } = {}) {
   const pending = armed.get(bikeId);
   if (!pending) return false;
+
+  // Only a current reading can say the bike is slow enough to cut. A record
+  // out of a tracker's backlog describes it as it was, and "6 km/h" from an
+  // hour ago would kill the engine of a bike doing sixty now — the one thing
+  // rule 1 exists to prevent.
+  //
+  // Staying armed is the right answer rather than a missed chance: the poll
+  // above is already asking this device where it is, every ten seconds, and
+  // what comes back is current by construction.
+  if (Math.abs(now.getTime() - at.getTime()) > MAX_ACTIONABLE_FIX_AGE_MS) return false;
 
   // Two ways to be safe to cut, and the second one used to be missed.
   //

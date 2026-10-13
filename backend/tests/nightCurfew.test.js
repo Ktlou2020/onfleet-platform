@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createRequire } from 'node:module';
 import { pgDb, resetAllPgTables, createPgBike } from './helpers/testPgDb.js';
 
@@ -201,6 +201,28 @@ describe.skipIf(!process.env.DATABASE_URL)('the overnight curfew', () => {
     });
   });
 
+  // Rule 1, by way of the backlog. "6 km/h" out of a tracker's stored records
+  // is a statement about an hour ago, and acting on it would kill the engine
+  // of a bike doing sixty now.
+  describe('a reading out of the backlog', () => {
+    it('does not satisfy the cut', async () => {
+      await arm();
+      const anHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+      const cut = await nightCurfew.cutIfSlowEnough(bike.id, 3, { at: anHourAgo });
+      expect(cut, 'a cut was decided from an hour-old speed').toBe(false);
+    });
+
+    // Not a missed chance: the poll is already asking this device where it is
+    // every ten seconds, and what comes back is current by construction.
+    it('and leaves the cut pending rather than throwing it away', async () => {
+      await arm();
+      await nightCurfew.cutIfSlowEnough(bike.id, 3, { at: new Date(Date.now() - 60 * 60 * 1000) });
+      expect(nightCurfew.isArmed(bike.id), 'the pending cut was dropped').toBe(true);
+      // And the next current reading still stops the bike.
+      expect(await nightCurfew.cutIfSlowEnough(bike.id, 3)).toBe(true);
+    });
+  });
+
   // Everything above drives the curfew directly. This drives it the way the
   // tracker does — raw pings through processPing — which is the only thing
   // that proves the window, the sustained-movement guard and the cut are
@@ -211,15 +233,35 @@ describe.skipIf(!process.env.DATABASE_URL)('the overnight curfew', () => {
     // each test rides on its own day rather than inheriting the last one's
     // cooldown.
     let day = 14;
-    beforeEach(() => { day += 1; });
+    // Only Date is faked. The poll and settle() below do real I/O on real
+    // timers, and a fake interval would sit there waiting for a tick that
+    // never writes anything.
+    beforeEach(() => { day += 1; vi.useFakeTimers({ toFake: ['Date'] }); });
+    afterEach(() => { vi.useRealTimers(); });
 
     // 23:00 UTC is 01:00 SAST: inside the window, no DST to worry about.
     const nightAt = (offsetSec) => new Date(Date.UTC(2026, 0, day, 23, 0, offsetSec)).toISOString();
     // 10:00 UTC is 12:00 SAST: the middle of the working day.
     const dayAt = (offsetSec) => new Date(Date.UTC(2026, 0, day, 10, 0, offsetSec)).toISOString();
 
-    const ride = async (at, lat, lng, speed) =>
-      tripService.processPing(bike.id, deviceId, lat, lng, speed, 1, at, null, 120);
+    // Each ping arrives live: the clock is moved to the moment it was taken,
+    // which is what a tracker with signal actually does.
+    const ride = async (at, lat, lng, speed) => {
+      vi.setSystemTime(new Date(at));
+      return tripService.processPing(bike.id, deviceId, lat, lng, speed, 1, at, null, 120);
+    };
+
+    // The same ride out of a tracker's backlog. The pings are stamped 01:00
+    // and the clock says 11:42, because the unit lost coverage during the
+    // ride and only dumped it at lunchtime.
+    //
+    // day + 1 because nightAt is 23:00 UTC, which is 01:00 SAST the following
+    // morning — the replay happens later that same morning, not eleven hours
+    // before the ride.
+    const replay = async (at, lat, lng, speed) => {
+      vi.setSystemTime(new Date(Date.UTC(2026, 0, day + 1, 9, 42, 0)));
+      return tripService.processPing(bike.id, deviceId, lat, lng, speed, 1, at, null, 120);
+    };
 
     it('cuts a bike ridden at 01:00, once it slows down', async () => {
       await ride(nightAt(0), -26.2041, 28.0473, 45);
@@ -236,6 +278,76 @@ describe.skipIf(!process.env.DATABASE_URL)('the overnight curfew', () => {
         `SELECT alert_type FROM tracking_alerts WHERE bike_id=$1 ORDER BY id`, [bike.id]);
       expect(rows.map((r) => r.alert_type)).toEqual(
         expect.arrayContaining(['night_movement', 'engine_cut_auto']));
+    });
+
+    // A bike armed from a live ride, whose tracker then loses coverage and
+    // replays a slow record half an hour later. By then the bike could be
+    // anywhere — including on a main road at sixty — so "3 km/h, stamped
+    // 01:02" must not be what resolves a pending cut.
+    //
+    // The poll is the reason this costs nothing: it is already asking the
+    // device where it is every ten seconds, and those answers are current.
+    it('does not resolve a pending cut from a record that arrives late', async () => {
+      await ride(nightAt(0), -26.2041, 28.0473, 45);
+      await ride(nightAt(100), -26.2059, 28.0473, 45);
+      expect(nightCurfew.isArmed(bike.id), 'the ride did not arm the cut').toBe(true);
+
+      // Stamped 01:02:40 SAST, arriving at 01:30.
+      vi.setSystemTime(new Date(Date.UTC(2026, 0, day, 23, 30, 0)));
+      await tripService.processPing(
+        bike.id, deviceId, -26.2065, 28.0473, 3, 1, nightAt(160), null, 120);
+      await settle();
+
+      expect(await isCut(),
+        'a half-hour-old standstill stopped a bike that could be doing sixty').toBe(false);
+      expect(nightCurfew.isArmed(bike.id), 'the pending cut was thrown away').toBe(true);
+    });
+
+    // Bike 457, 10 October. A fix stamped 02:03 arrived at 11:42, while the
+    // bike was pulling away from a stop — 5, then 19, then 24 km/h. It was
+    // one record short of a streak. Had it armed, the trusted "speed 3" that
+    // landed thirty seconds later would have satisfied the cut, and the
+    // engine would have died on a bike accelerating into traffic.
+    //
+    // The movement was real and belongs on the record: the alert is critical,
+    // it escalates, and it opens a theft case. What it does not do is start a
+    // timer that immobilises the bike at its next red light.
+    it('raises the alert but does not arm when the ride is replayed hours later', async () => {
+      await replay(nightAt(0), -26.2041, 28.0473, 45);
+      await replay(nightAt(100), -26.2059, 28.0473, 45);
+      await settle();
+
+      const { rows } = await pgDb.query(
+        'SELECT alert_type FROM tracking_alerts WHERE bike_id = $1', [bike.id]);
+      expect(rows.map((r) => r.alert_type),
+        'a night ride went unreported because it arrived late').toContain('night_movement');
+      expect(nightCurfew.isArmed(bike.id),
+        'a ten-hour-old reading armed an automatic cut').toBe(false);
+    });
+
+    it('and does not cut it when it next slows down', async () => {
+      await replay(nightAt(0), -26.2041, 28.0473, 45);
+      await replay(nightAt(100), -26.2059, 28.0473, 45);
+      await replay(nightAt(160), -26.2065, 28.0473, 3);
+      await settle();
+
+      expect(await isCut(),
+        'a bike was immobilised at lunchtime for having moved at 01:00').toBe(false);
+    });
+
+    // The window's own edge case, which must keep working: a bike confirmed at
+    // 03:58 does not earn a pass by still moving at 04:02. That cut is decided
+    // from current readings either side of the boundary, so nothing here
+    // touches it.
+    it('still cuts a bike confirmed just before four and slowing just after', async () => {
+      const edge = (offsetSec) => new Date(Date.UTC(2026, 0, day, 1, 58, offsetSec)).toISOString();
+      await ride(edge(0), -26.2041, 28.0473, 45);
+      await ride(edge(100), -26.2059, 28.0473, 45);
+      expect(nightCurfew.isArmed(bike.id), 'a ride at 03:58 did not arm').toBe(true);
+
+      await ride(edge(300), -26.2065, 28.0473, 3);   // 04:03 SAST
+      await settle();
+      expect(await isCut(), 'a bike confirmed at 03:58 got away at 04:03').toBe(true);
     });
 
     it('leaves the same ride alone in the middle of the day', async () => {

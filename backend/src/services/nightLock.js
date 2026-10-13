@@ -2,6 +2,7 @@
 
 const pgDb = require('../pgDb');
 const { cutCommandForModel, restoreCommandForModel } = require('./engineCommands');
+const { MAX_ACTIONABLE_FIX_AGE_MS } = require('../constants/gps');
 const nightCurfew = require('./nightCurfew');
 
 // The overnight fleet lock.
@@ -40,13 +41,9 @@ const STATIONARY_KMH = 3;
 // reconnects rather than being sent on the strength of last night's fix.
 const FIX_MAX_AGE_MINUTES = 90;
 
-// A tracker's clock can run ahead of ours. A few minutes of that is normal
-// and should not make a fix look like it came from the future; hours of it is
-// a broken clock, and a position stamped next Tuesday tells us nothing about
-// where the bike is tonight.
-const TOLERATED_CLOCK_SKEW_MINUTES = 10;
-
-// How old a reading may be and still justify *sending an immobilise*.
+// How current a reading must be to justify sending an immobilise:
+// MAX_ACTIONABLE_FIX_AGE_MS, shared with the curfew, which decides the same
+// thing from the same kind of reading.
 //
 // Far tighter than the ninety minutes above, and deliberately so. The sweep
 // allows itself ninety because the last known ping is all it has. A command
@@ -54,12 +51,10 @@ const TOLERATED_CLOCK_SKEW_MINUTES = 10;
 // end of a socket and its current position is arriving in the same batch,
 // milliseconds behind the backlog.
 //
-// The difference is rule 1. "Speed 0, an hour ago" is not evidence that a
-// motorcycle is standing still now — a bike parked at 23:34 and ridden at
-// 00:35 reports exactly that, and acting on it would cut a moving bike. So
-// anything older than a couple of minutes is read, stored, and not acted on;
-// the record that justifies a cut is the one taken just now.
-const CUT_MAX_FIX_AGE_MINUTES = 5;
+// Measured either side of now. A tracker takes its time from GPS, so a fix
+// stamped minutes into the future is a unit that has lost its fix and is
+// guessing — which is no better a basis for cutting an engine than an
+// hour-old record is.
 
 let enabledCache = null;
 async function isEnabled() {
@@ -265,9 +260,7 @@ async function onPosition({ deviceId, speedKmh, ignitionOn, at = new Date(), now
   if (!device) return null;
 
   const inWindow = nightCurfew.inCurfew(now);
-  const fixAgeMin = (now.getTime() - at.getTime()) / 60000;
-  const fixIsCurrent = fixAgeMin <= CUT_MAX_FIX_AGE_MINUTES
-    && fixAgeMin >= -TOLERATED_CLOCK_SKEW_MINUTES;
+  const fixIsCurrent = Math.abs(now.getTime() - at.getTime()) <= MAX_ACTIONABLE_FIX_AGE_MS;
 
   if (device.night_lock_active) {
     if (!inWindow) {
@@ -344,5 +337,4 @@ module.exports = {
   isEnabled, setEnabled, reloadSettings,
   covers, isStandingStill, ignitionIsOn,
   SETTING_KEY, STATIONARY_KMH, FIX_MAX_AGE_MINUTES,
-  TOLERATED_CLOCK_SKEW_MINUTES, CUT_MAX_FIX_AGE_MINUTES,
 };

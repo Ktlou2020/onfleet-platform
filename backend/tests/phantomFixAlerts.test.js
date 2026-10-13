@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createRequire } from 'node:module';
 import { pgDb, resetAllPgTables, createPgBike } from './helpers/testPgDb.js';
 
@@ -43,8 +43,14 @@ describe.skipIf(!process.env.DATABASE_URL)('a parked bike whose receiver is asle
   // 10:00 UTC is midday SAST.
   const dayAt = (sec) => new Date(Date.UTC(2026, 0, day, 10, 0, sec)).toISOString();
 
-  const ping = (at, lat, lng, speed, ignition, satellites) =>
-    tripService.processPing(bike.id, deviceId, lat, lng, speed, ignition, at, null, 120, satellites);
+  // Each ping arrives live: the clock is moved to the moment it was taken.
+  // The curfew now refuses to arm or cut from a reading that reached us long
+  // after the fact (see nightCurfew.arm), and these tests are about a bike
+  // being ridden right now, not about a backlog.
+  const ping = (at, lat, lng, speed, ignition, satellites) => {
+    vi.setSystemTime(new Date(at));
+    return tripService.processPing(bike.id, deviceId, lat, lng, speed, ignition, at, null, 120, satellites);
+  };
 
   const alertTypes = async () => {
     const { rows } = await pgDb.query(
@@ -56,6 +62,8 @@ describe.skipIf(!process.env.DATABASE_URL)('a parked bike whose receiver is asle
   const settle = () => new Promise((r) => setTimeout(r, 80));
 
   beforeEach(async () => {
+    // Only Date. settle() and the curfew's poll need real timers.
+    vi.useFakeTimers({ toFake: ['Date'] });
     await resetAllPgTables();
     tripService.__resetForTests();
     nightCurfew.clearAll();
@@ -77,7 +85,7 @@ describe.skipIf(!process.env.DATABASE_URL)('a parked bike whose receiver is asle
     tripService.__resetForTests();
   });
 
-  afterEach(() => nightCurfew.clearAll());
+  afterEach(() => { nightCurfew.clearAll(); vi.useRealTimers(); });
 
   // Three pings a minute and a half apart, each claiming highway speed and a
   // position two kilometres from the last. Sustained: yes. Displaced: yes.

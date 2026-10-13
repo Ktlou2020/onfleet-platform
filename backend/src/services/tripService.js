@@ -322,7 +322,16 @@ async function processPing(bikeId, deviceId, lat, lng, speed, ignition, recorded
         // Arming is separate from the alert on purpose: an admin who silences
         // the night_movement alert has asked for less noise, not for stolen
         // bikes to keep running.
-        await nightCurfew.arm(bikeId, deviceId, nightPayload);
+        //
+        // Both clocks, for the reason the night lock hook below spells out.
+        // The streak that got us here is built from fix timestamps, which is
+        // right — the movement happened when it happened. Whether to arm is a
+        // separate question, and a ride only reported hours after the fact is
+        // an alert and a theft case rather than an automatic cut.
+        await nightCurfew.arm(bikeId, deviceId, nightPayload, {
+          at: new Date(ts),
+          now: new Date(),
+        });
       }
     }
   } else {
@@ -368,6 +377,9 @@ async function processPing(bikeId, deviceId, lat, lng, speed, ignition, recorded
     // leaves the decision to speed alone as before.
     await nightCurfew.cutIfSlowEnough(bikeId, speed, {
       ignitionOn: hasIgnitionSignal ? ignitionOn : null,
+      // And the speed that decides it has to be a speed the bike has now.
+      at: new Date(ts),
+      now: new Date(),
     });
   }
 

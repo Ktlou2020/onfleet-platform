@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createRequire } from 'node:module';
 import { pgDb, resetAllPgTables, createPgBike } from './helpers/testPgDb.js';
 
@@ -183,8 +183,18 @@ describe.skipIf(!process.env.DATABASE_URL)('believing a tracker\'s ignition line
   // ignition — so a dead ignition wire must not quietly exempt a bike from it.
   it('does not change what the overnight curfew sees', async () => {
     const nightAt = (s) => new Date(Date.UTC(2026, 0, day, 23, 0, s)).toISOString();
-    await tripService.processPing(bike.id, deviceId, -26.2041, 28.0473, 45, 0, nightAt(0), {}, 120);
-    await tripService.processPing(bike.id, deviceId, -26.2059, 28.0473, 45, 0, nightAt(100), {}, 120);
-    expect(nightCurfew.isArmed(bike.id)).toBe(true);
+    // The ride is happening now, so the clock moves with it: arming refuses a
+    // confirmation that only reached us hours later (see nightCurfew.arm),
+    // and that refusal is not what this test is about.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      for (const [sec, lat] of [[0, -26.2041], [100, -26.2059]]) {
+        vi.setSystemTime(new Date(nightAt(sec)));
+        await tripService.processPing(bike.id, deviceId, lat, 28.0473, 45, 0, nightAt(sec), {}, 120);
+      }
+      expect(nightCurfew.isArmed(bike.id)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

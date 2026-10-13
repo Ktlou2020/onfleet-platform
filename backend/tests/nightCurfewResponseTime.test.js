@@ -14,6 +14,12 @@ const teltonika = require_('../src/tcp/teltonikaServer.js');
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// The moment the movement happened, which is also the moment it was reported:
+// a tracker with signal, reporting as it rides. Both clocks, because arming
+// now refuses a confirmation that reached us hours after the fact — see
+// nightCurfew.arm — and these tests are about a bike being taken right now.
+const MOVED_AT = new Date('2026-10-03T01:00:00Z');
+
 // How long a stolen bike keeps running.
 //
 // Everything in the curfew happens when a position arrives, and until now
@@ -49,14 +55,14 @@ describe.skipIf(!process.env.DATABASE_URL)('how quickly an armed bike is stopped
   // The original rule, unchanged: the engine never dies under somebody at
   // speed, whatever else is true.
   it('still refuses to cut a bike that is being ridden', async () => {
-    await nightCurfew.arm(bike.id, device.id, {}, { at: new Date('2026-10-03T01:00:00Z') });
+    await nightCurfew.arm(bike.id, device.id, {}, { at: MOVED_AT, now: MOVED_AT });
     const cut = await nightCurfew.cutIfSlowEnough(bike.id, 80);
     expect(cut).toBe(false);
     expect(nightCurfew.isArmed(bike.id), 'the cut was thrown away rather than kept waiting').toBe(true);
   });
 
   it('and cuts it at walking pace, as it always did', async () => {
-    await nightCurfew.arm(bike.id, device.id, {}, { at: new Date('2026-10-03T01:00:00Z') });
+    await nightCurfew.arm(bike.id, device.id, {}, { at: MOVED_AT, now: MOVED_AT });
     expect(await nightCurfew.cutIfSlowEnough(bike.id, 3)).toBe(true);
     const { rows } = await pgDb.query('SELECT engine_cut_active FROM tracking_devices WHERE id = $1', [device.id]);
     expect(rows[0].engine_cut_active).toBe(true);
@@ -68,13 +74,13 @@ describe.skipIf(!process.env.DATABASE_URL)('how quickly an armed bike is stopped
     // going to arrive, because the bike is not moving and the last thing it
     // reported was a road speed.
     it('is cut without waiting for a slow speed reading', async () => {
-      await nightCurfew.arm(bike.id, device.id, {}, { at: new Date('2026-10-03T01:00:00Z') });
+      await nightCurfew.arm(bike.id, device.id, {}, { at: MOVED_AT, now: MOVED_AT });
       const cut = await nightCurfew.cutIfSlowEnough(bike.id, 60, { ignitionOn: false });
       expect(cut, 'a parked bike with the engine off was left running').toBe(true);
     });
 
     it('and the alert says that is why', async () => {
-      await nightCurfew.arm(bike.id, device.id, {}, { at: new Date('2026-10-03T01:00:00Z') });
+      await nightCurfew.arm(bike.id, device.id, {}, { at: MOVED_AT, now: MOVED_AT });
       await nightCurfew.cutIfSlowEnough(bike.id, 60, { ignitionOn: false });
       const { rows } = await pgDb.query(
         `SELECT payload FROM tracking_alerts WHERE alert_type = 'engine_cut_auto'`);
@@ -86,13 +92,13 @@ describe.skipIf(!process.env.DATABASE_URL)('how quickly an armed bike is stopped
     // A tracker with no ignition wire reports nothing either way, and must not
     // be treated as switched off — that would cut a moving bike.
     it('but a tracker with no ignition signal decides on speed alone', async () => {
-      await nightCurfew.arm(bike.id, device.id, {}, { at: new Date('2026-10-03T01:00:00Z') });
+      await nightCurfew.arm(bike.id, device.id, {}, { at: MOVED_AT, now: MOVED_AT });
       const cut = await nightCurfew.cutIfSlowEnough(bike.id, 60, { ignitionOn: null });
       expect(cut, 'a bike doing 60 was cut on a guess').toBe(false);
     });
 
     it('and an ignition that is on is no reason to cut at speed either', async () => {
-      await nightCurfew.arm(bike.id, device.id, {}, { at: new Date('2026-10-03T01:00:00Z') });
+      await nightCurfew.arm(bike.id, device.id, {}, { at: MOVED_AT, now: MOVED_AT });
       expect(await nightCurfew.cutIfSlowEnough(bike.id, 60, { ignitionOn: true })).toBe(false);
     });
   });
@@ -102,7 +108,7 @@ describe.skipIf(!process.env.DATABASE_URL)('how quickly an armed bike is stopped
       vi.spyOn(teltonika, 'getConnectedIMEIs').mockReturnValue([device.imei]);
       const send = vi.spyOn(teltonika, 'sendCommand').mockReturnValue(true);
 
-      await nightCurfew.arm(bike.id, device.id, {}, { at: new Date('2026-10-03T01:00:00Z') });
+      await nightCurfew.arm(bike.id, device.id, {}, { at: MOVED_AT, now: MOVED_AT });
       await wait(nightCurfew.POLL_INTERVAL_MS + 50);
       await wait(nightCurfew.POLL_INTERVAL_MS + 50);
 
@@ -116,7 +122,7 @@ describe.skipIf(!process.env.DATABASE_URL)('how quickly an armed bike is stopped
       vi.spyOn(teltonika, 'getConnectedIMEIs').mockReturnValue([device.imei]);
       const send = vi.spyOn(teltonika, 'sendCommand').mockReturnValue(true);
 
-      await nightCurfew.arm(bike.id, device.id, {}, { at: new Date('2026-10-03T01:00:00Z') });
+      await nightCurfew.arm(bike.id, device.id, {}, { at: MOVED_AT, now: MOVED_AT });
       await wait(nightCurfew.POLL_INTERVAL_MS + 50);
       await nightCurfew.cutIfSlowEnough(bike.id, 2);
       const afterCut = send.mock.calls.length;
@@ -129,7 +135,7 @@ describe.skipIf(!process.env.DATABASE_URL)('how quickly an armed bike is stopped
       vi.spyOn(teltonika, 'getConnectedIMEIs').mockReturnValue([device.imei]);
       const send = vi.spyOn(teltonika, 'sendCommand').mockReturnValue(true);
 
-      await nightCurfew.arm(bike.id, device.id, {}, { at: new Date('2026-10-03T01:00:00Z') });
+      await nightCurfew.arm(bike.id, device.id, {}, { at: MOVED_AT, now: MOVED_AT });
       nightCurfew.disarm(bike.id);
       await wait(nightCurfew.POLL_INTERVAL_MS * 3);
 
@@ -143,7 +149,7 @@ describe.skipIf(!process.env.DATABASE_URL)('how quickly an armed bike is stopped
       vi.spyOn(teltonika, 'getConnectedIMEIs').mockReturnValue([]);
       const send = vi.spyOn(teltonika, 'sendCommand').mockReturnValue(true);
 
-      await nightCurfew.arm(bike.id, device.id, {}, { at: new Date('2026-10-03T01:00:00Z') });
+      await nightCurfew.arm(bike.id, device.id, {}, { at: MOVED_AT, now: MOVED_AT });
       await wait(nightCurfew.POLL_INTERVAL_MS * 2 + 100);
 
       expect(send).not.toHaveBeenCalled();
@@ -154,7 +160,7 @@ describe.skipIf(!process.env.DATABASE_URL)('how quickly an armed bike is stopped
       vi.spyOn(teltonika, 'getConnectedIMEIs').mockReturnValue([device.imei]);
       const send = vi.spyOn(teltonika, 'sendCommand').mockReturnValue(true);
 
-      await nightCurfew.arm(bike.id, device.id, {}, { at: new Date('2026-10-03T01:00:00Z') });
+      await nightCurfew.arm(bike.id, device.id, {}, { at: MOVED_AT, now: MOVED_AT });
       await wait(nightCurfew.POLL_CEILING_MS + nightCurfew.POLL_INTERVAL_MS * 3);
       const atCeiling = send.mock.calls.length;
       await wait(nightCurfew.POLL_INTERVAL_MS * 5);

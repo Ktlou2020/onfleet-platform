@@ -67,7 +67,27 @@ describe.skipIf(!process.env.DATABASE_URL)('a bike whose engine is restored duri
   it('is not cut again for the rest of that night', async () => {
     await curfew.grantReprieve(bike.id, { at: AT_0100_SAST });
     expect(await curfew.covers(bike.id, { at: AT_0330_SAST })).toBe(false);
-    expect(await curfew.arm(bike.id, 99, {}, { at: AT_0330_SAST })).toBe(false);
+    // `now` matches `at`: a tracker reporting as it rides. Without it the
+    // arming would be refused for being stale and this would pass without
+    // ever exercising the reprieve.
+    expect(await curfew.arm(bike.id, 99, {}, { at: AT_0330_SAST, now: AT_0330_SAST })).toBe(false);
+  });
+
+  // The rider the reprieve was granted for, at the one minute it could still
+  // go wrong.
+  //
+  // A reprieve runs out at 04:00. A bike moving at 03:59 is inside it; a
+  // report of that movement landing at 04:01 is not. Judging the reprieve by
+  // when the report arrived rather than by when the bike moved arms the cut
+  // and strands exactly the person somebody granted the reprieve to — which
+  // is why `at` is threaded through to covers, and why the caller now passes
+  // the fix's own timestamp rather than letting it default.
+  it('still covers movement from just before it expired, reported just after', async () => {
+    await curfew.grantReprieve(bike.id, { at: AT_0100_SAST });
+    const movedAt   = new Date('2026-09-27T01:59:00Z'); // 03:59 SAST, reprieved
+    const reportedAt = new Date('2026-09-27T02:01:00Z'); // 04:01 SAST, expired
+    expect(await curfew.arm(bike.id, 99, {}, { at: movedAt, now: reportedAt }),
+      'a reprieved rider was armed because their report landed two minutes late').toBe(false);
   });
 
   // And the protection comes back on its own. Nobody has to remember.
@@ -78,7 +98,7 @@ describe.skipIf(!process.env.DATABASE_URL)('a bike whose engine is restored duri
   });
 
   it('has its pending cut dropped as well, not just future ones blocked', async () => {
-    await curfew.arm(bike.id, 99, {}, { at: AT_0100_SAST });
+    await curfew.arm(bike.id, 99, {}, { at: AT_0100_SAST, now: AT_0100_SAST });
     expect(curfew.isArmed(bike.id)).toBe(true);
     await curfew.grantReprieve(bike.id, { at: AT_0100_SAST });
     expect(curfew.isArmed(bike.id)).toBe(false);

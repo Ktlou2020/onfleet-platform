@@ -40,6 +40,27 @@ const STATIONARY_KMH = 3;
 // reconnects rather than being sent on the strength of last night's fix.
 const FIX_MAX_AGE_MINUTES = 90;
 
+// A tracker's clock can run ahead of ours. A few minutes of that is normal
+// and should not make a fix look like it came from the future; hours of it is
+// a broken clock, and a position stamped next Tuesday tells us nothing about
+// where the bike is tonight.
+const TOLERATED_CLOCK_SKEW_MINUTES = 10;
+
+// How old a reading may be and still justify *sending an immobilise*.
+//
+// Far tighter than the ninety minutes above, and deliberately so. The sweep
+// allows itself ninety because the last known ping is all it has. A command
+// decided from a live report has no such excuse: the tracker is on the other
+// end of a socket and its current position is arriving in the same batch,
+// milliseconds behind the backlog.
+//
+// The difference is rule 1. "Speed 0, an hour ago" is not evidence that a
+// motorcycle is standing still now — a bike parked at 23:34 and ridden at
+// 00:35 reports exactly that, and acting on it would cut a moving bike. So
+// anything older than a couple of minutes is read, stored, and not acted on;
+// the record that justifies a cut is the one taken just now.
+const CUT_MAX_FIX_AGE_MINUTES = 5;
+
 let enabledCache = null;
 async function isEnabled() {
   if (enabledCache !== null) return enabledCache;
@@ -77,8 +98,8 @@ function send(imei, deviceId, command) {
  *
  * Run at midnight. Bikes that are moving, offline, or reporting a stale fix
  * are skipped — the first because it would be unsafe, the other two because
- * we cannot see where they are. An offline bike is picked up by reassert()
- * the moment it reports in.
+ * we cannot see where they are. An offline bike is picked up by onPosition()
+ * on its first report inside the window.
  */
 async function lockAll({ at = new Date() } = {}) {
   if (!(await isEnabled())) return { locked: 0, skipped: 0, reason: 'disabled' };
@@ -194,39 +215,101 @@ async function release(bikeId, { actorId = null, by = 'rider' } = {}) {
 }
 
 /**
- * Called on every position from a night-locked bike.
+ * Called on every position a tracker reports.
  *
- * Two jobs, and the second one matters more than the first.
+ * Three jobs, depending on what the bike is and what time it is.
  *
- * Inside the window: if the bike is reporting its ignition on, the lock did
- * not take or somebody has defeated it by cycling the power. Re-send — but
- * only while it is standing still, never to a motorcycle under way.
+ * Locked, inside the window: if the bike is reporting its ignition on, the
+ * lock did not take or somebody has defeated it by cycling the power.
+ * Re-send — but only while it is standing still, never to a motorcycle
+ * under way.
  *
- * Outside the window: it is daylight and this bike is still locked, which
- * means the four o'clock sweep did not run or did not reach it. Let it go.
- * A cron that fails should not be able to keep a fleet off the road, and the
- * bike reporting in is the most reliable signal available that it is stuck.
+ * Locked, outside the window: it is daylight and this bike is still locked,
+ * which means the four o'clock sweep did not run or did not reach it. Let it
+ * go. A cron that fails should not be able to keep a fleet off the road, and
+ * the bike reporting in is the most reliable signal available that it is
+ * stuck.
+ *
+ * Not locked, inside the window: this is a bike midnight could not reach,
+ * because it was asleep or out of coverage when the sweep ran. lockAll has
+ * always said such a bike would be "picked up the moment it reports in" —
+ * this is the part that makes that true. It was missing, so on a fleet of 91
+ * bikes, 11 were eligible at midnight and simply never got the command.
+ *
+ * On which clock, and this is the whole of it:
+ *
+ * What time it is, and when a fix was taken, are not the same question.
+ * Teltonika units buffer while they sleep or lose coverage and dump the
+ * backlog oldest-first when they next dial in, so a report landing at 00:35
+ * can carry a 23:34 timestamp. This decided the window from that timestamp,
+ * and so released bikes within minutes of locking them — six on the first
+ * night, each logged as "still locked after the window" at half past
+ * midnight, and nothing re-locks them because the sweep runs once. The fleet
+ * looked like the lock worked on some bikes and not others; what actually
+ * differed was which bikes reported during the night.
+ *
+ * So: the window is asked of the clock. The fix's own timestamp is used for
+ * the one thing it can answer — whether this reading is current enough to
+ * justify a command, which is a much shorter leash than the sweep's. A
+ * record out of the backlog is worth storing and not worth acting on.
  */
-async function onPosition({ deviceId, speedKmh, ignitionOn, at = new Date() }) {
-  const { rows } = await pgDb.query(
-    `SELECT d.id, d.imei, d.model, d.bike_id, d.night_lock_active
-       FROM tracking_devices d WHERE d.id = $1 AND d.night_lock_active = TRUE`, [deviceId]);
+async function onPosition({ deviceId, speedKmh, ignitionOn, at = new Date(), now = new Date() }) {
+  const { rows } = await pgDb.query(`
+    SELECT d.id, d.imei, d.model, d.bike_id, d.night_lock_active, d.engine_cut_active,
+           b.status, b.night_curfew_exempt, b.night_curfew_reprieve_until,
+           b.night_lock_released_until
+      FROM tracking_devices d
+      JOIN bikes b ON b.id = d.bike_id
+     WHERE d.id = $1`, [deviceId]);
   const device = rows[0];
   if (!device) return null;
 
-  if (!nightCurfew.inCurfew(at)) {
-    await releaseDevice(device);
-    console.warn(`[night-lock] bike ${device.bike_id} was still locked after the window — released on its own report`);
-    return 'self_released';
+  const inWindow = nightCurfew.inCurfew(now);
+  const fixAgeMin = (now.getTime() - at.getTime()) / 60000;
+  const fixIsCurrent = fixAgeMin <= CUT_MAX_FIX_AGE_MINUTES
+    && fixAgeMin >= -TOLERATED_CLOCK_SKEW_MINUTES;
+
+  if (device.night_lock_active) {
+    if (!inWindow) {
+      await releaseDevice(device);
+      console.warn(`[night-lock] bike ${device.bike_id} was still locked after the window — released on its own report`);
+      return 'self_released';
+    }
+    if (!fixIsCurrent) return null;
+    const movingOrUnknown = speedKmh == null || speedKmh > STATIONARY_KMH;
+    if (ignitionOn === true && !movingOrUnknown) {
+      await send(device.imei, device.id, cutCommandForModel(device.model));
+      console.log(`[night-lock] re-asserted on ${device.imei} — it was started while locked`);
+      return 'reasserted';
+    }
+    return null;
   }
 
-  const movingOrUnknown = speedKmh == null || speedKmh > STATIONARY_KMH;
-  if (ignitionOn === true && !movingOrUnknown) {
-    await send(device.imei, device.id, cutCommandForModel(device.model));
-    console.log(`[night-lock] re-asserted on ${device.imei} — it was started while locked`);
-    return 'reasserted';
-  }
-  return null;
+  // The bike midnight missed. Every rule the sweep applies applies here too:
+  // the feature switched on, no cut somebody else made, covered by the
+  // curfew, standing still.
+  if (!inWindow || !fixIsCurrent) return null;
+  if (!(await isEnabled())) return null;
+  if (device.engine_cut_active) return null;
+  if (!(await covers(device, now))) return null;
+
+  // Rule 1, asked of the report in hand rather than of the pings table. A
+  // speed we were not given is not a bike we lock: unknown is not still.
+  const speed = speedKmh == null ? null : Number(speedKmh);
+  if (speed == null || speed > STATIONARY_KMH) return null;
+  if (ignitionIsOn(ignitionOn)) return null;
+
+  // Claimed before the command is sent, so two records arriving in the same
+  // batch cannot both decide to lock the same bike. The tracker is on the
+  // other end of a live socket here — this is the one path where the cut is
+  // not being queued into the dark.
+  const { rowCount } = await pgDb.query(
+    `UPDATE tracking_devices SET night_lock_active = TRUE, night_locked_at = NOW()
+      WHERE id = $1 AND night_lock_active = FALSE`, [device.id]);
+  if (!rowCount) return null;
+  await send(device.imei, device.id, cutCommandForModel(device.model));
+  console.log(`[night-lock] bike ${device.bike_id} locked on its first report of the window`);
+  return 'late_locked';
 }
 
 /** The curfew's rules, asked of a row the sweep already has in hand. */
@@ -261,4 +344,5 @@ module.exports = {
   isEnabled, setEnabled, reloadSettings,
   covers, isStandingStill, ignitionIsOn,
   SETTING_KEY, STATIONARY_KMH, FIX_MAX_AGE_MINUTES,
+  TOLERATED_CLOCK_SKEW_MINUTES, CUT_MAX_FIX_AGE_MINUTES,
 };

@@ -56,6 +56,12 @@ describe.skipIf(!process.env.DATABASE_URL)('the overnight fleet lock', () => {
     await createPgAgreement({ bike_id: bike.id, user_id: rider.user.id, status: 'active' });
   });
 
+  const commandCount = async () => {
+    const { rows } = await pgDb.query(
+      'SELECT COUNT(*)::int AS n FROM tracking_commands WHERE device_id = $1', [device.id]);
+    return rows[0].n;
+  };
+
   const lockState = async () => {
     const { rows } = await pgDb.query('SELECT night_lock_active FROM tracking_devices WHERE id = $1', [device.id]);
     return rows[0].night_lock_active;
@@ -173,7 +179,7 @@ describe.skipIf(!process.env.DATABASE_URL)('the overnight fleet lock', () => {
       await nightLock.lockAll({ at: inWindow });
 
       const outcome = await nightLock.onPosition({
-        deviceId: device.id, speedKmh: 0, ignitionOn: false, at: daylight,
+        deviceId: device.id, speedKmh: 0, ignitionOn: false, at: daylight, now: daylight,
       });
       expect(outcome).toBe('self_released');
       expect(await lockState()).toBe(false);
@@ -188,7 +194,7 @@ describe.skipIf(!process.env.DATABASE_URL)('the overnight fleet lock', () => {
 
     it('is locked again while it is standing still', async () => {
       const outcome = await nightLock.onPosition({
-        deviceId: device.id, speedKmh: 0, ignitionOn: true, at: inWindow,
+        deviceId: device.id, speedKmh: 0, ignitionOn: true, at: inWindow, now: inWindow,
       });
       expect(outcome).toBe('reasserted');
     });
@@ -196,16 +202,202 @@ describe.skipIf(!process.env.DATABASE_URL)('the overnight fleet lock', () => {
     // The back door into cutting at speed, closed.
     it('but never while it is moving', async () => {
       const outcome = await nightLock.onPosition({
-        deviceId: device.id, speedKmh: 55, ignitionOn: true, at: inWindow,
+        deviceId: device.id, speedKmh: 55, ignitionOn: true, at: inWindow, now: inWindow,
       });
       expect(outcome, 'an immobilise was re-sent to a bike doing 55').toBeNull();
     });
 
     it('nor on a fix we cannot measure the speed of', async () => {
       const outcome = await nightLock.onPosition({
-        deviceId: device.id, speedKmh: null, ignitionOn: true, at: inWindow,
+        deviceId: device.id, speedKmh: null, ignitionOn: true, at: inWindow, now: inWindow,
       });
       expect(outcome).toBeNull();
+    });
+  });
+
+  // The night this shipped, six bikes were locked at midnight and released
+  // within the hour, each logged as "still locked after the window" at around
+  // half past twelve. The cause was not the window, the sweep, or the
+  // trackers: a Teltonika unit that sleeps or loses coverage buffers its
+  // records and dumps them oldest-first when it dials in, and the hook was
+  // reading the clock off whichever record it had been handed. A fix stamped
+  // 23:34, arriving at 00:35, said "outside the window" and let the bike go.
+  //
+  // Which is why the lock appeared to work on some bikes and not others. The
+  // bikes it failed on were the ones that reported during the night.
+  describe('a tracker dialling in with a backlog', () => {
+    // 00:00 SAST, the sweep. 00:35 SAST, the device wakes and uploads the
+    // hour it slept through: a record stamped 23:34, then one stamped 00:34.
+    const sweptAt = new Date('2026-10-04T22:00:00Z');
+    const dialsInAt = new Date('2026-10-04T22:35:27Z');
+    const staleRecord = new Date('2026-10-04T21:34:53Z');
+    const liveRecord = new Date('2026-10-04T22:34:53Z');
+
+    beforeEach(async () => {
+      await ping(bike.id, { speed: 0, ignition: 0, at: sweptAt });
+      const res = await nightLock.lockAll({ at: sweptAt });
+      expect(res.locked, 'the fixture did not lock the bike').toBe(1);
+    });
+
+    it('stays locked when the backlog arrives', async () => {
+      const outcome = await nightLock.onPosition({
+        deviceId: device.id, speedKmh: 0, ignitionOn: false,
+        at: staleRecord, now: dialsInAt,
+      });
+      expect(outcome, 'an hour-old record released a bike mid-window').toBeNull();
+      expect(await lockState()).toBe(true);
+    });
+
+    it('and through the whole batch, oldest first', async () => {
+      for (const at of [staleRecord, liveRecord]) {
+        await nightLock.onPosition({
+          deviceId: device.id, speedKmh: 0, ignitionOn: false, at, now: dialsInAt,
+        });
+      }
+      expect(await lockState(), 'the bike was let out by its own backlog').toBe(true);
+    });
+
+    // The release is still unconditional in daylight. That backstop is the
+    // reason a failed morning sweep cannot keep a fleet off the road, and
+    // nothing here is allowed to weaken it.
+    it('but a backlog arriving in daylight still releases the bike', async () => {
+      const outcome = await nightLock.onPosition({
+        deviceId: device.id, speedKmh: 0, ignitionOn: false,
+        at: staleRecord, now: daylight,
+      });
+      expect(outcome).toBe('self_released');
+      expect(await lockState()).toBe(false);
+    });
+
+    // Rule 1, by way of the backlog. A bike parked at 23:34 and ridden at
+    // 00:35 uploads "speed 0" with an old timestamp; believing it would put
+    // an immobilise into a moving motorcycle.
+    it('never re-cuts on an hour-old standstill', async () => {
+      const before = await commandCount();
+      const outcome = await nightLock.onPosition({
+        deviceId: device.id, speedKmh: 0, ignitionOn: true,
+        at: staleRecord, now: dialsInAt,
+      });
+      expect(outcome, 'a cut was decided from an hour-old reading').toBeNull();
+      expect(await commandCount()).toBe(before);
+    });
+
+    it('and not on one stamped in the future either', async () => {
+      const outcome = await nightLock.onPosition({
+        deviceId: device.id, speedKmh: 0, ignitionOn: true,
+        at: new Date(dialsInAt.getTime() + 6 * 3600 * 1000), now: dialsInAt,
+      });
+      expect(outcome).toBeNull();
+    });
+  });
+
+  // The other half of the same night: of 64 bikes eligible at midnight, 11
+  // got no command at all, because they were asleep or out of coverage when
+  // the sweep ran and nothing ran again. lockAll's own documentation had been
+  // promising for months that such a bike would be "picked up the moment it
+  // reports in". This is that promise, finally kept.
+  describe('a bike the midnight sweep could not reach', () => {
+    const dialsInAt = new Date('2026-10-04T23:00:00Z');   // 01:00 SAST
+    const liveRecord = new Date('2026-10-04T22:59:30Z');
+
+    const report = (over = {}) => nightLock.onPosition({
+      deviceId: device.id, speedKmh: 0, ignitionOn: false,
+      at: liveRecord, now: dialsInAt, ...over,
+    });
+
+    it('is locked on its first report inside the window', async () => {
+      expect(await lockState(), 'the fixture started out locked').toBe(false);
+      expect(await report()).toBe('late_locked');
+      expect(await lockState()).toBe(true);
+    });
+
+    it('and the cut is actually sent', async () => {
+      await report();
+      const { rows } = await pgDb.query(
+        'SELECT command FROM tracking_commands WHERE device_id = $1', [device.id]);
+      expect(rows.map((r) => r.command)).toEqual(['setdigout 1']);
+    });
+
+    // Rule 1 again, on the new path.
+    it('but never one that is moving', async () => {
+      expect(await report({ speedKmh: 55 }), 'an immobilise was sent to a bike doing 55').toBeNull();
+      expect(await lockState()).toBe(false);
+    });
+
+    it('nor one whose ignition is on at a standstill', async () => {
+      expect(await report({ ignitionOn: true })).toBeNull();
+      expect(await lockState()).toBe(false);
+    });
+
+    // Unknown is not still. A report whose speed we were not given could be
+    // a bike at a robot or a bike at eighty.
+    it('nor one whose speed we cannot measure', async () => {
+      expect(await report({ speedKmh: null })).toBeNull();
+      expect(await lockState()).toBe(false);
+    });
+
+    it('nor on a record out of the backlog', async () => {
+      const stale = new Date(dialsInAt.getTime() - 61 * 60 * 1000);
+      expect(await report({ at: stale })).toBeNull();
+      expect(await lockState()).toBe(false);
+    });
+
+    it('and nothing at all outside the window', async () => {
+      expect(await report({ now: daylight, at: daylight })).toBeNull();
+      expect(await lockState()).toBe(false);
+    });
+
+    it('nor while the lock is switched off', async () => {
+      await nightLock.setEnabled(false);
+      expect(await report(), 'a bike was locked with the feature off').toBeNull();
+      expect(await lockState()).toBe(false);
+    });
+
+    // Somebody else's cut is somebody else's decision, and the morning sweep
+    // must not restore it.
+    it('nor a bike already cut for theft or arrears', async () => {
+      await pgDb.query(
+        `UPDATE tracking_devices SET engine_cut_active = TRUE, engine_cut_reason = 'stolen' WHERE id = $1`,
+        [device.id]);
+      expect(await report()).toBeNull();
+      expect(await lockState(), 'the night lock took over a theft cut').toBe(false);
+    });
+
+    it('nor one the curfew does not cover', async () => {
+      await pgDb.query('UPDATE bikes SET night_curfew_exempt = TRUE WHERE id = $1', [bike.id]);
+      expect(await report()).toBeNull();
+      expect(await lockState()).toBe(false);
+    });
+
+    // A rider who let their bike out at midnight does not get locked again
+    // at one by the same feature.
+    it('nor one a rider has already let out tonight', async () => {
+      await pgDb.query(
+        `UPDATE bikes SET night_lock_released_until = $1 WHERE id = $2`,
+        [new Date('2026-10-05T02:00:00Z'), bike.id]);
+      expect(await report(), 'a released bike was locked again an hour later').toBeNull();
+      expect(await lockState()).toBe(false);
+    });
+
+    // Two records from one batch, in flight at the same time: one cut, not
+    // two.
+    //
+    // What this actually demonstrates is the flag short-circuiting the second
+    // record, because the test pool serialises the queries and the first
+    // call's UPDATE always lands before the second call's SELECT. The
+    // `night_lock_active = FALSE` on that UPDATE is for the case this harness
+    // cannot stage — two records genuinely in flight against a multi-client
+    // pool, both having read the row as unlocked. Removing it does not fail
+    // this test. It is kept because it is free and because the alternative is
+    // a second immobilise sent to the same motorcycle.
+    it('is locked once, however many records arrive together', async () => {
+      const outcomes = await Promise.all([
+        report(),
+        report({ at: new Date(dialsInAt.getTime() - 1000) }),
+      ]);
+      expect(outcomes.filter((o) => o === 'late_locked'),
+        'two records both decided to lock the same bike').toHaveLength(1);
+      expect(await commandCount(), 'the same bike was cut twice').toBe(1);
     });
   });
 

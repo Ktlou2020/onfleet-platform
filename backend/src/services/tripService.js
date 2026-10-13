@@ -336,15 +336,28 @@ async function processPing(bikeId, deviceId, lat, lng, speed, ignition, recorded
   // noise one: the cut waits for walking pace so the engine never dies under a
   // rider at speed, and a bad fix reporting 0 km/h on a bike doing 80 would
   // defeat exactly that.
-  // A locked bike reporting in. Inside the window this re-asserts a lock that
-  // did not take; outside it, the bike releases itself, so a four o'clock
-  // sweep that failed cannot keep the fleet off the road.
+  // A bike reporting in. Inside the window this re-asserts a lock that did
+  // not take, or locks a bike the midnight sweep could not reach; outside it,
+  // the bike releases itself, so a four o'clock sweep that failed cannot keep
+  // the fleet off the road.
+  //
+  // Both timestamps, and they are not interchangeable. `ts` is when the fix
+  // was taken; `now` is what time it is. A tracker that slept through an hour
+  // uploads that hour oldest-first when it wakes, so these can be an hour
+  // apart — and the hook has to answer "is the window open" from the clock
+  // while answering "is this reading worth acting on" from the fix. Passing
+  // only `ts` is what released six bikes half an hour after locking them.
+  //
+  // The night_movement streak above is the other way round on purpose: "was
+  // this movement during the night" is a question about the fix, so it stays
+  // on `ts` and a replayed 23:34 record correctly does not count.
   if (deviceId) {
     nightLock.onPosition({
       deviceId,
       speedKmh: trusted ? speed : null,
       ignitionOn: hasIgnitionSignal ? ignitionOn : null,
       at: new Date(ts),
+      now: new Date(),
     }).catch((e) => console.error('[night-lock] position hook failed:', e.message));
   }
 

@@ -42,6 +42,7 @@ describe.skipIf(!process.env.DATABASE_URL)('the overnight fleet lock', () => {
   beforeEach(async () => {
     await resetAllPgTables();
     nightLock.reloadSettings();
+    nightLock.clearReassertMemory();
     await nightLock.setEnabled(true);
 
     admin = await createPgUser({ role: 'superadmin' });
@@ -398,6 +399,118 @@ describe.skipIf(!process.env.DATABASE_URL)('the overnight fleet lock', () => {
       expect(outcomes.filter((o) => o === 'late_locked'),
         'two records both decided to lock the same bike').toHaveLength(1);
       expect(await commandCount(), 'the same bike was cut twice').toBe(1);
+    });
+  });
+
+  // One bike took 113 of the 175 cut commands the whole fleet received on the
+  // night of 13 October — about one a minute for an hour and a half, while
+  // somebody kept trying to ride it away. Every one was correct; every one
+  // after the first changed nothing, because the output was already latched.
+  describe('re-asserting a lock on a bike somebody keeps starting', () => {
+    // Just after midnight, not the middle of the window: this walks ninety
+    // minutes forward and has to stay inside it. Starting at 03:00 SAST — as
+    // the shared `inWindow` fixture does — runs out at four, and the count
+    // then measures where the window ends rather than how the throttle holds.
+    const t0 = new Date('2026-10-04T22:05:00Z');   // 00:05 SAST
+    const later = (ms) => new Date(t0.getTime() + ms);
+
+    beforeEach(async () => {
+      await ping(bike.id, { speed: 0, ignition: 0, at: t0 });
+      await nightLock.lockAll({ at: t0 });
+    });
+
+    const started = (now) => nightLock.onPosition({
+      deviceId: device.id, speedKmh: 0, ignitionOn: true, at: now, now,
+    });
+
+    it('sends the first one straight out', async () => {
+      expect(await started(t0)).toBe('reasserted');
+    });
+
+    it('holds the next one', async () => {
+      await started(t0);
+      expect(await started(later(5000)), 'the same cut went out twice in five seconds').toBe('reassert_held');
+      expect(await commandCount()).toBe(2);   // the midnight lock, and one re-assert
+    });
+
+    it('and sends again once the interval is up', async () => {
+      await started(t0);
+      await started(later(5000));
+      expect(await started(later(nightLock.REASSERT_INTERVAL_MS + 1000))).toBe('reasserted');
+    });
+
+    // The shape of the real night: a tracker reporting every few seconds for
+    // an hour and a half.
+    it('turns ninety minutes of restarts into ninety commands, not a thousand', async () => {
+      const before = await commandCount();
+      for (let sec = 0; sec <= 90 * 60; sec += 5) await started(later(sec * 1000));
+      const sent = (await commandCount()) - before;
+      // One a minute for ninety minutes, plus the one that went straight out.
+      expect(sent, 'the throttle let more through than one a minute').toBeLessThanOrEqual(91);
+      expect(sent, 'the throttle silenced the re-assert altogether').toBeGreaterThanOrEqual(90);
+    });
+
+    // Somebody who meant it has already stopped this bike. Re-asserting the
+    // night lock on top of a theft cut sends a command that changes nothing.
+    it('says nothing at all once the bike is cut for theft', async () => {
+      await pgDb.query(
+        `UPDATE tracking_devices SET engine_cut_active = TRUE, engine_cut_reason = 'stolen' WHERE id = $1`,
+        [device.id]);
+      const before = await commandCount();
+      expect(await started(t0)).toBeNull();
+      expect(await commandCount(), 'the night lock talked over a theft cut').toBe(before);
+    });
+  });
+
+  // Rule 2: a bike cut for theft or arrears stays cut, because that was
+  // somebody's decision and not a timer's. lockAll has always refused to take
+  // over a bike that is already cut — but a bike can be cut AFTER it was
+  // night-locked, which is exactly what the curfew does when it confirms a
+  // theft at twenty past midnight on a bike locked at midnight.
+  describe('a bike cut for theft while the night lock held it', () => {
+    beforeEach(async () => {
+      await ping(bike.id, { speed: 0, ignition: 0 });
+      await nightLock.lockAll({ at: inWindow });
+      await pgDb.query(
+        `UPDATE tracking_devices SET engine_cut_active = TRUE, engine_cut_reason = 'stolen' WHERE id = $1`,
+        [device.id]);
+    });
+
+    const restores = async () => {
+      const { rows } = await pgDb.query(
+        `SELECT COUNT(*)::int AS n FROM tracking_commands
+          WHERE device_id = $1 AND command LIKE 'setdigout%0'`, [device.id]);
+      return rows[0].n;
+    };
+
+    it('is not given its engine back by the morning sweep', async () => {
+      const res = await nightLock.unlockAll();
+      expect(res.left_cut).toBe(1);
+      expect(res.unlocked).toBe(0);
+      expect(await restores(), 'a stolen bike was restarted by a timer at four in the morning').toBe(0);
+    });
+
+    it('but the night lock still lets go of it', async () => {
+      await nightLock.unlockAll();
+      expect(await lockState(), 'the flag was left on a bike the night lock no longer owns').toBe(false);
+    });
+
+    it('nor by its own daylight report', async () => {
+      const outcome = await nightLock.onPosition({
+        deviceId: device.id, speedKmh: 0, ignitionOn: false, at: daylight, now: daylight,
+      });
+      expect(outcome).toBe('stood_down');
+      expect(await restores(), 'a stolen bike restarted itself in daylight').toBe(0);
+      expect(await lockState()).toBe(false);
+    });
+
+    // And the ordinary bike beside it still wakes up.
+    it('while a bike nobody cut is woken as usual', async () => {
+      await pgDb.query('UPDATE tracking_devices SET engine_cut_active = FALSE WHERE id = $1', [device.id]);
+      const res = await nightLock.unlockAll();
+      expect(res.unlocked).toBe(1);
+      expect(res.left_cut).toBe(0);
+      expect(await restores()).toBe(1);
     });
   });
 

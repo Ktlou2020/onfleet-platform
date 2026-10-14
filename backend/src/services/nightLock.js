@@ -36,6 +36,31 @@ const SETTING_KEY = 'night_lock_enabled';
 // a stationary motorcycle reported 2 km/h is a bike left unlocked all night.
 const STATIONARY_KMH = 3;
 
+// How long before the same device may be sent the cut again.
+//
+// The re-assert fires on every position from a locked bike whose ignition is
+// on, and a tracker being started over and over reports every few seconds. On
+// the night of 13 October one bike took 113 of the 175 cut commands sent to
+// the whole fleet — about one a minute for an hour and a half, while somebody
+// tried to ride it away. Every one was correct and every one after the first
+// was redundant: the output is already latched, and the next attempt meets the
+// same cut whether it was sent once or a hundred times.
+//
+// So the first goes straight out and the rest wait. A shorter interval costs
+// SIM data and a command queue nobody can read; a longer one costs a few
+// seconds before a cut that is already in force is restated.
+const REASSERT_INTERVAL_MS = 60 * 1000;
+
+// device id → when it was last re-asserted. In memory and per process, so a
+// restart costs one extra command rather than a missed one, which is the right
+// way round for this.
+const lastReassert = new Map();
+
+// Forgotten at the morning sweep, and by tests between cases — the table is
+// truncated with RESTART IDENTITY, so device ids repeat and one test's
+// throttle would otherwise silence the next one's re-assert.
+function clearReassertMemory() { lastReassert.clear(); }
+
 // How stale a position can be and still be believed. A tracker that has not
 // spoken for hours might be anywhere, and the lock will reach it when it
 // reconnects rather than being sent on the strength of last night's fix.
@@ -149,18 +174,52 @@ async function lockAll({ at = new Date() } = {}) {
  */
 async function unlockAll() {
   const { rows } = await pgDb.query(
-    'SELECT id, imei, model, bike_id FROM tracking_devices WHERE night_lock_active = TRUE');
+    `SELECT id, imei, model, bike_id, engine_cut_active
+       FROM tracking_devices WHERE night_lock_active = TRUE`);
   let unlocked = 0;
+  let leftCut = 0;
   for (const device of rows) {
     try {
+      // Rule 2, which this did not keep. lockAll refuses to take over a bike
+      // that is already cut, but a bike can be cut AFTER it was night-locked —
+      // which is exactly what happens when the curfew confirms a theft at
+      // twenty past midnight on a bike locked at midnight. This then restored
+      // it at four, because it selected on night_lock_active alone and never
+      // looked at why else the engine might be off. A stolen bike's engine
+      // came back on a timer. On 14 October that was only avoided because the
+      // control room happened to restore the bike by hand at 01:43 first.
+      if (device.engine_cut_active) {
+        await standDown(device);
+        leftCut += 1;
+        console.log(`[night-lock] bike ${device.bike_id} left cut — that was somebody's decision, not the timer's`);
+        continue;
+      }
       await releaseDevice(device);
       unlocked += 1;
     } catch (e) {
       console.error(`[night-lock] could not wake ${device.imei}:`, e.message);
     }
   }
-  if (rows.length) console.log(`[night-lock] woke ${unlocked} of ${rows.length}`);
-  return { unlocked, attempted: rows.length };
+  lastReassert.clear();
+  if (rows.length) {
+    console.log(`[night-lock] woke ${unlocked} of ${rows.length}${leftCut ? `, left ${leftCut} cut` : ''}`);
+  }
+  return { unlocked, attempted: rows.length, left_cut: leftCut };
+}
+
+/**
+ * Let go of a bike without restoring it.
+ *
+ * For a bike that was night-locked and has since been cut by somebody — the
+ * curfew confirming a theft, an operator, an arrears cut. The night lock no
+ * longer owns that engine, so it clears its own flag and sends nothing. The
+ * bike stays cut, and the person who cut it is the one who decides when it
+ * comes back.
+ */
+async function standDown(device) {
+  await pgDb.query(
+    'UPDATE tracking_devices SET night_lock_active = FALSE, night_locked_at = NULL WHERE id = $1',
+    [device.id]);
 }
 
 async function releaseDevice(device) {
@@ -264,13 +323,28 @@ async function onPosition({ deviceId, speedKmh, ignitionOn, at = new Date(), now
 
   if (device.night_lock_active) {
     if (!inWindow) {
+      // Rule 2 again, on the self-heal path. A bike cut for theft that reports
+      // in at nine in the morning must not be handed its engine back by this.
+      if (device.engine_cut_active) {
+        await standDown(device);
+        console.log(`[night-lock] bike ${device.bike_id} let go after the window, but left cut — somebody else stopped it`);
+        return 'stood_down';
+      }
       await releaseDevice(device);
       console.warn(`[night-lock] bike ${device.bike_id} was still locked after the window — released on its own report`);
       return 'self_released';
     }
     if (!fixIsCurrent) return null;
+
+    // Already stopped by somebody who meant it. Re-asserting the night lock on
+    // top of a theft cut sends a command that changes nothing.
+    if (device.engine_cut_active) return null;
+
     const movingOrUnknown = speedKmh == null || speedKmh > STATIONARY_KMH;
     if (ignitionOn === true && !movingOrUnknown) {
+      const since = now.getTime() - (lastReassert.get(device.id) || 0);
+      if (since < REASSERT_INTERVAL_MS) return 'reassert_held';
+      lastReassert.set(device.id, now.getTime());
       await send(device.imei, device.id, cutCommandForModel(device.model));
       console.log(`[night-lock] re-asserted on ${device.imei} — it was started while locked`);
       return 'reasserted';
@@ -336,5 +410,6 @@ module.exports = {
   lockAll, unlockAll, release, onPosition,
   isEnabled, setEnabled, reloadSettings,
   covers, isStandingStill, ignitionIsOn,
-  SETTING_KEY, STATIONARY_KMH, FIX_MAX_AGE_MINUTES,
+  SETTING_KEY, STATIONARY_KMH, FIX_MAX_AGE_MINUTES, REASSERT_INTERVAL_MS,
+  clearReassertMemory,
 };

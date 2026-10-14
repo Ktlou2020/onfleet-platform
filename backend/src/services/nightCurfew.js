@@ -229,7 +229,10 @@ async function arm(bikeId, deviceId, payload = {}, { at = new Date(), now = new 
 
   const confirmationAgeMs = now.getTime() - at.getTime();
   if (Math.abs(confirmationAgeMs) > MAX_ACTIONABLE_FIX_AGE_MS) {
-    console.warn(`[night-curfew] bike ${bikeId} moved in the window but only reported it ${Math.round(confirmationAgeMs / 60000)} minutes later — alert raised, not armed; this one is the control room's to decide`);
+    // log, not warn: Railway files a warn as an error, and this is an expected
+    // outcome being reported, not a fault. It was showing up in error
+    // dashboards on the first night it ever fired.
+    console.log(`[night-curfew] bike ${bikeId} moved in the window but only reported it ${Math.round(confirmationAgeMs / 60000)} minutes later — alert raised, not armed; this one is the control room's to decide`);
     return false;
   }
 

@@ -12,3 +12,9 @@ backend/uploads/*
 .vscode/
 .idea/
 *.swp
+
+# Theft case photographs. Deliberately outside the public uploads tree so the
+# unauthenticated /uploads route cannot reach them — see
+# backend/src/services/theftCasePhotos.js — which also puts them outside
+# whatever rule already ignores uploads/.
+backend/private/

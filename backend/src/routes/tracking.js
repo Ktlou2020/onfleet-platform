@@ -1422,6 +1422,7 @@ router.post('/devices/:id/commission', authRequired, adminOnly, async (req, res)
 
 const theftCases = require('../services/theftCaseService');
 const nightLock = require('../services/nightLock');
+const theftCasePhotos = require('../services/theftCasePhotos');
 const deviceHealth = require('../services/deviceHealth');
 
 router.get('/theft-cases', authRequired, trackingReadOnly, async (req, res) => {
@@ -1494,7 +1495,69 @@ router.get('/theft-cases/:id', authRequired, trackingReadOnly, async (req, res) 
       WHERE bike_id = $1 AND recorded_at >= $2::timestamptz - INTERVAL '15 minutes'
       ORDER BY recorded_at DESC LIMIT 500`,
     [theftCase.bike_id, theftCase.opened_at]);
-  res.json({ case: theftCase, events, alerts, pings });
+  const photos = await photosForCase(theftCase.id);
+  res.json({ case: theftCase, events, alerts, pings, photos });
+});
+
+const PHOTO_URL_BASE = '/tracking/theft-cases';
+const photosForCase = (caseId) => theftCasePhotos.forCase(caseId, PHOTO_URL_BASE);
+
+// ---------- Photographs on a theft case ----------
+//
+// A case could say a bike was recovered. It could not show it. These are the
+// sightings while it is open and the evidence of how it ended when it closes —
+// the set somebody is asked for a year later, by an insurer or a court.
+//
+// On trackingReadOnly rather than adminOnly, like notes and closing already
+// are: the control room works these cases at two in the morning, and a
+// photograph of the bike in a yard is worth no less for being taken by the
+// person who found it.
+router.post('/theft-cases/:id/photos', authRequired, trackingReadOnly,
+  theftCasePhotos.upload.single('photo'), async (req, res, next) => {
+    const caseId = Number(req.params.id);
+    const { rows } = await pgDb.query('SELECT id FROM theft_cases WHERE id = $1', [caseId]);
+    if (!rows[0]) {
+      await theftCasePhotos.discard(req.file);
+      return res.status(404).json({ error: 'Case not found' });
+    }
+    try {
+      const photo = await theftCasePhotos.record({
+        caseId,
+        file: req.file,
+        caption: String(req.body.caption || '').trim() || null,
+        stage: String(req.body.stage || 'sighting'),
+        actorId: req.user.id,
+        urlBase: PHOTO_URL_BASE,
+      });
+      await logAudit(req.user.id, 'theft_case.photo_upload', 'theft_cases', caseId,
+        { photo_id: photo.id, stage: photo.stage }, req.ip);
+      res.status(201).json({ photo });
+    } catch (e) {
+      await theftCasePhotos.discard(req.file);
+      // Only errors that named their own status are the caller's fault. A bare
+      // one is ours, and reporting a broken query as a 400 sends whoever is
+      // debugging it looking at the upload instead of at us.
+      if (!e.status) return next(e);
+      res.status(e.status).json({ error: e.message });
+    }
+  });
+
+router.get('/theft-cases/:id/photos/:photoId/image', authRequired, trackingReadOnly, async (req, res) => {
+  const photo = await theftCasePhotos.get({ caseId: req.params.id, photoId: req.params.photoId });
+  if (!photo) return res.status(404).json({ error: 'Photograph not found' });
+  if (await theftCasePhotos.sendTo(res, photo)) return;
+  return res.status(404).json({ error: 'Photograph not found' });
+});
+
+// Deleting evidence is an admin's call, not the control room's — the same line
+// claims already draws.
+router.delete('/theft-cases/:id/photos/:photoId', authRequired, adminOnly, async (req, res) => {
+  const photo = await theftCasePhotos.get({ caseId: req.params.id, photoId: req.params.photoId });
+  if (!photo) return res.status(404).json({ error: 'Photograph not found' });
+  await theftCasePhotos.remove(photo);
+  await logAudit(req.user.id, 'theft_case.photo_delete', 'theft_cases', Number(req.params.id),
+    { photo_id: photo.id }, req.ip);
+  res.json({ ok: true });
 });
 
 router.post('/theft-cases', authRequired, adminOnly, async (req, res) => {

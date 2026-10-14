@@ -28,6 +28,20 @@ function resolveUploadPath(relativePath) {
   return null;
 }
 
+// Files the /uploads route must never serve, whichever backend holds them.
+//
+// That route has no authorization check — an unguessable filename is its only
+// defence, as its own comment admits. Anything genuinely private is written
+// outside UPLOAD_DIRS.base so the disk path cannot reach it (see
+// services/theftCasePhotos.js), but an object store is one flat namespace: with
+// R2 configured, /uploads/private/theft-case-photos/<name> would fetch exactly
+// the key the uploader wrote. This closes that door too, so the two storage
+// backends cannot disagree about what is public.
+function isPrivateUpload(relativePath) {
+  const normalized = path.normalize(String(relativePath || '')).replace(/\\/g, '/').replace(/^\/+/, '');
+  return normalized === 'private' || normalized.startsWith('private/');
+}
+
 function sendMissingUpload(res, relativePath) {
   return res.status(404).format({
     'application/json': () => res.json({ error: 'Uploaded file not found', path: `/uploads/${relativePath}` }),
@@ -189,6 +203,7 @@ function buildApp() {
   }
   app.get(/^\/uploads\/(.+)$/, async (req, res) => {
     const relativePath = String(req.params[0] || '');
+    if (isPrivateUpload(relativePath)) return sendMissingUpload(res, relativePath);
     let absolutePath = resolveUploadPath(relativePath);
     if (!absolutePath) {
       try {
@@ -204,6 +219,7 @@ function buildApp() {
   });
   app.head(/^\/uploads\/(.+)$/, async (req, res) => {
     const relativePath = String(req.params[0] || '');
+    if (isPrivateUpload(relativePath)) return sendMissingUpload(res, relativePath);
     let absolutePath = resolveUploadPath(relativePath);
     if (!absolutePath) {
       try {

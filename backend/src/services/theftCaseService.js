@@ -77,8 +77,31 @@ async function closeCase({ caseId, status, note = null, policeReference = null, 
       RETURNING *`,
     [status, note, policeReference, actorId, caseId]);
   if (!rows[0]) return null;
-  await addEvent(caseId, 'closed', `Closed as ${status.replace(/_/g, ' ')}`, { status, note }, actorId);
+
+  // The photograph count goes on the closing event itself, not just into a
+  // gallery beside it. "Closed as recovered" and "Closed as recovered — 4
+  // photographs" are different claims a year later when an insurer asks, and
+  // the second one should not have to be reconstructed by counting rows.
+  const photos = await photoCount(caseId);
+  const summary = photos
+    ? `Closed as ${status.replace(/_/g, ' ')} — ${photos} photograph${photos === 1 ? '' : 's'}`
+    : `Closed as ${status.replace(/_/g, ' ')}`;
+  await addEvent(caseId, 'closed', summary, { status, note, photos }, actorId);
   return rows[0];
+}
+
+// Counted here rather than passed in by the caller, so the two consoles cannot
+// report different numbers for the same case. Never fails a close: a gallery
+// that cannot be counted is not a reason to leave a recovered bike's case open.
+async function photoCount(caseId) {
+  try {
+    const { rows } = await pgDb.query(
+      'SELECT COUNT(*)::int AS n FROM theft_case_photos WHERE case_id = $1', [caseId]);
+    return rows[0].n;
+  } catch (e) {
+    console.error('[theft-case] could not count photographs:', e.message);
+    return 0;
+  }
 }
 
 async function setStatus({ caseId, status, policeReference = null, actorId }) {

@@ -3,6 +3,7 @@ import api from '../../api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../auth';
 import { Badge, EmptyState, Loading, Modal, fmt, fmtDate, fmtDateTime } from '../../components/ui';
+import { CasePhotoStrip, CasePhotoPicker, uploadCasePhotos } from '../../components/TheftCasePhotos';
 import { canManageFleetSection } from './access';
 import { Siren, ShieldAlert, Plus } from 'lucide-react';
 
@@ -123,6 +124,8 @@ export default function FleetSecurity() {
   const [reporting, setReporting] = useState(null);      // { bike_id, reason }
   const [openCase, setOpenCase] = useState(null);        // { case, events }
   const [caseForm, setCaseForm] = useState({ status: '', police_reference: '', note: '', reinstate: true });
+  // Held until Save, so closing the modal without saving attaches nothing.
+  const [casePhotos, setCasePhotos] = useState([]);
   const [newNote, setNewNote] = useState('');
   const [filing, setFiling] = useState(null);            // new claim draft
   const [outcome, setOutcome] = useState(null);          // { claim, status, payout_amount, notes }
@@ -152,6 +155,8 @@ export default function FleetSecurity() {
 
   const openCases = useMemo(() => theft.filter((c) => !isClosed(c)).length, [theft]);
 
+  const isClosingStatus = (status) => CLOSING_STATUSES.some((s) => s.value === status);
+
   const showCase = async (id) => {
     try {
       const { data } = await api.get(`/fleet/theft-cases/${id}`);
@@ -163,6 +168,7 @@ export default function FleetSecurity() {
         reinstate: true,
       });
       setNewNote('');
+      setCasePhotos([]);
     } catch (err) {
       toast.error(err.response?.data?.error || 'Could not open that case');
     }
@@ -190,6 +196,24 @@ export default function FleetSecurity() {
   const saveCase = async () => {
     setBusy(true);
     try {
+      // The photographs go up before the status changes, and a failure stops
+      // the save. A case still open is obvious; one closed as recovered with
+      // the evidence missing is not, and whoever took the photographs would
+      // never find out.
+      if (casePhotos.length) {
+        const { failed } = await uploadCasePhotos({
+          base: '/fleet/theft-cases',
+          caseId: openCase.case.id,
+          files: casePhotos,
+          stage: isClosingStatus(caseForm.status) ? 'outcome' : 'sighting',
+        });
+        if (failed.length) {
+          toast.error(`${failed.length} of ${casePhotos.length} photographs did not upload — nothing has been saved, try again`);
+          setBusy(false);
+          return;
+        }
+        setCasePhotos([]);
+      }
       const { data } = await api.put(`/fleet/theft-cases/${openCase.case.id}/status`, {
         status: caseForm.status,
         police_reference: caseForm.police_reference || undefined,
@@ -418,13 +442,21 @@ export default function FleetSecurity() {
                        onChange={(e) => setCaseForm((f) => ({ ...f, police_reference: e.target.value }))} />
               </Field>
               <CaseOutcome bike={openCase.bike} status={caseForm.status} form={caseForm} setForm={setCaseForm} />
-              {CLOSING_STATUSES.some((s) => s.value === caseForm.status) && (
+              {isClosingStatus(caseForm.status) && (
                 <Field label="Closing note" hint="— what actually happened">
                   <textarea rows="2" style={{ width: '100%' }} value={caseForm.note}
                             placeholder="Found in Katlehong, rider unhurt"
                             onChange={(e) => setCaseForm((f) => ({ ...f, note: e.target.value }))} />
                 </Field>
               )}
+              <div style={{ marginBottom: 12 }}>
+                <CasePhotoPicker files={casePhotos} onChange={setCasePhotos} />
+                <div className="text-xs muted" style={{ marginTop: 4 }}>
+                  {caseForm.status === 'recovered'
+                    ? 'The bike as it came back — the plate, the damage, where it was found. This is the set an insurer asks for.'
+                    : 'A sighting, a cut lock, anything worth being able to show later.'}
+                </div>
+              </div>
               <div className="row" style={{ justifyContent: 'flex-end', gap: 8, marginBottom: 6 }}>
                 <button className="btn btn-sm" disabled={busy} onClick={saveCase}>
                   {busy ? 'Saving…' : 'Save'}
@@ -437,6 +469,14 @@ export default function FleetSecurity() {
               <strong>{String(openCase.case.status).replace(/_/g, ' ')}</strong>
               {openCase.case.closing_note ? ` — ${openCase.case.closing_note}` : ''}
             </p>
+          )}
+
+          {openCase.photos?.length > 0 && (
+            <>
+              <h3 style={{ marginTop: 18, marginBottom: 8 }}>Photographs</h3>
+              <CasePhotoStrip photos={openCase.photos} canDelete={canManage}
+                onDeleted={() => showCase(openCase.case.id)} />
+            </>
           )}
 
           <h3 style={{ marginTop: 18, marginBottom: 8 }}>The story so far</h3>

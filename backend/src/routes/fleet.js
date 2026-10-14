@@ -23,6 +23,7 @@ const { writeFleetOwnerContractSnapshot } = require('../services/contractsPg');
 const { insertImportedPaymentForFleet } = require('../services/csvImportsFleet');
 const asyncRouter = require('../utils/asyncRouter');
 const theftCases = require('../services/theftCaseService');
+const theftCasePhotos = require('../services/theftCasePhotos');
 
 const router = asyncRouter(express.Router());
 const PAYSTACK_BASE = 'https://api.paystack.co';
@@ -4495,7 +4496,12 @@ router.get('/theft-cases/:id', fleetSection('security', 'view'), async (req, res
     `SELECT e.id, e.kind, e.summary, e.created_at, u.full_name AS actor_name
        FROM theft_case_events e LEFT JOIN users u ON u.id = e.actor_id
       WHERE e.case_id = $1 ORDER BY e.created_at, e.id`, [theftCase.id]);
-  res.json({ case: theftCase, events, bike: await bikeStateForCase(theftCase.bike_id) });
+  res.json({
+    case: theftCase,
+    events,
+    bike: await bikeStateForCase(theftCase.bike_id),
+    photos: await theftCasePhotos.forCase(theftCase.id, FLEET_PHOTO_URL_BASE),
+  });
 });
 
 // Reporting a theft by hand. Most cases open themselves off a tamper or a
@@ -4566,6 +4572,67 @@ router.put('/theft-cases/:id/status', fleetSection('security', 'manage'), async 
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
+});
+
+// ------------------------------------------- theft case photographs ----
+//
+// The fleet owner's own copy of the same thing the operator console has. Every
+// one of these goes through scopedTheftCase first, which is the whole point:
+// a fleet owner may photograph and read their own cases and must not be able
+// to reach anybody else's, and the case id is checked against the bikes this
+// organisation owns before a file is written or a byte is served.
+const FLEET_PHOTO_URL_BASE = '/fleet/theft-cases';
+
+router.post('/theft-cases/:id/photos', fleetSection('security', 'manage'),
+  theftCasePhotos.upload.single('photo'), async (req, res, next) => {
+    const org = await getOrganizationOrThrow(req);
+    const theftCase = await scopedTheftCase(org, req.params.id);
+    if (!theftCase) {
+      await theftCasePhotos.discard(req.file);
+      return res.status(404).json({ error: 'Case not found' });
+    }
+    try {
+      const photo = await theftCasePhotos.record({
+        caseId: theftCase.id,
+        file: req.file,
+        caption: String(req.body.caption || '').trim() || null,
+        stage: String(req.body.stage || 'sighting'),
+        actorId: req.user.id,
+        urlBase: FLEET_PHOTO_URL_BASE,
+      });
+      await logAudit(req.user.id, 'fleet_owner.theft_case_photo_upload', 'theft_cases', theftCase.id,
+        { organization_id: org.id, photo_id: photo.id, stage: photo.stage }, req.ip);
+      res.status(201).json({ photo });
+    } catch (e) {
+      await theftCasePhotos.discard(req.file);
+      // Only errors that named their own status are the caller's fault. A bare
+      // one is ours, and reporting a broken query as a 400 sends whoever is
+      // debugging it looking at the upload instead of at us.
+      if (!e.status) return next(e);
+      res.status(e.status).json({ error: e.message });
+    }
+  });
+
+router.get('/theft-cases/:id/photos/:photoId/image', fleetSection('security', 'view'), async (req, res) => {
+  const org = await getOrganizationOrThrow(req);
+  const theftCase = await scopedTheftCase(org, req.params.id);
+  if (!theftCase) return res.status(404).json({ error: 'Photograph not found' });
+  const photo = await theftCasePhotos.get({ caseId: theftCase.id, photoId: req.params.photoId });
+  if (!photo) return res.status(404).json({ error: 'Photograph not found' });
+  if (await theftCasePhotos.sendTo(res, photo)) return;
+  return res.status(404).json({ error: 'Photograph not found' });
+});
+
+router.delete('/theft-cases/:id/photos/:photoId', fleetSection('security', 'manage'), async (req, res) => {
+  const org = await getOrganizationOrThrow(req);
+  const theftCase = await scopedTheftCase(org, req.params.id);
+  if (!theftCase) return res.status(404).json({ error: 'Photograph not found' });
+  const photo = await theftCasePhotos.get({ caseId: theftCase.id, photoId: req.params.photoId });
+  if (!photo) return res.status(404).json({ error: 'Photograph not found' });
+  await theftCasePhotos.remove(photo);
+  await logAudit(req.user.id, 'fleet_owner.theft_case_photo_delete', 'theft_cases', theftCase.id,
+    { organization_id: org.id, photo_id: photo.id }, req.ip);
+  res.json({ ok: true });
 });
 
 // ---------------------------------------------------------- claims ----

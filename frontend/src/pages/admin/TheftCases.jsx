@@ -7,6 +7,7 @@ import { ShieldAlert, Radio, RadioTower, Phone, MapPin, Zap, ZapOff, CheckCircle
 import api from '../../api';
 import { MAP_TILES } from '../../utils/mapTiles';
 import { Loading, Modal, fmtDateTime } from '../../components/ui';
+import { CasePhotoStrip, CasePhotoPicker, uploadCasePhotos } from '../../components/TheftCasePhotos';
 
 // The theft playbook. A case opens itself when a bike looks like it is being
 // taken; this is where the control room works it: where the bike is now, what
@@ -55,6 +56,9 @@ export default function TheftCases() {
   const [closing, setClosing] = useState(null); // status being closed as
   const [closeNote, setCloseNote] = useState('');
   const [policeRef, setPoliceRef] = useState('');
+  // Held locally until the close is confirmed, so cancelling leaves nothing
+  // attached to the case.
+  const [closePhotos, setClosePhotos] = useState([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -107,12 +111,41 @@ export default function TheftCases() {
   const setStatus = async (status, extra = {}) => {
     setBusy(status);
     try {
+      // Photographs first, and the case is not closed unless all of them
+      // landed. A case left open is obvious and fixable; one closed as
+      // recovered with the evidence missing is neither, and the person who
+      // just photographed the bike would have no way of knowing.
+      if (closePhotos.length) {
+        const { failed } = await uploadCasePhotos({
+          base: '/tracking/theft-cases', caseId: selectedId, files: closePhotos, stage: 'outcome',
+        });
+        if (failed.length) {
+          toast.error(`${failed.length} of ${closePhotos.length} photographs did not upload — the case is still open, try again`);
+          await loadDetail(selectedId);
+          return;
+        }
+      }
       await api.put(`/tracking/theft-cases/${selectedId}/status`, { status, ...extra });
       toast.success(`Case marked ${STATUS_STYLE[status]?.label?.toLowerCase() || status}`);
-      setClosing(null); setCloseNote(''); setPoliceRef('');
+      setClosing(null); setCloseNote(''); setPoliceRef(''); setClosePhotos([]);
       await Promise.all([load(), loadDetail(selectedId)]);
     } catch (e) {
       toast.error(e.response?.data?.error || 'Could not update the case');
+    } finally { setBusy(''); }
+  };
+
+  // A photograph taken while the case is still running: a sighting, a cut
+  // lock, a plate on a trailer.
+  const addSighting = async (files) => {
+    if (!files.length) return;
+    setBusy('photo');
+    try {
+      const { uploaded, failed } = await uploadCasePhotos({
+        base: '/tracking/theft-cases', caseId: selectedId, files, stage: 'sighting',
+      });
+      if (uploaded.length) toast.success(`${uploaded.length} photograph${uploaded.length === 1 ? '' : 's'} added`);
+      if (failed.length) toast.error(`${failed.length} did not upload`);
+      await loadDetail(selectedId);
     } finally { setBusy(''); }
   };
 
@@ -233,6 +266,22 @@ export default function TheftCases() {
               </div>
             )}
 
+            {(detail.photos?.length > 0 || !c.closed_at) && (
+              <div className="mt-3">
+                <h3 style={{ fontSize: 15, marginBottom: 8 }}>Photographs</h3>
+                {detail.photos?.length > 0
+                  ? <CasePhotoStrip photos={detail.photos} canDelete
+                      onDeleted={() => loadDetail(selectedId)} />
+                  : <div className="text-xs muted">None yet.</div>}
+                {!c.closed_at && (
+                  <div className="mt-2">
+                    <CasePhotoPicker files={[]} label="Add a sighting"
+                      onChange={(files) => addSighting(files)} />
+                  </div>
+                )}
+              </div>
+            )}
+
             <h3 style={{ fontSize: 15, marginTop: 18 }}>What happened</h3>
             <div style={{ borderLeft: '2px solid var(--border)', marginLeft: 6, paddingLeft: 14 }}>
               {[...detail.events].reverse().map((e) => {
@@ -250,7 +299,7 @@ export default function TheftCases() {
         )}
       </div>
 
-      <Modal isOpen={!!closing} onClose={() => setClosing(null)} title={closing === 'with_police' ? 'Hand to police' : `Close case as ${STATUS_STYLE[closing]?.label?.toLowerCase() || ''}`}>
+      <Modal isOpen={!!closing} onClose={() => { setClosing(null); setClosePhotos([]); }} title={closing === 'with_police' ? 'Hand to police' : `Close case as ${STATUS_STYLE[closing]?.label?.toLowerCase() || ''}`}>
         <div style={{ minWidth: 340 }}>
           {(closing === 'with_police' || closing === 'written_off') && (
             <>
@@ -261,11 +310,25 @@ export default function TheftCases() {
           <label className="label" style={{ fontSize: 12, marginTop: 10 }}>Note (optional)</label>
           <textarea rows={3} value={closeNote} onChange={(e) => setCloseNote(e.target.value)} style={{ width: '100%', resize: 'vertical' }}
             placeholder={closing === 'recovered' ? 'Where was it found, and who has it now?' : 'Anything worth knowing later'} />
+
+          {closing !== 'with_police' && (
+            <div className="mt-3">
+              <CasePhotoPicker files={closePhotos} onChange={setClosePhotos} />
+              <div className="text-xs muted" style={{ marginTop: 4 }}>
+                {closing === 'recovered'
+                  ? 'The bike as it came back — the plate, the damage, where it was found. This is the set an insurer asks for.'
+                  : 'Anything worth being able to show later.'}
+              </div>
+            </div>
+          )}
+
           <div className="row mt-3" style={{ justifyContent: 'flex-end', gap: 8 }}>
-            <button className="btn btn-sm btn-secondary" onClick={() => setClosing(null)}>Cancel</button>
+            <button className="btn btn-sm btn-secondary" onClick={() => { setClosing(null); setClosePhotos([]); }}>Cancel</button>
             <button className="btn btn-sm btn-primary" disabled={!!busy}
               onClick={() => setStatus(closing, { note: closeNote.trim() || null, police_reference: policeRef.trim() || null })}>
-              {busy ? 'Saving…' : 'Confirm'}
+              {busy ? 'Saving…' : closePhotos.length
+                ? `Confirm and upload ${closePhotos.length} photograph${closePhotos.length === 1 ? '' : 's'}`
+                : 'Confirm'}
             </button>
           </div>
         </div>

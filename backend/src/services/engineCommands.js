@@ -15,8 +15,14 @@
 // attempt — restore was silently never working. Omitting the timeout entirely
 // holds the state indefinitely until an explicit opposite command is sent,
 // which is what "stays cut until deactivated" requires.
-const CUT_BY_MODEL     = { fmb920: 'setdigout 1',   fmc920: 'setdigout 1',   fmb965: 'setdigout ? 1' };
-const RESTORE_BY_MODEL = { fmb920: 'setdigout 0',   fmc920: 'setdigout 0',   fmb965: 'setdigout ? 0' };
+//
+// The state block is one character per output with NO spaces between them:
+// '?1' is DOUT1 unchanged, DOUT2 on. The FMB965 commands used to be
+// 'setdigout ? 1' / 'setdigout ? 0' — a space there makes '?' the whole state
+// block and the digit a timeout, which the FMB965 rejects outright with
+// "ERR:Bad Syntax", so neither cut nor restore ever reached DOUT2.
+const CUT_BY_MODEL     = { fmb920: 'setdigout 1',   fmc920: 'setdigout 1',   fmb965: 'setdigout ?1' };
+const RESTORE_BY_MODEL = { fmb920: 'setdigout 0',   fmc920: 'setdigout 0',   fmb965: 'setdigout ?0' };
 
 function normalizeModel(model) {
   return String(model || '').toLowerCase().replace(/[^a-z0-9]/g, '');

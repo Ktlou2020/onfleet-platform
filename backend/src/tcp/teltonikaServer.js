@@ -252,6 +252,9 @@ async function storeRecords(imei, device, records) {
 // A command still unanswered when its connection closes, or after
 // COMMAND_REPLY_TIMEOUT_MS, is marked failed so it can't block the queue.
 const COMMAND_REPLY_TIMEOUT_MS = 2 * 60 * 1000;
+// How long a freshly connected device gets to send its first data packet
+// before queued commands are sent anyway.
+const CONNECT_FLUSH_FALLBACK_MS = Number(process.env.TELTONIKA_CONNECT_FLUSH_MS) || 10_000;
 
 function failCommands(ids, reason) {
   if (!ids.length) return Promise.resolve();
@@ -378,6 +381,34 @@ async function resendLostRestore(socket, imei, device) {
   console.log(`[Teltonika] Re-sending unanswered engine restore on reconnect for ${imei}`);
 }
 
+// Everything owed to a device that has just connected: queued commands, then
+// the engine-state re-assert.
+async function flushOnConnect(socket, imei, device) {
+  // Flush queued commands
+  const { rows: pending } = await pgDb.query(
+    `SELECT * FROM tracking_commands WHERE device_id=$1 AND status='pending' ORDER BY created_at ASC`,
+    [device.id]
+  );
+  for (const cmd of pending) dispatchCommand(socket, imei, cmd.id, cmd.command);
+
+  // setdigout does not survive a device power cycle — a rider can defeat
+  // an engine cut just by disconnecting/reconnecting the bike battery.
+  // Every reconnect is exactly when that would show up, so re-assert the
+  // cut here unconditionally (harmless if it was never actually lost)
+  // whenever this device is flagged as should-stay-cut.
+  if (device.engine_cut_active) {
+    const cutCmd = cutCommandForModel(device.model);
+    const { rows: cutCmdRows } = await pgDb.query(
+      `INSERT INTO tracking_commands (device_id, command, status, created_at) VALUES ($1,$2,'pending',NOW()) RETURNING id`,
+      [device.id, cutCmd]
+    );
+    dispatchCommand(socket, imei, cutCmdRows[0].id, cutCmd);
+    console.log(`[Teltonika] Re-asserting engine cut on reconnect for ${imei} (reason: ${device.engine_cut_reason || 'unknown'})`);
+  } else {
+    await resendLostRestore(socket, imei, device);
+  }
+}
+
 // ── Handle one TCP connection ─────────────────────────────────────────────────
 function handleConnection(socket) {
   const remoteAddress = socket.remoteAddress?.replace(/^::ffff:/, ''); // strip IPv6 wrapper
@@ -390,6 +421,15 @@ function handleConnection(socket) {
   // even while async DB ops are in flight (prevents interleaved writes)
   let processing = Promise.resolve();
   socket.inflight = [];
+  let flushTimer = null;
+  let flushed = false;
+
+  async function runConnectFlush() {
+    if (flushed || socket.destroyed) return;
+    flushed = true;
+    clearTimeout(flushTimer);
+    await flushOnConnect(socket, imei, cachedDevice);
+  }
 
   socket.setTimeout(300_000, () => socket.destroy());
 
@@ -423,29 +463,14 @@ function handleConnection(socket) {
         if (remoteAddress) deviceAddresses.set(imei, remoteAddress);
         await pgDb.query('UPDATE tracking_devices SET connected=TRUE, last_seen_at=NOW() WHERE imei=$1', [imei]);
         console.log(`[Teltonika] + ${imei} (${device.model})`);
-        // Flush queued commands
-        const { rows: pending } = await pgDb.query(
-          `SELECT * FROM tracking_commands WHERE device_id=$1 AND status='pending' ORDER BY created_at ASC`,
-          [device.id]
-        );
-        for (const cmd of pending) dispatchCommand(socket, imei, cmd.id, cmd.command);
-
-        // setdigout does not survive a device power cycle — a rider can defeat
-        // an engine cut just by disconnecting/reconnecting the bike battery.
-        // Every reconnect is exactly when that would show up, so re-assert the
-        // cut here unconditionally (harmless if it was never actually lost)
-        // whenever this device is flagged as should-stay-cut.
-        if (device.engine_cut_active) {
-          const cutCmd = cutCommandForModel(device.model);
-          const { rows: cutCmdRows } = await pgDb.query(
-            `INSERT INTO tracking_commands (device_id, command, status, created_at) VALUES ($1,$2,'pending',NOW()) RETURNING id`,
-            [device.id, cutCmd]
-          );
-          dispatchCommand(socket, imei, cutCmdRows[0].id, cutCmd);
-          console.log(`[Teltonika] Re-asserting engine cut on reconnect for ${imei} (reason: ${device.engine_cut_reason || 'unknown'})`);
-        } else {
-          await resendLostRestore(socket, imei, device);
-        }
+        // Queued commands wait for the device's first data packet. Written
+        // straight after the IMEI ack they went unanswered — the device does
+        // not take commands until it has sent its records — so the overnight
+        // lock and anything else queued while a bike was offline never landed.
+        // The timer covers a device that logs in with nothing to send.
+        flushTimer = setTimeout(() => {
+          processing = processing.then(runConnectFlush).catch(console.error);
+        }, CONNECT_FLUSH_FALLBACK_MS);
       } else {
         socket.write(Buffer.from([0x00]));
         console.log(`[Teltonika] rejected unknown IMEI ${imei}`);
@@ -490,6 +515,7 @@ function handleConnection(socket) {
           await storeRecords(imei, cachedDevice, parsed.pingRecords);
         }
         await pgDb.query('UPDATE tracking_devices SET connected=TRUE, last_seen_at=NOW() WHERE imei=$1', [imei]);
+        await runConnectFlush();
       }
 
       if (parsed.commandResponse) {
@@ -499,6 +525,7 @@ function handleConnection(socket) {
   }
 
   socket.on('close', () => {
+    clearTimeout(flushTimer);
     // Anything still awaiting a reply will never get one on this connection.
     failCommands(socket.inflight.splice(0).map((c) => c.id), 'No reply — connection closed');
     if (imei && connections.get(imei) === socket) {

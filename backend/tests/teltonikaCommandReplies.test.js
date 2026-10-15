@@ -28,6 +28,28 @@ function replyPacket(text) {
   return p;
 }
 
+function crc16(buf) {
+  let crc = 0;
+  for (const b of buf) {
+    crc ^= b;
+    for (let i = 0; i < 8; i++) crc = crc & 1 ? (crc >>> 1) ^ 0xa001 : crc >>> 1;
+  }
+  return crc;
+}
+
+// One Codec 8 record at 0,0 with no IO — enough for the server to ack it.
+function avlPacket() {
+  const rec = Buffer.alloc(8 + 1 + 15 + 2 + 4); // ts, priority, GPS, event+total IO, four empty IO groups
+  rec.writeUInt32BE(Math.floor(Date.now() / 4294967296), 0);
+  rec.writeUInt32BE(Date.now() % 4294967296, 4);
+  const data = Buffer.concat([Buffer.from([0x08, 0x01]), rec, Buffer.from([0x01])]);
+  const p = Buffer.alloc(8 + data.length + 4);
+  p.writeUInt32BE(data.length, 4);
+  data.copy(p, 8);
+  p.writeUInt32BE(crc16(data), 8 + data.length);
+  return p;
+}
+
 function commandsIn(buf) {
   const out = [];
   let o = 0;
@@ -40,7 +62,7 @@ function commandsIn(buf) {
   return out;
 }
 
-async function connectDevice(port) {
+async function connectDevice(port, { sendRecords = true } = {}) {
   const sock = net.connect(port, '127.0.0.1');
   let received = Buffer.alloc(0);
   sock.on('data', (d) => { received = Buffer.concat([received, d]); });
@@ -48,8 +70,11 @@ async function connectDevice(port) {
   const imei = Buffer.from(IMEI, 'ascii');
   const hello = Buffer.alloc(2); hello.writeUInt16BE(imei.length);
   sock.write(Buffer.concat([hello, imei]));
-  await wait(150);
-  return { sock, commands: () => commandsIn(received.slice(1)) };
+  await wait(100);
+  if (sendRecords) { sock.write(avlPacket()); await wait(150); }
+  // Skip the 1-byte login ack and the 4-byte record ack.
+  const commands = () => commandsIn(received.slice(sendRecords ? 5 : 1));
+  return { sock, commands };
 }
 
 describe.skipIf(!process.env.DATABASE_URL)('matching device replies to the commands they answer', () => {
@@ -82,7 +107,7 @@ describe.skipIf(!process.env.DATABASE_URL)('matching device replies to the comma
 
   it('credits a reply to the command it answers, not an older unanswered one', async () => {
     // Left at 'sent' by an earlier connection that died before the device answered.
-    const orphan = await queue('setdigout ? 1', 'sent', 60);
+    const orphan = await queue('setdigout ?1', 'sent', 60);
     const { sock } = await connectDevice(port);
 
     const cmd = await queue('getinfo');
@@ -97,10 +122,10 @@ describe.skipIf(!process.env.DATABASE_URL)('matching device replies to the comma
   });
 
   it('answers several queued commands in the order they were sent', async () => {
-    const a = await queue('setdigout ? 0');
+    const a = await queue('setdigout ?0');
     const b = await queue('getgps');
     const { sock, commands } = await connectDevice(port);
-    expect(commands()).toEqual(['setdigout ? 0', 'getgps']);
+    expect(commands()).toEqual(['setdigout ?0', 'getgps']);
 
     sock.write(replyPacket('DOUT1:0'));
     sock.write(replyPacket('GPS:0'));
@@ -123,18 +148,30 @@ describe.skipIf(!process.env.DATABASE_URL)('matching device replies to the comma
   });
 
   it('re-sends an engine restore that never got a reply when the device reconnects', async () => {
-    const lost = await queue('setdigout ? 0', 'failed', 5);
+    const lost = await queue('setdigout ?0', 'failed', 5);
     const { sock, commands } = await connectDevice(port);
 
-    expect(commands()).toEqual(['setdigout ? 0']);
+    expect(commands()).toEqual(['setdigout ?0']);
     const { rows } = await pgDb.query(
-      `SELECT id FROM tracking_commands WHERE device_id=$1 AND id <> $2 AND command='setdigout ? 0'`, [device.id, lost]);
+      `SELECT id FROM tracking_commands WHERE device_id=$1 AND id <> $2 AND command='setdigout ?0'`, [device.id, lost]);
     expect(rows).toHaveLength(1);
     sock.destroy();
   });
 
+  it('holds queued commands until the device has sent its first records', async () => {
+    await queue('setdigout ?1');
+    const { sock, commands } = await connectDevice(port, { sendRecords: false });
+    expect(commands()).toEqual([]);
+
+    sock.write(avlPacket());
+    await wait(150);
+    const { rows } = await pgDb.query(`SELECT status FROM tracking_commands WHERE device_id=$1`, [device.id]);
+    expect(rows.map((r) => r.status)).toEqual(['sent']);
+    sock.destroy();
+  });
+
   it('does not re-send a restore the device already confirmed', async () => {
-    await queue('setdigout ? 0', 'delivered', 5);
+    await queue('setdigout ?0', 'delivered', 5);
     const { sock, commands } = await connectDevice(port);
     expect(commands()).toEqual([]);
     sock.destroy();

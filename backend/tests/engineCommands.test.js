@@ -15,15 +15,22 @@ describe('engineCommands', () => {
   });
 
   it('maps FMB965 to digital output 2 (DOUT1 left unchanged via "?"), everything else to output 1', () => {
-    expect(cutCommandForModel('FMB965')).toBe('setdigout ? 1');
-    expect(restoreCommandForModel('FMB965')).toBe('setdigout ? 0');
+    expect(cutCommandForModel('FMB965')).toBe('setdigout ?1');
+    expect(restoreCommandForModel('FMB965')).toBe('setdigout ?0');
     expect(cutCommandForModel('FMB920')).toBe('setdigout 1');
     expect(cutCommandForModel('FMC920')).toBe('setdigout 1');
   });
 
+  it('writes the state block as one token — a space inside it is "ERR:Bad Syntax" on the FMB965', () => {
+    for (const model of ['FMB920', 'FMC920', 'FMB965', null]) {
+      expect(cutCommandForModel(model)).toMatch(/^setdigout [01?]+$/);
+      expect(restoreCommandForModel(model)).toMatch(/^setdigout [01?]+$/);
+    }
+  });
+
   it('is case-insensitive (tracking.js/fleet.js used to look up device.model verbatim and silently fall through to a default on any case mismatch)', () => {
-    expect(cutCommandForModel('fmb965')).toBe('setdigout ? 1');
-    expect(cutCommandForModel('Fmb965')).toBe('setdigout ? 1');
+    expect(cutCommandForModel('fmb965')).toBe('setdigout ?1');
+    expect(cutCommandForModel('Fmb965')).toBe('setdigout ?1');
   });
 
   it('falls back to output 1 for an unknown/other model', () => {

@@ -7,6 +7,20 @@ const require_ = createRequire(import.meta.url);
 const teltonika = require_('../src/tcp/teltonikaServer.js');
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Poll rather than sleep a fixed time: CI runners share one busy Postgres,
+// and a reply can take well over the 150ms that is plenty locally.
+async function until(check, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await check();
+    if (value) return value;
+    if (Date.now() > deadline) return value;
+    await wait(25);
+  }
+}
+
+const openSockets = [];
 const IMEI = '353201357807277';
 
 // Codec 12 replies carry no command id: a device answers the commands sent on
@@ -64,14 +78,15 @@ function commandsIn(buf) {
 
 async function connectDevice(port, { sendRecords = true } = {}) {
   const sock = net.connect(port, '127.0.0.1');
+  openSockets.push(sock);
   let received = Buffer.alloc(0);
   sock.on('data', (d) => { received = Buffer.concat([received, d]); });
   await new Promise((r) => sock.once('connect', r));
   const imei = Buffer.from(IMEI, 'ascii');
   const hello = Buffer.alloc(2); hello.writeUInt16BE(imei.length);
   sock.write(Buffer.concat([hello, imei]));
-  await wait(100);
-  if (sendRecords) { sock.write(avlPacket()); await wait(150); }
+  await until(() => received.length >= 1);
+  if (sendRecords) { sock.write(avlPacket()); await until(() => received.length >= 5); }
   // Skip the 1-byte login ack and the 4-byte record ack.
   const commands = () => commandsIn(received.slice(sendRecords ? 5 : 1));
   return { sock, commands };
@@ -92,6 +107,9 @@ describe.skipIf(!process.env.DATABASE_URL)('matching device replies to the comma
   });
 
   afterEach(async () => {
+    // A failed assertion skips a test's own sock.destroy(); without this the
+    // server waits on that connection forever and the hook times out.
+    openSockets.splice(0).forEach((s) => s.destroy());
     await new Promise((r) => server.close(r));
   });
 
@@ -112,9 +130,8 @@ describe.skipIf(!process.env.DATABASE_URL)('matching device replies to the comma
 
     const cmd = await queue('getinfo');
     expect(teltonika.sendCommand(IMEI, cmd, 'getinfo')).toBe(true);
-    await wait(50);
     sock.write(replyPacket('INI:2026/10/15 RTC:2026/10/15'));
-    await wait(150);
+    await until(async () => (await row(cmd)).status === 'delivered');
 
     expect(await row(cmd)).toEqual({ status: 'delivered', response: 'INI:2026/10/15 RTC:2026/10/15' });
     expect((await row(orphan)).status).not.toBe('delivered');
@@ -125,11 +142,12 @@ describe.skipIf(!process.env.DATABASE_URL)('matching device replies to the comma
     const a = await queue('setdigout ?0');
     const b = await queue('getgps');
     const { sock, commands } = await connectDevice(port);
+    await until(() => commands().length >= 2);
     expect(commands()).toEqual(['setdigout ?0', 'getgps']);
 
     sock.write(replyPacket('DOUT1:0'));
     sock.write(replyPacket('GPS:0'));
-    await wait(150);
+    await until(async () => (await row(b)).status === 'delivered');
 
     expect((await row(a)).response).toBe('DOUT1:0');
     expect((await row(b)).response).toBe('GPS:0');
@@ -140,9 +158,9 @@ describe.skipIf(!process.env.DATABASE_URL)('matching device replies to the comma
     const { sock } = await connectDevice(port);
     const cmd = await queue('getinfo');
     teltonika.sendCommand(IMEI, cmd, 'getinfo');
-    await wait(50);
+    await until(async () => (await row(cmd)).status === 'sent');
     sock.destroy();
-    await wait(150);
+    await until(async () => (await row(cmd)).status === 'failed');
 
     expect(await row(cmd)).toEqual({ status: 'failed', response: 'No reply — connection closed' });
   });
@@ -151,6 +169,7 @@ describe.skipIf(!process.env.DATABASE_URL)('matching device replies to the comma
     const lost = await queue('setdigout ?0', 'failed', 5);
     const { sock, commands } = await connectDevice(port);
 
+    await until(() => commands().length >= 1);
     expect(commands()).toEqual(['setdigout ?0']);
     const { rows } = await pgDb.query(
       `SELECT id FROM tracking_commands WHERE device_id=$1 AND id <> $2 AND command='setdigout ?0'`, [device.id, lost]);
@@ -161,18 +180,21 @@ describe.skipIf(!process.env.DATABASE_URL)('matching device replies to the comma
   it('holds queued commands until the device has sent its first records', async () => {
     await queue('setdigout ?1');
     const { sock, commands } = await connectDevice(port, { sendRecords: false });
+    await wait(300); // long enough for an immediate flush to have shown up
     expect(commands()).toEqual([]);
 
     sock.write(avlPacket());
-    await wait(150);
-    const { rows } = await pgDb.query(`SELECT status FROM tracking_commands WHERE device_id=$1`, [device.id]);
-    expect(rows.map((r) => r.status)).toEqual(['sent']);
+    const statuses = async () =>
+      (await pgDb.query(`SELECT status FROM tracking_commands WHERE device_id=$1`, [device.id])).rows.map((r) => r.status);
+    await until(async () => (await statuses())[0] === 'sent');
+    expect(await statuses()).toEqual(['sent']);
     sock.destroy();
   });
 
   it('does not re-send a restore the device already confirmed', async () => {
     await queue('setdigout ?0', 'delivered', 5);
     const { sock, commands } = await connectDevice(port);
+    await wait(300); // long enough for a re-send to have shown up
     expect(commands()).toEqual([]);
     sock.destroy();
   });

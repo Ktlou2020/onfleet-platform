@@ -7,7 +7,7 @@ const trackingEvents = require('../trackingEvents');
 const geofenceService = require('../services/geofenceService');
 const tripService = require('../services/tripService');
 const riskService = require('../services/riskService');
-const { cutCommandForModel } = require('../services/engineCommands');
+const { cutCommandForModel, restoreCommandForModel } = require('../services/engineCommands');
 
 // How far back a record may be timestamped and still be treated as describing
 // the present. Generous on purpose: a tracker that loses coverage buffers its
@@ -237,20 +237,53 @@ async function storeRecords(imei, device, records) {
   }
 }
 
+// ── Command reply tracking ────────────────────────────────────────────────────
+// Codec 12 replies carry no command id — a device answers the commands it was
+// sent on a connection in the order it got them. So replies are matched
+// against the commands written to *this socket*, oldest first.
+//
+// This used to match against the oldest 'sent' row in the database for the
+// IMEI. Any command that never got an answer — written into a connection that
+// had already died, or in flight when the server restarted — stayed 'sent'
+// forever, and from then on every reply was credited to that stale row
+// instead of the command it answered. The newest commands sat at "Sent"
+// indefinitely and their replies landed on the wrong history entries.
+//
+// A command still unanswered when its connection closes, or after
+// COMMAND_REPLY_TIMEOUT_MS, is marked failed so it can't block the queue.
+const COMMAND_REPLY_TIMEOUT_MS = 2 * 60 * 1000;
+
+function failCommands(ids, reason) {
+  if (!ids.length) return Promise.resolve();
+  return pgDb.query(
+    `UPDATE tracking_commands SET status='failed', response=COALESCE(response, $1)
+     WHERE id = ANY($2::int[]) AND status='sent'`,
+    [reason, ids]
+  ).catch(console.error);
+}
+
+function expireStaleInflight() {
+  const cutoff = Date.now() - COMMAND_REPLY_TIMEOUT_MS;
+  for (const socket of connections.values()) {
+    const inflight = socket.inflight;
+    if (!inflight?.length) continue;
+    const expired = [];
+    while (inflight.length && inflight[0].sentAt < cutoff) expired.push(inflight.shift().id);
+    failCommands(expired, 'No reply from device');
+  }
+}
+
 // ── Async: mark sent command as delivered ─────────────────────────────────────
-async function storeCommandResponse(imei, response) {
+async function storeCommandResponse(imei, response, socket) {
   console.log(`[Teltonika] ${imei} → ${response}`);
-  const { rows } = await pgDb.query(
-    `SELECT tc.id, tc.command FROM tracking_commands tc
-     JOIN tracking_devices td ON td.id = tc.device_id
-     WHERE td.imei=$1 AND tc.status='sent' ORDER BY tc.sent_at ASC LIMIT 1`,
-    [imei]
-  );
-  if (rows[0]) {
+  const answered = socket?.inflight?.shift();
+  if (answered) {
     await pgDb.query(
       `UPDATE tracking_commands SET status='delivered', response=$1, responded_at=NOW() WHERE id=$2`,
-      [response, rows[0].id]
+      [response, answered.id]
     );
+  } else {
+    console.warn(`[Teltonika] ${imei} reply with no command awaiting one — not attributed`);
   }
 
   // If this is a getgps response, parse the position and emit it as a real ping
@@ -314,6 +347,7 @@ async function storeCommandResponse(imei, response) {
 function dispatchCommand(socket, imei, cmdId, command) {
   try {
     socket.write(buildCommandPacket(command));
+    (socket.inflight ||= []).push({ id: cmdId, sentAt: Date.now() });
     pgDb.query(`UPDATE tracking_commands SET status='sent', sent_at=NOW() WHERE id=$1`, [cmdId])
       .catch(console.error);
     console.log(`[Teltonika] → ${imei}: ${command}`);
@@ -322,6 +356,26 @@ function dispatchCommand(socket, imei, cmdId, command) {
     pgDb.query(`UPDATE tracking_commands SET status='failed' WHERE id=$1`, [cmdId])
       .catch(console.error);
   }
+}
+
+// The mirror of the engine-cut re-assert: if the last engine command this
+// device was sent is a restore that never got a reply, the device may still
+// be holding the cut — re-send it rather than leave the bike immobilised.
+async function resendLostRestore(socket, imei, device) {
+  const restoreCmd = restoreCommandForModel(device.model);
+  const { rows } = await pgDb.query(
+    `SELECT command, status FROM tracking_commands
+     WHERE device_id=$1 AND command LIKE 'setdigout%' AND created_at > NOW() - INTERVAL '24 hours'
+     ORDER BY created_at DESC, id DESC LIMIT 1`,
+    [device.id]
+  );
+  if (rows[0]?.command !== restoreCmd || rows[0].status !== 'failed') return;
+  const { rows: ins } = await pgDb.query(
+    `INSERT INTO tracking_commands (device_id, command, status, created_at) VALUES ($1,$2,'pending',NOW()) RETURNING id`,
+    [device.id, restoreCmd]
+  );
+  dispatchCommand(socket, imei, ins[0].id, restoreCmd);
+  console.log(`[Teltonika] Re-sending unanswered engine restore on reconnect for ${imei}`);
 }
 
 // ── Handle one TCP connection ─────────────────────────────────────────────────
@@ -335,6 +389,7 @@ function handleConnection(socket) {
   // Serial processing queue: ensures data chunks are processed one at a time
   // even while async DB ops are in flight (prevents interleaved writes)
   let processing = Promise.resolve();
+  socket.inflight = [];
 
   socket.setTimeout(300_000, () => socket.destroy());
 
@@ -388,6 +443,8 @@ function handleConnection(socket) {
           );
           dispatchCommand(socket, imei, cutCmdRows[0].id, cutCmd);
           console.log(`[Teltonika] Re-asserting engine cut on reconnect for ${imei} (reason: ${device.engine_cut_reason || 'unknown'})`);
+        } else {
+          await resendLostRestore(socket, imei, device);
         }
       } else {
         socket.write(Buffer.from([0x00]));
@@ -436,12 +493,14 @@ function handleConnection(socket) {
       }
 
       if (parsed.commandResponse) {
-        await storeCommandResponse(imei, parsed.commandResponse);
+        await storeCommandResponse(imei, parsed.commandResponse, socket);
       }
     }
   }
 
   socket.on('close', () => {
+    // Anything still awaiting a reply will never get one on this connection.
+    failCommands(socket.inflight.splice(0).map((c) => c.id), 'No reply — connection closed');
     if (imei && connections.get(imei) === socket) {
       connections.delete(imei);
       pgDb.query('UPDATE tracking_devices SET connected=FALSE WHERE imei=$1', [imei]).catch(() => {});
@@ -470,6 +529,14 @@ function start(port) {
   _tcpPort = port;
   // Hydrate open trips from Postgres before accepting connections
   tripService.hydrateOpenTrips().catch(console.error);
+  // Replies to anything in flight before this process started can't arrive on
+  // a connection this process owns — close those rows out instead of leaving
+  // them at 'sent' forever.
+  pgDb.query(
+    `UPDATE tracking_commands SET status='failed', response=COALESCE(response, 'No reply — server restarted')
+     WHERE status='sent'`
+  ).catch(console.error);
+  setInterval(expireStaleInflight, 30_000).unref();
 
   const server = net.createServer(handleConnection);
   server.listen(port, () => console.log(`📡 Teltonika TCP server on :${port}`));

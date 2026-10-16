@@ -19,6 +19,7 @@ import {
 import api from '../../api';
 import toast from 'react-hot-toast';
 import { Modal, ConfirmModal } from '../../components/ui';
+import DevicePicker from '../../components/DevicePicker';
 import { ALERT_LABELS, ALERT_COLORS, ALERT_SEVERITY, ALERT_FILTER_GROUPS, CRITICAL_ALERT_TYPES } from '../../lib/alertMeta';
 import {
   SAST, fmtSASTtime, fmtSAST, fmtSASTshort, todayInSAST,
@@ -3304,18 +3305,11 @@ export default function Tracking({ readOnly = false, apiBase = '/tracking', tier
               <label style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', display: 'block', marginBottom: 6 }}>
                 Apply settings to
               </label>
-              <select
-                value={alertSettingsDeviceId || ''}
-                onChange={e => changeAlertSettingsDevice(e.target.value ? Number(e.target.value) : null)}
-                style={{ width: '100%', fontSize: 12, padding: '7px 10px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', cursor: 'pointer' }}
-              >
-                <option value="">All devices (global default)</option>
-                {devices.map(d => (
-                  <option key={d.id} value={d.id}>
-                    {d.label || d.imei}{d.registration ? ` — ${d.registration}` : ''}
-                  </option>
-                ))}
-              </select>
+              <DevicePicker
+                devices={devices}
+                value={alertSettingsDeviceId}
+                onChange={changeAlertSettingsDevice}
+              />
               {alertSettingsDeviceId && alertSettings.some(s => s.device_override) && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
                   <span style={{ fontSize: 11, color: '#6366f1' }}>

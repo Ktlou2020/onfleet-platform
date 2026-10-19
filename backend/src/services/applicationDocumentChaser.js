@@ -34,26 +34,30 @@ const REQUIRED_PAYSLIPS = 3;
 // that happening. Somebody turns it on, having looked at who it would reach.
 const SETTING_KEY = 'application_doc_chaser_enabled';
 
-let enabledCache = null;
+// Read fresh every sweep, deliberately not cached.
+//
+// Caching it would save one indexed lookup every fifteen minutes and cost the
+// thing that actually goes wrong: a value held in a process cannot be changed
+// from outside it. Switching this on in the database and finding the running
+// service still believes it is off — because something read the setting once
+// at boot — is a trap this codebase has now sprung twice in a day, on the
+// night lock and on the alert settings. A query per quarter hour is not worth
+// a switch that does not switch.
 async function isEnabled() {
-  if (enabledCache !== null) return enabledCache;
   try {
     const { rows } = await pgDb.query(
       'SELECT setting_value FROM app_settings WHERE setting_key = $1', [SETTING_KEY]);
-    enabledCache = rows.length ? rows[0].setting_value === 'true' : false;
+    return rows.length ? rows[0].setting_value === 'true' : false;
   } catch {
-    enabledCache = false;
+    return false;
   }
-  return enabledCache;
 }
-function reloadSettings() { enabledCache = null; }
 
 async function setEnabled(on) {
   await pgDb.query(
     `INSERT INTO app_settings (setting_key, setting_value, updated_at) VALUES ($1,$2,NOW())
      ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = NOW()`,
     [SETTING_KEY, on ? 'true' : 'false']);
-  enabledCache = !!on;
 }
 
 /**
@@ -206,6 +210,6 @@ async function run({ at = new Date(), dryRun = false, limit = 200, send = sendNo
 
 module.exports = {
   run, candidates, missingFrom, composeEmail,
-  isEnabled, setEnabled, reloadSettings,
+  isEnabled, setEnabled,
   SETTING_KEY, QUIET_MINUTES, MAX_AGE_DAYS, REQUIRED_PAYSLIPS,
 };

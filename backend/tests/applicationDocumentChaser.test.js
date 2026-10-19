@@ -60,7 +60,6 @@ describe.skipIf(!process.env.DATABASE_URL)('chasing outstanding application docu
 
   beforeEach(async () => {
     await resetAllPgTables();
-    chaser.reloadSettings();
     await chaser.setEnabled(true);
     rider = (await createPgUser({ role: 'rider', full_name: 'Thabo Mokoena' })).user;
     vi.restoreAllMocks();
@@ -208,6 +207,8 @@ describe.skipIf(!process.env.DATABASE_URL)('chasing outstanding application docu
       expect((await chaser.run()).sent, 'the rider was chased a second time').toBe(0);
     });
 
+    // Read from the database every sweep, so switching it off takes effect on
+    // the next one rather than on the next deploy.
     it('sends nothing at all while it is switched off', async () => {
       await chaser.setEnabled(false);
       await application();

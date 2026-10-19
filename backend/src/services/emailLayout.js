@@ -147,6 +147,7 @@ function labelForUrl(url, subject) {
   if (u.includes('statement')) return 'View your statement';
   if (u.includes('invoice')) return 'View your invoice';
   if (u.includes('/pay')) return 'Make a payment';
+  if (u.includes('/application')) return 'Upload your documents';
 
   const s = String(subject || '').toLowerCase();
   if (s.includes('set up your')) return 'Set your password';

@@ -7,6 +7,7 @@ const { sendNotification } = require('./notifierPg');
 const { recalcScheduleStatuses } = require('../utils/helpersPg');
 const { brand } = require('../brand');
 const nightLock = require('./nightLock');
+const applicationDocumentChaser = require('./applicationDocumentChaser');
 
 function creditedAmount(payment) {
   return Number(payment?.amount ?? payment?.net_amount ?? 0);
@@ -377,6 +378,18 @@ async function runScheduleRecalc() {
 
 function start() {
   cron.schedule('0 6 * * *', () => runDailyReminders().catch((error) => console.error('daily reminders failed', error)));
+
+  // Asking applicants for the documents they still owe us.
+  //
+  // Quarter-hourly rather than daily, because the point is to reach somebody
+  // while they still remember applying. The sweep itself is one indexed query
+  // over the open queue and sends nothing until an application has been quiet
+  // for an hour, so running it often costs nothing and waiting until tomorrow
+  // morning would cost the day.
+  cron.schedule('*/15 * * * *', () => {
+    applicationDocumentChaser.run().catch((error) =>
+      console.error('application document chaser failed', error));
+  });
   cron.schedule('5 0 * * *', () => runScheduleRecalc().catch((error) => console.error('schedule recalc failed', error)));
 
   // The overnight fleet lock, in Johannesburg time rather than the

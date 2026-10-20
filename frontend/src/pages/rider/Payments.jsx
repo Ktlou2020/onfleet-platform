@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { Loading, Badge, Modal, SearchInput, Pagination, fmt, fmtDate, EmptyState, matchesSearch, paginateItems } from '../../components/ui';
 import { trackAnalyticsEvent } from '../../analytics';
 import { CreditCard, AlertTriangle } from 'lucide-react';
+import MomoPay from '../../components/MomoPay';
 
 const calcFee = (amt) => +(Number(amt || 0) * 0.029 + 1).toFixed(2);
 const calcGross = (amt) => +(Number(amt || 0) + calcFee(amt)).toFixed(2);
@@ -28,6 +29,9 @@ export default function RiderPayments() {
   const [feeInfo, setFeeInfo] = useState(null);
   const [search, setSearch] = useState('');
   const [confirming, setConfirming] = useState(false);
+  // Offered only where MoMo is actually wired up; the rider's screen should
+  // not show a way to pay that cannot take their money.
+  const [momo, setMomo] = useState(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(8);
 
@@ -36,7 +40,17 @@ export default function RiderPayments() {
       setAgreements(r.data.agreements);
       if (r.data.agreements[0]) setSelected(r.data.agreements[0].id);
     });
+    // Silent on failure: MoMo simply does not appear. A rider should never
+    // see an error about a payment method they were not offered.
+    api.get('/momo/available').then((r) => setMomo(r.data)).catch(() => setMomo(null));
   }, []);
+
+  // Reloads the agreement after a MoMo payment so the balance and the
+  // payment list reflect it without the rider refreshing.
+  const reloadAgreement = () => {
+    if (!selected) return;
+    api.get(`/agreements/${selected}`).then((r) => setData(r.data)).catch(() => {});
+  };
 
   useEffect(() => {
     if (!selected) return;
@@ -153,6 +167,19 @@ export default function RiderPayments() {
                 >Pay off {fmt(data.summary.remaining)}</button>
               </div>
               <button className="btn btn-block" onClick={pay} disabled={busy}><CreditCard size={16} />{busy ? 'Redirecting…' : `Pay ${fmt(feeInfo?.gross || amount)} via Paystack`}</button>
+              {momo?.available && Number(amount) > 0 && (
+                <div className="mt-2" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <MomoPay
+                    agreementId={selected}
+                    amount={Number(amount)}
+                    savedMsisdn={momo.msisdn}
+                    onPaid={reloadAgreement}
+                  />
+                  <span className="text-xs muted" style={{ textAlign: 'center' }}>
+                    No card needed — approve it on your phone.
+                  </span>
+                </div>
+              )}
               <div className="muted text-xs mt-3">Recent transactions below show the rental amount credited separately from the gateway fee.</div>
             </>
           )}

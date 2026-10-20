@@ -60,6 +60,30 @@ async function handleCallback(req, res, direction) {
   }
 }
 
+/**
+ * Can this platform take a MoMo payment at all?
+ *
+ * Open to any signed-in user because the rider's screen has to decide whether
+ * to offer the button, and the answer is configuration rather than anything
+ * about them. Says nothing about keys, only whether there are any.
+ */
+router.get('/available', authRequired, async (req, res) => {
+  // The caller's own saved number comes back with it, so the rider's screen
+  // can offer "pay from this number" rather than asking somebody standing at
+  // a bike to type eleven digits they have already given us once.
+  const { rows } = await pgDb.query(
+    'SELECT momo_msisdn, momo_account_name, momo_verified_at FROM users WHERE id = $1', [req.user.id]);
+  res.json({
+    available: client.isConfigured('collection'),
+    payouts_available: client.isConfigured('disbursement'),
+    currency: client.currency(),
+    environment: client.env(),
+    msisdn: rows[0]?.momo_msisdn || null,
+    account_name: rows[0]?.momo_account_name || null,
+    verified: !!rows[0]?.momo_verified_at,
+  });
+});
+
 /** Is a number a real wallet, and whose? Asked before one is ever stored. */
 router.post('/verify', authRequired, async (req, res) => {
   try {

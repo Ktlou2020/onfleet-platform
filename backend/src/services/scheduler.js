@@ -8,6 +8,7 @@ const { recalcScheduleStatuses } = require('../utils/helpersPg');
 const { brand } = require('../brand');
 const nightLock = require('./nightLock');
 const applicationDocumentChaser = require('./applicationDocumentChaser');
+const momo = require('./momo/payments');
 
 function creditedAmount(payment) {
   return Number(payment?.amount ?? payment?.net_amount ?? 0);
@@ -378,6 +379,17 @@ async function runScheduleRecalc() {
 
 function start() {
   cron.schedule('0 6 * * *', () => runDailyReminders().catch((error) => console.error('daily reminders failed', error)));
+
+  // Bringing our view of MoMo into line with MTN's.
+  //
+  // The backstop to the callbacks, not a replacement for them. MTN's
+  // callbacks are unsigned and best-effort, and the failure they leave behind
+  // is the worst one this integration has: a rider's money taken and their
+  // bike still immobilised. Five minutes is the longest anybody should stand
+  // next to a bike that will not start after they have paid for it.
+  cron.schedule('*/5 * * * *', () => {
+    momo.reconcile().catch((error) => console.error('momo reconcile failed', error));
+  });
 
   // Asking applicants for the documents they still owe us.
   //

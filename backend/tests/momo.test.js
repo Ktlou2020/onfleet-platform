@@ -102,6 +102,41 @@ describe.skipIf(!process.env.DATABASE_URL)('MTN MoMo', () => {
       expect(rows[0].momo_reason).toMatch(/PAYER_NOT_FOUND/);
     });
 
+    // A rider on a patchy connection taps Pay, sees nothing, and taps again.
+    // Two prompts on the handset is two payments if they approve both, and
+    // the second is money we have to give back.
+    it('does not start a second prompt while one is in flight', async () => {
+      const calls = [];
+      vi.spyOn(client, 'requestToPay').mockImplementation(async (a) => { calls.push(a); return { status: 'PENDING' }; });
+      const args = {
+        userId: rider.id, organizationId: org.id, agreementId: agreement.id,
+        amount: 650, msisdn: '0821234567',
+      };
+      const first = await momo.collectFromRider(args);
+      const second = await momo.collectFromRider(args);
+
+      expect(calls, 'the rider got two payment prompts').toHaveLength(1);
+      expect(second.reference_id, 'the second tap started a different payment').toBe(first.reference_id);
+      expect(second.already_pending).toBe(true);
+      const { rows } = await pgDb.query('SELECT COUNT(*)::int AS n FROM momo_transactions');
+      expect(rows[0].n).toBe(1);
+    });
+
+    // Once the old one is dead, a fresh attempt is allowed through.
+    it('but does allow a fresh attempt once the old prompt has expired', async () => {
+      vi.spyOn(client, 'requestToPay').mockResolvedValue({ status: 'PENDING' });
+      const args = {
+        userId: rider.id, organizationId: org.id, agreementId: agreement.id,
+        amount: 650, msisdn: '0821234567',
+      };
+      const first = await momo.collectFromRider(args);
+      await pgDb.query(
+        `UPDATE momo_transactions SET requested_at = NOW() - ($1 || ' minutes')::interval WHERE id = $2`,
+        [String(momo.DUPLICATE_WINDOW_MINUTES + 1), first.id]);
+      const second = await momo.collectFromRider(args);
+      expect(second.reference_id).not.toBe(first.reference_id);
+    });
+
     it('will not collect against a number it cannot read', async () => {
       await expect(momo.collectFromRider({
         userId: rider.id, organizationId: org.id, amount: 650, msisdn: 'nonsense',

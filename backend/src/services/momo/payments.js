@@ -19,6 +19,15 @@ const { restoreEngine, deviceForBike } = require('../engineRestore');
 // transaction does, and a request we sent without recording its reference is
 // money we cannot ask MTN about.
 
+// How long a pending request-to-pay blocks another for the same agreement.
+//
+// A rider on a patchy connection taps Pay, sees nothing happen, and taps
+// again. Without this that is two prompts on their handset and, if they
+// approve both, two payments — and the second is money we have to give back
+// rather than money we can keep. MTN's own prompt expires well inside this,
+// so a request still pending after it is dead rather than waiting.
+const DUPLICATE_WINDOW_MINUTES = Number(process.env.MOMO_DUPLICATE_WINDOW_MINUTES || 15);
+
 const PLATFORM_FEE_RATE = Number(process.env.MOMO_FEE_RATE ?? 0.015);
 const PLATFORM_FEE_FIXED = Number(process.env.MOMO_FEE_FIXED ?? 0);
 
@@ -88,6 +97,18 @@ async function collectFromRider({
   const msisdn = normaliseMsisdn(rawMsisdn);
   if (!msisdn) throw Object.assign(new Error('No usable MoMo number for that rider'), { status: 400 });
   if (!(Number(amount) > 0)) throw Object.assign(new Error('Nothing to collect'), { status: 400 });
+
+  // One prompt at a time. Returns the request already in flight rather than
+  // refusing, so a second tap lands the rider's screen back on the payment
+  // they already started instead of showing them an error.
+  const { rows: inFlight } = await db.query(
+    `SELECT * FROM momo_transactions
+      WHERE direction = 'collection' AND status = 'pending'
+        AND user_id = $1 AND COALESCE(agreement_id, 0) = COALESCE($2, 0)
+        AND requested_at > NOW() - ($3 || ' minutes')::interval
+      ORDER BY requested_at DESC LIMIT 1`,
+    [userId, agreementId || null, String(DUPLICATE_WINDOW_MINUTES)]);
+  if (inFlight[0]) return { ...inFlight[0], already_pending: true };
 
   const referenceId = crypto.randomUUID();
   const externalId = reference || `RENT-${agreementId || userId}-${Date.now()}`;
@@ -289,5 +310,5 @@ async function balances() {
 module.exports = {
   collectFromRider, payOutToFleet, reconcile, applyStatus, settleCollection,
   verifyMsisdn, normaliseMsisdn, balances,
-  PLATFORM_FEE_RATE, PLATFORM_FEE_FIXED,
+  PLATFORM_FEE_RATE, PLATFORM_FEE_FIXED, DUPLICATE_WINDOW_MINUTES,
 };

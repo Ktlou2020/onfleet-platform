@@ -59,6 +59,7 @@ const AdminShell = lazy(() => import('./pages/admin/AdminShell'));
 const AdminDashboard = lazy(() => import('./pages/admin/Dashboard'));
 const PlatformDashboard = lazy(() => import('./pages/admin/PlatformDashboard'));
 const AdminApplications = lazy(() => import('./pages/admin/Applications'));
+const AdminMomo = lazy(() => import('./pages/admin/Momo'));
 const AdminApplicationDetail = lazy(() => import('./pages/admin/ApplicationDetail'));
 const AdminAgreements = lazy(() => import('./pages/admin/Agreements'));
 const AdminAgreementDetail = lazy(() => import('./pages/admin/AgreementDetail'));
@@ -238,6 +239,7 @@ export default function App() {
 
             <Route index element={isTelematicsConsole ? <PlatformDashboard /> : <AdminDashboard />} />
             <Route path="applications" element={fleetConsoleOnly(<AdminApplications />)} />
+            <Route path="momo" element={<AdminMomo />} />
             <Route path="applications/:id" element={fleetConsoleOnly(<AdminApplicationDetail />)} />
             <Route path="agreements" element={fleetConsoleOnly(<AdminAgreements />)} />
             <Route path="agreements/:id" element={fleetConsoleOnly(<AdminAgreementDetail />)} />

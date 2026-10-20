@@ -189,6 +189,41 @@ router.get('/transactions', authRequired, adminOnly, async (req, res) => {
   res.json({ transactions: rows });
 });
 
+/**
+ * Send a pending payout to the fleet owner's wallet.
+ *
+ * The wallet was already deducted when the request was raised, so this moves
+ * the money rather than deciding whether to. It refuses to send twice: a
+ * request that already has a transfer against it is left alone, because the
+ * failure mode of getting that wrong is paying somebody a second time.
+ */
+router.post('/payout/:id', authRequired, adminOnly, async (req, res) => {
+  const { rows } = await pgDb.query(
+    `SELECT p.*, o.momo_msisdn AS org_msisdn
+       FROM fleet_payout_requests p
+       JOIN organizations o ON o.id = p.organization_id
+      WHERE p.id = $1`, [Number(req.params.id)]);
+  const request = rows[0];
+  if (!request) return res.status(404).json({ error: 'No such payout request' });
+  if (request.status !== 'pending') return res.status(409).json({ error: `That payout is already ${request.status}` });
+  if (request.momo_transaction_id) return res.status(409).json({ error: 'A transfer has already been sent for that payout' });
+  if (request.payout_method !== 'momo') return res.status(400).json({ error: 'That payout is going to a bank account' });
+
+  try {
+    const tx = await momo.payOutToFleet({
+      payoutRequestId: request.id,
+      organizationId: request.organization_id,
+      amount: request.net_payout,
+      msisdn: request.momo_msisdn || request.org_msisdn,
+    });
+    await logAudit(req.user.id, 'momo.payout_sent', 'fleet_payout_requests', request.id,
+      { amount: request.net_payout, reference: tx.reference_id }, req.ip);
+    res.status(202).json({ reference: tx.reference_id, status: 'pending' });
+  } catch (e) {
+    res.status(e.status || 502).json({ error: e.message });
+  }
+});
+
 /** Ask MTN about everything outstanding, now rather than on the next sweep. */
 router.post('/reconcile', authRequired, adminOnly, async (req, res) => {
   try {

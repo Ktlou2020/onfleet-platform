@@ -3038,12 +3038,27 @@ router.post('/wallet/payout', fleetSection('wallet', 'manage'), async (req, res)
       });
     }
 
+    // A payout goes to a bank account or to a MoMo wallet, and the two want
+    // entirely different details. Default 'bank', because that is what every
+    // payout before this one was.
+    const payoutMethod = String(req.body.payout_method || 'bank').toLowerCase() === 'momo' ? 'momo' : 'bank';
+
     const bankAccountName = req.body.bank_account_name || org.bank_account_name;
     const bankName = req.body.bank_name || org.bank_name;
     const bankAccountNumber = req.body.bank_account_number || org.bank_account_number;
     const bankBranchCode = req.body.bank_branch_code || org.bank_branch_code;
 
-    if (!bankAccountName || !bankName || !bankAccountNumber) {
+    let momoMsisdn = null;
+    if (payoutMethod === 'momo') {
+      const momo = require('../services/momo/payments');
+      // Checked with MTN here rather than when the money is sent. A payout
+      // that fails at the transfer has already had the wallet deducted and a
+      // request raised, and somebody has to unpick both. A number MTN does
+      // not recognise should never get that far.
+      const check = await momo.verifyMsisdn(req.body.momo_msisdn || org.momo_msisdn);
+      if (!check.ok) return res.status(400).json({ error: check.reason || 'That MoMo number cannot be used' });
+      momoMsisdn = check.msisdn;
+    } else if (!bankAccountName || !bankName || !bankAccountNumber) {
       return res.status(400).json({ error: 'Bank account name, bank name, and account number are required' });
     }
 
@@ -3087,9 +3102,12 @@ router.post('/wallet/payout', fleetSection('wallet', 'manage'), async (req, res)
         if (deducted.rowCount !== 1) throw insufficient(fresh);
 
         const { rows: insertedRows } = await client.query(`INSERT INTO fleet_payout_requests
-          (organization_id, requested_by, amount_requested, withdrawal_fee, net_payout, status, bank_account_name, bank_name, bank_account_number, bank_branch_code)
-          VALUES ($1,$2,$3,$4,$5, 'pending',$6,$7,$8,$9) RETURNING id`,
-          [org.id, req.user.id, amount, withdrawalFee, netPayout, bankAccountName, bankName, bankAccountNumber, bankBranchCode || null]);
+          (organization_id, requested_by, amount_requested, withdrawal_fee, net_payout, status,
+           bank_account_name, bank_name, bank_account_number, bank_branch_code, payout_method, momo_msisdn)
+          VALUES ($1,$2,$3,$4,$5, 'pending',$6,$7,$8,$9,$10,$11) RETURNING id`,
+          [org.id, req.user.id, amount, withdrawalFee, netPayout,
+            bankAccountName, bankName, bankAccountNumber, bankBranchCode || null,
+            payoutMethod, momoMsisdn]);
 
         const reqId = insertedRows[0].id;
         await client.query(`INSERT INTO fleet_wallet_transactions

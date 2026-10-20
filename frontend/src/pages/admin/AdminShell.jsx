@@ -4,7 +4,7 @@ import { useAuth } from '../../auth';
 import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
 import NotificationBell from '../../components/NotificationBell';
-import { Package, LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell, Briefcase, ShieldCheck, PiggyBank, MapPin, UserCheck, Wrench, ShieldAlert, Gauge, Star, TrendingUp, Plug, Inbox, Repeat, MoreHorizontal, X, Siren, BookOpen, Layers, Landmark } from 'lucide-react';
+import { Package, LayoutDashboard, FileCheck, FileText, Bike, CreditCard, Users, ClipboardList, BrainCircuit, LogOut, UploadCloud, Bell, Briefcase, ShieldCheck, PiggyBank, MapPin, UserCheck, Wrench, ShieldAlert, Gauge, Star, TrendingUp, Plug, Inbox, Repeat, MoreHorizontal, X, Siren, BookOpen, Layers, Landmark, Smartphone } from 'lucide-react';
 import { brandFullName, isTelematicsConsole } from '../../brand';
 
 // The console for a company that runs its own motorcycles: the whole business
@@ -25,6 +25,7 @@ const FLEET_CONSOLE_NAV = [
   { to: '/admin/claims', label: 'Insurance Claims', icon: ShieldAlert },
   { to: '/admin/payments', label: 'Payments', icon: CreditCard },
   { to: '/admin/paystack-charges', label: 'Paystack charges', icon: Inbox },
+  { to: '/admin/momo', label: 'MTN MoMo', icon: Smartphone },
   { to: '/admin/paystack-subscriptions', label: 'Paystack subscriptions', icon: Repeat, superadminOnly: true },
   { to: '/admin/notifications', label: 'Notifications', icon: Bell },
   { to: '/admin/imports', label: 'CSV Imports', icon: UploadCloud },

@@ -5,21 +5,47 @@ import api from '../api';
 import Guide from './Guide';
 import { TRACKING_SECTIONS, ALERT_SEVERITIES, ESCALATION_ROUNDS } from '../lib/trackingGuideContent';
 import { ALERT_LABELS } from '../lib/alertMeta';
+import SupportContact from './SupportContact';
+import { brandName } from '../brand';
 
 // The GPS tracking guide. Two of its sections show the fleet as it is right
 // now rather than describing it: what the trackers are doing, and what is
 // sitting unanswered in the control room. Reading about the queue and looking
 // at the queue are the same action.
 
-function TrackerHealthNow() {
+function TrackerHealthNow({ fleet = false }) {
   const [health, setHealth] = useState(null);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
+    // The operator has a device-health endpoint that counts the whole estate.
+    // A fleet owner may not call it — and should not, since it counts other
+    // people's bikes — so theirs is derived from their own device list, which
+    // already carries the same status for each tracker.
+    if (fleet) {
+      api.get('/fleet/tracking/devices')
+        .then(({ data }) => {
+          const devices = Array.isArray(data) ? data : (data.devices || []);
+          const by = (p) => devices.filter(p).length;
+          const total = devices.length || 1;
+          const reporting = by((d) => d.device_status === 'active');
+          setHealth({
+            reporting,
+            reporting_pct: Math.round((reporting / total) * 100),
+            quiet: by((d) => d.device_status === 'sleeping'),
+            silent: by((d) => d.device_status === 'offline' && d.last_seen_at),
+            never_connected: by((d) => !d.last_seen_at),
+            uncommissioned: 0,
+            awaiting_install_proof: 0,
+          });
+        })
+        .catch(() => setFailed(true));
+      return;
+    }
     api.get('/tracking/device-health')
       .then(({ data }) => setHealth(data.summary))
       .catch(() => setFailed(true));
-  }, []);
+  }, [fleet]);
 
   if (failed) return null;
 
@@ -58,15 +84,15 @@ function TrackerHealthNow() {
   );
 }
 
-function OpenAlertsNow() {
+function OpenAlertsNow({ fleet = false }) {
   const [alerts, setAlerts] = useState(null);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    api.get('/tracking/alerts', { params: { status: 'open', limit: 200 } })
+    api.get(fleet ? '/fleet/tracking/alerts' : '/tracking/alerts', { params: { status: 'open', limit: 200 } })
       .then(({ data }) => setAlerts(data))
       .catch(() => setFailed(true));
-  }, []);
+  }, [fleet]);
 
   if (failed) return null;
 
@@ -133,14 +159,24 @@ function TrackerEndpointLine() {
 }
 
 export default function TrackingGuidePage({ portal = 'admin' }) {
+  // A fleet owner is reading this about their own bikes, not about a fleet
+  // they are operating on somebody's behalf, so the guide is addressed to them
+  // and named after the product they are signed into.
+  const isFleet = portal === 'fleet';
+
   return (
     <Guide
       guide="tracking"
       sections={TRACKING_SECTIONS}
       portal={portal}
-      title="GPS tracking guide"
-      intro="How to watch the map, answer an alert, work a theft, and keep the trackers honest."
-      widgets={{ trackerHealth: <TrackerHealthNow />, openAlerts: <OpenAlertsNow /> }}
+      title={isFleet ? `${brandName} Guide` : 'GPS tracking guide'}
+      intro={isFleet
+        ? 'How to watch your bikes on the map, answer an alert, work a theft, and keep your trackers honest.'
+        : 'How to watch the map, answer an alert, work a theft, and keep the trackers honest.'}
+      widgets={{
+        trackerHealth: <TrackerHealthNow fleet={isFleet} />,
+        openAlerts: <OpenAlertsNow fleet={isFleet} />,
+      }}
       footer={
         <>
           <div className="card mt-3">
@@ -175,7 +211,9 @@ export default function TrackingGuidePage({ portal = 'admin' }) {
             </div>
             <div className="card">
               <h3 style={{ marginTop: 0, fontSize: 15 }}><WifiOff size={14} /> A tracker that never connects</h3>
-              <TrackerEndpointLine />
+              {/* The ingest host and port are the operator's fitment detail.
+                  A fleet owner cannot act on them and does not need them. */}
+              {!isFleet && <TrackerEndpointLine />}
               <div className="text-sm muted">SIM active with data, and the network's APN set</div>
               <div className="text-sm muted">Wired to power and ignition</div>
               <div className="text-xs muted" style={{ marginTop: 6 }}>
@@ -184,12 +222,21 @@ export default function TrackingGuidePage({ portal = 'admin' }) {
             </div>
           </div>
 
-          <div className="card mt-3">
-            <h3 style={{ marginTop: 0, fontSize: 15 }}>Who to call</h3>
-            <div className="text-sm">Weekdays 08:00–17:00 — <strong>010 141 1165</strong></div>
-            <div className="text-sm">After hours, weekends and public holidays — <strong>081 539 5612</strong></div>
-            <div className="text-xs muted">An alert sent to the control room's systems carries whichever of these was on duty when it was raised.</div>
-          </div>
+          {isFleet ? (
+            <div className="mt-3">
+              <SupportContact
+                title="Need a hand?"
+                sub="Anything you cannot sort out from these screens."
+              />
+            </div>
+          ) : (
+            <div className="card mt-3">
+              <h3 style={{ marginTop: 0, fontSize: 15 }}>Who to call</h3>
+              <div className="text-sm">Weekdays 08:00–17:00 — <strong>010 141 1165</strong></div>
+              <div className="text-sm">After hours, weekends and public holidays — <strong>081 539 5612</strong></div>
+              <div className="text-xs muted">An alert sent to the control room&apos;s systems carries whichever of these was on duty when it was raised.</div>
+            </div>
+          )}
         </>
       }
     />

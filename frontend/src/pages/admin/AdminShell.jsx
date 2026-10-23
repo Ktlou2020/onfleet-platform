@@ -72,6 +72,7 @@ const TELEMATICS_CONSOLE_NAV = [
   { section: 'Billing' },
   { to: '/admin/paystack-subscriptions', label: 'Subscriptions', icon: Repeat },
   { to: '/admin/paystack-charges', label: 'Charges', icon: Inbox },
+  { to: '/admin/momo', label: 'MTN MoMo', icon: Smartphone },
   { to: '/admin/fleet-payouts', label: 'Payout requests', icon: PiggyBank },
   { section: 'System' },
   { to: '/admin/users', label: 'Users', icon: Users },

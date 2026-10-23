@@ -1,3 +1,5 @@
+import { brandName } from '../../brand';
+
 export const ADMIN_PORTAL_ROLES = ['admin', 'superadmin'];
 export const FLEET_OWNER_ROLES = ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'];
 
@@ -30,6 +32,13 @@ export const FLEET_RESOURCE_ACCESS = {
     manage: ['fleet_owner_admin', 'fleet_owner_ops']
   },
   help: {
+    view: ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'],
+    manage: []
+  },
+  // Open to everyone who can sign in. It describes screens rather than
+  // changing anything, and a viewer who may not read the manual for the
+  // screens in front of them is a strange place to draw a line.
+  guide: {
     view: ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'],
     manage: []
   },
@@ -112,6 +121,9 @@ export const FLEET_NAV_ITEMS = [
   // so a fleet that stops paying can still see its own bill. Only the label
   // and the destination changed when the flat plans were retired.
   { key: 'billing',    to: '/fleet/app/subscription',  label: 'Subscription' },
+  // Named after the product rather than after the hardware: a fleet owner is
+  // reading about how to run their bikes, not about GPS units.
+  { key: 'guide',      to: '/fleet/app/guide',         label: `${brandName} Guide` },
   { key: 'help',       to: '/fleet/app/help',          label: 'Help' },
 ];
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Bike, FileText, CreditCard, HelpCircle, LogOut, Users, Wallet, AlertTriangle, PiggyBank, AlertCircle, MapPin, Navigation, Key, Clock, X, MoreHorizontal, BarChart2, UserCog, Eye, Lock, Wrench, ClipboardList, Siren, History } from 'lucide-react';
+import { LayoutDashboard, Bike, BookOpen, FileText, CreditCard, HelpCircle, LogOut, Users, Wallet, AlertTriangle, PiggyBank, AlertCircle, MapPin, Navigation, Key, Clock, X, MoreHorizontal, BarChart2, UserCog, Eye, Lock, Wrench, ClipboardList, Siren, History } from 'lucide-react';
 import Logo from '../../components/Logo';
 import { SearchInput, matchesSearch } from '../../components/ui';
 import { useAuth } from '../../auth';
@@ -24,6 +24,7 @@ const navIconMap = {
   api_keys: Key,
   reporting: BarChart2,
   team: UserCog,
+  guide: BookOpen,
   help: HelpCircle,
   // The four added when fleet owners gained what the admin portal had. Every
   // one of them was falling through to the dashboard icon, so the menu showed

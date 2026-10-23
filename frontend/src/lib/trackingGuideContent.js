@@ -27,7 +27,7 @@ export const TRACKING_SECTIONS = [
         'It shows whether the live feed is connected. If it says offline, the map is still loading positions but not receiving them as they arrive.'],
     ],
     interactive: 'trackerHealth',
-    links: [{ label: 'Open the live map', to: '/admin/tracking', adminTo: '/admin/tracking' }],
+    links: [{ label: 'Open the live map', to: '/admin/tracking', adminTo: '/admin/tracking', fleetTo: '/fleet/app/tracking' }],
   },
   {
     id: 'alerts',
@@ -48,7 +48,7 @@ export const TRACKING_SECTIONS = [
         'One paid-off bike raised 964 of 1,073 idle alerts in a month. Alert types can be turned off per bike, or for the fleet.'],
     ],
     interactive: 'openAlerts',
-    links: [{ label: 'Open the control room', to: '/admin/alerts', adminTo: '/admin/alerts' }],
+    links: [{ label: 'Open the control room', to: '/admin/alerts', adminTo: '/admin/alerts', fleetTo: '/fleet/app/tracking', fleetLabel: 'Open your alerts' }],
   },
   {
     id: 'theft',
@@ -71,7 +71,7 @@ export const TRACKING_SECTIONS = [
       ['close', 'Close the case: recovered, false alarm, or written off.',
         'This is where the recovery rate comes from — the number the whole playbook exists to move.'],
     ],
-    links: [{ label: 'Open theft cases', to: '/admin/theft-cases', adminTo: '/admin/theft-cases' }],
+    links: [{ label: 'Open theft cases', to: '/admin/theft-cases', adminTo: '/admin/theft-cases', fleetTo: '/fleet/app/security' }],
   },
   {
     id: 'trackers',
@@ -91,7 +91,7 @@ export const TRACKING_SECTIONS = [
       ['coverage', 'Keep trackers on the bikes that are out with riders.',
         'Coverage counts active bikes only. A tracker on a paid-off bike is doing nothing for the fleet — and tracking a bike its owner has paid off needs their consent.'],
     ],
-    links: [{ label: 'Open the tracking dashboard', to: '/admin/tracking/dashboard', adminTo: '/admin/tracking/dashboard' }],
+    links: [{ label: 'Open the tracking dashboard', to: '/admin/tracking/dashboard', adminTo: '/admin/tracking/dashboard', fleetTo: '/fleet/app/tracking' }],
   },
   {
     id: 'geofences',

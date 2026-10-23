@@ -209,6 +209,7 @@ export default function App() {
             <Route path="workshop" element={<FleetRouteGate section="workshop"><FleetWorkshop /></FleetRouteGate>} />
             <Route path="workshop/diary" element={<FleetRouteGate section="workshop"><FleetWorkshopDiary /></FleetRouteGate>} />
             <Route path="applications" element={<FleetRouteGate section="applications"><FleetApplications /></FleetRouteGate>} />
+            <Route path="guide" element={<FleetRouteGate section="guide"><TrackingGuide portal="fleet" /></FleetRouteGate>} />
             <Route path="security" element={<FleetRouteGate section="security"><FleetSecurity /></FleetRouteGate>} />
             <Route path="activity" element={<FleetRouteGate section="activity"><FleetActivity /></FleetRouteGate>} />
             <Route path="team" element={<FleetRouteGate section="team"><FleetTeam /></FleetRouteGate>} />

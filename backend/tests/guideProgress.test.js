@@ -20,6 +20,43 @@ describe.skipIf(!process.env.DATABASE_URL)('the workshop guide\'s progress', () 
     admin = (await createPgUser({ role: 'admin', full_name: 'Kagiso T' })).user;
   });
 
+  // A fleet owner reads the same tracking guide from inside their own console,
+  // so they keep their own progress through it. Safe because a progress row
+  // belongs to one person and is read back by that person alone — there is no
+  // fleet's data in it to reach another fleet.
+  describe('a fleet owner reading the tracking guide', () => {
+    let owner;
+    beforeEach(async () => {
+      owner = (await createPgUser({ role: 'fleet_owner_admin', full_name: 'Moyo Owner' })).user;
+    });
+
+    it('can keep their own place in it', async () => {
+      expect((await read(owner, 'tracking')).status).toBe(200);
+      const ticked = await tick(owner, { step_key: 'live-map.open', guide: 'tracking' });
+      expect(ticked.status).toBe(200);
+      expect((await read(owner, 'tracking')).body.done).toContain('live-map.open');
+    });
+
+    it('and a viewer, who may read but not change anything else, can too', async () => {
+      const viewer = (await createPgUser({ role: 'fleet_owner_viewer' })).user;
+      expect((await read(viewer, 'tracking')).status).toBe(200);
+    });
+
+    // The team view is about who in an organisation has been brought on, and
+    // that is the operator's question about their own staff.
+    it('but cannot see whose team has worked through it', async () => {
+      const res = await request(app)
+        .get('/api/guide/progress/team?guide=tracking').set(authHeader(owner));
+      expect(res.status).toBe(403);
+    });
+
+    // One person's place in a guide is not another's, whoever they are.
+    it('and does not see anybody else\'s progress as their own', async () => {
+      await tick(technician, { step_key: 'job-card.odometer' });
+      expect((await read(owner)).body.done).toEqual([]);
+    });
+  });
+
   it('remembers a ticked step, and untickng it', async () => {
     expect((await read(technician)).body.done).toEqual([]);
 

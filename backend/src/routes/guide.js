@@ -4,22 +4,29 @@
 //
 // Separate from the guides themselves because they are read by different
 // people: the workshop guide by technicians, the tracking guide by the control
-// room. Any signed-in staff member can keep their own progress; only an admin
-// can see the team's.
+// room, and now the same tracking guide by a fleet owner reading it about
+// their own bikes. Anyone who can read a guide can keep their own progress;
+// only an admin can see the team's.
+//
+// Letting fleet owners in here is safe because a progress row belongs to one
+// user and is read back by that user alone — there is no fleet's data in it to
+// leak to another fleet. The team view stays adminOnly, and the frontend only
+// asks for it from the operator's console.
 
 const express = require('express');
 const pgDb = require('../pgDb');
-const { authRequired, adminOnly } = require('../middleware/auth');
+const { authRequired, adminOnly, FLEET_OWNER_ROLES } = require('../middleware/auth');
 const asyncRouter = require('../utils/asyncRouter');
 
 const router = asyncRouter(express.Router());
 
 const STAFF_ROLES = ['technician', 'control_room', 'admin', 'superadmin'];
+const READER_ROLES = [...STAFF_ROLES, ...FLEET_OWNER_ROLES];
 const GUIDES = ['workshop', 'tracking'];
 
-function staffOnly(req, res, next) {
+function guideReader(req, res, next) {
   if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
-  if (!STAFF_ROLES.includes(req.user.role)) return res.status(403).json({ error: 'Access denied' });
+  if (!READER_ROLES.includes(req.user.role)) return res.status(403).json({ error: 'Access denied' });
   next();
 }
 
@@ -28,7 +35,7 @@ const guideName = (value) => {
   return GUIDES.includes(guide) ? guide : null;
 };
 
-router.get('/progress', authRequired, staffOnly, async (req, res) => {
+router.get('/progress', authRequired, guideReader, async (req, res) => {
   const guide = guideName(req.query.guide);
   if (!guide) return res.status(400).json({ error: 'No such guide' });
   const { rows } = await pgDb.query(
@@ -36,7 +43,7 @@ router.get('/progress', authRequired, staffOnly, async (req, res) => {
   res.json({ guide, done: rows.map((r) => r.step_key) });
 });
 
-router.put('/progress', authRequired, staffOnly, async (req, res) => {
+router.put('/progress', authRequired, guideReader, async (req, res) => {
   const guide = guideName(req.body.guide);
   if (!guide) return res.status(400).json({ error: 'No such guide' });
   const stepKey = String(req.body.step_key || '').trim();

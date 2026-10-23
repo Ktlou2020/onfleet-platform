@@ -160,6 +160,11 @@ export default function Guide({
   const [filter, setFilter] = useState('');
   const [team, setTeam] = useState(null);
   const isAdmin = portal === 'admin';
+  // A fleet owner reads the same guide from inside their own console, so the
+  // links in it have to land on their screens rather than the operator's. A
+  // guide whose every button bounces you to a page you may not open is worse
+  // than no guide.
+  const isFleet = portal === 'fleet';
 
   const sections = useMemo(
     () => allSections.filter((s) => (isAdmin || s.forRole !== 'admin')),
@@ -286,8 +291,9 @@ export default function Guide({
                 {section.links && (
                   <div className="row mt-3" style={{ gap: 8, flexWrap: 'wrap' }}>
                     {section.links.map((link) => (
-                      <Link key={link.label} className="btn btn-sm btn-secondary" to={isAdmin ? link.adminTo : link.to}>
-                        {link.label}
+                      <Link key={link.label} className="btn btn-sm btn-secondary"
+                        to={isAdmin ? link.adminTo : (isFleet && link.fleetTo) || link.to}>
+                        {(isFleet && link.fleetLabel) || link.label}
                       </Link>
                     ))}
                   </div>

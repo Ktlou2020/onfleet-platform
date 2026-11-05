@@ -10,10 +10,10 @@ const ROSEBANK_DROP = { lat: -26.1400, lng: 28.0450, address: '5 Tyrwhitt Ave, R
 
 async function world() {
   const t = await setup();
-  const customer = t.api(await t.login('customer@verdant.africa'));
-  const merchant = t.api(await t.login('merchant1@verdant.africa'));
-  const rider = t.api(await t.login('rider1@verdant.africa'));
-  const admin = t.api(await t.login('admin@verdant.africa'));
+  const customer = t.api(await t.login('customer@cloud9.africa'));
+  const merchant = t.api(await t.login('merchant1@cloud9.africa'));
+  const rider = t.api(await t.login('rider1@cloud9.africa'));
+  const admin = t.api(await t.login('admin@cloud9.africa'));
   const store = (await request(t.app).get('/api/stores/rosebank-botanicals')).body;
   return { ...t, customer, merchant, rider, admin, store };
 }
@@ -71,7 +71,7 @@ describe('ordering', () => {
     const order = await placePaidOrder(w);
 
     // Another store cannot touch it.
-    const other = w.api(await w.login('merchant2@verdant.africa'));
+    const other = w.api(await w.login('merchant2@cloud9.africa'));
     expect((await other.post(`/api/merchant/orders/${order.id}/status`, { status: 'accepted' })).status).toBe(404);
 
     const accepted = await w.merchant.post(`/api/merchant/orders/${order.id}/status`, { status: 'accepted' });
@@ -138,7 +138,7 @@ describe('ordering', () => {
     await w.merchant.post(`/api/merchant/orders/${b.id}/status`, { status: 'accepted' });
     expect((await w.rider.post(`/api/rider/jobs/${a.id}/claim`)).status).toBe(200);
     expect((await w.rider.post(`/api/rider/jobs/${b.id}/claim`)).status).toBe(409);
-    const rider2 = w.api(await w.login('rider2@verdant.africa'));
+    const rider2 = w.api(await w.login('rider2@cloud9.africa'));
     expect((await rider2.post(`/api/rider/jobs/${a.id}/claim`)).status).toBe(409);
   });
 

@@ -2,13 +2,13 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 
 // ---- Brand: change the name here and it changes everywhere ---------------
 export const BRAND = {
-  name: 'Verdant',
+  name: 'Cloud 9',
   tagline: 'Delivered to your door in minutes',
-  support: 'help@verdant.africa',
+  support: 'help@cloud9.africa',
 };
 
 // ---- API ------------------------------------------------------------------
-const TOKEN_KEY = 'verdant.token';
+const TOKEN_KEY = 'cloud9.token';
 const safe = (fn, fallback = null) => { try { return fn(); } catch { return fallback; } };
 export const getToken = () => safe(() => localStorage.getItem(TOKEN_KEY));
 
@@ -71,7 +71,7 @@ export function AuthProvider({ children }) {
 export const useAuth = () => useContext(AuthCtx);
 
 // ---- Location: where the customer wants things delivered ----------------
-const LOC_KEY = 'verdant.location';
+const LOC_KEY = 'cloud9.location';
 const LocCtx = createContext(null);
 
 export function LocationProvider({ children }) {
@@ -85,7 +85,7 @@ export function LocationProvider({ children }) {
 export const useLoc = () => useContext(LocCtx);
 
 // ---- Basket: one store at a time, like every serious delivery app -------
-const CART_KEY = 'verdant.cart';
+const CART_KEY = 'cloud9.cart';
 const CartCtx = createContext(null);
 
 export function CartProvider({ children }) {

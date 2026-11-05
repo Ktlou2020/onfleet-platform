@@ -4,13 +4,13 @@ import { BRAND } from '../lib.jsx';
 // checkout and the ID check at the door.
 export default function AgeGate({ onConfirm }) {
   const yes = () => {
-    try { localStorage.setItem('verdant.adult', 'yes'); } catch { /* private mode */ }
+    try { localStorage.setItem('cloud9.adult', 'yes'); } catch { /* private mode */ }
     onConfirm();
   };
   return (
     <div className="gate">
       <div className="gate-card">
-        <div className="logo big"><span className="logo-mark">◆</span> {BRAND.name}</div>
+        <div className="logo big"><span className="logo-mark">☁</span> {BRAND.name}</div>
         <h1>Are you 18 or older?</h1>
         <p className="muted">You must be an adult to browse. We check your SA ID before your first order, and our riders check it again at the door.</p>
         <div className="gate-actions">

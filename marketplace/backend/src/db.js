@@ -2,9 +2,9 @@
 const path = require('path');
 const Database = require('better-sqlite3');
 
-// One connection per process. Tests pass ':memory:' through VERDANT_DB so
+// One connection per process. Tests pass ':memory:' through CLOUD9_DB so
 // each test file gets a clean database.
-function open(file = process.env.VERDANT_DB || path.join(__dirname, '..', 'verdant.db')) {
+function open(file = process.env.CLOUD9_DB || path.join(__dirname, '..', 'cloud9.db')) {
   const db = new Database(file);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');

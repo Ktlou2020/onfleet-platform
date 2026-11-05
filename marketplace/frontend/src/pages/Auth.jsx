@@ -5,10 +5,10 @@ import { BRAND, api, useAuth } from '../lib.jsx';
 const HOME_FOR = { merchant: '/merchant', rider: '/rider', admin: '/admin', customer: '/' };
 
 const DEMO = [
-  ['Customer', 'customer@verdant.africa'],
-  ['Store', 'merchant1@verdant.africa'],
-  ['Rider', 'rider1@verdant.africa'],
-  ['Admin', 'admin@verdant.africa'],
+  ['Customer', 'customer@cloud9.africa'],
+  ['Store', 'merchant1@cloud9.africa'],
+  ['Rider', 'rider1@cloud9.africa'],
+  ['Admin', 'admin@cloud9.africa'],
 ];
 
 export default function Auth() {

@@ -49,7 +49,7 @@ class OrderError extends Error {
 }
 
 function newCode() {
-  return 'V' + crypto.randomBytes(3).toString('hex').toUpperCase();
+  return 'C9' + crypto.randomBytes(3).toString('hex').toUpperCase();
 }
 
 function newHandoverCode() {

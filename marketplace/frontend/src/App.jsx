@@ -32,7 +32,7 @@ function Header({ onAddress }) {
   return (
     <header className="topbar">
       <Link to={user ? HOME_FOR[user.role] : '/'} className="logo" aria-label={`${BRAND.name} home`}>
-        <span className="logo-mark">◆</span> {BRAND.name}
+        <span className="logo-mark">☁</span> {BRAND.name}
       </Link>
       {customerSide && (
         <button className="addr-pill" onClick={onAddress}>
@@ -77,7 +77,7 @@ export default function App() {
   const { loc } = useLoc();
   const [addressOpen, setAddressOpen] = useState(false);
   const [adultConfirmed, setAdultConfirmed] = useState(() => {
-    try { return localStorage.getItem('verdant.adult') === 'yes'; } catch { return false; }
+    try { return localStorage.getItem('cloud9.adult') === 'yes'; } catch { return false; }
   });
   const { pathname } = useLocation();
   useEffect(() => { window.scrollTo(0, 0); }, [pathname]);

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Empty, STATUS, Spinner, api, rand, useAuth, useToast } from '../lib.jsx';
+import { Empty, STATUS, Spinner, api, rand, useAuth, useMeta, useToast } from '../lib.jsx';
 import { VerifyAge } from './Checkout.jsx';
 
 const maps = (lat, lng) => `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
@@ -8,6 +8,7 @@ function CurrentJob({ o, onChange, lastFix }) {
   const notify = useToast();
   const [code, setCode] = useState('');
   const [idChecked, setIdChecked] = useState(false);
+  const meta = useMeta();
   const run = async (path, body) => {
     try { await api(`/rider/jobs/${o.id}/${path}`, { method: 'POST', body }); onChange(); } catch (e) { notify(e.message, 'bad'); }
   };
@@ -37,7 +38,7 @@ function CurrentJob({ o, onChange, lastFix }) {
       <div className="actions">
         <a className="btn btn-ghost" href={maps(target.lat, target.lng)} target="_blank" rel="noreferrer">🧭 Navigate</a>
         {toDoor && o.customer.phone && <a className="btn btn-ghost" href={`tel:${o.customer.phone}`}>📞 Call</a>}
-        {import.meta.env.DEV && <button className="btn btn-ghost" onClick={simulate}>▶ Simulate move</button>}
+        {meta?.demo && <button className="btn btn-ghost" onClick={simulate}>▶ Simulate move</button>}
       </div>
 
       {['accepted', 'preparing'].includes(o.status) && <p className="banner">The store is packing — head over. You can collect once it's marked ready.</p>}

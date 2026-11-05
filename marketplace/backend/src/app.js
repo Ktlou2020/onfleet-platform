@@ -25,7 +25,10 @@ function slugify(s) {
 function createApp(db) {
   const app = express();
   app.set('trust proxy', 1);
-  app.use(helmet());
+  // Map tiles come from CARTO's CDN; everything else is same-origin.
+  app.use(helmet({
+    contentSecurityPolicy: { directives: { 'img-src': ["'self'", 'data:', 'https://*.basemaps.cartocdn.com'] } },
+  }));
   app.use(cors({ origin: process.env.CORS_ORIGIN?.split(',') || true }));
 
   const refund = (order) => {
@@ -179,6 +182,9 @@ function createApp(db) {
       deliveryHours: { open: st.deliveryOpenHour, close: st.deliveryCloseHour, openNow: compliance.deliveryWindowOpen(st) },
       fees: pricing.FEES,
       paymentProvider: payments.provider().name,
+      // Demo mode: simulated payments, so the one-tap demo logins and the
+      // rider's simulate-move button are safe to show.
+      demo: payments.provider().name === 'mock' && process.env.DEMO_MODE !== 'false',
     });
   });
 

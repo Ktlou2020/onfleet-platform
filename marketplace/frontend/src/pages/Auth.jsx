@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { BRAND, api, useAuth } from '../lib.jsx';
+import { BRAND, api, useAuth, useMeta } from '../lib.jsx';
 
 const HOME_FOR = { merchant: '/merchant', rider: '/rider', admin: '/admin', customer: '/' };
 
@@ -19,6 +19,7 @@ export default function Auth() {
   const { signIn } = useAuth();
   const navigate = useNavigate();
   const [params] = useSearchParams();
+  const meta = useMeta();
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -69,7 +70,7 @@ export default function Auth() {
           {mode === 'register' && <p className="muted small">By signing up you confirm you are 18 or older. We verify this with your SA ID before your first order.</p>}
         </form>
       </div>
-      {import.meta.env.DEV && (
+      {meta?.demo && (
         <div className="card">
           <p className="eyebrow">Demo accounts (password123)</p>
           <div className="chips">

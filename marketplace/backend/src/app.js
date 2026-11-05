@@ -1,0 +1,676 @@
+'use strict';
+const express = require('express');
+const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+
+const compliance = require('./compliance');
+const pricing = require('./pricing');
+const orders = require('./orders');
+const payments = require('./payments');
+
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-secret-change-me';
+if (process.env.NODE_ENV === 'production' && JWT_SECRET === 'dev-only-secret-change-me') {
+  throw new Error('Set JWT_SECRET in production');
+}
+
+const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
+function slugify(s) {
+  return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
+}
+
+function createApp(db) {
+  const app = express();
+  app.set('trust proxy', 1);
+  app.use(helmet());
+  app.use(cors({ origin: process.env.CORS_ORIGIN?.split(',') || true }));
+
+  const refund = (order) => {
+    payments.provider().refund(order).catch((e) => audit(null, 'refund_failed', { orderId: order.id, error: e.message }));
+  };
+
+  function audit(userId, action, detail) {
+    db.prepare('INSERT INTO audit_log (user_id, action, detail) VALUES (?, ?, ?)').run(userId, action, detail ? JSON.stringify(detail) : null);
+  }
+
+  // ---- Paystack webhook: needs the raw body for its signature ----------
+  app.post('/api/payments/paystack/webhook', express.raw({ type: '*/*' }), wrap(async (req, res) => {
+    if (!payments.paystack.verifyWebhook(req.body, req.get('x-paystack-signature'))) return res.sendStatus(401);
+    const event = JSON.parse(req.body.toString('utf8'));
+    if (event.event === 'charge.success') {
+      const order = db.prepare('SELECT * FROM orders WHERE payment_ref = ?').get(event.data.reference);
+      if (order) await settle(order, event.data.reference);
+    }
+    res.sendStatus(200);
+  }));
+
+  app.use(express.json({ limit: '200kb' }));
+
+  const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: 'draft-7', legacyHeaders: false });
+
+  // ---- Auth --------------------------------------------------------------
+  function sign(user) {
+    return jwt.sign({ sub: user.id, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
+  }
+
+  function publicUser(u) {
+    return { id: u.id, email: u.email, name: u.name, phone: u.phone, role: u.role, ageVerified: !!u.age_verified, dob: u.dob };
+  }
+
+  function auth(...roles) {
+    return (req, res, next) => {
+      const header = req.get('authorization') || '';
+      const token = header.startsWith('Bearer ') ? header.slice(7) : req.query.token;
+      if (!token) return res.status(401).json({ error: 'Please sign in' });
+      let payload;
+      try {
+        payload = jwt.verify(token, JWT_SECRET);
+      } catch {
+        return res.status(401).json({ error: 'Your session has expired — please sign in again' });
+      }
+      const user = db.prepare('SELECT * FROM users WHERE id = ?').get(payload.sub);
+      if (!user || user.suspended) return res.status(401).json({ error: 'This account is not active' });
+      if (roles.length && !roles.includes(user.role)) return res.status(403).json({ error: 'Not allowed' });
+      req.user = user;
+      next();
+    };
+  }
+
+  function requireAdult(req, res, next) {
+    if (!req.user.age_verified) return res.status(403).json({ error: 'Verify your age with your SA ID before continuing', code: 'AGE_UNVERIFIED' });
+    next();
+  }
+
+  app.post('/api/auth/register', authLimiter, wrap(async (req, res) => {
+    const { email, password, name, phone } = req.body || {};
+    const role = ['customer', 'merchant', 'rider'].includes(req.body?.role) ? req.body.role : 'customer';
+    if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address' });
+    if (!password || password.length < 8) return res.status(400).json({ error: 'Use a password of at least 8 characters' });
+    if (!name?.trim()) return res.status(400).json({ error: 'Enter your name' });
+    if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(email)) return res.status(409).json({ error: 'That email already has an account — sign in instead' });
+    const hash = await bcrypt.hash(password, 10);
+    const { lastInsertRowid } = db.prepare('INSERT INTO users (email, password_hash, name, phone, role) VALUES (?, ?, ?, ?, ?)')
+      .run(email.trim(), hash, name.trim(), phone?.trim() || null, role);
+    if (role === 'rider') db.prepare('INSERT INTO riders (user_id) VALUES (?)').run(lastInsertRowid);
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(lastInsertRowid);
+    audit(user.id, 'register', { role });
+    res.status(201).json({ token: sign(user), user: publicUser(user) });
+  }));
+
+  app.post('/api/auth/login', authLimiter, wrap(async (req, res) => {
+    const { email, password } = req.body || {};
+    const user = email && db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+    if (!user || !(await bcrypt.compare(password || '', user.password_hash))) return res.status(401).json({ error: 'Email or password is wrong' });
+    if (user.suspended) return res.status(403).json({ error: 'This account is suspended' });
+    res.json({ token: sign(user), user: publicUser(user) });
+  }));
+
+  app.get('/api/me', auth(), (req, res) => res.json({ user: publicUser(req.user) }));
+
+  app.post('/api/me/verify-age', auth(), authLimiter, (req, res) => {
+    const parsed = compliance.parseSaId(req.body?.idNumber);
+    if (!parsed.valid) return res.status(400).json({ error: parsed.reason });
+    if (!compliance.isAdult(parsed)) {
+      audit(req.user.id, 'age_check_failed', { age: parsed.age });
+      return res.status(403).json({ error: `You must be ${compliance.MIN_AGE} or older to use this service` });
+    }
+    const taken = db.prepare('SELECT id FROM users WHERE id_number = ? AND id <> ?').get(req.body.idNumber.replace(/\s/g, ''), req.user.id);
+    if (taken) return res.status(409).json({ error: 'That ID number is already linked to another account' });
+    db.prepare('UPDATE users SET id_number = ?, dob = ?, age_verified = 1 WHERE id = ?').run(req.body.idNumber.replace(/\s/g, ''), parsed.dob, req.user.id);
+    audit(req.user.id, 'age_verified');
+    res.json({ user: publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)) });
+  });
+
+  // ---- Catalogue ---------------------------------------------------------
+  const settings = () => compliance.getSettings(db);
+  const categoriesById = () => Object.fromEntries(db.prepare('SELECT * FROM categories').all().map((c) => [c.id, c]));
+
+  function productView(p, cat) {
+    return {
+      id: p.id, storeId: p.store_id, name: p.name, description: p.description, priceCents: p.price_cents, unit: p.unit,
+      inStock: p.stock > 0, stock: p.stock, thcPct: p.thc_pct, cbdPct: p.cbd_pct, strainType: p.strain_type,
+      category: { slug: cat.slug, name: cat.name, icon: cat.icon },
+    };
+  }
+
+  function storeSummary(s, origin) {
+    const rating = s.rating_count ? Math.round((s.rating_sum / s.rating_count) * 10) / 10 : null;
+    const out = {
+      id: s.id, slug: s.slug, name: s.name, description: s.description, address: s.address, accent: s.accent,
+      isOpen: !!s.is_open, rating, ratingCount: s.rating_count, prepMinutes: s.prep_minutes, city: s.city_slug,
+      lat: s.lat, lng: s.lng,
+    };
+    if (origin) {
+      const km = pricing.roadKm(s, origin);
+      out.distanceKm = km;
+      out.delivers = km <= s.delivery_radius_km;
+      out.etaMinutes = pricing.etaMinutes(km, s.prep_minutes);
+      out.deliveryFeeCents = pricing.deliveryFeeCents(km, 0);
+    }
+    return out;
+  }
+
+  function parseOrigin(q) {
+    const lat = Number(q.lat);
+    const lng = Number(q.lng);
+    return Number.isFinite(lat) && Number.isFinite(lng) && q.lat !== undefined && q.lng !== undefined ? { lat, lng } : null;
+  }
+
+  function sellableProducts(store, { categorySlug, q } = {}) {
+    const cats = categoriesById();
+    const st = settings();
+    return db.prepare('SELECT * FROM products WHERE store_id = ? AND active = 1 ORDER BY name').all(store.id)
+      .filter((p) => compliance.canSell({ category: cats[p.category_id], store, settings: st }).ok)
+      .filter((p) => !categorySlug || cats[p.category_id].slug === categorySlug)
+      .filter((p) => !q || `${p.name} ${p.description}`.toLowerCase().includes(q.toLowerCase()))
+      .map((p) => productView(p, cats[p.category_id]));
+  }
+
+  app.get('/api/meta', (req, res) => {
+    const st = settings();
+    res.json({
+      cities: db.prepare('SELECT slug, name, lat, lng FROM cities ORDER BY name').all(),
+      categories: db.prepare('SELECT slug, name, icon, regulated FROM categories ORDER BY sort').all()
+        .filter((c) => !c.regulated || st.regulatedSalesEnabled)
+        .map((c) => ({ slug: c.slug, name: c.name, icon: c.icon })),
+      deliveryHours: { open: st.deliveryOpenHour, close: st.deliveryCloseHour, openNow: compliance.deliveryWindowOpen(st) },
+      fees: pricing.FEES,
+      paymentProvider: payments.provider().name,
+    });
+  });
+
+  app.get('/api/stores', (req, res) => {
+    const origin = parseOrigin(req.query);
+    const rows = db.prepare(`
+      SELECT s.*, c.slug AS city_slug FROM stores s JOIN cities c ON c.id = s.city_id
+      WHERE s.status = 'approved' AND (? IS NULL OR c.slug = ?)
+    `).all(req.query.city || null, req.query.city || null);
+    let list = rows.map((s) => ({ ...storeSummary(s, origin), productCount: sellableProducts(s, { categorySlug: req.query.category }).length }))
+      .filter((s) => s.productCount > 0);
+    list.sort((a, b) => (b.isOpen - a.isOpen) || ((b.delivers ?? 1) - (a.delivers ?? 1)) || ((a.etaMinutes ?? 0) - (b.etaMinutes ?? 0)) || ((b.rating ?? 0) - (a.rating ?? 0)));
+    res.json({ stores: list });
+  });
+
+  app.get('/api/stores/:slug', (req, res) => {
+    const s = db.prepare(`SELECT s.*, c.slug AS city_slug FROM stores s JOIN cities c ON c.id = s.city_id WHERE s.slug = ? AND s.status = 'approved'`).get(req.params.slug);
+    if (!s) return res.status(404).json({ error: 'Store not found' });
+    const reviews = db.prepare(`
+      SELECT r.rating, r.comment, r.created_at, u.name FROM reviews r JOIN users u ON u.id = r.customer_id
+      WHERE r.store_id = ? ORDER BY r.id DESC LIMIT 10
+    `).all(s.id).map((r) => ({ ...r, name: r.name.split(' ')[0] }));
+    res.json({ store: storeSummary(s, parseOrigin(req.query)), products: sellableProducts(s), reviews });
+  });
+
+  app.get('/api/search', (req, res) => {
+    const q = String(req.query.q || '').trim();
+    const origin = parseOrigin(req.query);
+    const stores = db.prepare(`
+      SELECT s.*, c.slug AS city_slug FROM stores s JOIN cities c ON c.id = s.city_id
+      WHERE s.status = 'approved' AND (? IS NULL OR c.slug = ?)
+    `).all(req.query.city || null, req.query.city || null);
+    const results = [];
+    for (const s of stores) {
+      const summary = storeSummary(s, origin);
+      for (const p of sellableProducts(s, { q, categorySlug: req.query.category })) results.push({ ...p, store: summary });
+    }
+    results.sort((a, b) => (b.inStock - a.inStock) || ((a.store.etaMinutes ?? 0) - (b.store.etaMinutes ?? 0)));
+    res.json({ results: results.slice(0, 60) });
+  });
+
+  // ---- Basket → quote → order -------------------------------------------
+  function buildBasket(storeId, items) {
+    const store = db.prepare("SELECT * FROM stores WHERE id = ? AND status = 'approved'").get(storeId);
+    if (!store) throw new orders.OrderError('That store is not available', 404);
+    if (!Array.isArray(items) || !items.length) throw new orders.OrderError('Your basket is empty');
+    const cats = categoriesById();
+    const st = settings();
+    const merged = new Map();
+    for (const it of items) {
+      const qty = Number(it.qty);
+      if (!Number.isInteger(qty) || qty < 1 || qty > 20) throw new orders.OrderError('Quantities must be between 1 and 20');
+      merged.set(Number(it.productId), (merged.get(Number(it.productId)) || 0) + qty);
+    }
+    const lines = [];
+    for (const [productId, qty] of merged) {
+      const p = db.prepare('SELECT * FROM products WHERE id = ? AND store_id = ? AND active = 1').get(productId, store.id);
+      if (!p) throw new orders.OrderError('An item in your basket is no longer available');
+      if (!compliance.canSell({ category: cats[p.category_id], store, settings: st }).ok) throw new orders.OrderError(`${p.name} cannot be sold right now`);
+      if (p.stock < qty) throw new orders.OrderError(p.stock ? `Only ${p.stock} × ${p.name} left` : `${p.name} is sold out`, 409);
+      lines.push({ product: p, qty });
+    }
+    const subtotal = lines.reduce((sum, l) => sum + l.product.price_cents * l.qty, 0);
+    return { store, lines, subtotal };
+  }
+
+  function quoteFor(store, subtotal, dropoff) {
+    const lat = Number(dropoff?.lat);
+    const lng = Number(dropoff?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) throw new orders.OrderError('Choose a delivery address');
+    const km = pricing.roadKm(store, { lat, lng });
+    if (km > store.delivery_radius_km) throw new orders.OrderError(`${store.name} doesn't deliver that far (${km} km — limit ${store.delivery_radius_km} km)`);
+    return pricing.quote({ subtotalCents: subtotal, km, prepMinutes: store.prep_minutes });
+  }
+
+  app.post('/api/quote', wrap(async (req, res) => {
+    const { store, subtotal } = buildBasket(req.body.storeId, req.body.items);
+    res.json({ quote: quoteFor(store, subtotal, req.body) });
+  }));
+
+  app.post('/api/orders', auth('customer'), requireAdult, wrap(async (req, res) => {
+    const st = settings();
+    if (!compliance.deliveryWindowOpen(st)) {
+      return res.status(409).json({ error: `Deliveries run ${st.deliveryOpenHour}:00–${st.deliveryCloseHour}:00. Come back then!` });
+    }
+    const address = String(req.body.address || '').trim();
+    if (address.length < 5) return res.status(400).json({ error: 'Enter your full delivery address' });
+
+    const create = db.transaction(() => {
+      const { store, lines, subtotal } = buildBasket(req.body.storeId, req.body.items);
+      if (!store.is_open) throw new orders.OrderError(`${store.name} is closed right now`, 409);
+      const q = quoteFor(store, subtotal, req.body);
+      if (q.belowMinimum) throw new orders.OrderError(`The minimum order is R${q.minimumOrderCents / 100}`);
+      const { lastInsertRowid: id } = db.prepare(`
+        INSERT INTO orders (code, customer_id, store_id, status, subtotal_cents, delivery_fee_cents, service_fee_cents,
+          total_cents, vat_cents, address, lat, lng, distance_km, eta_minutes, notes, handover_code)
+        VALUES (?, ?, ?, 'pending_payment', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(orders.newCode(), req.user.id, store.id, q.subtotalCents, q.deliveryFeeCents, q.serviceFeeCents, q.totalCents, q.vatCents,
+        address, Number(req.body.lat), Number(req.body.lng), q.distanceKm, q.etaMinutes, String(req.body.notes || '').slice(0, 300), orders.newHandoverCode());
+      const insertItem = db.prepare('INSERT INTO order_items (order_id, product_id, name, price_cents, qty) VALUES (?, ?, ?, ?, ?)');
+      const reserve = db.prepare('UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?');
+      for (const l of lines) {
+        insertItem.run(id, l.product.id, l.product.name, l.product.price_cents, l.qty);
+        if (reserve.run(l.qty, l.product.id, l.qty).changes === 0) throw new orders.OrderError(`${l.product.name} just sold out`, 409);
+      }
+      orders.logEvent(db, id, 'pending_payment', null);
+      return id;
+    });
+    const id = create();
+    res.status(201).json({ order: orders.orderView(db, id, 'customer') });
+  }));
+
+  async function settle(order, reference) {
+    if (order.payment_status === 'paid' || order.status !== 'pending_payment') return;
+    db.prepare("UPDATE orders SET payment_status = 'paid', payment_ref = ? WHERE id = ?").run(reference, order.id);
+    orders.transition(db, order.id, 'system', 'placed', { note: 'Payment received' });
+  }
+
+  app.post('/api/orders/:id/pay', auth('customer'), wrap(async (req, res) => {
+    const order = db.prepare('SELECT * FROM orders WHERE id = ? AND customer_id = ?').get(req.params.id, req.user.id);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (order.status !== 'pending_payment') return res.status(409).json({ error: 'This order has already been paid or cancelled' });
+    const p = payments.provider();
+    const started = await p.start(order, req.user);
+    if (started.settleNow) {
+      await settle(order, started.reference);
+      return res.json({ order: orders.orderView(db, order.id, 'customer') });
+    }
+    db.prepare('UPDATE orders SET payment_ref = ? WHERE id = ?').run(started.reference, order.id);
+    res.json({ redirectUrl: started.redirectUrl });
+  }));
+
+  app.post('/api/orders/:id/verify-payment', auth('customer'), wrap(async (req, res) => {
+    const order = db.prepare('SELECT * FROM orders WHERE id = ? AND customer_id = ?').get(req.params.id, req.user.id);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (order.payment_ref && order.status === 'pending_payment') {
+      const v = await payments.provider().verify(order.payment_ref, order.total_cents);
+      if (v.ok) await settle(order, order.payment_ref);
+    }
+    res.json({ order: orders.orderView(db, order.id, 'customer') });
+  }));
+
+  app.get('/api/orders', auth('customer'), (req, res) => {
+    const ids = db.prepare('SELECT id FROM orders WHERE customer_id = ? ORDER BY id DESC LIMIT 50').all(req.user.id);
+    res.json({ orders: ids.map(({ id }) => orders.orderView(db, id, 'customer')) });
+  });
+
+  // Who is looking at this order, and in what capacity.
+  function viewerOf(user, order) {
+    if (user.role === 'admin') return 'admin';
+    if (user.role === 'customer' && order.customer_id === user.id) return 'customer';
+    if (user.role === 'rider' && order.rider_id === user.id) return 'rider';
+    if (user.role === 'merchant' && db.prepare('SELECT 1 FROM stores WHERE id = ? AND owner_id = ?').get(order.store_id, user.id)) return 'merchant';
+    return null;
+  }
+
+  app.get('/api/orders/:id', auth(), (req, res) => {
+    const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(req.params.id);
+    const viewer = order && viewerOf(req.user, order);
+    if (!viewer) return res.status(404).json({ error: 'Order not found' });
+    res.json({ order: orders.orderView(db, order.id, viewer) });
+  });
+
+  // Server-sent events: the tracking screen holds this open and gets the
+  // full order every time anything about it changes, including the rider
+  // moving.
+  app.get('/api/orders/:id/stream', auth(), (req, res) => {
+    const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(req.params.id);
+    const viewer = order && viewerOf(req.user, order);
+    if (!viewer) return res.status(404).json({ error: 'Order not found' });
+    res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+    res.flushHeaders();
+    const send = () => res.write(`data: ${JSON.stringify(orders.orderView(db, order.id, viewer))}\n\n`);
+    const onOrder = (id) => { if (id === order.id) send(); };
+    orders.bus.on('order', onOrder);
+    const ping = setInterval(() => res.write(': ping\n\n'), 25000);
+    send();
+    req.on('close', () => {
+      clearInterval(ping);
+      orders.bus.off('order', onOrder);
+    });
+  });
+
+  app.post('/api/orders/:id/cancel', auth('customer', 'admin'), (req, res) => {
+    const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(req.params.id);
+    if (!order || (req.user.role === 'customer' && order.customer_id !== req.user.id)) return res.status(404).json({ error: 'Order not found' });
+    orders.transition(db, order.id, req.user.role, 'cancelled', { note: String(req.body?.reason || 'Cancelled by ' + req.user.role).slice(0, 200), refund });
+    audit(req.user.id, 'order_cancelled', { orderId: order.id });
+    res.json({ order: orders.orderView(db, order.id, req.user.role === 'admin' ? 'admin' : 'customer') });
+  });
+
+  app.post('/api/orders/:id/review', auth('customer'), (req, res) => {
+    const order = db.prepare('SELECT * FROM orders WHERE id = ? AND customer_id = ?').get(req.params.id, req.user.id);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (order.status !== 'delivered') return res.status(409).json({ error: 'You can review once your order has arrived' });
+    const rating = Number(req.body?.rating);
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) return res.status(400).json({ error: 'Rating must be 1 to 5 stars' });
+    const add = db.transaction(() => {
+      db.prepare('INSERT INTO reviews (order_id, customer_id, store_id, rating, comment) VALUES (?, ?, ?, ?, ?)')
+        .run(order.id, req.user.id, order.store_id, rating, String(req.body.comment || '').slice(0, 500));
+      db.prepare('UPDATE stores SET rating_sum = rating_sum + ?, rating_count = rating_count + 1 WHERE id = ?').run(rating, order.store_id);
+    });
+    try {
+      add();
+    } catch (e) {
+      if (String(e.message).includes('UNIQUE')) return res.status(409).json({ error: 'You have already reviewed this order' });
+      throw e;
+    }
+    res.status(201).json({ order: orders.orderView(db, order.id, 'customer') });
+  });
+
+  // ---- Merchant ----------------------------------------------------------
+  const myStore = (userId) => db.prepare('SELECT * FROM stores WHERE owner_id = ?').get(userId);
+
+  function merchantStoreView(s) {
+    return {
+      ...storeSummary({ ...s, city_slug: db.prepare('SELECT slug FROM cities WHERE id = ?').get(s.city_id)?.slug }),
+      status: s.status, deliveryRadiusKm: s.delivery_radius_km, licenceNumber: s.licence_number,
+      licenceCategories: JSON.parse(s.licence_categories), licenceVerified: !!s.licence_verified,
+    };
+  }
+
+  app.get('/api/merchant/store', auth('merchant'), (req, res) => {
+    const s = myStore(req.user.id);
+    res.json({ store: s ? merchantStoreView(s) : null });
+  });
+
+  app.post('/api/merchant/store', auth('merchant'), requireAdult, (req, res) => {
+    if (myStore(req.user.id)) return res.status(409).json({ error: 'You already have a store' });
+    const b = req.body || {};
+    const city = db.prepare('SELECT * FROM cities WHERE slug = ?').get(b.city);
+    if (!city) return res.status(400).json({ error: 'Choose a city' });
+    if (!b.name?.trim() || !b.address?.trim()) return res.status(400).json({ error: 'Store name and address are required' });
+    const lat = Number(b.lat ?? city.lat);
+    const lng = Number(b.lng ?? city.lng);
+    let slug = slugify(b.name);
+    if (db.prepare('SELECT 1 FROM stores WHERE slug = ?').get(slug)) slug = `${slug}-${city.slug}-${Date.now() % 10000}`;
+    const { lastInsertRowid } = db.prepare(`
+      INSERT INTO stores (owner_id, slug, name, description, city_id, address, lat, lng, licence_number)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(req.user.id, slug, b.name.trim(), String(b.description || '').slice(0, 400), city.id, b.address.trim(), lat, lng, b.licenceNumber?.trim() || null);
+    audit(req.user.id, 'store_applied', { storeId: lastInsertRowid });
+    res.status(201).json({ store: merchantStoreView(db.prepare('SELECT * FROM stores WHERE id = ?').get(lastInsertRowid)) });
+  });
+
+  app.patch('/api/merchant/store', auth('merchant'), (req, res) => {
+    const s = myStore(req.user.id);
+    if (!s) return res.status(404).json({ error: 'No store yet' });
+    const b = req.body || {};
+    const next = {
+      is_open: b.isOpen === undefined ? s.is_open : b.isOpen ? 1 : 0,
+      description: b.description === undefined ? s.description : String(b.description).slice(0, 400),
+      prep_minutes: b.prepMinutes === undefined ? s.prep_minutes : Math.min(Math.max(Number(b.prepMinutes) || 10, 3), 60),
+      delivery_radius_km: b.deliveryRadiusKm === undefined ? s.delivery_radius_km : Math.min(Math.max(Number(b.deliveryRadiusKm) || 8, 1), 25),
+      licence_number: b.licenceNumber === undefined ? s.licence_number : String(b.licenceNumber).trim() || null,
+    };
+    // Changing the licence number puts it back in the review queue.
+    const licenceChanged = next.licence_number !== s.licence_number;
+    db.prepare(`UPDATE stores SET is_open = ?, description = ?, prep_minutes = ?, delivery_radius_km = ?, licence_number = ?,
+      licence_verified = CASE WHEN ? THEN 0 ELSE licence_verified END WHERE id = ?`)
+      .run(next.is_open, next.description, next.prep_minutes, next.delivery_radius_km, next.licence_number, licenceChanged ? 1 : 0, s.id);
+    res.json({ store: merchantStoreView(myStore(req.user.id)) });
+  });
+
+  app.get('/api/merchant/products', auth('merchant'), (req, res) => {
+    const s = myStore(req.user.id);
+    if (!s) return res.json({ products: [] });
+    const cats = categoriesById();
+    const st = settings();
+    const products = db.prepare('SELECT * FROM products WHERE store_id = ? ORDER BY active DESC, name').all(s.id).map((p) => {
+      const sell = compliance.canSell({ category: cats[p.category_id], store: s, settings: st });
+      return { ...productView(p, cats[p.category_id]), active: !!p.active, live: !!p.active && sell.ok, blockedReason: sell.ok ? null : sell.reason };
+    });
+    res.json({ products, categories: db.prepare('SELECT slug, name, icon, regulated FROM categories ORDER BY sort').all() });
+  });
+
+  function productInput(b, existing = {}) {
+    const cat = b.category ? db.prepare('SELECT * FROM categories WHERE slug = ?').get(b.category) : null;
+    if (b.category && !cat) throw new orders.OrderError('Unknown category');
+    const price = b.priceCents === undefined ? existing.price_cents : Math.round(Number(b.priceCents));
+    if (!Number.isInteger(price) || price <= 0) throw new orders.OrderError('Enter a price above R0');
+    const stock = b.stock === undefined ? existing.stock ?? 0 : Math.round(Number(b.stock));
+    if (!Number.isInteger(stock) || stock < 0) throw new orders.OrderError('Stock cannot be negative');
+    const name = b.name === undefined ? existing.name : String(b.name).trim();
+    if (!name) throw new orders.OrderError('Enter a product name');
+    const num = (v, old) => (v === undefined ? old ?? null : v === null || v === '' ? null : Number(v));
+    return {
+      category_id: cat ? cat.id : existing.category_id,
+      name, price_cents: price, stock,
+      description: b.description === undefined ? existing.description ?? '' : String(b.description).slice(0, 600),
+      unit: b.unit === undefined ? existing.unit ?? 'each' : String(b.unit).slice(0, 20),
+      thc_pct: num(b.thcPct, existing.thc_pct), cbd_pct: num(b.cbdPct, existing.cbd_pct),
+      strain_type: b.strainType === undefined ? existing.strain_type ?? null : b.strainType || null,
+      active: b.active === undefined ? existing.active ?? 1 : b.active ? 1 : 0,
+    };
+  }
+
+  app.post('/api/merchant/products', auth('merchant'), (req, res) => {
+    const s = myStore(req.user.id);
+    if (!s) return res.status(404).json({ error: 'Set up your store first' });
+    if (!req.body?.category) return res.status(400).json({ error: 'Choose a category' });
+    const p = productInput(req.body);
+    const { lastInsertRowid } = db.prepare(`
+      INSERT INTO products (store_id, category_id, name, description, price_cents, unit, stock, thc_pct, cbd_pct, strain_type, active)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(s.id, p.category_id, p.name, p.description, p.price_cents, p.unit, p.stock, p.thc_pct, p.cbd_pct, p.strain_type, p.active);
+    res.status(201).json({ id: lastInsertRowid });
+  });
+
+  app.patch('/api/merchant/products/:id', auth('merchant'), (req, res) => {
+    const s = myStore(req.user.id);
+    const existing = s && db.prepare('SELECT * FROM products WHERE id = ? AND store_id = ?').get(req.params.id, s.id);
+    if (!existing) return res.status(404).json({ error: 'Product not found' });
+    const p = productInput(req.body || {}, existing);
+    db.prepare(`UPDATE products SET category_id = ?, name = ?, description = ?, price_cents = ?, unit = ?, stock = ?,
+      thc_pct = ?, cbd_pct = ?, strain_type = ?, active = ? WHERE id = ?`)
+      .run(p.category_id, p.name, p.description, p.price_cents, p.unit, p.stock, p.thc_pct, p.cbd_pct, p.strain_type, p.active, existing.id);
+    res.json({ ok: true });
+  });
+
+  app.get('/api/merchant/orders', auth('merchant'), (req, res) => {
+    const s = myStore(req.user.id);
+    if (!s) return res.json({ orders: [], stats: null });
+    const ids = db.prepare(`SELECT id FROM orders WHERE store_id = ? AND status <> 'pending_payment' ORDER BY
+      CASE WHEN status IN ('placed','accepted','preparing','ready','picked_up') THEN 0 ELSE 1 END, id DESC LIMIT 80`).all(s.id);
+    const stats = db.prepare(`
+      SELECT COUNT(*) AS orders, COALESCE(SUM(subtotal_cents), 0) AS sales_cents
+      FROM orders WHERE store_id = ? AND status = 'delivered' AND date(delivered_at) = date('now')
+    `).get(s.id);
+    res.json({ orders: ids.map(({ id }) => orders.orderView(db, id, 'merchant')), stats: { todayOrders: stats.orders, todaySalesCents: stats.sales_cents } });
+  });
+
+  app.post('/api/merchant/orders/:id/status', auth('merchant'), (req, res) => {
+    const s = myStore(req.user.id);
+    const order = s && db.prepare('SELECT * FROM orders WHERE id = ? AND store_id = ?').get(req.params.id, s.id);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    orders.transition(db, order.id, 'merchant', req.body?.status, { note: req.body?.reason, refund });
+    res.json({ order: orders.orderView(db, order.id, 'merchant') });
+  });
+
+  // ---- Rider -------------------------------------------------------------
+  function riderRow(userId) {
+    return db.prepare('SELECT * FROM riders WHERE user_id = ?').get(userId);
+  }
+
+  function setLocation(userId, lat, lng) {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    db.prepare("UPDATE riders SET lat = ?, lng = ?, located_at = datetime('now') WHERE user_id = ?").run(lat, lng, userId);
+    const active = db.prepare("SELECT id FROM orders WHERE rider_id = ? AND status IN ('ready','picked_up')").all(userId);
+    for (const { id } of active) orders.bus.emit('order', id);
+  }
+
+  app.post('/api/rider/status', auth('rider'), requireAdult, (req, res) => {
+    const online = req.body?.online ? 1 : 0;
+    db.prepare('UPDATE riders SET online = ?, vehicle = COALESCE(?, vehicle), plate = COALESCE(?, plate) WHERE user_id = ?')
+      .run(online, req.body?.vehicle || null, req.body?.plate || null, req.user.id);
+    setLocation(req.user.id, Number(req.body?.lat), Number(req.body?.lng));
+    // Coming online picks up the oldest unassigned job in range, if any.
+    if (online) {
+      const waiting = db.prepare("SELECT id FROM orders WHERE rider_id IS NULL AND status IN ('accepted','preparing','ready') ORDER BY id").all();
+      for (const { id } of waiting) if (orders.autoDispatch(db, id) === req.user.id) break;
+    }
+    res.json({ rider: riderRow(req.user.id) });
+  });
+
+  app.post('/api/rider/location', auth('rider'), (req, res) => {
+    setLocation(req.user.id, Number(req.body?.lat), Number(req.body?.lng));
+    res.json({ ok: true });
+  });
+
+  app.get('/api/rider/jobs', auth('rider'), (req, res) => {
+    const r = riderRow(req.user.id);
+    const current = db.prepare(`SELECT id FROM orders WHERE rider_id = ? AND status IN (${orders.RIDER_ACTIVE.map(() => '?').join(',')})`).all(req.user.id, ...orders.RIDER_ACTIVE);
+    const open = db.prepare("SELECT id FROM orders WHERE rider_id IS NULL AND status IN ('accepted','preparing','ready') ORDER BY id").all()
+      .map(({ id }) => orders.orderView(db, id, 'rider'))
+      .map((o) => ({ ...o, pickupKm: r?.lat != null ? pricing.roadKm(o.store, r) : null }))
+      .filter((o) => o.pickupKm == null || o.pickupKm <= 15);
+    const earnings = db.prepare(`SELECT COUNT(*) AS trips, COALESCE(SUM(delivery_fee_cents), 0) AS fees FROM orders
+      WHERE rider_id = ? AND status = 'delivered' AND date(delivered_at) = date('now')`).get(req.user.id);
+    res.json({
+      rider: r,
+      current: current.map(({ id }) => orders.orderView(db, id, 'rider')),
+      open,
+      today: { trips: earnings.trips, earningsCents: earnings.fees },
+    });
+  });
+
+  app.post('/api/rider/jobs/:id/claim', auth('rider'), requireAdult, (req, res) => {
+    const busy = db.prepare(`SELECT 1 FROM orders WHERE rider_id = ? AND status IN (${orders.RIDER_ACTIVE.map(() => '?').join(',')})`).get(req.user.id, ...orders.RIDER_ACTIVE);
+    if (busy) return res.status(409).json({ error: 'Finish your current delivery first' });
+    orders.assignRider(db, Number(req.params.id), req.user.id);
+    res.json({ order: orders.orderView(db, Number(req.params.id), 'rider') });
+  });
+
+  app.post('/api/rider/jobs/:id/pickup', auth('rider'), (req, res) => {
+    const order = db.prepare('SELECT * FROM orders WHERE id = ? AND rider_id = ?').get(req.params.id, req.user.id);
+    if (!order) return res.status(404).json({ error: 'Job not found' });
+    orders.transition(db, order.id, 'rider', 'picked_up');
+    res.json({ order: orders.orderView(db, order.id, 'rider') });
+  });
+
+  // Handover at the door: the rider must see an ID that matches an adult
+  // and the customer must give the code from their app. No code, no ID, no
+  // handover — the rider returns the order to the store.
+  app.post('/api/rider/jobs/:id/deliver', auth('rider'), (req, res) => {
+    const order = db.prepare('SELECT * FROM orders WHERE id = ? AND rider_id = ?').get(req.params.id, req.user.id);
+    if (!order) return res.status(404).json({ error: 'Job not found' });
+    if (!req.body?.idChecked) return res.status(400).json({ error: "Check the customer's ID before handing over" });
+    if (String(req.body?.handoverCode || '') !== order.handover_code) return res.status(400).json({ error: "That code doesn't match — ask the customer to read it from their app" });
+    db.prepare('UPDATE orders SET id_checked = 1 WHERE id = ?').run(order.id);
+    orders.transition(db, order.id, 'rider', 'delivered', { note: 'ID checked at the door' });
+    res.json({ order: orders.orderView(db, order.id, 'rider') });
+  });
+
+  // ---- Admin -------------------------------------------------------------
+  app.get('/api/admin/overview', auth('admin'), (req, res) => {
+    const one = (sql, ...a) => db.prepare(sql).get(...a);
+    const active = orders.ACTIVE.map(() => '?').join(',');
+    res.json({
+      today: one(`SELECT COUNT(*) AS orders, COALESCE(SUM(total_cents), 0) AS gmv_cents,
+        COALESCE(SUM(service_fee_cents), 0) AS service_fees_cents,
+        COALESCE(AVG((julianday(delivered_at) - julianday(created_at)) * 1440), 0) AS avg_minutes
+        FROM orders WHERE status = 'delivered' AND date(delivered_at) = date('now')`),
+      activeOrders: one(`SELECT COUNT(*) AS n FROM orders WHERE status IN (${active})`, ...orders.ACTIVE).n,
+      unassigned: one("SELECT COUNT(*) AS n FROM orders WHERE rider_id IS NULL AND status IN ('accepted','preparing','ready')").n,
+      ridersOnline: one('SELECT COUNT(*) AS n FROM riders WHERE online = 1').n,
+      pendingStores: one("SELECT COUNT(*) AS n FROM stores WHERE status = 'pending'").n,
+      unverifiedLicences: one("SELECT COUNT(*) AS n FROM stores WHERE licence_number IS NOT NULL AND licence_verified = 0").n,
+      customers: one("SELECT COUNT(*) AS n FROM users WHERE role = 'customer'").n,
+      settings: settings(),
+    });
+  });
+
+  app.get('/api/admin/stores', auth('admin'), (req, res) => {
+    const rows = db.prepare(`SELECT s.*, c.slug AS city_slug, u.name AS owner_name, u.email AS owner_email
+      FROM stores s JOIN cities c ON c.id = s.city_id JOIN users u ON u.id = s.owner_id ORDER BY s.status = 'pending' DESC, s.name`).all();
+    res.json({ stores: rows.map((s) => ({ ...merchantStoreView(s), owner: { name: s.owner_name, email: s.owner_email } })) });
+  });
+
+  app.post('/api/admin/stores/:id', auth('admin'), (req, res) => {
+    const s = db.prepare('SELECT * FROM stores WHERE id = ?').get(req.params.id);
+    if (!s) return res.status(404).json({ error: 'Store not found' });
+    const b = req.body || {};
+    if (b.status && !['approved', 'suspended', 'pending'].includes(b.status)) return res.status(400).json({ error: 'Bad status' });
+    let licenceCats = s.licence_categories;
+    if (b.licenceCategories !== undefined) {
+      const valid = db.prepare('SELECT slug FROM categories WHERE regulated = 1').all().map((c) => c.slug);
+      const bad = b.licenceCategories.filter((c) => !valid.includes(c));
+      if (bad.length) return res.status(400).json({ error: `Not regulated categories: ${bad.join(', ')}` });
+      licenceCats = JSON.stringify(b.licenceCategories);
+    }
+    const verified = b.licenceVerified === undefined ? s.licence_verified : b.licenceVerified ? 1 : 0;
+    if (verified && !s.licence_number) return res.status(400).json({ error: 'The store has not given a licence number' });
+    db.prepare('UPDATE stores SET status = COALESCE(?, status), licence_categories = ?, licence_verified = ? WHERE id = ?')
+      .run(b.status || null, licenceCats, verified, s.id);
+    audit(req.user.id, 'store_updated', { storeId: s.id, ...b });
+    res.json({ ok: true });
+  });
+
+  app.put('/api/admin/settings', auth('admin'), (req, res) => {
+    const b = req.body || {};
+    const put = db.prepare('UPDATE settings SET value = ? WHERE key = ?');
+    if (b.regulatedSalesEnabled !== undefined) put.run(b.regulatedSalesEnabled ? 'true' : 'false', 'regulated_sales_enabled');
+    for (const [k, col] of [['deliveryOpenHour', 'delivery_open_hour'], ['deliveryCloseHour', 'delivery_close_hour']]) {
+      if (b[k] === undefined) continue;
+      const h = Number(b[k]);
+      if (!Number.isInteger(h) || h < 0 || h > 24) return res.status(400).json({ error: 'Hours must be 0–24' });
+      put.run(String(h), col);
+    }
+    audit(req.user.id, 'settings_updated', b);
+    res.json({ settings: settings() });
+  });
+
+  app.get('/api/admin/orders', auth('admin'), (req, res) => {
+    const ids = db.prepare('SELECT id FROM orders ORDER BY id DESC LIMIT 100').all();
+    res.json({ orders: ids.map(({ id }) => orders.orderView(db, id, 'admin')) });
+  });
+
+  app.get('/api/health', (req, res) => res.json({ ok: true }));
+
+  // ---- Errors ------------------------------------------------------------
+  // eslint-disable-next-line no-unused-vars
+  app.use((err, req, res, next) => {
+    if (err instanceof orders.OrderError) return res.status(err.status).json({ error: err.message });
+    if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Malformed request' });
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong on our side — please try again' });
+  });
+
+  app.locals.db = db;
+  app.locals.refund = refund;
+  return app;
+}
+
+module.exports = { createApp };

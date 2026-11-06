@@ -15,6 +15,7 @@ const { registerAdminRoutes } = require('./admin');
 const { registerMerchantRoutes } = require('./merchant');
 const { availability } = require('./storeHours');
 const promos = require('./promos');
+const { deliveryStart } = require('./schedule');
 const { registerCustomerRoutes } = require('./customer');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-secret-change-me';
@@ -192,7 +193,7 @@ function createApp(db) {
     const prep = s.prep_minutes + (s.busy_extra_minutes || 0);
     const out = {
       id: s.id, slug: s.slug, name: s.name, description: s.description, address: s.address, accent: s.accent,
-      isOpen: avail.open, openLabel: avail.label, rating, ratingCount: s.rating_count, prepMinutes: prep, city: s.city_slug,
+      isOpen: avail.open, openLabel: avail.label, preorder: !avail.open && avail.reason === 'hours', rating, ratingCount: s.rating_count, prepMinutes: prep, city: s.city_slug,
       lat: s.lat, lng: s.lng,
     };
     if (origin) {
@@ -323,23 +324,30 @@ function createApp(db) {
   app.post('/api/quote', wrap(async (req, res) => {
     const { store, subtotal } = buildBasket(req.body.storeId, req.body.items);
     const user = optionalUser(req);
-    res.json({ quote: withPromo(quoteFor(store, subtotal, req.body), req.body.promoCode, user?.id) });
+    const q = withPromo(quoteFor(store, subtotal, req.body), req.body.promoCode, user?.id);
+    res.json({ quote: { ...q, delivery: deliveryView(deliveryStart(store, settings())) } });
   }));
+
+  function deliveryView(d) {
+    if (d.blocked) return { possible: false, reason: d.blocked };
+    if (d.now) return { possible: true, now: true };
+    return { possible: true, now: false, scheduledFor: d.at.toISOString(), label: d.label };
+  }
 
   app.get('/api/promos', (req, res) => res.json({ promos: promos.available(db, optionalUser(req)?.id) }));
 
   app.post('/api/orders', auth('customer'), requireAdult, wrap(async (req, res) => {
-    const st = settings();
-    if (!compliance.deliveryWindowOpen(st)) {
-      return res.status(409).json({ error: `Deliveries run ${st.deliveryOpenHour}:00–${st.deliveryCloseHour}:00. Come back then!` });
-    }
     const address = String(req.body.address || '').trim();
     if (address.length < 5) return res.status(400).json({ error: 'Enter your full delivery address' });
 
     const create = db.transaction(() => {
       const { store, lines, subtotal } = buildBasket(req.body.storeId, req.body.items);
-      const avail = availability(store);
-      if (!avail.open) throw new orders.OrderError(`${store.name} isn't taking orders right now (${avail.label.toLowerCase()})`, 409);
+      // Outside delivery or opening hours the order is taken now and
+      // delivered from the next delivery time; paused or closed stores
+      // can't take it at all.
+      const when = deliveryStart(store, settings());
+      if (when.blocked) throw new orders.OrderError(when.blocked, 409);
+      const scheduledFor = when.now ? null : when.at.toISOString();
       const q = withPromo(quoteFor(store, subtotal, req.body), req.body.promoCode, req.user.id);
       if (q.promoError) throw new orders.OrderError(q.promoError);
       if (q.belowMinimum) throw new orders.OrderError(`The minimum order is R${q.minimumOrderCents / 100}`);
@@ -349,11 +357,13 @@ function createApp(db) {
       if (!Number.isInteger(tip) || tip < 0 || tip > 50000) throw new orders.OrderError('Tips can be up to R500');
       const { lastInsertRowid: id } = db.prepare(`
         INSERT INTO orders (code, customer_id, store_id, status, subtotal_cents, delivery_fee_cents, service_fee_cents,
-          tip_cents, promo_code, discount_cents, total_cents, vat_cents, address, lat, lng, distance_km, eta_minutes, notes, handover_code)
-        VALUES (?, ?, ?, 'pending_payment', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          tip_cents, promo_code, discount_cents, total_cents, vat_cents, address, lat, lng, distance_km, eta_minutes, notes, handover_code,
+          scheduled_for, base_eta_minutes)
+        VALUES (?, ?, ?, 'pending_payment', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(orders.newCode(), req.user.id, store.id, q.subtotalCents, q.deliveryFeeCents, q.serviceFeeCents, tip,
         q.promo?.code || null, q.discountCents || 0, q.totalCents + tip, q.vatCents,
-        address, Number(req.body.lat), Number(req.body.lng), q.distanceKm, q.etaMinutes, String(req.body.notes || '').slice(0, 300), orders.newHandoverCode());
+        address, Number(req.body.lat), Number(req.body.lng), q.distanceKm, q.etaMinutes, String(req.body.notes || '').slice(0, 300), orders.newHandoverCode(),
+        scheduledFor, q.etaMinutes);
       const insertItem = db.prepare('INSERT INTO order_items (order_id, product_id, name, price_cents, qty) VALUES (?, ?, ?, ?, ?)');
       const reserve = db.prepare('UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?');
       for (const l of lines) {
@@ -370,7 +380,9 @@ function createApp(db) {
   async function settle(order, reference) {
     if (order.payment_status === 'paid' || order.status !== 'pending_payment') return;
     db.prepare("UPDATE orders SET payment_status = 'paid', payment_ref = ? WHERE id = ?").run(reference, order.id);
-    orders.transition(db, order.id, 'system', 'placed', { note: 'Payment received' });
+    // A pre-order waits until delivery time; anything due already goes now.
+    const later = order.scheduled_for && new Date(order.scheduled_for) > new Date();
+    orders.transition(db, order.id, 'system', later ? 'scheduled' : 'placed', { note: later ? 'Payment received — scheduled for delivery time' : 'Payment received' });
   }
 
   app.post('/api/orders/:id/pay', auth('customer'), wrap(async (req, res) => {

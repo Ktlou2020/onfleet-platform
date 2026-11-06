@@ -33,6 +33,7 @@ export const rand = (cents) => `R${(cents / 100).toLocaleString('en-ZA', { minim
 
 export const STATUS = {
   pending_payment: { label: 'Awaiting payment', step: 0 },
+  scheduled: { label: 'Scheduled', step: 0 },
   placed: { label: 'Order placed', step: 1 },
   accepted: { label: 'Store accepted', step: 2 },
   preparing: { label: 'Being packed', step: 2 },
@@ -222,4 +223,16 @@ export function kmBetween(a, b) {
   const r = (d) => (d * Math.PI) / 180;
   const h = Math.sin(r(b.lat - a.lat) / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(r(b.lng - a.lng) / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+// "Fri 08:00" style label for a scheduled delivery time, in SAST.
+export function deliveryTimeLabel(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const t = new Date(d.getTime() + 2 * 3600e3);
+  const n = new Date(Date.now() + 2 * 3600e3);
+  const hhmm = `${String(t.getUTCHours()).padStart(2, '0')}:${String(t.getUTCMinutes()).padStart(2, '0')}`;
+  const days = Math.round((Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate()) - Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate())) / 864e5);
+  const day = days === 0 ? 'today' : days === 1 ? 'tomorrow' : t.toLocaleDateString('en-ZA', { weekday: 'long', timeZone: 'UTC' });
+  return `${day} at ${hhmm}`;
 }

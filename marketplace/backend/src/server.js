@@ -1,7 +1,7 @@
 'use strict';
 const { open } = require('./db');
 const { createApp } = require('./app');
-const { expireUnpaid, sweep } = require('./orders');
+const { expireUnpaid, sweep, releaseScheduled } = require('./orders');
 
 const path = require('path');
 const fs = require('fs');
@@ -32,6 +32,7 @@ setInterval(() => {
 // still waiting for one.
 setInterval(() => {
   try {
+    releaseScheduled(db);
     sweep(db);
   } catch (e) {
     console.error('dispatch sweep failed', e);

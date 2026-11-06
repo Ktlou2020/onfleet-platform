@@ -39,10 +39,12 @@ const TRANSITIONS = {
   },
   customer: {
     pending_payment: ['cancelled'],
+    scheduled: ['cancelled'],
     placed: ['cancelled'],
   },
   admin: {
     pending_payment: ['cancelled'],
+    scheduled: ['cancelled'],
     placed: ['cancelled'],
     accepted: ['cancelled'],
     preparing: ['cancelled'],
@@ -50,7 +52,8 @@ const TRANSITIONS = {
     picked_up: ['cancelled'],
   },
   system: {
-    pending_payment: ['placed', 'cancelled'],
+    pending_payment: ['placed', 'scheduled', 'cancelled'],
+    scheduled: ['placed', 'cancelled'],
   },
 };
 
@@ -264,6 +267,7 @@ function orderView(db, orderId, viewer) {
     deliveredAt: o.delivered_at,
     cancelReason: o.cancel_reason,
     etaMinutes: o.eta_minutes,
+    scheduledFor: o.scheduled_for,
     distanceKm: o.distance_km,
     notes: o.notes,
     milestones: {
@@ -347,6 +351,20 @@ function offerView(db, orderId) {
   };
 }
 
+// Scheduled orders whose delivery time has come go to the store as new
+// orders. The ETA restarts from now: time waited so far plus the original
+// estimate, so "late" alerts count from the release, not from payment.
+function releaseScheduled(db, now = new Date()) {
+  const due = db.prepare("SELECT id, base_eta_minutes, eta_minutes FROM orders WHERE status = 'scheduled' AND scheduled_for <= ?").all(now.toISOString());
+  for (const o of due) {
+    transition(db, o.id, 'system', 'placed', { note: 'Delivery time reached — sent to the store' });
+    const elapsed = db.prepare("SELECT (julianday('now') - julianday(created_at)) * 1440 AS m FROM orders WHERE id = ?").get(o.id).m;
+    db.prepare("UPDATE orders SET eta_minutes = ?, updated_at = datetime('now') WHERE id = ?").run(Math.round(elapsed + (o.base_eta_minutes || o.eta_minutes)), o.id);
+    bus.emit('order', o.id);
+  }
+  return due.length;
+}
+
 function expireUnpaid(db, refund) {
   const stale = db.prepare(`
     SELECT id FROM orders WHERE status = 'pending_payment'
@@ -360,5 +378,5 @@ module.exports = {
   bus, ACTIVE, RIDER_ACTIVE, WAITING_FOR_RIDER, OrderError, TRANSITIONS, RIDER_PAY, OFFER_SECONDS, NO_ANSWER_WAIT_MINUTES,
   newCode, newHandoverCode, canTransition, transition, riderPayoutCents,
   offerNext, acceptOffer, declineOffer, expireOffers, dispatchWaiting, sweep, assignRider,
-  orderView, offerView, logEvent, expireUnpaid,
+  orderView, offerView, logEvent, expireUnpaid, releaseScheduled,
 };

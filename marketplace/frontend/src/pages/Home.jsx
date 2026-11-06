@@ -29,11 +29,11 @@ export function Heart({ storeId, name, className = '' }) {
 
 export function StoreCard({ s }) {
   return (
-    <Link to={`/store/${s.slug}`} className={`store-card ${!s.isOpen || s.delivers === false ? 'dim' : ''}`}>
+    <Link to={`/store/${s.slug}`} className={`store-card ${(!s.isOpen && !s.preorder) || s.delivers === false ? 'dim' : ''}`}>
       <div className="store-banner" style={{ background: `linear-gradient(135deg, ${s.accent}, ${s.accent}cc 60%, #0f2a1d)` }}>
         <Heart storeId={s.id} name={s.name} className="on-banner" />
         <span className="store-initial">{s.name[0]}</span>
-        {!s.isOpen && <span className="tag tag-dark">{s.openLabel || 'Closed'}</span>}
+        {!s.isOpen && <span className="tag tag-dark">{s.preorder ? `Pre-order · ${s.openLabel.replace('Opens ', 'opens ')}` : s.openLabel || 'Closed'}</span>}
         {s.isOpen && s.delivers === false && <span className="tag tag-dark">Too far</span>}
         {s.etaMinutes != null && s.isOpen && s.delivers !== false && <span className="eta-pill">{s.etaMinutes}–{s.etaMinutes + 10} min</span>}
       </div>
@@ -181,7 +181,7 @@ export default function Home({ searchMode, onAddress }) {
       )}
 
       {meta && !meta.deliveryHours.openNow && (
-        <div className="banner">🌙 Delivery is closed right now. You can browse — orders open again at {meta.deliveryHours.open}:00.</div>
+        <div className="banner">🌙 We're not delivering right now, but you can still order. We'll deliver from {meta.deliveryHours.open}:00, when deliveries start.</div>
       )}
 
       <div className="search-bar">

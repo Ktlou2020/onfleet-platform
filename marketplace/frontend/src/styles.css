@@ -369,3 +369,9 @@ textarea { min-height: 80px; resize: vertical; }
 .acct-edit input { border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 8px 10px; }
 .acct-help { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: .92rem; color: var(--ink-2); }
 .link.danger { color: var(--bad); }
+
+/* ---- Pre-orders ------------------------------------------------------ */
+.schedule-note { background: #edf2ff; border: 1px solid #c3dafe; }
+.schedule-note p { margin: 4px 0 0; font-size: .9rem; }
+.s-scheduled { background: #e9d8fd; color: #553c9a; }
+@media (prefers-color-scheme: dark) { .schedule-note { background: #1e2440; border-color: #3c4a80; } }

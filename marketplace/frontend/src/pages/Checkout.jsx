@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Empty, api, rand, useAuth, useCart, useLoc, useMeta, useToast } from '../lib.jsx';
+import { Empty, api, deliveryTimeLabel, rand, useAuth, useCart, useLoc, useMeta, useToast } from '../lib.jsx';
 
 export function VerifyAge({ onDone }) {
   const { setUser } = useAuth();
@@ -75,7 +75,7 @@ export default function Checkout({ onAddress }) {
       const paid = await api(`/orders/${order.id}/pay`, { method: 'POST' });
       clear();
       if (paid.redirectUrl) { window.location.href = paid.redirectUrl; return; }
-      notify('Order placed — the store has it', 'ok');
+      notify(later ? `Order placed — we'll deliver ${deliveryTimeLabel(quote.delivery.scheduledFor)}` : 'Order placed — the store has it', 'ok');
       navigate(`/orders/${order.id}`);
     } catch (e) {
       notify(e.message, 'bad');
@@ -84,7 +84,8 @@ export default function Checkout({ onAddress }) {
     }
   };
 
-  const canPlace = user?.role === 'customer' && user.ageVerified && loc && quote && !quote.belowMinimum && meta?.deliveryHours.openNow !== false;
+  const later = quote?.delivery && quote.delivery.possible && !quote.delivery.now;
+  const canPlace = user?.role === 'customer' && user.ageVerified && loc && quote && !quote.belowMinimum && quote.delivery?.possible !== false;
 
   return (
     <div className="page narrow">
@@ -160,7 +161,7 @@ export default function Checkout({ onAddress }) {
             </div>
             {tipCents > 0 && <div className="sum"><span>Rider tip</span><span>{rand(tipCents)}</span></div>}
             <div className="sum total"><span>Total</span><span>{rand(quote.totalCents + tipCents)}</span></div>
-            <p className="muted small">Includes VAT of {rand(quote.vatCents)} · Arrives in about {quote.etaMinutes}–{quote.etaMinutes + 10} min</p>
+            <p className="muted small">Includes VAT of {rand(quote.vatCents)} · {later ? `Delivered ${deliveryTimeLabel(quote.delivery.scheduledFor)}, about ${quote.etaMinutes} min after deliveries start` : `Arrives in about ${quote.etaMinutes}–${quote.etaMinutes + 10} min`}</p>
             {quote.belowMinimum && <p className="error">Minimum order is {rand(quote.minimumOrderCents)} — add {rand(quote.minimumOrderCents - quote.subtotalCents)} more.</p>}
             {meta && quote.subtotalCents < meta.fees.freeDeliveryOverCents && quote.deliveryFeeCents > 0 && (
               <p className="hint">Add {rand(meta.fees.freeDeliveryOverCents - quote.subtotalCents)} for free delivery.</p>
@@ -178,10 +179,16 @@ export default function Checkout({ onAddress }) {
       )}
       {user && user.role !== 'customer' && <p className="banner warn">You're signed in as a {user.role}. Use a customer account to order.</p>}
       {user?.role === 'customer' && !user.ageVerified && <VerifyAge />}
-      {meta?.deliveryHours.openNow === false && <p className="banner">🌙 Delivery opens at {meta.deliveryHours.open}:00.</p>}
+      {later && (
+        <div className="banner schedule-note">
+          <strong>🌙 We're not delivering right now.</strong>
+          <p>You can still order. Your order will be delivered <b>{deliveryTimeLabel(quote.delivery.scheduledFor)}</b>, when delivery starts. We'll send it to the store then, and you can cancel for a full refund until it's sent.</p>
+        </div>
+      )}
+      {quote?.delivery?.possible === false && <p className="banner warn">{quote.delivery.reason}. Try another store.</p>}
 
       <button className="btn btn-lg full sticky-cta" disabled={!canPlace || busy} onClick={place}>
-        {busy ? 'Placing order…' : quote ? `Pay ${rand(quote.totalCents + tipCents)}` : 'Pay'}
+        {busy ? 'Placing order…' : quote ? `${later ? 'Pre-order · ' : ''}Pay ${rand(quote.totalCents + tipCents)}` : 'Pay'}
       </button>
       {meta?.paymentProvider === 'mock' && <p className="muted small center-text">Demo mode: payment is simulated.</p>}
     </div>

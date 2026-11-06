@@ -127,11 +127,16 @@ describe('ordering', () => {
     expect(res.body.error).toMatch(/doesn't deliver that far/);
   });
 
-  it('closes outside delivery hours', async () => {
+  it('takes orders outside delivery hours and schedules them for the next delivery time', async () => {
     const w = await world();
-    vi.setSystemTime(new Date('2026-11-05T21:30:00Z')); // 23:30 SAST
-    const res = await w.customer.post('/api/orders', { storeId: w.store.store.id, items: [{ productId: w.store.products[0].id, qty: 5 }], ...ROSEBANK_DROP });
-    expect(res.status).toBe(409);
+    vi.setSystemTime(new Date('2026-11-05T21:30:00Z')); // 23:30 SAST; deliveries run 08:00-22:00
+    const body = { storeId: w.store.store.id, items: [{ productId: w.store.products[0].id, qty: 5 }], ...ROSEBANK_DROP };
+    const q = (await w.customer.post('/api/quote', body)).body.quote;
+    expect(q.delivery).toMatchObject({ possible: true, now: false, label: 'tomorrow at 08:00', scheduledFor: '2026-11-06T06:00:00.000Z' });
+    const created = await w.customer.post('/api/orders', body);
+    expect(created.status).toBe(201);
+    const paid = (await w.customer.post(`/api/orders/${created.body.order.id}/pay`)).body.order;
+    expect(paid).toMatchObject({ status: 'scheduled', scheduledFor: '2026-11-06T06:00:00.000Z' });
   });
 
   it('only lets a rider claim one job at a time, and a job only once', async () => {

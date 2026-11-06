@@ -52,6 +52,10 @@ To try the whole loop, use three browser windows: the customer orders, the store
 
 Tests: `cd marketplace/backend && npm test` (SA ID parsing, licence gating, delivery hours, the full order lifecycle, stock, permissions).
 
+## Ordering outside delivery hours
+
+Customers can order and pay at any time. If the platform isn't delivering yet (outside the hours set under Admin → Settings), or the store is closed by its own opening hours, the order is held as **Scheduled**, and the customer is told exactly when it will be delivered, for example "tomorrow at 08:00". The server releases it to the store as a normal new order at that time. The delivery estimate restarts from then, and the customer can cancel for a full refund until it's released. Stores see upcoming pre-orders under their board. A store that is paused or switched off still can't take orders. Logic: `backend/src/schedule.js`.
+
 ## Rider pay
 
 R18 per trip + R5 per km (to the store and on to the customer), at least R25. Customer tips (chosen at checkout) are added on top and go to the rider in full. The rider sees the total before accepting. Rates live in `backend/src/orders.js` (`RIDER_PAY`).

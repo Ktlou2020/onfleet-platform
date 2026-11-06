@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { MapContainer, TileLayer, Marker, Polyline, useMap } from 'react-leaflet';
-import { Empty, STATUS, Spinner, api, kmBetween, rand, reorderInto, useCart, useLiveOrder, useToast } from '../lib.jsx';
+import { Empty, STATUS, Spinner, api, deliveryTimeLabel, kmBetween, rand, reorderInto, useCart, useLiveOrder, useToast } from '../lib.jsx';
 import { TILE_ATTR, TILE_URL, pin } from './Address.jsx';
 
 function OrderAgain({ order, small }) {
@@ -175,7 +175,8 @@ export function Track() {
 
   const step = STATUS[order.status]?.step ?? 0;
   const m = order.milestones || {};
-  const headline = order.status === 'picked_up' && m.arrivedCustomerAt ? 'Your rider is outside 👋'
+  const headline = order.status === 'scheduled' ? `Scheduled for ${deliveryTimeLabel(order.scheduledFor)}`
+    : order.status === 'picked_up' && m.arrivedCustomerAt ? 'Your rider is outside 👋'
     : ['accepted', 'preparing', 'ready'].includes(order.status) && m.arrivedStoreAt ? 'Rider is at the store'
       : ['accepted', 'preparing'].includes(order.status) && order.rider ? `${order.rider.name} is heading to the store`
         : STATUS[order.status]?.label;
@@ -205,7 +206,8 @@ export function Track() {
         <div>
           <p className="eyebrow">Order #{order.code} · {order.store.name}</p>
           <h1>{headline}</h1>
-          {!ended && order.status !== 'delivered' && (liveMinutes && !m.arrivedCustomerAt
+          {order.status === 'scheduled' && <p className="muted">We'll send your order to {order.store.name} when deliveries start, then it arrives about {order.etaMinutes} min later. You can cancel for a full refund until then.</p>}
+          {!ended && order.status !== 'delivered' && order.status !== 'scheduled' && (liveMinutes && !m.arrivedCustomerAt
             ? <p className="arriving">Arriving in <strong>~{liveMinutes} min</strong></p>
             : <p className="muted">Arriving around <strong>{eta.toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit' })}</strong></p>)}
           {!ended && order.status !== 'delivered' && alerts.supported && !alerts.on && (
@@ -277,7 +279,7 @@ export function Track() {
         </ul>
       </div>
 
-      {['pending_payment', 'placed'].includes(order.status) && <button className="btn btn-ghost full" onClick={cancel}>Cancel order</button>}
+      {['pending_payment', 'scheduled', 'placed'].includes(order.status) && <button className="btn btn-ghost full" onClick={cancel}>Cancel order</button>}
       {order.status !== 'pending_payment' && <Help order={order} />}
     </div>
   );

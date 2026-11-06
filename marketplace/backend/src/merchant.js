@@ -197,10 +197,14 @@ function registerMerchantRoutes(app, { db, auth, requireAdult, audit, refund, st
     const prep = one(`SELECT AVG((julianday(ready_at) - julianday(accepted_at)) * 1440) AS m FROM orders
       WHERE store_id = ? AND ready_at IS NOT NULL AND ${DAY('ready_at')} = date('now', '+2 hours')`, s.id);
     const lowStock = db.prepare('SELECT id, name, stock FROM products WHERE store_id = ? AND active = 1 AND stock <= ? ORDER BY stock, name LIMIT 10').all(s.id, LOW_STOCK);
+    // Pre-orders waiting for delivery time, so the store can plan stock and staff.
+    const scheduled = db.prepare("SELECT id FROM orders WHERE store_id = ? AND status = 'scheduled' ORDER BY scheduled_for, id").all(s.id)
+      .map(({ id }) => orders.orderView(db, id, 'merchant'));
     res.json({
       store: storeView(s),
       live: live.map(({ id }) => boardView(id)),
       recent: recent.map(({ id }) => boardView(id)),
+      scheduled,
       stats: { todayOrders: t.n, todaySalesCents: t.sales, avgPrepMinutes: prep.m == null ? null : Math.round(prep.m) },
       lowStock,
     });

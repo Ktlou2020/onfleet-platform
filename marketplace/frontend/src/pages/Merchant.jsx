@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BRAND, Empty, STATUS, Spinner, api, rand, useAuth, useMeta, useToast } from '../lib.jsx';
+import { BRAND, Empty, STATUS, Spinner, api, deliveryTimeLabel, rand, useAuth, useMeta, useToast } from '../lib.jsx';
 import { VerifyAge } from './Checkout.jsx';
 import { Columns } from '../charts.jsx';
 import '../admin.css';
@@ -188,6 +188,17 @@ function Board({ data, reload, setStore }) {
         ))}
       </div>
 
+      {data.scheduled?.length > 0 && (
+        <details className="m-recent" open>
+          <summary>🕘 Pre-orders for later ({data.scheduled.length})</summary>
+          <p className="muted small">These come to your board as new orders when delivery starts. Check you have the stock.</p>
+          <table className="adm-table">
+            <tbody>{data.scheduled.map((o) => (
+              <tr key={o.id}><td><strong>#{o.code}</strong></td><td>{deliveryTimeLabel(o.scheduledFor)}</td><td>{o.items.map((i) => `${i.qty}× ${i.name}`).join(', ')}</td><td className="num">{rand(o.totals.subtotalCents)}</td></tr>
+            ))}</tbody>
+          </table>
+        </details>
+      )}
       {data.recent.length > 0 && (
         <details className="m-recent">
           <summary>Finished today ({data.recent.length})</summary>

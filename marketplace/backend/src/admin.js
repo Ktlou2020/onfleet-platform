@@ -130,6 +130,7 @@ function registerAdminRoutes(app, { db, auth, audit }) {
   // ---- Orders -----------------------------------------------------------------
   const STATUS_GROUPS = {
     active: orders.ACTIVE,
+    scheduled: ['scheduled'],
     needs_rider: orders.WAITING_FOR_RIDER,
     delivered: ['delivered'],
     problems: ['cancelled', 'rejected', 'returned'],

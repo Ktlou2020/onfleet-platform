@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Empty, Spinner, api, rand, useCart, useLoc } from '../lib.jsx';
+import { Empty, Spinner, api, rand, useCart, useLoc, useMeta } from '../lib.jsx';
 import { Heart, ProductRow } from './Home.jsx';
 
 export default function Store() {
   const { slug } = useParams();
   const { loc } = useLoc();
   const { cart, count, subtotal } = useCart();
+  const meta = useMeta();
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [cat, setCat] = useState('all');
@@ -48,6 +49,8 @@ export default function Store() {
           <span>{s.isOpen ? `🟢 ${s.openLabel || 'Open'}` : `🔴 ${s.openLabel || 'Closed'}`}</span>
         </div>
         {s.delivers === false && <p className="banner warn">This store doesn't deliver to your address. Choose a closer store or change your address.</p>}
+        {s.preorder && <p className="banner">🕘 {s.name} {s.openLabel.replace('Opens', 'opens')}. Order now and we'll deliver when it opens.</p>}
+        {!s.preorder && s.isOpen && meta && !meta.deliveryHours.openNow && <p className="banner">🌙 Deliveries start at {meta.deliveryHours.open}:00. Order now and we'll deliver then.</p>}
       </section>
 
       <div className="sticky-tools">

@@ -215,7 +215,7 @@ function Recenter({ to }) {
 
 // ---- Orders ---------------------------------------------------------------
 
-const ORDER_FILTERS = [['active', 'Live'], ['needs_rider', 'Needs a rider'], ['delivered', 'Delivered'], ['problems', 'Cancelled & returned'], ['', 'All']];
+const ORDER_FILTERS = [['active', 'Live'], ['scheduled', 'Scheduled'], ['needs_rider', 'Needs a rider'], ['delivered', 'Delivered'], ['problems', 'Cancelled & returned'], ['', 'All']];
 
 function Orders({ openOrder, refreshKey }) {
   const [status, setStatus] = useState('active');

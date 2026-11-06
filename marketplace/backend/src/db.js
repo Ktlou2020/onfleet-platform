@@ -277,6 +277,8 @@ function migrate(db) {
   addColumn('riders', 'paused', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('riders', 'rating_sum', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('riders', 'rating_count', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('orders', 'scheduled_for', 'TEXT');
+  addColumn('orders', 'base_eta_minutes', 'INTEGER');
   addColumn('orders', 'promo_code', 'TEXT');
   addColumn('orders', 'discount_cents', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('stores', 'paused_until', 'TEXT');

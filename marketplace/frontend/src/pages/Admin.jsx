@@ -437,7 +437,47 @@ function Customers() {
   );
 }
 
+function HelpRequests() {
+  const [list, setList] = useState(null);
+  const notify = useToast();
+  const load = useCallback(() => api('/admin/help').then((d) => setList(d.requests)), []);
+  useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, [load]);
+  const resolve = async (r) => {
+    const resolution = window.prompt(`How did you resolve #${r.orderCode}? ${r.customer.name} will see this.`);
+    if (!resolution) return;
+    try { await api(`/admin/help/${r.id}/resolve`, { method: 'POST', body: { resolution } }); load(); } catch (e) { notify(e.message, 'bad'); }
+  };
+  if (!list) return <Spinner />;
+  if (list.length === 0) return <p className="muted">No customer help requests.</p>;
+  return (
+    <div className="table">
+      {list.map((r) => (
+        <div key={r.id} className={`trow ${r.status === 'resolved' ? 'dim' : ''}`}>
+          <span className={`status ${r.status === 'open' ? 's-placed' : 's-approved'}`}>{r.status === 'open' ? 'Open' : 'Resolved'}</span>
+          <span className="grow small"><strong>{r.typeLabel}</strong> · #{r.orderCode} · {r.storeName} · {when(r.createdAt)}<br />
+            <span className="muted">{r.customer.name} ({r.customer.email}){r.note ? ` — “${r.note}”` : ''}</span>
+            {r.resolution && <><br /><span>↳ {r.resolution}</span></>}
+          </span>
+          {r.customer.phone && <a className="link" href={`tel:${r.customer.phone}`}>Call</a>}
+          {r.status === 'open' && <button className="link" onClick={() => resolve(r)}>Reply & resolve</button>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Incidents() {
+  return (
+    <>
+      <h3>Rider safety & incidents</h3>
+      <RiderIncidents />
+      <h3 className="adm-gap">Customer help requests</h3>
+      <HelpRequests />
+    </>
+  );
+}
+
+function RiderIncidents() {
   const [list, setList] = useState(null);
   const load = useCallback(() => api('/admin/incidents').then((d) => setList(d.incidents)), []);
   useEffect(() => { load(); const t = setInterval(load, 10000); return () => clearInterval(t); }, [load]);

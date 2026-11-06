@@ -9,6 +9,7 @@ import Auth from './pages/Auth.jsx';
 import Merchant from './pages/Merchant.jsx';
 import Rider from './pages/Rider.jsx';
 import Admin from './pages/Admin.jsx';
+import Account from './pages/Account.jsx';
 import AgeGate from './pages/AgeGate.jsx';
 import { AddressSheet } from './pages/Address.jsx';
 
@@ -49,6 +50,7 @@ function Header({ onAddress }) {
         {user ? (
           <>
             {user.role === 'customer' && <NavLink to="/orders" className="nav-link hide-sm">Orders</NavLink>}
+            {user.role === 'customer' && <NavLink to="/account" className="nav-link hide-sm">Account</NavLink>}
             <button className="nav-link" onClick={() => { signOut(); navigate('/'); }}>Sign out</button>
           </>
         ) : (
@@ -69,6 +71,7 @@ function BottomNav() {
       <NavLink to="/search">🔎<span>Search</span></NavLink>
       <NavLink to="/checkout">🛒<span>Basket{count ? ` (${count})` : ''}</span></NavLink>
       <NavLink to="/orders">📦<span>Orders</span></NavLink>
+      <NavLink to={user ? '/account' : '/login'}>👤<span>{user ? 'Account' : 'Sign in'}</span></NavLink>
     </nav>
   );
 }
@@ -97,6 +100,7 @@ export default function App() {
           <Route path="/checkout" element={<Checkout onAddress={() => setAddressOpen(true)} />} />
           <Route path="/orders" element={<Guard role="customer"><Orders /></Guard>} />
           <Route path="/orders/:id" element={<Guard role="customer"><Track /></Guard>} />
+          <Route path="/account" element={<Guard role="customer"><Account /></Guard>} />
           <Route path="/login" element={<Auth />} />
           <Route path="/merchant/*" element={<Guard role="merchant"><Merchant /></Guard>} />
           <Route path="/rider" element={<Guard role="rider"><Rider /></Guard>} />

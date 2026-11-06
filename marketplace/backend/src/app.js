@@ -14,6 +14,8 @@ const { registerRiderRoutes } = require('./rider');
 const { registerAdminRoutes } = require('./admin');
 const { registerMerchantRoutes } = require('./merchant');
 const { availability } = require('./storeHours');
+const promos = require('./promos');
+const { registerCustomerRoutes } = require('./customer');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-secret-change-me';
 if (process.env.NODE_ENV === 'production' && JWT_SECRET === 'dev-only-secret-change-me') {
@@ -87,6 +89,18 @@ function createApp(db) {
       req.user = user;
       next();
     };
+  }
+
+  // For endpoints that work signed out but do more when signed in.
+  function optionalUser(req) {
+    const header = req.get('authorization') || '';
+    if (!header.startsWith('Bearer ')) return null;
+    try {
+      const user = db.prepare('SELECT * FROM users WHERE id = ?').get(jwt.verify(header.slice(7), JWT_SECRET).sub);
+      return user && !user.suspended ? user : null;
+    } catch {
+      return null;
+    }
   }
 
   function requireAdult(req, res, next) {
@@ -296,10 +310,23 @@ function createApp(db) {
     return pricing.quote({ subtotalCents: subtotal, km, prepMinutes: store.prep_minutes + (store.busy_extra_minutes || 0) });
   }
 
+  // Takes a promo off a quote. Discount comes off before VAT is worked out;
+  // a bad code is reported, not fatal, so checkout can show why.
+  function withPromo(q, code, userId) {
+    if (!code) return q;
+    const r = promos.apply(db, code, { userId, subtotalCents: q.subtotalCents, deliveryFeeCents: q.deliveryFeeCents });
+    if (!r.ok) return { ...q, promoError: r.reason };
+    const total = q.totalCents - r.discountCents;
+    return { ...q, discountCents: r.discountCents, promo: r.promo, totalCents: total, vatCents: Math.round((total * 0.15) / 1.15) };
+  }
+
   app.post('/api/quote', wrap(async (req, res) => {
     const { store, subtotal } = buildBasket(req.body.storeId, req.body.items);
-    res.json({ quote: quoteFor(store, subtotal, req.body) });
+    const user = optionalUser(req);
+    res.json({ quote: withPromo(quoteFor(store, subtotal, req.body), req.body.promoCode, user?.id) });
   }));
+
+  app.get('/api/promos', (req, res) => res.json({ promos: promos.available(db, optionalUser(req)?.id) }));
 
   app.post('/api/orders', auth('customer'), requireAdult, wrap(async (req, res) => {
     const st = settings();
@@ -313,7 +340,8 @@ function createApp(db) {
       const { store, lines, subtotal } = buildBasket(req.body.storeId, req.body.items);
       const avail = availability(store);
       if (!avail.open) throw new orders.OrderError(`${store.name} isn't taking orders right now (${avail.label.toLowerCase()})`, 409);
-      const q = quoteFor(store, subtotal, req.body);
+      const q = withPromo(quoteFor(store, subtotal, req.body), req.body.promoCode, req.user.id);
+      if (q.promoError) throw new orders.OrderError(q.promoError);
       if (q.belowMinimum) throw new orders.OrderError(`The minimum order is R${q.minimumOrderCents / 100}`);
       // The rider tip is optional, goes to the rider in full, and is not
       // part of the VAT-able supply.
@@ -321,9 +349,10 @@ function createApp(db) {
       if (!Number.isInteger(tip) || tip < 0 || tip > 50000) throw new orders.OrderError('Tips can be up to R500');
       const { lastInsertRowid: id } = db.prepare(`
         INSERT INTO orders (code, customer_id, store_id, status, subtotal_cents, delivery_fee_cents, service_fee_cents,
-          tip_cents, total_cents, vat_cents, address, lat, lng, distance_km, eta_minutes, notes, handover_code)
-        VALUES (?, ?, ?, 'pending_payment', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(orders.newCode(), req.user.id, store.id, q.subtotalCents, q.deliveryFeeCents, q.serviceFeeCents, tip, q.totalCents + tip, q.vatCents,
+          tip_cents, promo_code, discount_cents, total_cents, vat_cents, address, lat, lng, distance_km, eta_minutes, notes, handover_code)
+        VALUES (?, ?, ?, 'pending_payment', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(orders.newCode(), req.user.id, store.id, q.subtotalCents, q.deliveryFeeCents, q.serviceFeeCents, tip,
+        q.promo?.code || null, q.discountCents || 0, q.totalCents + tip, q.vatCents,
         address, Number(req.body.lat), Number(req.body.lng), q.distanceKm, q.etaMinutes, String(req.body.notes || '').slice(0, 300), orders.newHandoverCode());
       const insertItem = db.prepare('INSERT INTO order_items (order_id, product_id, name, price_cents, qty) VALUES (?, ?, ?, ?, ?)');
       const reserve = db.prepare('UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?');
@@ -458,6 +487,7 @@ function createApp(db) {
   // ---- Rider -------------------------------------------------------------
   registerRiderRoutes(app, { db, auth, requireAdult, audit, refund });
   registerAdminRoutes(app, { db, auth, audit });
+  registerCustomerRoutes(app, { db, auth, audit, storeSummary, productView, categoriesById, settings });
 
   // ---- Admin -------------------------------------------------------------
   app.get('/api/admin/overview', auth('admin'), (req, res) => {
@@ -471,7 +501,7 @@ function createApp(db) {
       activeOrders: one(`SELECT COUNT(*) AS n FROM orders WHERE status IN (${active})`, ...orders.ACTIVE).n,
       unassigned: one("SELECT COUNT(*) AS n FROM orders WHERE rider_id IS NULL AND status IN ('accepted','preparing','ready')").n,
       ridersOnline: one('SELECT COUNT(*) AS n FROM riders WHERE online = 1').n,
-      openIncidents: one('SELECT COUNT(*) AS n FROM incidents WHERE resolved = 0').n,
+      openIncidents: one('SELECT COUNT(*) AS n FROM incidents WHERE resolved = 0').n + one("SELECT COUNT(*) AS n FROM help_requests WHERE status = 'open'").n,
       pendingStores: one("SELECT COUNT(*) AS n FROM stores WHERE status = 'pending'").n,
       unverifiedLicences: one("SELECT COUNT(*) AS n FROM stores WHERE licence_number IS NOT NULL AND licence_verified = 0").n,
       customers: one("SELECT COUNT(*) AS n FROM users WHERE role = 'customer'").n,

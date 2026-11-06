@@ -4,7 +4,7 @@ import { BrowserRouter } from 'react-router-dom';
 import 'leaflet/dist/leaflet.css';
 import './styles.css';
 import App from './App.jsx';
-import { AuthProvider, CartProvider, LocationProvider, ToastProvider } from './lib.jsx';
+import { AuthProvider, CartProvider, FavouritesProvider, LocationProvider, ToastProvider } from './lib.jsx';
 
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>
@@ -13,7 +13,9 @@ createRoot(document.getElementById('root')).render(
         <AuthProvider>
           <LocationProvider>
             <CartProvider>
-              <App />
+              <FavouritesProvider>
+                <App />
+              </FavouritesProvider>
             </CartProvider>
           </LocationProvider>
         </AuthProvider>

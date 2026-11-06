@@ -181,3 +181,45 @@ export function ToastProvider({ children }) {
   );
 }
 export const useToast = () => useContext(ToastCtx);
+
+// ---- Favourite stores: one set for the whole app -------------------------
+const FavCtx = createContext({ ids: new Set(), toggle: () => {}, ready: false });
+
+export function FavouritesProvider({ children }) {
+  const { user } = useAuth();
+  const [ids, setIds] = useState(new Set());
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    if (user?.role !== 'customer') { setIds(new Set()); setReady(true); return; }
+    api('/me/favourites').then((d) => setIds(new Set(d.stores.map((s) => s.id)))).catch(() => {}).finally(() => setReady(true));
+  }, [user?.id, user?.role]);
+  const toggle = useCallback(async (storeId) => {
+    const on = ids.has(storeId);
+    setIds((s) => { const n = new Set(s); if (on) n.delete(storeId); else n.add(storeId); return n; });
+    try {
+      await api(`/me/favourites/${storeId}`, { method: on ? 'DELETE' : 'PUT' });
+    } catch {
+      setIds((s) => { const n = new Set(s); if (on) n.add(storeId); else n.delete(storeId); return n; });
+    }
+    return !on;
+  }, [ids]);
+  return <FavCtx.Provider value={{ ids, toggle, ready }}>{children}</FavCtx.Provider>;
+}
+export const useFavourites = () => useContext(FavCtx);
+
+// Rebuild a basket from a past order. Returns what couldn't be added.
+export async function reorderInto(orderId, cart) {
+  const d = await api(`/orders/${orderId}/reorder`);
+  const ok = d.items.filter((i) => i.available);
+  if (!ok.length) throw new Error('Nothing from that order is available right now');
+  cart.clear();
+  for (const i of ok) cart.add(d.store, { id: i.productId, name: i.name, priceCents: i.priceCents, stock: i.stock, category: i.category }, i.qty);
+  return { store: d.store, missing: d.items.filter((i) => !i.available), reduced: ok.filter((i) => i.reduced) };
+}
+
+export function kmBetween(a, b) {
+  const R = 6371;
+  const r = (d) => (d * Math.PI) / 180;
+  const h = Math.sin(r(b.lat - a.lat) / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(r(b.lng - a.lng) / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}

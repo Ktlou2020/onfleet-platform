@@ -30,6 +30,7 @@ async function setup() {
     post: (u, b) => request(app).post(u).set('Authorization', `Bearer ${token}`).send(b || {}),
     patch: (u, b) => request(app).patch(u).set('Authorization', `Bearer ${token}`).send(b || {}),
     put: (u, b) => request(app).put(u).set('Authorization', `Bearer ${token}`).send(b || {}),
+    delete: (u) => request(app).delete(u).set('Authorization', `Bearer ${token}`),
   }) };
 }
 

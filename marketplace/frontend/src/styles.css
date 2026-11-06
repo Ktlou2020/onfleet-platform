@@ -73,7 +73,7 @@ main { flex: 1; }
 @media (max-width: 720px) {
   .hide-sm, .cart-btn { display: none; }
   .bottom-nav {
-    display: grid; grid-template-columns: repeat(4, 1fr); position: fixed; bottom: 0; left: 0; right: 0; z-index: 60;
+    display: grid; grid-template-columns: repeat(5, 1fr); position: fixed; bottom: 0; left: 0; right: 0; z-index: 60;
     background: var(--card); border-top: 1px solid var(--line); padding: 6px 0 calc(6px + env(safe-area-inset-bottom));
   }
   .bottom-nav a { display: grid; justify-items: center; font-size: 1.2rem; gap: 2px; color: var(--muted); }
@@ -305,3 +305,67 @@ textarea { min-height: 80px; resize: vertical; }
 .tip-box { background: var(--brand-soft); border-radius: 12px; padding: 12px; margin: 8px 0; }
 .tip-chips { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 8px; }
 .tip-chips .chip { text-align: center; padding: 8px 4px; }
+
+/* ---- Favourites ------------------------------------------------------- */
+.heart { border: 0; background: rgba(255, 255, 255, .92); color: #c53030; width: 36px; height: 36px; border-radius: 50%; font-size: 1.15rem; line-height: 1; display: grid; place-items: center; box-shadow: 0 2px 8px rgba(0, 0, 0, .15); flex: none; }
+.heart:not(.on) { color: #4a5568; }
+.heart.on-banner { position: absolute; top: 10px; right: 10px; z-index: 2; }
+.heart.on-hero { width: 44px; height: 44px; font-size: 1.4rem; }
+
+/* ---- Home: order again, sorting -------------------------------------- */
+.again-row { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 6px; scrollbar-width: none; }
+.again-card { flex: 0 0 240px; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; display: grid; gap: 6px; align-content: start; }
+.again-name { font-weight: 700; border-left: 4px solid; padding-left: 8px; }
+.again-card p { margin: 0; }
+.list-head { flex-wrap: wrap; margin-top: 8px; }
+.list-head .section-title { margin-bottom: 0; }
+.sort-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.sort-row select { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 8px 12px; font-weight: 600; color: var(--ink-2); }
+
+/* ---- Checkout promo -------------------------------------------------- */
+.sum.discount { color: var(--brand-2); font-weight: 600; }
+.promo-box { border-top: 1px dashed var(--line); margin-top: 8px; padding-top: 10px; }
+.promo-box p { margin: 0; }
+.promo-form { display: flex; gap: 8px; }
+.promo-form input { flex: 1; border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 8px 10px; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; outline: none; }
+.promo-form input:focus { border-color: var(--brand); }
+.promo-offers { display: flex; gap: 8px; overflow-x: auto; margin-top: 8px; padding-bottom: 2px; }
+.promo-chip { flex: none; display: grid; text-align: left; border: 1px dashed var(--brand); background: var(--brand-soft); border-radius: 12px; padding: 8px 12px; color: var(--ink); max-width: 240px; }
+.promo-chip strong { letter-spacing: .06em; color: var(--brand-2); }
+.promo-chip span { font-size: .78rem; color: var(--ink-2); }
+
+/* ---- Orders and tracking -------------------------------------------- */
+.order-row { align-items: flex-start; }
+.order-row-main { flex: 1; min-width: 0; color: inherit; }
+.order-row-main p { margin: 2px 0 0; }
+.arriving { font-size: 1.15rem; margin: 2px 0; color: var(--brand-2); }
+.help-card h3 { margin-bottom: 8px; }
+.help-req { border: 1px solid var(--line); border-radius: 12px; padding: 10px; margin-bottom: 8px; }
+.help-req p { margin: 4px 0 0; }
+.help-form { display: grid; gap: 6px; }
+.help-opt { display: flex; gap: 10px; align-items: center; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; cursor: pointer; }
+.help-opt.on { border-color: var(--brand); background: var(--brand-soft); }
+
+/* ---- Saved addresses ------------------------------------------------ */
+.saved-list { display: grid; gap: 6px; margin-bottom: 12px; }
+.saved-addr { display: flex; gap: 10px; align-items: center; text-align: left; border: 1px solid var(--line); background: var(--card); border-radius: 12px; padding: 10px 12px; color: var(--ink); }
+.saved-addr.on { border-color: var(--brand); background: var(--brand-soft); }
+.saved-addr em { display: block; font-style: normal; font-size: .82rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.saved-icon { font-size: 1.3rem; flex: none; }
+.save-as { margin: 4px 0 8px; }
+.save-as .chips { margin: 6px 0; }
+.notes-input { width: 100%; border: 1px solid var(--line); background: var(--bg); border-radius: 12px; padding: 10px 12px; outline: none; }
+
+/* ---- Account -------------------------------------------------------- */
+.acct-head { display: flex; gap: 16px; align-items: center; margin: 8px 0 12px; }
+.acct-head h1 { margin: 0; }
+.acct-head p { margin: 2px 0 0; }
+.acct-avatar { width: 68px; height: 68px; border-radius: 50%; background: radial-gradient(circle at 30% 30%, #48bb78, #0f2a1d); color: #fff; display: grid; place-items: center; font-weight: 800; font-size: 1.5rem; flex: none; }
+.acct-list { list-style: none; padding: 0; margin: 0; }
+.acct-list li { display: flex; gap: 10px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+.acct-list li:first-child { border-top: 0; }
+.acct-list p { margin: 2px 0 0; }
+.acct-edit { display: grid; gap: 6px; width: 100%; }
+.acct-edit input { border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 8px 10px; }
+.acct-help { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: .92rem; color: var(--ink-2); }
+.link.danger { color: var(--bad); }

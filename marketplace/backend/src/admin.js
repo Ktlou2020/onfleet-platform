@@ -23,7 +23,7 @@ function registerAdminRoutes(app, { db, auth, audit }) {
   function dayKpis(day) {
     const placed = one(`SELECT COUNT(*) AS n FROM orders WHERE status <> 'pending_payment' AND ${DAY('created_at')} = ${day}`).n;
     const d = one(`SELECT COUNT(*) AS n, COALESCE(SUM(total_cents), 0) AS gmv, COALESCE(SUM(service_fee_cents), 0) AS service,
-        COALESCE(SUM(delivery_fee_cents), 0) AS delivery, COALESCE(SUM(rider_payout_cents), 0) AS payouts, COALESCE(SUM(tip_cents), 0) AS tips,
+        COALESCE(SUM(delivery_fee_cents), 0) AS delivery, COALESCE(SUM(rider_payout_cents), 0) AS payouts, COALESCE(SUM(tip_cents), 0) AS tips, COALESCE(SUM(discount_cents), 0) AS discounts,
         AVG((julianday(delivered_at) - julianday(created_at)) * 1440) AS minutes
       FROM orders WHERE status = 'delivered' AND ${DAY('delivered_at')} = ${day}`);
     const failed = one(`SELECT COUNT(*) AS n FROM orders WHERE status IN ('cancelled','rejected','returned') AND payment_status <> 'unpaid'
@@ -33,9 +33,10 @@ function registerAdminRoutes(app, { db, auth, audit }) {
       ordersPlaced: placed,
       ordersDelivered: d.n,
       gmvCents: d.gmv,
-      // What the platform keeps: its fees, less what it pays riders. Tips
-      // pass straight through to riders, so they are in neither side.
-      netRevenueCents: d.service + d.delivery - d.payouts,
+      // What the platform keeps: its fees, less what it pays riders and the
+      // promo discounts it funds. Tips pass straight through to riders.
+      netRevenueCents: d.service + d.delivery - d.payouts - d.discounts,
+      discountsCents: d.discounts,
       avgDeliveryMinutes: d.minutes == null ? null : Math.round(d.minutes),
       cancellationRate: placed ? Math.round((failed / placed) * 1000) / 10 : null,
       newCustomers: customers,
@@ -59,6 +60,8 @@ function registerAdminRoutes(app, { db, auth, audit }) {
     const slowStore = db.prepare(`SELECT o.id, o.code, s.name, CAST((julianday('now') - julianday(o.updated_at)) * 1440 AS INTEGER) AS age
       FROM orders o JOIN stores s ON s.id = o.store_id WHERE o.status = 'placed' AND (julianday('now') - julianday(o.updated_at)) * 1440 > ?`).all(STORE_SLOW_MINUTES);
     for (const o of slowStore) add('warning', 'store_slow', `${o.name} hasn't accepted #${o.code}`, `${o.age} min since payment`, { orderId: o.id });
+    const help = one("SELECT COUNT(*) AS n FROM help_requests WHERE status = 'open'").n;
+    if (help) add('warning', 'help', `${help} customer help request${help > 1 ? 's' : ''}`, 'Reply in Incidents', { section: 'incidents' });
     const pending = one("SELECT COUNT(*) AS n FROM stores WHERE status = 'pending'").n;
     if (pending) add('info', 'stores', `${pending} store${pending > 1 ? 's' : ''} waiting for approval`, 'Review in Stores', { section: 'stores' });
     const licences = one('SELECT COUNT(*) AS n FROM stores WHERE licence_number IS NOT NULL AND licence_verified = 0').n;

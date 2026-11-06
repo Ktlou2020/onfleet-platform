@@ -204,6 +204,58 @@ function migrate(db) {
     );
   `);
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS addresses (
+      id         INTEGER PRIMARY KEY,
+      user_id    INTEGER NOT NULL REFERENCES users(id),
+      label      TEXT NOT NULL,
+      address    TEXT NOT NULL,
+      lat        REAL NOT NULL,
+      lng        REAL NOT NULL,
+      city       TEXT,
+      notes      TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS addresses_user ON addresses(user_id);
+
+    CREATE TABLE IF NOT EXISTS favourites (
+      user_id    INTEGER NOT NULL REFERENCES users(id),
+      store_id   INTEGER NOT NULL REFERENCES stores(id),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (user_id, store_id)
+    );
+
+    -- kind: percent (value = %), fixed (value = cents), free_delivery.
+    CREATE TABLE IF NOT EXISTS promos (
+      code               TEXT PRIMARY KEY COLLATE NOCASE,
+      description        TEXT NOT NULL,
+      kind               TEXT NOT NULL CHECK (kind IN ('percent','fixed','free_delivery')),
+      value              INTEGER NOT NULL DEFAULT 0,
+      max_discount_cents INTEGER,
+      min_subtotal_cents INTEGER NOT NULL DEFAULT 0,
+      first_order_only   INTEGER NOT NULL DEFAULT 0,
+      per_user_limit     INTEGER NOT NULL DEFAULT 1,
+      public             INTEGER NOT NULL DEFAULT 1,
+      active             INTEGER NOT NULL DEFAULT 1,
+      expires_at         TEXT
+    );
+    INSERT OR IGNORE INTO promos (code, description, kind, value, max_discount_cents, min_subtotal_cents, first_order_only, per_user_limit) VALUES
+      ('WELCOME20', '20% off your first order (up to R60)', 'percent', 20, 6000, 10000, 1, 1),
+      ('FREEDEL', 'Free delivery on orders over R250', 'free_delivery', 0, NULL, 25000, 0, 3);
+
+    CREATE TABLE IF NOT EXISTS help_requests (
+      id          INTEGER PRIMARY KEY,
+      order_id    INTEGER NOT NULL REFERENCES orders(id),
+      customer_id INTEGER NOT NULL REFERENCES users(id),
+      type        TEXT NOT NULL,
+      note        TEXT NOT NULL DEFAULT '',
+      status      TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','resolved')),
+      resolution  TEXT,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      resolved_at TEXT
+    );
+  `);
+
   // Columns added after the first release. SQLite has no ADD COLUMN IF NOT
   // EXISTS, so check first; this is what upgrades a database already in use.
   const addColumn = (table, column, ddl) => {
@@ -225,6 +277,8 @@ function migrate(db) {
   addColumn('riders', 'paused', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('riders', 'rating_sum', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('riders', 'rating_count', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('orders', 'promo_code', 'TEXT');
+  addColumn('orders', 'discount_cents', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('stores', 'paused_until', 'TEXT');
   addColumn('stores', 'busy_extra_minutes', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('stores', 'hours', 'TEXT');

@@ -1,8 +1,91 @@
-import { useEffect, useState } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { MapContainer, TileLayer, Marker, Polyline, useMap } from 'react-leaflet';
-import { Empty, STATUS, Spinner, api, rand, useLiveOrder, useToast } from '../lib.jsx';
+import { Empty, STATUS, Spinner, api, kmBetween, rand, reorderInto, useCart, useLiveOrder, useToast } from '../lib.jsx';
 import { TILE_ATTR, TILE_URL, pin } from './Address.jsx';
+
+function OrderAgain({ order, small }) {
+  const cart = useCart();
+  const notify = useToast();
+  const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const go = async () => {
+    setBusy(true);
+    try {
+      const r = await reorderInto(order.id, cart);
+      notify(r.missing.length ? `Added what's available — ${r.missing.map((m) => m.name).join(', ')} unavailable` : 'Added to your basket', r.missing.length ? 'bad' : 'ok');
+      navigate('/checkout');
+    } catch (e) { notify(e.message, 'bad'); } finally { setBusy(false); }
+  };
+  return <button className={`btn ${small ? 'btn-sm btn-ghost' : 'full'}`} disabled={busy} onClick={go}>↻ Order again</button>;
+}
+
+const HELP_TYPES = [
+  ['missing_item', 'Something was missing'], ['wrong_item', 'I got the wrong item'], ['damaged', 'Something arrived damaged'],
+  ['late', 'My order was very late'], ['not_received', "I didn't receive my order"], ['rider', 'A problem with the rider'], ['other', 'Something else'],
+];
+
+function Help({ order }) {
+  const notify = useToast();
+  const [open, setOpen] = useState(false);
+  const [requests, setRequests] = useState(null);
+  const [type, setType] = useState('missing_item');
+  const [note, setNote] = useState('');
+  const load = () => api(`/orders/${order.id}/help`).then((d) => setRequests(d.requests)).catch(() => setRequests([]));
+  useEffect(() => { load(); }, [order.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const send = async () => {
+    try {
+      await api(`/orders/${order.id}/help`, { method: 'POST', body: { type, note } });
+      notify("Thanks — our team will get back to you shortly", 'ok');
+      setOpen(false);
+      load();
+    } catch (e) { notify(e.message, 'bad'); }
+  };
+  const live = requests?.find((r) => r.status === 'open');
+  return (
+    <div className="card help-card">
+      <h3>Need help with this order?</h3>
+      {requests?.map((r) => (
+        <div key={r.id} className={`help-req ${r.status}`}>
+          <strong>{r.typeLabel}</strong> <span className={`status ${r.status === 'open' ? 's-placed' : 's-approved'}`}>{r.status === 'open' ? 'We\'re on it' : 'Resolved'}</span>
+          {r.note && <p className="small muted">{r.note}</p>}
+          {r.resolution && <p className="small"><b>Our reply:</b> {r.resolution}</p>}
+        </div>
+      ))}
+      {!live && !open && <button className="btn btn-ghost full" onClick={() => setOpen(true)}>Report a problem</button>}
+      {open && (
+        <div className="help-form">
+          {HELP_TYPES.map(([k, l]) => <label key={k} className={`help-opt ${type === k ? 'on' : ''}`}><input type="radio" name="help" checked={type === k} onChange={() => setType(k)} /> {l}</label>)}
+          <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Tell us what happened (optional)" maxLength={600} />
+          <div className="actions"><button className="btn" onClick={send}>Send</button><button className="btn btn-ghost" onClick={() => setOpen(false)}>Cancel</button></div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Optional browser alerts when the order moves on, for people who switch
+// to another tab while they wait.
+function useStatusAlerts(order) {
+  const [on, setOn] = useState(() => typeof Notification !== 'undefined' && Notification.permission === 'granted');
+  const last = useRef(null);
+  useEffect(() => {
+    if (!order) return;
+    const key = `${order.status}|${order.milestones?.arrivedCustomerAt || ''}`;
+    if (last.current && last.current !== key && on && document.visibilityState !== 'visible') {
+      const body = order.milestones?.arrivedCustomerAt && order.status === 'picked_up' ? 'Your rider is outside 👋' : STATUS[order.status]?.label;
+      try { new Notification(`Order #${order.code}`, { body }); } catch { /* not supported */ }
+    }
+    last.current = key;
+  }, [order, on]);
+  const enable = async () => {
+    if (typeof Notification === 'undefined') return false;
+    const p = await Notification.requestPermission();
+    setOn(p === 'granted');
+    return p === 'granted';
+  };
+  return { on, enable, supported: typeof Notification !== 'undefined' };
+}
 
 export function Orders() {
   const [orders, setOrders] = useState(null);
@@ -13,17 +96,18 @@ export function Orders() {
     <div className="page narrow">
       <h1>Your orders</h1>
       {orders.map((o) => (
-        <Link key={o.id} to={`/orders/${o.id}`} className="card order-row">
-          <div>
+        <div key={o.id} className="card order-row">
+          <Link to={`/orders/${o.id}`} className="order-row-main">
             <strong>{o.store.name}</strong>
             <p className="muted small">#{o.code} · {new Date(o.createdAt + 'Z').toLocaleString('en-ZA', { dateStyle: 'medium', timeStyle: 'short' })}</p>
             <p className="small">{o.items.map((i) => `${i.qty}× ${i.name}`).join(', ')}</p>
-          </div>
+          </Link>
           <div className="right">
             <span className={`status s-${o.status}`}>{STATUS[o.status]?.label}</span>
             <strong>{rand(o.totals.totalCents)}</strong>
+            {['delivered', 'cancelled', 'rejected', 'returned'].includes(o.status) && <OrderAgain order={o} small />}
           </div>
-        </Link>
+        </div>
       ))}
     </div>
   );
@@ -77,6 +161,7 @@ export function Track() {
   const { id } = useParams();
   const [params] = useSearchParams();
   const { order, setOrder, error } = useLiveOrder(id);
+  const alerts = useStatusAlerts(order);
   const notify = useToast();
 
   // Back from Paystack: confirm the payment straight away rather than
@@ -99,6 +184,12 @@ export function Track() {
   const points = [[order.store.lat, order.store.lng], [order.dropoff.lat, order.dropoff.lng], ...(rider ? [[rider.lat, rider.lng]] : [])];
   const eta = new Date(new Date(order.createdAt + 'Z').getTime() + order.etaMinutes * 60000);
 
+  // Once the rider has the order, count down from where they actually are.
+  const riderLoc = order.rider?.location;
+  const liveMinutes = order.status === 'picked_up' && riderLoc
+    ? Math.max(1, Math.round((kmBetween(riderLoc, order.dropoff) * 1.3 / 25) * 60 + 1))
+    : null;
+
   const cancel = async () => {
     if (!window.confirm('Cancel this order? You will be refunded in full.')) return;
     try {
@@ -114,7 +205,12 @@ export function Track() {
         <div>
           <p className="eyebrow">Order #{order.code} · {order.store.name}</p>
           <h1>{headline}</h1>
-          {!ended && order.status !== 'delivered' && <p className="muted">Arriving around <strong>{eta.toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit' })}</strong></p>}
+          {!ended && order.status !== 'delivered' && (liveMinutes && !m.arrivedCustomerAt
+            ? <p className="arriving">Arriving in <strong>~{liveMinutes} min</strong></p>
+            : <p className="muted">Arriving around <strong>{eta.toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit' })}</strong></p>)}
+          {!ended && order.status !== 'delivered' && alerts.supported && !alerts.on && (
+            <button className="link small" onClick={() => alerts.enable().then((ok) => notify(ok ? "We'll alert you when your order moves on" : 'Alerts are blocked in your browser settings'))}>🔔 Alert me when it moves on</button>
+          )}
           {ended && order.cancelReason && <p className="muted">{order.cancelReason}{order.paymentStatus === 'refunded' && ' · Refunded in full'}</p>}
         </div>
         {order.status === 'picked_up' && <div className="live-dot">LIVE</div>}
@@ -159,12 +255,14 @@ export function Track() {
       )}
 
       {order.status === 'delivered' && !order.review && <Review order={order} onDone={setOrder} />}
+      {['delivered', 'cancelled', 'rejected', 'returned'].includes(order.status) && <OrderAgain order={order} />}
 
       <div className="card">
         <h3>Receipt</h3>
         {order.items.map((i) => <div key={i.product_id} className="sum"><span>{i.qty}× {i.name}</span><span>{rand(i.qty * i.price_cents)}</span></div>)}
         <div className="sum"><span>Delivery</span><span>{order.totals.deliveryFeeCents ? rand(order.totals.deliveryFeeCents) : 'Free'}</span></div>
         <div className="sum"><span>Service fee</span><span>{rand(order.totals.serviceFeeCents)}</span></div>
+        {order.totals.discountCents > 0 && <div className="sum discount"><span>🏷️ {order.totals.promoCode}</span><span>−{rand(order.totals.discountCents)}</span></div>}
         {order.totals.tipCents > 0 && <div className="sum"><span>Rider tip</span><span>{rand(order.totals.tipCents)}</span></div>}
         <div className="sum total"><span>Total</span><span>{rand(order.totals.totalCents)}</span></div>
         <p className="muted small">Incl. VAT {rand(order.totals.vatCents)} · Paid: {order.paymentStatus}</p>
@@ -180,6 +278,7 @@ export function Track() {
       </div>
 
       {['pending_payment', 'placed'].includes(order.status) && <button className="btn btn-ghost full" onClick={cancel}>Cancel order</button>}
+      {order.status !== 'pending_payment' && <Help order={order} />}
     </div>
   );
 }

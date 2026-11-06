@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Empty, Spinner, api, rand, useCart, useLoc } from '../lib.jsx';
-import { ProductRow } from './Home.jsx';
+import { Heart, ProductRow } from './Home.jsx';
 
 export default function Store() {
   const { slug } = useParams();
@@ -38,7 +38,7 @@ export default function Store() {
     <div className="page">
       <section className="store-hero" style={{ background: `linear-gradient(135deg, ${s.accent}, #0f2a1d)` }}>
         <Link to="/" className="back">← Stores</Link>
-        <h1>{s.name}</h1>
+        <div className="row-between"><h1>{s.name}</h1><Heart storeId={s.id} name={s.name} className="on-hero" /></div>
         <p>{s.description}</p>
         <div className="store-facts">
           {s.rating && <span>★ {s.rating.toFixed(1)} ({s.ratingCount})</span>}

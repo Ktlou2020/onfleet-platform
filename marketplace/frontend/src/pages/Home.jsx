@@ -1,15 +1,37 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
-import { BRAND, Empty, Spinner, api, rand, useCart, useLoc, useMeta, useToast } from '../lib.jsx';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { BRAND, Empty, Spinner, api, rand, reorderInto, useAuth, useCart, useFavourites, useLoc, useMeta, useToast } from '../lib.jsx';
 
 function qs(params) {
   return new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')).toString();
+}
+
+export function Heart({ storeId, name, className = '' }) {
+  const { user } = useAuth();
+  const { ids, toggle } = useFavourites();
+  const navigate = useNavigate();
+  const notify = useToast();
+  const on = ids.has(storeId);
+  const click = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!user) return navigate('/login');
+    if (user.role !== 'customer') return;
+    const nowOn = await toggle(storeId);
+    notify(nowOn ? `Saved ${name} to favourites` : `Removed ${name} from favourites`);
+  };
+  return (
+    <button className={`heart ${on ? 'on' : ''} ${className}`} onClick={click} aria-pressed={on} aria-label={on ? `Remove ${name} from favourites` : `Save ${name} to favourites`}>
+      {on ? '♥' : '♡'}
+    </button>
+  );
 }
 
 export function StoreCard({ s }) {
   return (
     <Link to={`/store/${s.slug}`} className={`store-card ${!s.isOpen || s.delivers === false ? 'dim' : ''}`}>
       <div className="store-banner" style={{ background: `linear-gradient(135deg, ${s.accent}, ${s.accent}cc 60%, #0f2a1d)` }}>
+        <Heart storeId={s.id} name={s.name} className="on-banner" />
         <span className="store-initial">{s.name[0]}</span>
         {!s.isOpen && <span className="tag tag-dark">{s.openLabel || 'Closed'}</span>}
         {s.isOpen && s.delivers === false && <span className="tag tag-dark">Too far</span>}
@@ -77,6 +99,31 @@ export default function Home({ searchMode, onAddress }) {
   const [q, setQ] = useState(params.get('q') || '');
   const [stores, setStores] = useState(null);
   const [results, setResults] = useState(null);
+  const [sort, setSort] = useState('fastest');
+  const [only, setOnly] = useState({ open: false, free: false });
+  const [recent, setRecent] = useState([]);
+  const { user } = useAuth();
+  const { ids: favIds } = useFavourites();
+  const cart = useCart();
+  const notify = useToast();
+  const navigate = useNavigate();
+
+  // The last few stores this customer ordered from, newest first.
+  useEffect(() => {
+    if (user?.role !== 'customer' || searchMode) return;
+    api('/orders').then((d) => {
+      const seen = new Set();
+      setRecent(d.orders.filter((o) => o.status === 'delivered' && !seen.has(o.store.id) && seen.add(o.store.id)).slice(0, 6));
+    }).catch(() => {});
+  }, [user?.id, user?.role, searchMode]);
+
+  const again = async (o) => {
+    try {
+      const r = await reorderInto(o.id, cart);
+      notify(r.missing.length ? `Added what's available — ${r.missing.map((m) => m.name).join(', ')} unavailable` : `Added your ${o.store.name} order to the basket`, r.missing.length ? 'bad' : 'ok');
+      navigate('/checkout');
+    } catch (e) { notify(e.message, 'bad'); }
+  };
 
   const where = useMemo(() => ({ city: loc?.city, lat: loc?.lat, lng: loc?.lng, category }), [loc, category]);
 
@@ -100,6 +147,17 @@ export default function Home({ searchMode, onAddress }) {
   };
 
   const fastest = stores?.filter((s) => s.isOpen && s.delivers !== false)[0];
+  const shown = useMemo(() => {
+    if (!stores) return null;
+    const list = stores.filter((x) => (!only.open || (x.isOpen && x.delivers !== false)) && (!only.free || (x.deliveryFeeCents ?? 99999) <= 3000));
+    const by = {
+      fastest: (a, b) => (b.isOpen - a.isOpen) || ((a.etaMinutes ?? 99) - (b.etaMinutes ?? 99)),
+      rating: (a, b) => (b.isOpen - a.isOpen) || ((b.rating ?? 0) - (a.rating ?? 0)),
+      nearest: (a, b) => (a.distanceKm ?? 99) - (b.distanceKm ?? 99),
+    };
+    return [...list].sort(by[sort]);
+  }, [stores, sort, only]);
+  const favStores = stores?.filter((x) => favIds.has(x.id)) || [];
 
   return (
     <div className="page">
@@ -153,11 +211,44 @@ export default function Home({ searchMode, onAddress }) {
         </section>
       ) : (
         <section>
-          <h2 className="section-title">{category ? `${meta?.categories.find((c) => c.slug === category)?.name} stores` : 'Stores near you'}</h2>
-          {!stores ? <div className="center pad"><Spinner /></div> : stores.length === 0 ? (
-            <Empty icon="🏪" title="No stores here yet">We're onboarding stores in your city. Try another city or category.</Empty>
+          {!category && recent.length > 0 && (
+            <>
+              <h2 className="section-title">Order again</h2>
+              <div className="again-row">
+                {recent.map((o) => (
+                  <div key={o.id} className="again-card">
+                    <Link to={`/store/${o.store.slug}`} className="again-name" style={{ borderColor: o.store.accent }}>{o.store.name}</Link>
+                    <p className="muted small clamp">{o.items.map((i) => `${i.qty}× ${i.name}`).join(', ')}</p>
+                    <button className="btn btn-sm" onClick={() => again(o)}>↻ Order again · {rand(o.totals.subtotalCents)}</button>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+          {!category && favStores.length > 0 && (
+            <>
+              <h2 className="section-title">♥ Your favourites</h2>
+              <div className="store-grid">{favStores.map((s) => <StoreCard key={`f${s.id}`} s={s} />)}</div>
+            </>
+          )}
+          <div className="row-between list-head">
+            <h2 className="section-title">{category ? `${meta?.categories.find((c) => c.slug === category)?.name} stores` : 'All stores near you'}</h2>
+            <div className="sort-row">
+              <select value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort stores">
+                <option value="fastest">Fastest</option>
+                <option value="rating">Top rated</option>
+                <option value="nearest">Nearest</option>
+              </select>
+              <button className={`chip ${only.open ? 'on' : ''}`} onClick={() => setOnly((o) => ({ ...o, open: !o.open }))} aria-pressed={only.open}>Open now</button>
+              <button className={`chip ${only.free ? 'on' : ''}`} onClick={() => setOnly((o) => ({ ...o, free: !o.free }))} aria-pressed={only.free}>Delivery under R30</button>
+            </div>
+          </div>
+          {!shown ? <div className="center pad"><Spinner /></div> : shown.length === 0 ? (
+            stores.length === 0
+              ? <Empty icon="🏪" title="No stores here yet">We're onboarding stores in your city. Try another city or category.</Empty>
+              : <Empty icon="🔍" title="No stores match">Try turning off a filter.</Empty>
           ) : (
-            <div className="store-grid">{stores.map((s) => <StoreCard key={s.id} s={s} />)}</div>
+            <div className="store-grid">{shown.map((s) => <StoreCard key={s.id} s={s} />)}</div>
           )}
         </section>
       )}

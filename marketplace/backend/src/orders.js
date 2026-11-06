@@ -277,6 +277,8 @@ function orderView(db, orderId, viewer) {
       deliveryFeeCents: o.delivery_fee_cents,
       serviceFeeCents: o.service_fee_cents,
       tipCents: o.tip_cents,
+      discountCents: o.discount_cents,
+      promoCode: o.promo_code,
       totalCents: o.total_cents,
       vatCents: o.vat_cents,
     },

@@ -46,16 +46,20 @@ export default function Checkout({ onAddress }) {
   const [quoteError, setQuoteError] = useState('');
   const [notes, setNotes] = useState('');
   const [tipCents, setTipCents] = useState(1000);
+  const [promoInput, setPromoInput] = useState('');
+  const [promoCode, setPromoCode] = useState('');
+  const [offers, setOffers] = useState([]);
+  useEffect(() => { api('/promos').then((d) => setOffers(d.promos)).catch(() => {}); }, [user?.id]);
   const [busy, setBusy] = useState(false);
 
   const itemsKey = JSON.stringify(cart.items.map((i) => [i.id, i.qty]));
   useEffect(() => {
     if (!cart.store || !loc) { setQuote(null); return; }
     setQuoteError('');
-    api('/quote', { method: 'POST', body: { storeId: cart.store.id, items: cart.items.map((i) => ({ productId: i.id, qty: i.qty })), lat: loc.lat, lng: loc.lng } })
+    api('/quote', { method: 'POST', body: { storeId: cart.store.id, items: cart.items.map((i) => ({ productId: i.id, qty: i.qty })), lat: loc.lat, lng: loc.lng, promoCode: promoCode || undefined } })
       .then((d) => setQuote(d.quote))
       .catch((e) => { setQuote(null); setQuoteError(e.message); });
-  }, [itemsKey, loc, cart.store]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [itemsKey, loc, cart.store, promoCode, user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!cart.items.length) {
     return <div className="page"><Empty icon="🛒" title="Your basket is empty"><Link className="btn" to="/">Browse stores</Link></Empty></div>;
@@ -66,7 +70,7 @@ export default function Checkout({ onAddress }) {
     try {
       const { order } = await api('/orders', {
         method: 'POST',
-        body: { storeId: cart.store.id, items: cart.items.map((i) => ({ productId: i.id, qty: i.qty })), lat: loc.lat, lng: loc.lng, address: loc.label, notes, tipCents },
+        body: { storeId: cart.store.id, items: cart.items.map((i) => ({ productId: i.id, qty: i.qty })), lat: loc.lat, lng: loc.lng, address: loc.label, notes, tipCents, promoCode: quote?.promo ? promoCode : undefined },
       });
       const paid = await api(`/orders/${order.id}/pay`, { method: 'POST' });
       clear();
@@ -123,6 +127,29 @@ export default function Checkout({ onAddress }) {
           <>
             <div className="sum"><span>Delivery ({quote.distanceKm} km)</span><span>{quote.deliveryFeeCents ? rand(quote.deliveryFeeCents) : 'Free'}</span></div>
             <div className="sum"><span>Service fee</span><span>{rand(quote.serviceFeeCents)}</span></div>
+            {quote.discountCents > 0 && <div className="sum discount"><span>🏷️ {quote.promo.code}</span><span>−{rand(quote.discountCents)}</span></div>}
+            <div className="promo-box">
+              {quote.promo ? (
+                <p className="small"><strong>{quote.promo.code}</strong> applied — {quote.promo.description}. <button className="link" onClick={() => { setPromoCode(''); setPromoInput(''); }}>Remove</button></p>
+              ) : (
+                <>
+                  <form className="promo-form" onSubmit={(e) => { e.preventDefault(); setPromoCode(promoInput.trim().toUpperCase()); }}>
+                    <input value={promoInput} onChange={(e) => setPromoInput(e.target.value)} placeholder="Promo code" aria-label="Promo code" autoCapitalize="characters" />
+                    <button className="btn btn-sm btn-ghost" disabled={!promoInput.trim()}>Apply</button>
+                  </form>
+                  {quote.promoError && promoCode && <p className="error small">{quote.promoError}</p>}
+                  {offers.length > 0 && (
+                    <div className="promo-offers">
+                      {offers.map((o) => (
+                        <button key={o.code} type="button" className="promo-chip" onClick={() => { setPromoInput(o.code); setPromoCode(o.code); }}>
+                          <strong>{o.code}</strong><span>{o.description}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
             <div className="tip-box">
               <div className="row-between"><strong>Tip your rider</strong><span className="muted small">100% goes to them</span></div>
               <div className="tip-chips">

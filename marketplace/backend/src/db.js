@@ -220,6 +220,8 @@ function migrate(db) {
   addColumn('orders', 'picked_up_at', 'TEXT');
   addColumn('orders', 'arrived_customer_at', 'TEXT');
   addColumn('orders', 'rider_rating', 'INTEGER');
+  addColumn('users', 'last_login_at', 'TEXT');
+  addColumn('users', 'must_change_password', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('riders', 'paused', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('riders', 'rating_sum', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('riders', 'rating_count', 'INTEGER NOT NULL DEFAULT 0');

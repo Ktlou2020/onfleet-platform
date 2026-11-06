@@ -11,6 +11,7 @@ const pricing = require('./pricing');
 const orders = require('./orders');
 const payments = require('./payments');
 const { registerRiderRoutes } = require('./rider');
+const { registerAdminRoutes } = require('./admin');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-secret-change-me';
 if (process.env.NODE_ENV === 'production' && JWT_SECRET === 'dev-only-secret-change-me') {
@@ -61,7 +62,10 @@ function createApp(db) {
   }
 
   function publicUser(u) {
-    return { id: u.id, email: u.email, name: u.name, phone: u.phone, role: u.role, ageVerified: !!u.age_verified, dob: u.dob };
+    return {
+      id: u.id, email: u.email, name: u.name, phone: u.phone, role: u.role, ageVerified: !!u.age_verified, dob: u.dob,
+      createdAt: u.created_at, lastLoginAt: u.last_login_at, mustChangePassword: !!u.must_change_password,
+    };
   }
 
   function auth(...roles) {
@@ -109,10 +113,36 @@ function createApp(db) {
     const user = email && db.prepare('SELECT * FROM users WHERE email = ?').get(email);
     if (!user || !(await bcrypt.compare(password || '', user.password_hash))) return res.status(401).json({ error: 'Email or password is wrong' });
     if (user.suspended) return res.status(403).json({ error: 'This account is suspended' });
-    res.json({ token: sign(user), user: publicUser(user) });
+    // Shown back to the user as "last signed in", so record the sign-in
+    // before this one too.
+    const previous = user.last_login_at;
+    db.prepare("UPDATE users SET last_login_at = datetime('now') WHERE id = ?").run(user.id);
+    if (user.role === 'admin') audit(user.id, 'signed_in');
+    res.json({ token: sign(user), user: { ...publicUser(user), lastLoginAt: previous } });
   }));
 
   app.get('/api/me', auth(), (req, res) => res.json({ user: publicUser(req.user) }));
+
+  app.patch('/api/me', auth(), (req, res) => {
+    const b = req.body || {};
+    const name = b.name === undefined ? req.user.name : String(b.name).trim().slice(0, 80);
+    if (!name) return res.status(400).json({ error: 'Your name cannot be empty' });
+    const phone = b.phone === undefined ? req.user.phone : String(b.phone).trim().slice(0, 20) || null;
+    if (phone && !/^[+\d][\d\s-]{6,19}$/.test(phone)) return res.status(400).json({ error: 'Enter a valid phone number' });
+    db.prepare('UPDATE users SET name = ?, phone = ? WHERE id = ?').run(name, phone, req.user.id);
+    audit(req.user.id, 'profile_updated', { name: name !== req.user.name, phone: phone !== req.user.phone });
+    res.json({ user: publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)) });
+  });
+
+  app.post('/api/me/password', auth(), authLimiter, wrap(async (req, res) => {
+    const { currentPassword, newPassword } = req.body || {};
+    if (!(await bcrypt.compare(String(currentPassword || ''), req.user.password_hash))) return res.status(400).json({ error: 'Your current password is wrong' });
+    if (!newPassword || String(newPassword).length < 10) return res.status(400).json({ error: 'Use a new password of at least 10 characters' });
+    if (newPassword === currentPassword) return res.status(400).json({ error: 'Choose a password you have not used here' });
+    db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?').run(await bcrypt.hash(String(newPassword), 10), req.user.id);
+    audit(req.user.id, 'password_changed');
+    res.json({ user: publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)) });
+  }));
 
   app.post('/api/me/verify-age', auth(), authLimiter, (req, res) => {
     const parsed = compliance.parseSaId(req.body?.idNumber);
@@ -539,6 +569,7 @@ function createApp(db) {
 
   // ---- Rider -------------------------------------------------------------
   registerRiderRoutes(app, { db, auth, requireAdult, audit, refund });
+  registerAdminRoutes(app, { db, auth, audit });
 
   // ---- Admin -------------------------------------------------------------
   app.get('/api/admin/overview', auth('admin'), (req, res) => {
@@ -600,10 +631,6 @@ function createApp(db) {
     res.json({ settings: settings() });
   });
 
-  app.get('/api/admin/orders', auth('admin'), (req, res) => {
-    const ids = db.prepare('SELECT id FROM orders ORDER BY id DESC LIMIT 100').all();
-    res.json({ orders: ids.map(({ id }) => orders.orderView(db, id, 'admin')) });
-  });
 
   app.get('/api/admin/riders', auth('admin'), (req, res) => {
     const active = orders.RIDER_ACTIVE.map(() => '?').join(',');

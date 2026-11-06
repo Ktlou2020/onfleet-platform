@@ -11,7 +11,7 @@ export function StoreCard({ s }) {
     <Link to={`/store/${s.slug}`} className={`store-card ${!s.isOpen || s.delivers === false ? 'dim' : ''}`}>
       <div className="store-banner" style={{ background: `linear-gradient(135deg, ${s.accent}, ${s.accent}cc 60%, #0f2a1d)` }}>
         <span className="store-initial">{s.name[0]}</span>
-        {!s.isOpen && <span className="tag tag-dark">Closed</span>}
+        {!s.isOpen && <span className="tag tag-dark">{s.openLabel || 'Closed'}</span>}
         {s.isOpen && s.delivers === false && <span className="tag tag-dark">Too far</span>}
         {s.etaMinutes != null && s.isOpen && s.delivers !== false && <span className="eta-pill">{s.etaMinutes}–{s.etaMinutes + 10} min</span>}
       </div>

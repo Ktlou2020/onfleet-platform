@@ -1,29 +1,47 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Empty, STATUS, Spinner, api, rand, useAuth, useMeta, useToast } from '../lib.jsx';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { BRAND, Empty, STATUS, Spinner, api, rand, useAuth, useMeta, useToast } from '../lib.jsx';
 import { VerifyAge } from './Checkout.jsx';
+import { Columns } from '../charts.jsx';
+import '../admin.css';
+import '../merchant.css';
 
-const NEXT_ACTION = {
-  placed: [['accepted', 'Accept'], ['rejected', 'Decline']],
-  accepted: [['preparing', 'Start packing'], ['ready', 'Ready for pickup']],
-  preparing: [['ready', 'Ready for pickup']],
+const clock = (secs) => {
+  const s = Math.abs(Math.round(secs));
+  return `${secs < 0 ? '-' : ''}${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 };
+const when = (s, opts = { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) => (s ? new Date(s.replace(' ', 'T') + 'Z').toLocaleString('en-ZA', opts) : '—');
+const DAYS = [['mon', 'Monday'], ['tue', 'Tuesday'], ['wed', 'Wednesday'], ['thu', 'Thursday'], ['fri', 'Friday'], ['sat', 'Saturday'], ['sun', 'Sunday']];
+const SECTIONS = [['orders', '🧾', 'Orders'], ['menu', '📦', 'Menu'], ['insights', '📈', 'Insights'], ['payouts', '💳', 'Payouts'], ['reviews', '⭐', 'Reviews'], ['store', '🏪', 'Store settings']];
 
-function beep() {
+// A repeating chime while orders are waiting to be accepted, the way a
+// kitchen printer keeps beeping until someone deals with the ticket.
+let ctx;
+function unlockAudio() {
+  try { ctx = ctx || new (window.AudioContext || window.webkitAudioContext)(); if (ctx.state === 'suspended') ctx.resume(); } catch { /* no audio */ }
+}
+function ding() {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const o = ctx.createOscillator();
-    o.frequency.value = 880;
-    o.connect(ctx.destination);
-    o.start();
-    o.stop(ctx.currentTime + 0.25);
+    if (!ctx) return;
+    [0, 0.22].forEach((t, i) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.frequency.value = i ? 1320 : 990;
+      g.gain.setValueAtTime(0.3, ctx.currentTime + t);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + t + 0.2);
+      o.connect(g).connect(ctx.destination);
+      o.start(ctx.currentTime + t);
+      o.stop(ctx.currentTime + t + 0.21);
+    });
   } catch { /* no audio */ }
 }
+
+// ---- Setup (no store yet) ---------------------------------------------------
 
 function Setup({ onCreated }) {
   const meta = useMeta();
   const { user } = useAuth();
   const notify = useToast();
-  const [f, setF] = useState({ name: '', city: 'johannesburg', address: '', description: '', licenceNumber: '' });
+  const [f, setF] = useState({ name: '', city: 'johannesburg', address: '', phone: '', description: '', licenceNumber: '' });
   const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
   if (!user.ageVerified) return <div className="page narrow"><h1>Open your store</h1><VerifyAge /></div>;
   const submit = async (e) => {
@@ -36,14 +54,15 @@ function Setup({ onCreated }) {
   };
   return (
     <div className="page narrow">
-      <h1>Open your store</h1>
-      <p className="muted">List with us and reach customers across your city, with riders, payments and tracking handled for you.</p>
+      <h1>Open your store on {BRAND.name}</h1>
+      <p className="muted">Reach customers across your city. Riders, payments, tracking and ID checks are handled for you — you pack, we deliver.</p>
       <form className="card" onSubmit={submit}>
         <label className="field"><span>Store name</span><input value={f.name} onChange={set('name')} required /></label>
         <label className="field"><span>City</span>
           <select value={f.city} onChange={set('city')}>{meta?.cities.map((c) => <option key={c.slug} value={c.slug}>{c.name}</option>)}</select>
         </label>
         <label className="field"><span>Street address (riders collect here)</span><input value={f.address} onChange={set('address')} required /></label>
+        <label className="field"><span>Store phone (for riders and support)</span><input value={f.phone} onChange={set('phone')} inputMode="tel" /></label>
         <label className="field"><span>Short description</span><textarea value={f.description} onChange={set('description')} maxLength={400} /></label>
         <label className="field"><span>Licence or permit number (if you hold one)</span><input value={f.licenceNumber} onChange={set('licenceNumber')} /></label>
         <button className="btn btn-lg full">Apply</button>
@@ -52,41 +71,167 @@ function Setup({ onCreated }) {
   );
 }
 
-function OrderCard({ o, onChange }) {
-  const notify = useToast();
-  const act = async (status) => {
-    let reason;
-    if (status === 'rejected') {
-      reason = window.prompt('Why are you declining? The customer will see this.', 'Out of stock');
-      if (reason === null) return;
-    }
-    try {
-      await api(`/merchant/orders/${o.id}/status`, { method: 'POST', body: { status, reason } });
-      onChange();
-    } catch (e) { notify(e.message, 'bad'); }
-  };
-  const age = Math.round((Date.now() - new Date(o.createdAt + 'Z').getTime()) / 60000);
+// ---- Orders board --------------------------------------------------------
+
+function useTick(ms = 1000) {
+  const [, set] = useState(0);
+  useEffect(() => { const t = setInterval(() => set((n) => n + 1), ms); return () => clearInterval(t); }, [ms]);
+}
+
+function Slip({ o, store }) {
   return (
-    <div className={`card order-card s-${o.status}`}>
-      <div className="row-between">
-        <strong>#{o.code}</strong>
-        <span className={`status s-${o.status}`}>{STATUS[o.status]?.label}</span>
-      </div>
-      <p className="muted small">{o.customer.name} · {o.distanceKm} km · {age} min ago</p>
-      <ul className="pick-list">{o.items.map((i) => <li key={i.product_id}><strong>{i.qty}×</strong> {i.name}</li>)}</ul>
-      {o.notes && <p className="small">📝 {o.notes}</p>}
-      <p className="small">{o.rider ? `🛵 ${o.rider.name} assigned` : ['accepted', 'preparing', 'ready'].includes(o.status) ? '⏳ Finding a rider…' : ''}</p>
-      <div className="row-between">
-        <strong>{rand(o.totals.subtotalCents)}</strong>
-        <div className="actions">
-          {(NEXT_ACTION[o.status] || []).map(([s, label]) => (
-            <button key={s} className={`btn btn-sm ${s === 'rejected' ? 'btn-ghost' : ''}`} onClick={() => act(s)}>{label}</button>
-          ))}
-        </div>
+    <div className="m-slip" id="m-slip">
+      <h2>{store.name}</h2>
+      <p>Order <strong>#{o.code}</strong> · {when(o.createdAt)}</p>
+      <p>For: <strong>{o.customer.name}</strong></p>
+      <table><tbody>{o.items.map((i) => <tr key={i.product_id}><td>☐ {i.qty}×</td><td>{i.name}</td></tr>)}</tbody></table>
+      {o.notes && <p>Note: {o.notes}</p>}
+      <p className="m-slip-foot">18+ only — rider checks ID at the door</p>
+    </div>
+  );
+}
+
+function OrderCard({ o, store, onAccept, onDecline, act, onPrint }) {
+  useTick();
+  const startedAt = useRef(Date.now());
+  useEffect(() => { startedAt.current = Date.now(); }, [o.waitingSeconds, o.prepSecondsLeft]);
+  const drift = (Date.now() - startedAt.current) / 1000;
+  const waited = o.waitingSeconds + drift;
+  const prepLeft = o.prepSecondsLeft != null ? o.prepSecondsLeft - drift : null;
+  const items = o.items.reduce((n, i) => n + i.qty, 0);
+  return (
+    <article className={`m-order lane-${o.lane} ${o.lane === 'new' && waited > 180 ? 'urgent' : ''}`}>
+      <header>
+        <div><strong className="m-code">#{o.code}</strong> <span className="muted small">{o.customer.name}</span></div>
+        {o.lane === 'new' && <span className={`m-timer ${waited > 180 ? 'bad' : ''}`}>{clock(waited)}</span>}
+        {o.lane === 'preparing' && prepLeft != null && <span className={`m-timer ${prepLeft < 0 ? 'bad' : prepLeft < 120 ? 'warn' : ''}`}>{prepLeft < 0 ? `${clock(-prepLeft)} late` : `${clock(prepLeft)} left`}</span>}
+      </header>
+      <ul className="m-items">{o.items.map((i) => <li key={i.product_id}><b>{i.qty}×</b> {i.name}</li>)}</ul>
+      {o.notes && <p className="m-note">📝 {o.notes}</p>}
+      <p className="m-rider">
+        {o.riderAtStore ? <span className="m-here">🛵 {o.rider.name} is at the counter</span>
+          : o.rider ? <>🛵 {o.rider.name} assigned{o.lane === 'out' ? ' — on the way' : ' — heading to you'}</>
+            : o.lane === 'new' ? <>{items} item{items === 1 ? '' : 's'} · {rand(o.totals.subtotalCents)}</>
+              : <span className="muted">⏳ Finding a rider…</span>}
+      </p>
+      <footer>
+        {o.lane === 'new' && <>
+          <button className="btn btn-ghost" onClick={() => onDecline(o)}>Decline</button>
+          <button className="btn grow" onClick={() => onAccept(o)}>Accept</button>
+        </>}
+        {o.lane === 'preparing' && <>
+          <button className="btn btn-ghost" onClick={() => onPrint(o)} aria-label="Print packing slip">🖨️</button>
+          <button className="btn grow" onClick={() => act(o, 'ready')}>Mark ready</button>
+        </>}
+        {o.lane === 'ready' && <p className="muted small">{o.riderAtStore ? 'Hand the bag to the rider and check it against the list.' : 'Packed — waiting for the rider.'}</p>}
+        {o.lane === 'out' && <p className="muted small">Collected {when(o.milestones.pickedUpAt, { hour: '2-digit', minute: '2-digit' })}</p>}
+      </footer>
+    </article>
+  );
+}
+
+function Modal({ title, children, onClose }) {
+  return (
+    <div className="m-modal-back" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="m-modal" role="dialog" aria-label={title}>
+        <div className="row-between"><h3>{title}</h3><button className="nav-link" onClick={onClose} aria-label="Close">✕</button></div>
+        {children}
       </div>
     </div>
   );
 }
+
+function Board({ data, reload, setStore }) {
+  const notify = useToast();
+  const [accepting, setAccepting] = useState(null);
+  const [declining, setDeclining] = useState(null);
+  const [printing, setPrinting] = useState(null);
+  const [lane, setLane] = useState('new');
+  const [reason, setReason] = useState('out_of_stock');
+  const [note, setNote] = useState('');
+  const [meta, setMeta] = useState({ prepChoices: [5, 10, 15, 20, 30], declineReasons: {} });
+  useEffect(() => { api('/merchant/store').then((d) => setMeta({ prepChoices: d.prepChoices, declineReasons: d.declineReasons })); }, []);
+
+  const act = async (o, status, extra = {}) => {
+    try { await api(`/merchant/orders/${o.id}/status`, { method: 'POST', body: { status, ...extra } }); reload(); } catch (e) { notify(e.message, 'bad'); }
+  };
+  const print = (o) => { setPrinting(o); setTimeout(() => window.print(), 50); };
+
+  const lanes = [['new', 'New'], ['preparing', 'Preparing'], ['ready', 'Ready'], ['out', 'With rider']];
+  const byLane = Object.fromEntries(lanes.map(([k]) => [k, data.live.filter((o) => o.lane === k)]));
+  const s = data.store;
+  const defaultPrep = s.prepMinutes;
+
+  return (
+    <>
+      {data.lowStock.length > 0 && (() => {
+        const out = data.lowStock.filter((p) => p.stock === 0);
+        const low = data.lowStock.filter((p) => p.stock > 0);
+        return (
+          <p className="banner warn small">
+            📦 {out.length > 0 && <>Sold out: {out.map((p) => p.name).join(', ')}{low.length ? ' · ' : ''}</>}
+            {low.length > 0 && <>Running low: {low.map((p) => `${p.name} (${p.stock} left)`).join(', ')}</>}
+          </p>
+        );
+      })()}
+      <div className="m-lane-tabs">
+        {lanes.map(([k, l]) => <button key={k} className={lane === k ? 'on' : ''} onClick={() => setLane(k)}>{l}{byLane[k].length ? <b>{byLane[k].length}</b> : null}</button>)}
+      </div>
+      <div className="m-board">
+        {lanes.map(([k, l]) => (
+          <section key={k} className={`m-lane ${lane === k ? 'shown' : ''}`}>
+            <h3>{l} <span>{byLane[k].length}</span></h3>
+            {byLane[k].length === 0 ? <p className="m-empty">{k === 'new' ? 'New orders appear here with a chime.' : 'Nothing here.'}</p>
+              : byLane[k].map((o) => <OrderCard key={o.id} o={o} store={s} act={act} onPrint={print}
+                onAccept={(x) => { unlockAudio(); setAccepting(x); }} onDecline={(x) => { setReason('out_of_stock'); setNote(''); setDeclining(x); }} />)}
+          </section>
+        ))}
+      </div>
+
+      {data.recent.length > 0 && (
+        <details className="m-recent">
+          <summary>Finished today ({data.recent.length})</summary>
+          <table className="adm-table">
+            <tbody>{data.recent.map((o) => (
+              <tr key={o.id}><td><strong>#{o.code}</strong></td><td>{o.customer.name}</td><td><span className={`status s-${o.status}`}>{STATUS[o.status]?.label}</span></td><td className="muted small">{o.cancelReason || ''}</td><td className="num">{rand(o.totals.subtotalCents)}</td></tr>
+            ))}</tbody>
+          </table>
+        </details>
+      )}
+
+      {accepting && (
+        <Modal title={`Accept #${accepting.code}`} onClose={() => setAccepting(null)}>
+          <p className="muted">How long until it's packed? The customer's arrival time updates to match.</p>
+          <div className="m-prep">
+            {meta.prepChoices.map((m) => (
+              <button key={m} className={m === defaultPrep ? 'suggested' : ''} onClick={() => { act(accepting, 'accepted', { prepMinutes: m }); setAccepting(null); }}>
+                <strong>{m}</strong><span>min</span>
+              </button>
+            ))}
+          </div>
+          <p className="muted small">Suggested: {defaultPrep} min{s.busyExtraMinutes ? ` (includes +${s.busyExtraMinutes} busy time)` : ''}.</p>
+        </Modal>
+      )}
+
+      {declining && (
+        <Modal title={`Decline #${declining.code}?`} onClose={() => setDeclining(null)}>
+          <p className="muted">The customer is refunded in full and sees your reason. Declining often lowers your ranking — consider pausing instead if you're swamped.</p>
+          {Object.entries(meta.declineReasons).map(([k, l]) => (
+            <label key={k} className={`m-reason ${reason === k ? 'on' : ''}`}><input type="radio" name="reason" checked={reason === k} onChange={() => setReason(k)} /> {l}</label>
+          ))}
+          <label className="field"><span>Add a note (optional)</span><input value={note} onChange={(e) => setNote(e.target.value)} maxLength={160} placeholder="e.g. Grinders sold out" /></label>
+          <div className="actions">
+            <button className="btn btn-ghost" onClick={() => { setDeclining(null); api('/merchant/store', { method: 'PATCH', body: { pauseMinutes: 30 } }).then((d) => setStore(d.store)); }}>Pause 30 min instead</button>
+            <button className="btn" onClick={() => { act(declining, 'rejected', { reasonCode: reason, reason: note }); setDeclining(null); }}>Decline order</button>
+          </div>
+        </Modal>
+      )}
+      {printing && <Slip o={printing} store={s} />}
+    </>
+  );
+}
+
+// ---- Menu ---------------------------------------------------------------------
 
 function ProductForm({ categories, initial, onSaved, onCancel }) {
   const notify = useToast();
@@ -99,12 +244,13 @@ function ProductForm({ categories, initial, onSaved, onCancel }) {
     try {
       if (initial?.id) await api(`/merchant/products/${initial.id}`, { method: 'PATCH', body });
       else await api('/merchant/products', { method: 'POST', body });
+      notify('Saved', 'ok');
       onSaved();
     } catch (err) { notify(err.message, 'bad'); }
   };
   return (
     <form className="card" onSubmit={submit}>
-      <h3>{initial?.id ? 'Edit product' : 'New product'}</h3>
+      <h3>{initial?.id ? `Edit ${initial.name}` : 'New product'}</h3>
       <label className="field"><span>Name</span><input value={f.name} onChange={set('name')} required /></label>
       <div className="grid-2">
         <label className="field"><span>Category</span>
@@ -122,51 +268,274 @@ function ProductForm({ categories, initial, onSaved, onCancel }) {
       ) : null}
       <label className="field"><span>Description</span><textarea value={f.description} onChange={set('description')} maxLength={600} /></label>
       {cat?.regulated ? <p className="banner warn small">This category only goes live once your licence is verified and covers it.</p> : null}
-      <div className="actions">
-        <button className="btn">Save</button>
-        <button type="button" className="btn btn-ghost" onClick={onCancel}>Cancel</button>
-      </div>
+      <div className="actions"><button className="btn">Save</button><button type="button" className="btn btn-ghost" onClick={onCancel}>Cancel</button></div>
     </form>
   );
 }
 
-function Products() {
+function Menu() {
   const [data, setData] = useState(null);
   const [editing, setEditing] = useState(null);
+  const [q, setQ] = useState('');
+  const [filter, setFilter] = useState('all');
   const notify = useToast();
   const load = useCallback(() => api('/merchant/products').then(setData), []);
   useEffect(() => { load(); }, [load]);
+  const shown = useMemo(() => (data?.products || []).filter((p) => (!q || p.name.toLowerCase().includes(q.toLowerCase()))
+    && (filter === 'all' || (filter === 'low' && p.lowStock) || (filter === 'out' && p.active && !p.inStock) || (filter === 'hidden' && (!p.active || p.blockedReason)) || filter === p.category.slug)), [data, q, filter]);
   if (!data) return <Spinner />;
-  const patch = async (p, body) => {
-    try { await api(`/merchant/products/${p.id}`, { method: 'PATCH', body }); load(); } catch (e) { notify(e.message, 'bad'); }
+  const patch = async (p, body, msg) => {
+    try { await api(`/merchant/products/${p.id}`, { method: 'PATCH', body }); if (msg) notify(msg, 'ok'); load(); } catch (e) { notify(e.message, 'bad'); }
   };
+  const counts = { low: data.products.filter((p) => p.lowStock).length, out: data.products.filter((p) => p.active && !p.inStock).length };
+  const cats = [...new Map(data.products.map((p) => [p.category.slug, p.category])).values()];
+  if (editing) return <ProductForm categories={data.categories} initial={editing === 'new' ? null : editing} onSaved={() => { setEditing(null); load(); }} onCancel={() => setEditing(null)} />;
   return (
-    <div>
-      {editing ? (
-        <ProductForm categories={data.categories} initial={editing === 'new' ? null : editing} onSaved={() => { setEditing(null); load(); }} onCancel={() => setEditing(null)} />
-      ) : (
+    <>
+      <div className="adm-toolbar">
+        <input className="adm-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search your menu" aria-label="Search menu" />
         <button className="btn" onClick={() => setEditing('new')}>+ Add product</button>
-      )}
-      <div className="table">
-        {data.products.map((p) => (
-          <div key={p.id} className={`trow ${!p.live ? 'dim' : ''}`}>
+      </div>
+      <div className="chips">
+        <button className={`chip ${filter === 'all' ? 'on' : ''}`} onClick={() => setFilter('all')}>All {data.products.length}</button>
+        <button className={`chip ${filter === 'low' ? 'on' : ''}`} onClick={() => setFilter('low')}>Low stock {counts.low}</button>
+        <button className={`chip ${filter === 'out' ? 'on' : ''}`} onClick={() => setFilter('out')}>Sold out {counts.out}</button>
+        <button className={`chip ${filter === 'hidden' ? 'on' : ''}`} onClick={() => setFilter('hidden')}>Hidden</button>
+        {cats.map((c) => <button key={c.slug} className={`chip ${filter === c.slug ? 'on' : ''}`} onClick={() => setFilter(c.slug)}>{c.icon} {c.name}</button>)}
+      </div>
+      <div className="m-menu">
+        {shown.length === 0 && <p className="muted">Nothing matches.</p>}
+        {shown.map((p) => (
+          <div key={p.id} className={`m-product ${!p.live ? 'dim' : ''}`}>
             <span className="product-icon sm">{p.category.icon}</span>
             <div className="grow">
               <strong>{p.name}</strong>
-              <p className="muted small">{rand(p.priceCents)} / {p.unit} · {p.live ? 'Live' : p.active ? `Hidden — ${p.blockedReason}` : 'Switched off'}</p>
+              <p className="muted small">
+                {rand(p.priceCents)} / {p.unit} · {p.soldThisWeek} sold this week ·{' '}
+                {!p.active ? 'switched off' : p.blockedReason ? `hidden — ${p.blockedReason}` : !p.inStock ? <b className="m-bad">sold out</b> : p.lowStock ? <b className="m-warn">only {p.stock} left</b> : 'live'}
+              </p>
             </div>
             <div className="stepper">
-              <button onClick={() => patch(p, { stock: Math.max(0, p.stock - 1) })} aria-label="Less stock">−</button>
+              <button onClick={() => patch(p, { stock: Math.max(0, p.stock - 1) })} aria-label={`Less ${p.name}`}>−</button>
               <span>{p.stock}</span>
-              <button onClick={() => patch(p, { stock: p.stock + 1 })} aria-label="More stock">+</button>
+              <button onClick={() => patch(p, { stock: p.stock + 1 })} aria-label={`More ${p.name}`}>+</button>
             </div>
+            {p.inStock
+              ? <button className="btn btn-sm btn-ghost" onClick={() => patch(p, { stock: 0 }, `${p.name} marked sold out`)}>Sold out</button>
+              : <button className="btn btn-sm" onClick={() => patch(p, { stock: 10 }, `${p.name} back in stock`)}>Restock 10</button>}
             <button className="link" onClick={() => setEditing({ ...p, category: p.category.slug, price: (p.priceCents / 100).toFixed(2) })}>Edit</button>
-            <label className="switch" title="Listed">
-              <input type="checkbox" checked={p.active} onChange={(e) => patch(p, { active: e.target.checked })} />
+            <label className="switch" title={p.active ? 'Listed' : 'Not listed'}>
+              <input type="checkbox" checked={p.active} onChange={(e) => patch(p, { active: e.target.checked })} aria-label={`List ${p.name}`} />
               <span />
             </label>
           </div>
         ))}
+      </div>
+    </>
+  );
+}
+
+// ---- Insights -------------------------------------------------------------------
+
+function Insights() {
+  const [days, setDays] = useState(7);
+  const [d, setD] = useState(null);
+  useEffect(() => { setD(null); api(`/merchant/insights?days=${days}`).then(setD); }, [days]);
+  if (!d) return <Spinner />;
+  const t = d.totals;
+  const label = (day) => new Date(day + 'T12:00:00Z').toLocaleDateString('en-ZA', { weekday: 'short', day: 'numeric', month: 'short' });
+  const series = d.series.map((x, i) => ({ key: x.day, label: label(x.day), short: i === d.series.length - 1 ? 'Today' : new Date(x.day + 'T12:00:00Z').toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' }), value: x.salesCents, extra: `${x.orders} order${x.orders === 1 ? '' : 's'}` }));
+  const hourly = d.hourly.map((h) => ({ key: h.hour, label: `${String(h.hour).padStart(2, '0')}:00`, tick: h.hour % 3 === 0 ? `${h.hour}h` : '', value: h.orders }));
+  const busiest = d.hourly.reduce((a, b) => (b.orders > a.orders ? b : a), { hour: null, orders: 0 });
+  return (
+    <>
+      <div className="adm-seg m-range">
+        <button className={days === 7 ? 'on' : ''} onClick={() => setDays(7)}>Last 7 days</button>
+        <button className={days === 30 ? 'on' : ''} onClick={() => setDays(30)}>Last 30 days</button>
+      </div>
+      <div className="m-stats">
+        <div><span>Sales</span><strong>{rand(t.salesCents)}</strong><em>item totals, delivered</em></div>
+        <div><span>Orders</span><strong>{t.orders}</strong><em>delivered</em></div>
+        <div><span>Average order</span><strong>{rand(t.avgOrderCents)}</strong><em>per delivery</em></div>
+        <div><span>Prep time</span><strong>{t.avgPrepMinutes != null ? `${t.avgPrepMinutes} min` : '—'}</strong><em>accept → ready</em></div>
+        <div><span>Acceptance</span><strong>{t.acceptanceRate != null ? `${t.acceptanceRate}%` : '—'}</strong><em>orders you took</em></div>
+        <div><span>Rating</span><strong>{t.rating ? `★ ${t.rating}` : 'New'}</strong><em>{t.ratingCount} review{t.ratingCount === 1 ? '' : 's'}</em></div>
+      </div>
+      <div className="adm-two">
+        <section className="adm-card">
+          <h3>Sales per day</h3>
+          <Columns data={series} format={(v, axis) => (axis && v >= 100000 ? `R${Math.round(v / 100000)}K` : rand(v))} label="Sales per day" highlightLast />
+        </section>
+        <section className="adm-card">
+          <h3>When customers order</h3>
+          <Columns data={hourly} format={(v) => String(Math.round(v))} label="Orders by hour of day" />
+          <p className="muted small">{busiest.orders ? `Busiest around ${busiest.hour}:00 — have stock packed and staff on hand.` : 'Not enough orders yet to show a pattern.'}</p>
+        </section>
+      </div>
+      <section className="adm-card">
+        <h3>Best sellers</h3>
+        {d.topProducts.length === 0 ? <p className="muted">No deliveries in this period yet.</p> : (
+          <table className="adm-table">
+            <thead><tr><th>Product</th><th className="num">Sold</th><th className="num">Sales</th></tr></thead>
+            <tbody>{d.topProducts.map((p) => <tr key={p.id}><td>{p.name}</td><td className="num">{p.qty}</td><td className="num">{rand(p.salesCents)}</td></tr>)}</tbody>
+          </table>
+        )}
+      </section>
+    </>
+  );
+}
+
+// ---- Payouts and reviews -------------------------------------------------
+
+function Payouts() {
+  const [d, setD] = useState(null);
+  useEffect(() => { api('/merchant/payouts').then(setD); }, []);
+  if (!d) return <Spinner />;
+  const weekLabel = (w) => {
+    const a = new Date(w + 'T12:00:00Z');
+    const b = new Date(a.getTime() + 6 * 864e5);
+    return `${a.toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })} – ${b.toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })}`;
+  };
+  return (
+    <>
+      <div className="m-stats"><div><span>Owed to you · last 12 weeks</span><strong>{rand(d.owedCents)}</strong><em>before any payouts made</em></div></div>
+      <p className="muted small">{d.note}</p>
+      {d.statements.length === 0 ? <Empty icon="💳" title="No payouts yet">Your weekly statements appear here after your first delivery.</Empty> : (
+        <table className="adm-table">
+          <thead><tr><th>Week</th><th className="num">Orders</th><th className="num">Refunded</th><th className="num">Payout</th><th>Status</th></tr></thead>
+          <tbody>{d.statements.map((s) => (
+            <tr key={s.weekStart}><td>{weekLabel(s.weekStart)}</td><td className="num">{s.orders}</td><td className="num">{s.refundedOrders}</td><td className="num"><strong>{rand(s.payoutCents)}</strong></td>
+              <td>{s.status === 'in_progress' ? <span className="status s-placed">This week</span> : <span className="status s-approved">Due</span>}</td></tr>
+          ))}</tbody>
+        </table>
+      )}
+    </>
+  );
+}
+
+function Reviews() {
+  const [d, setD] = useState(null);
+  const [drafts, setDrafts] = useState({});
+  const notify = useToast();
+  const load = useCallback(() => api('/merchant/reviews').then(setD), []);
+  useEffect(() => { load(); }, [load]);
+  if (!d) return <Spinner />;
+  const max = Math.max(1, ...d.distribution.map((x) => x.count));
+  const reply = async (r) => {
+    try { await api(`/merchant/reviews/${r.id}/reply`, { method: 'POST', body: { reply: drafts[r.id] } }); notify('Reply posted', 'ok'); load(); } catch (e) { notify(e.message, 'bad'); }
+  };
+  return (
+    <>
+      <div className="m-rating">
+        <div className="m-rating-big"><strong>{d.rating ?? '—'}</strong><span>★ from {d.ratingCount} review{d.ratingCount === 1 ? '' : 's'}</span></div>
+        <div className="m-dist">
+          {d.distribution.map((x) => (
+            <div key={x.stars} className="m-dist-row"><span>{x.stars}★</span><i><b style={{ width: `${(x.count / max) * 100}%` }} /></i><span>{x.count}</span></div>
+          ))}
+        </div>
+      </div>
+      {d.reviews.length === 0 ? <Empty icon="⭐" title="No reviews yet">Reviews from customers show up here — reply to thank them or put things right.</Empty>
+        : d.reviews.map((r) => (
+          <div key={r.id} className="card">
+            <div className="row-between"><strong className="m-stars">{'★'.repeat(r.rating)}<span>{'★'.repeat(5 - r.rating)}</span></strong><span className="muted small">{r.name} · #{r.orderCode} · {when(r.at, { dateStyle: 'medium' })}</span></div>
+            {r.comment ? <p>{r.comment}</p> : <p className="muted small">No comment.</p>}
+            {r.reply ? <p className="m-reply"><b>Your reply:</b> {r.reply}</p> : (
+              <div className="m-reply-form">
+                <input value={drafts[r.id] || ''} onChange={(e) => setDrafts({ ...drafts, [r.id]: e.target.value })} placeholder="Reply publicly…" maxLength={500} aria-label="Reply to review" />
+                <button className="btn btn-sm" onClick={() => reply(r)} disabled={!drafts[r.id]?.trim()}>Reply</button>
+              </div>
+            )}
+          </div>
+        ))}
+    </>
+  );
+}
+
+// ---- Store settings ---------------------------------------------------------
+
+function StoreSettings({ store, onSaved }) {
+  const notify = useToast();
+  const [f, setF] = useState({ description: store.description, prepMinutes: store.prepMinutes - (store.busyExtraMinutes || 0), deliveryRadiusKm: store.deliveryRadiusKm, licenceNumber: store.licenceNumber || '', phone: store.phone || '' });
+  const [hoursOn, setHoursOn] = useState(!!store.hours);
+  const [hours, setHours] = useState(() => Object.fromEntries(DAYS.map(([k]) => [k, store.hours?.[k] || (store.hours ? null : ['09:00', '21:00'])])));
+  const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
+  const save = async (body, msg = 'Saved') => {
+    try { const d = await api('/merchant/store', { method: 'PATCH', body }); onSaved(d.store); notify(msg, 'ok'); } catch (err) { notify(err.message, 'bad'); }
+  };
+  return (
+    <div className="adm-two">
+      <form className="adm-card" onSubmit={(e) => { e.preventDefault(); save(f); }}>
+        <h3>Store details</h3>
+        <label className="field"><span>Description customers see</span><textarea value={f.description} onChange={set('description')} maxLength={400} /></label>
+        <div className="grid-2">
+          <label className="field"><span>Usual packing time (min)</span><input type="number" min="3" max="60" value={f.prepMinutes} onChange={set('prepMinutes')} /></label>
+          <label className="field"><span>Delivery radius (km)</span><input type="number" min="1" max="25" value={f.deliveryRadiusKm} onChange={set('deliveryRadiusKm')} /></label>
+        </div>
+        <label className="field"><span>Store phone</span><input value={f.phone} onChange={set('phone')} inputMode="tel" /></label>
+        <label className="field"><span>Licence number</span><input value={f.licenceNumber} onChange={set('licenceNumber')} /></label>
+        <p className="small muted">Licence: {store.licenceVerified ? `✅ verified for ${store.licenceCategories.join(', ') || 'no categories yet'}` : store.licenceNumber ? '⏳ awaiting verification' : 'none on file'}. Changing the number sends it back for review.</p>
+        <button className="btn">Save details</button>
+      </form>
+      <div className="adm-card">
+        <div className="row-between">
+          <h3>Opening hours</h3>
+          <label className="switch" title="Use opening hours"><input type="checkbox" checked={hoursOn} onChange={(e) => setHoursOn(e.target.checked)} aria-label="Use opening hours" /><span /></label>
+        </div>
+        <p className="muted small">{hoursOn ? 'Outside these hours you close automatically and customers see when you open next.' : `No hours set — you're open whenever your switch is on (within ${BRAND.name}'s delivery hours).`}</p>
+        {hoursOn && DAYS.map(([k, label]) => (
+          <div key={k} className="m-hours-row">
+            <label className="m-day"><input type="checkbox" checked={!!hours[k]} onChange={(e) => setHours({ ...hours, [k]: e.target.checked ? ['09:00', '21:00'] : null })} /> {label}</label>
+            {hours[k] ? <>
+              <input type="time" value={hours[k][0]} onChange={(e) => setHours({ ...hours, [k]: [e.target.value, hours[k][1]] })} aria-label={`${label} opens`} />
+              <span className="muted">to</span>
+              <input type="time" value={hours[k][1]} onChange={(e) => setHours({ ...hours, [k]: [hours[k][0], e.target.value] })} aria-label={`${label} closes`} />
+            </> : <span className="muted small">Closed</span>}
+          </div>
+        ))}
+        <button className="btn adm-gap" onClick={() => save({ hours: hoursOn ? hours : null }, 'Opening hours saved')}>Save hours</button>
+      </div>
+    </div>
+  );
+}
+
+// ---- Shell -------------------------------------------------------------------
+
+function StatusBar({ store, setStore, stats }) {
+  const notify = useToast();
+  const [menu, setMenu] = useState(false);
+  const patch = async (body, msg) => {
+    try { const d = await api('/merchant/store', { method: 'PATCH', body }); setStore(d.store); if (msg) notify(msg, 'ok'); } catch (e) { notify(e.message, 'bad'); }
+  };
+  const a = store.availability;
+  return (
+    <div className="m-bar">
+      <div className="m-bar-id">
+        <h1>{store.name}</h1>
+        <span className={`m-pill ${a.open ? 'open' : a.reason}`}>{a.open ? '●' : a.reason === 'paused' ? '⏸' : '○'} {a.label}</span>
+        {store.status !== 'approved' && <span className="status s-placed">{store.status === 'pending' ? 'Awaiting approval' : 'Suspended'}</span>}
+      </div>
+      <div className="m-bar-stats">
+        <span><b>{stats?.todayOrders ?? 0}</b> delivered today</span>
+        <span><b>{rand(stats?.todaySalesCents ?? 0)}</b> sales</span>
+        {stats?.avgPrepMinutes != null && <span><b>{stats.avgPrepMinutes} min</b> avg prep</span>}
+      </div>
+      <div className="m-bar-actions">
+        <div className="m-busy">
+          <span className="muted small">Busy time</span>
+          <div className="adm-seg">{[0, 10, 20, 30].map((m) => <button key={m} className={store.busyExtraMinutes === m ? 'on' : ''} onClick={() => patch({ busyExtraMinutes: m }, m ? `Adding ${m} min to prep times` : 'Back to normal prep times')}>{m ? `+${m}` : 'Off'}</button>)}</div>
+        </div>
+        {a.reason === 'paused'
+          ? <button className="btn" onClick={() => patch({ pauseMinutes: 0 }, 'Taking orders again')}>Resume orders</button>
+          : (
+            <div className="m-pause">
+              <button className="btn btn-ghost" onClick={() => setMenu((x) => !x)} disabled={!store.switchedOn}>⏸ Pause</button>
+              {menu && <div className="m-pause-menu">{[15, 30, 60, 120].map((m) => <button key={m} onClick={() => { setMenu(false); patch({ pauseMinutes: m }, `Paused for ${m} min`); }}>{m < 60 ? `${m} min` : `${m / 60} h`}</button>)}</div>}
+            </div>
+          )}
+        <label className="m-switch">
+          <span>{store.switchedOn ? 'Open' : 'Closed'}</span>
+          <span className="switch"><input type="checkbox" checked={store.switchedOn} onChange={(e) => patch({ isOpen: e.target.checked }, e.target.checked ? 'Store open' : 'Store closed')} aria-label="Store open" /><span /></span>
+        </label>
       </div>
     </div>
   );
@@ -174,104 +543,62 @@ function Products() {
 
 export default function Merchant() {
   const [store, setStore] = useState(undefined);
-  const [tab, setTab] = useState('orders');
-  const [data, setData] = useState(null);
+  const [section, setSection] = useState('orders');
+  const [board, setBoard] = useState(null);
+  const [sound, setSound] = useState(false);
   const notify = useToast();
-  const seen = useRef(new Set());
+  const seen = useRef(null);
 
   useEffect(() => { api('/merchant/store').then((d) => setStore(d.store)); }, []);
 
-  const loadOrders = useCallback(() => api('/merchant/orders').then((d) => {
-    const fresh = d.orders.filter((o) => o.status === 'placed' && !seen.current.has(o.id));
-    if (fresh.length && seen.current.size) { beep(); notify(`New order #${fresh[0].code}`, 'ok'); }
-    d.orders.forEach((o) => seen.current.add(o.id));
-    if (!seen.current.size) seen.current.add(-1);
-    setData(d);
-  }), [notify]);
+  const loadBoard = useCallback(() => api('/merchant/orders').then((d) => {
+    const fresh = d.live.filter((o) => o.lane === 'new' && seen.current && !seen.current.has(o.id));
+    if (fresh.length) notify(`New order #${fresh[0].code}`, 'ok');
+    seen.current = new Set(d.live.map((o) => o.id));
+    setBoard(d);
+    if (d.store) setStore(d.store);
+  }).catch(() => {}), [notify]);
 
   useEffect(() => {
     if (!store) return undefined;
-    loadOrders();
-    const t = setInterval(loadOrders, 5000);
+    loadBoard();
+    const t = setInterval(loadBoard, 4000);
     return () => clearInterval(t);
-  }, [store, loadOrders]);
+  }, [store?.id, loadBoard]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keep chiming while anything sits in New.
+  const waiting = board?.live.filter((o) => o.lane === 'new').length || 0;
+  useEffect(() => {
+    if (!sound || !waiting) return undefined;
+    ding();
+    const t = setInterval(ding, 4000);
+    return () => clearInterval(t);
+  }, [sound, waiting]);
 
   if (store === undefined) return <div className="page center pad"><Spinner /></div>;
   if (!store) return <Setup onCreated={setStore} />;
 
-  const toggleOpen = async () => {
-    const d = await api('/merchant/store', { method: 'PATCH', body: { isOpen: !store.isOpen } });
-    setStore(d.store);
-  };
-
-  const live = data?.orders.filter((o) => ['placed', 'accepted', 'preparing', 'ready', 'picked_up'].includes(o.status)) || [];
-  const past = data?.orders.filter((o) => !live.includes(o)) || [];
-
   return (
-    <div className="page">
-      <div className="console-head">
-        <div>
-          <p className="eyebrow">Store console</p>
-          <h1>{store.name}</h1>
-          {store.status !== 'approved' && <p className="banner warn">Your store is {store.status}. You can add products now; customers will see you once approved.</p>}
-        </div>
-        <button className={`btn ${store.isOpen ? '' : 'btn-ghost'}`} onClick={toggleOpen}>{store.isOpen ? '🟢 Open — tap to close' : '🔴 Closed — tap to open'}</button>
+    <div className="m-app">
+      <StatusBar store={store} setStore={setStore} stats={board?.stats} />
+      <nav className="m-nav">
+        {SECTIONS.map(([k, icon, label]) => (
+          <button key={k} className={section === k ? 'on' : ''} onClick={() => setSection(k)}>
+            {icon} {label}{k === 'orders' && waiting ? <b className="adm-badge hot">{waiting}</b> : null}
+          </button>
+        ))}
+        <button className={`m-sound ${sound ? 'on' : ''}`} onClick={() => { unlockAudio(); setSound((x) => !x); }} title="Order alerts">
+          {sound ? '🔔 Alerts on' : '🔕 Turn on alerts'}
+        </button>
+      </nav>
+      <div className="m-main">
+        {section === 'orders' && (board ? <Board data={board} reload={loadBoard} setStore={setStore} /> : <Spinner />)}
+        {section === 'menu' && <Menu />}
+        {section === 'insights' && <Insights />}
+        {section === 'payouts' && <Payouts />}
+        {section === 'reviews' && <Reviews />}
+        {section === 'store' && <StoreSettings store={store} onSaved={setStore} />}
       </div>
-
-      <div className="stats">
-        <div><span>Orders today</span><strong>{data?.stats?.todayOrders ?? '–'}</strong></div>
-        <div><span>Sales today</span><strong>{data?.stats ? rand(data.stats.todaySalesCents) : '–'}</strong></div>
-        <div><span>Live now</span><strong>{live.length}</strong></div>
-        <div><span>Rating</span><strong>{store.rating ? `★ ${store.rating}` : 'New'}</strong></div>
-      </div>
-
-      <div className="tabs">
-        {['orders', 'products', 'settings'].map((t) => <button key={t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)}>{t[0].toUpperCase() + t.slice(1)}</button>)}
-      </div>
-
-      {tab === 'orders' && (!data ? <Spinner /> : (
-        <>
-          {live.length === 0 ? <Empty icon="🧾" title="No live orders">New orders appear here with a sound.</Empty> : (
-            <div className="board">{live.map((o) => <OrderCard key={o.id} o={o} onChange={loadOrders} />)}</div>
-          )}
-          {past.length > 0 && (
-            <>
-              <h2 className="section-title">Earlier</h2>
-              <div className="table">{past.slice(0, 20).map((o) => (
-                <div key={o.id} className="trow"><strong>#{o.code}</strong><span className="grow muted small">{o.items.length} items · {o.customer.name}</span><span className={`status s-${o.status}`}>{STATUS[o.status]?.label}</span><strong>{rand(o.totals.subtotalCents)}</strong></div>
-              ))}</div>
-            </>
-          )}
-        </>
-      ))}
-      {tab === 'products' && <Products />}
-      {tab === 'settings' && <StoreSettings store={store} onSaved={setStore} />}
     </div>
-  );
-}
-
-function StoreSettings({ store, onSaved }) {
-  const notify = useToast();
-  const [f, setF] = useState({ description: store.description, prepMinutes: store.prepMinutes, deliveryRadiusKm: store.deliveryRadiusKm, licenceNumber: store.licenceNumber || '' });
-  const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
-  const save = async (e) => {
-    e.preventDefault();
-    try {
-      const d = await api('/merchant/store', { method: 'PATCH', body: f });
-      onSaved(d.store);
-      notify('Saved', 'ok');
-    } catch (err) { notify(err.message, 'bad'); }
-  };
-  return (
-    <form className="card narrow-card" onSubmit={save}>
-      <label className="field"><span>Description</span><textarea value={f.description} onChange={set('description')} /></label>
-      <div className="grid-2">
-        <label className="field"><span>Packing time (min)</span><input type="number" min="3" max="60" value={f.prepMinutes} onChange={set('prepMinutes')} /></label>
-        <label className="field"><span>Delivery radius (km)</span><input type="number" min="1" max="25" value={f.deliveryRadiusKm} onChange={set('deliveryRadiusKm')} /></label>
-      </div>
-      <label className="field"><span>Licence number</span><input value={f.licenceNumber} onChange={set('licenceNumber')} /></label>
-      <p className="small muted">Licence: {store.licenceVerified ? `✅ verified for ${store.licenceCategories.join(', ') || 'no categories yet'}` : store.licenceNumber ? '⏳ awaiting verification' : 'none on file'}. Changing the number sends it back for review.</p>
-      <button className="btn">Save settings</button>
-    </form>
   );
 }

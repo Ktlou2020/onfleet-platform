@@ -225,6 +225,15 @@ function migrate(db) {
   addColumn('riders', 'paused', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('riders', 'rating_sum', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('riders', 'rating_count', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('stores', 'paused_until', 'TEXT');
+  addColumn('stores', 'busy_extra_minutes', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('stores', 'hours', 'TEXT');
+  addColumn('stores', 'phone', 'TEXT');
+  addColumn('orders', 'accepted_at', 'TEXT');
+  addColumn('orders', 'ready_at', 'TEXT');
+  addColumn('orders', 'prep_minutes', 'INTEGER');
+  addColumn('reviews', 'store_reply', 'TEXT');
+  addColumn('reviews', 'replied_at', 'TEXT');
   db.exec('CREATE INDEX IF NOT EXISTS orders_offer ON orders(offered_rider_id)');
 }
 

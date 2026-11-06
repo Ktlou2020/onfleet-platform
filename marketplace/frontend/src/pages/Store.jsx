@@ -45,7 +45,7 @@ export default function Store() {
           {s.etaMinutes != null && <span>⏱ {s.etaMinutes}–{s.etaMinutes + 10} min</span>}
           {s.deliveryFeeCents != null && <span>🛵 {rand(s.deliveryFeeCents)}</span>}
           {s.distanceKm != null && <span>📍 {s.distanceKm} km</span>}
-          <span>{s.isOpen ? '🟢 Open' : '🔴 Closed'}</span>
+          <span>{s.isOpen ? `🟢 ${s.openLabel || 'Open'}` : `🔴 ${s.openLabel || 'Closed'}`}</span>
         </div>
         {s.delivers === false && <p className="banner warn">This store doesn't deliver to your address. Choose a closer store or change your address.</p>}
       </section>
@@ -73,7 +73,7 @@ export default function Store() {
           <h2 className="section-title">What customers say</h2>
           <div className="reviews">
             {data.reviews.map((r, i) => (
-              <div key={i} className="review"><strong>{'★'.repeat(r.rating)}</strong> <span className="muted">{r.name}</span>{r.comment && <p>{r.comment}</p>}</div>
+              <div key={i} className="review"><strong>{'★'.repeat(r.rating)}</strong> <span className="muted">{r.name}</span>{r.comment && <p>{r.comment}</p>}{r.reply && <p className="muted small">↳ <b>{s.name}:</b> {r.reply}</p>}</div>
             ))}
           </div>
         </section>

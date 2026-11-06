@@ -12,6 +12,8 @@ const orders = require('./orders');
 const payments = require('./payments');
 const { registerRiderRoutes } = require('./rider');
 const { registerAdminRoutes } = require('./admin');
+const { registerMerchantRoutes } = require('./merchant');
+const { availability } = require('./storeHours');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-secret-change-me';
 if (process.env.NODE_ENV === 'production' && JWT_SECRET === 'dev-only-secret-change-me') {
@@ -172,16 +174,18 @@ function createApp(db) {
 
   function storeSummary(s, origin) {
     const rating = s.rating_count ? Math.round((s.rating_sum / s.rating_count) * 10) / 10 : null;
+    const avail = availability(s);
+    const prep = s.prep_minutes + (s.busy_extra_minutes || 0);
     const out = {
       id: s.id, slug: s.slug, name: s.name, description: s.description, address: s.address, accent: s.accent,
-      isOpen: !!s.is_open, rating, ratingCount: s.rating_count, prepMinutes: s.prep_minutes, city: s.city_slug,
+      isOpen: avail.open, openLabel: avail.label, rating, ratingCount: s.rating_count, prepMinutes: prep, city: s.city_slug,
       lat: s.lat, lng: s.lng,
     };
     if (origin) {
       const km = pricing.roadKm(s, origin);
       out.distanceKm = km;
       out.delivers = km <= s.delivery_radius_km;
-      out.etaMinutes = pricing.etaMinutes(km, s.prep_minutes);
+      out.etaMinutes = pricing.etaMinutes(km, prep);
       out.deliveryFeeCents = pricing.deliveryFeeCents(km, 0);
     }
     return out;
@@ -236,7 +240,7 @@ function createApp(db) {
     const s = db.prepare(`SELECT s.*, c.slug AS city_slug FROM stores s JOIN cities c ON c.id = s.city_id WHERE s.slug = ? AND s.status = 'approved'`).get(req.params.slug);
     if (!s) return res.status(404).json({ error: 'Store not found' });
     const reviews = db.prepare(`
-      SELECT r.rating, r.comment, r.created_at, u.name FROM reviews r JOIN users u ON u.id = r.customer_id
+      SELECT r.rating, r.comment, r.created_at, r.store_reply AS reply, u.name FROM reviews r JOIN users u ON u.id = r.customer_id
       WHERE r.store_id = ? ORDER BY r.id DESC LIMIT 10
     `).all(s.id).map((r) => ({ ...r, name: r.name.split(' ')[0] }));
     res.json({ store: storeSummary(s, parseOrigin(req.query)), products: sellableProducts(s), reviews });
@@ -289,7 +293,7 @@ function createApp(db) {
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) throw new orders.OrderError('Choose a delivery address');
     const km = pricing.roadKm(store, { lat, lng });
     if (km > store.delivery_radius_km) throw new orders.OrderError(`${store.name} doesn't deliver that far (${km} km — limit ${store.delivery_radius_km} km)`);
-    return pricing.quote({ subtotalCents: subtotal, km, prepMinutes: store.prep_minutes });
+    return pricing.quote({ subtotalCents: subtotal, km, prepMinutes: store.prep_minutes + (store.busy_extra_minutes || 0) });
   }
 
   app.post('/api/quote', wrap(async (req, res) => {
@@ -307,7 +311,8 @@ function createApp(db) {
 
     const create = db.transaction(() => {
       const { store, lines, subtotal } = buildBasket(req.body.storeId, req.body.items);
-      if (!store.is_open) throw new orders.OrderError(`${store.name} is closed right now`, 409);
+      const avail = availability(store);
+      if (!avail.open) throw new orders.OrderError(`${store.name} isn't taking orders right now (${avail.label.toLowerCase()})`, 409);
       const q = quoteFor(store, subtotal, req.body);
       if (q.belowMinimum) throw new orders.OrderError(`The minimum order is R${q.minimumOrderCents / 100}`);
       // The rider tip is optional, goes to the rider in full, and is not
@@ -438,9 +443,7 @@ function createApp(db) {
     res.status(201).json({ order: orders.orderView(db, order.id, 'customer') });
   });
 
-  // ---- Merchant ----------------------------------------------------------
-  const myStore = (userId) => db.prepare('SELECT * FROM stores WHERE owner_id = ?').get(userId);
-
+  // How admin sees a store: the public summary plus status and licence.
   function merchantStoreView(s) {
     return {
       ...storeSummary({ ...s, city_slug: db.prepare('SELECT slug FROM cities WHERE id = ?').get(s.city_id)?.slug }),
@@ -449,123 +452,8 @@ function createApp(db) {
     };
   }
 
-  app.get('/api/merchant/store', auth('merchant'), (req, res) => {
-    const s = myStore(req.user.id);
-    res.json({ store: s ? merchantStoreView(s) : null });
-  });
-
-  app.post('/api/merchant/store', auth('merchant'), requireAdult, (req, res) => {
-    if (myStore(req.user.id)) return res.status(409).json({ error: 'You already have a store' });
-    const b = req.body || {};
-    const city = db.prepare('SELECT * FROM cities WHERE slug = ?').get(b.city);
-    if (!city) return res.status(400).json({ error: 'Choose a city' });
-    if (!b.name?.trim() || !b.address?.trim()) return res.status(400).json({ error: 'Store name and address are required' });
-    const lat = Number(b.lat ?? city.lat);
-    const lng = Number(b.lng ?? city.lng);
-    let slug = slugify(b.name);
-    if (db.prepare('SELECT 1 FROM stores WHERE slug = ?').get(slug)) slug = `${slug}-${city.slug}-${Date.now() % 10000}`;
-    const { lastInsertRowid } = db.prepare(`
-      INSERT INTO stores (owner_id, slug, name, description, city_id, address, lat, lng, licence_number)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(req.user.id, slug, b.name.trim(), String(b.description || '').slice(0, 400), city.id, b.address.trim(), lat, lng, b.licenceNumber?.trim() || null);
-    audit(req.user.id, 'store_applied', { storeId: lastInsertRowid });
-    res.status(201).json({ store: merchantStoreView(db.prepare('SELECT * FROM stores WHERE id = ?').get(lastInsertRowid)) });
-  });
-
-  app.patch('/api/merchant/store', auth('merchant'), (req, res) => {
-    const s = myStore(req.user.id);
-    if (!s) return res.status(404).json({ error: 'No store yet' });
-    const b = req.body || {};
-    const next = {
-      is_open: b.isOpen === undefined ? s.is_open : b.isOpen ? 1 : 0,
-      description: b.description === undefined ? s.description : String(b.description).slice(0, 400),
-      prep_minutes: b.prepMinutes === undefined ? s.prep_minutes : Math.min(Math.max(Number(b.prepMinutes) || 10, 3), 60),
-      delivery_radius_km: b.deliveryRadiusKm === undefined ? s.delivery_radius_km : Math.min(Math.max(Number(b.deliveryRadiusKm) || 8, 1), 25),
-      licence_number: b.licenceNumber === undefined ? s.licence_number : String(b.licenceNumber).trim() || null,
-    };
-    // Changing the licence number puts it back in the review queue.
-    const licenceChanged = next.licence_number !== s.licence_number;
-    db.prepare(`UPDATE stores SET is_open = ?, description = ?, prep_minutes = ?, delivery_radius_km = ?, licence_number = ?,
-      licence_verified = CASE WHEN ? THEN 0 ELSE licence_verified END WHERE id = ?`)
-      .run(next.is_open, next.description, next.prep_minutes, next.delivery_radius_km, next.licence_number, licenceChanged ? 1 : 0, s.id);
-    res.json({ store: merchantStoreView(myStore(req.user.id)) });
-  });
-
-  app.get('/api/merchant/products', auth('merchant'), (req, res) => {
-    const s = myStore(req.user.id);
-    if (!s) return res.json({ products: [] });
-    const cats = categoriesById();
-    const st = settings();
-    const products = db.prepare('SELECT * FROM products WHERE store_id = ? ORDER BY active DESC, name').all(s.id).map((p) => {
-      const sell = compliance.canSell({ category: cats[p.category_id], store: s, settings: st });
-      return { ...productView(p, cats[p.category_id]), active: !!p.active, live: !!p.active && sell.ok, blockedReason: sell.ok ? null : sell.reason };
-    });
-    res.json({ products, categories: db.prepare('SELECT slug, name, icon, regulated FROM categories ORDER BY sort').all() });
-  });
-
-  function productInput(b, existing = {}) {
-    const cat = b.category ? db.prepare('SELECT * FROM categories WHERE slug = ?').get(b.category) : null;
-    if (b.category && !cat) throw new orders.OrderError('Unknown category');
-    const price = b.priceCents === undefined ? existing.price_cents : Math.round(Number(b.priceCents));
-    if (!Number.isInteger(price) || price <= 0) throw new orders.OrderError('Enter a price above R0');
-    const stock = b.stock === undefined ? existing.stock ?? 0 : Math.round(Number(b.stock));
-    if (!Number.isInteger(stock) || stock < 0) throw new orders.OrderError('Stock cannot be negative');
-    const name = b.name === undefined ? existing.name : String(b.name).trim();
-    if (!name) throw new orders.OrderError('Enter a product name');
-    const num = (v, old) => (v === undefined ? old ?? null : v === null || v === '' ? null : Number(v));
-    return {
-      category_id: cat ? cat.id : existing.category_id,
-      name, price_cents: price, stock,
-      description: b.description === undefined ? existing.description ?? '' : String(b.description).slice(0, 600),
-      unit: b.unit === undefined ? existing.unit ?? 'each' : String(b.unit).slice(0, 20),
-      thc_pct: num(b.thcPct, existing.thc_pct), cbd_pct: num(b.cbdPct, existing.cbd_pct),
-      strain_type: b.strainType === undefined ? existing.strain_type ?? null : b.strainType || null,
-      active: b.active === undefined ? existing.active ?? 1 : b.active ? 1 : 0,
-    };
-  }
-
-  app.post('/api/merchant/products', auth('merchant'), (req, res) => {
-    const s = myStore(req.user.id);
-    if (!s) return res.status(404).json({ error: 'Set up your store first' });
-    if (!req.body?.category) return res.status(400).json({ error: 'Choose a category' });
-    const p = productInput(req.body);
-    const { lastInsertRowid } = db.prepare(`
-      INSERT INTO products (store_id, category_id, name, description, price_cents, unit, stock, thc_pct, cbd_pct, strain_type, active)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(s.id, p.category_id, p.name, p.description, p.price_cents, p.unit, p.stock, p.thc_pct, p.cbd_pct, p.strain_type, p.active);
-    res.status(201).json({ id: lastInsertRowid });
-  });
-
-  app.patch('/api/merchant/products/:id', auth('merchant'), (req, res) => {
-    const s = myStore(req.user.id);
-    const existing = s && db.prepare('SELECT * FROM products WHERE id = ? AND store_id = ?').get(req.params.id, s.id);
-    if (!existing) return res.status(404).json({ error: 'Product not found' });
-    const p = productInput(req.body || {}, existing);
-    db.prepare(`UPDATE products SET category_id = ?, name = ?, description = ?, price_cents = ?, unit = ?, stock = ?,
-      thc_pct = ?, cbd_pct = ?, strain_type = ?, active = ? WHERE id = ?`)
-      .run(p.category_id, p.name, p.description, p.price_cents, p.unit, p.stock, p.thc_pct, p.cbd_pct, p.strain_type, p.active, existing.id);
-    res.json({ ok: true });
-  });
-
-  app.get('/api/merchant/orders', auth('merchant'), (req, res) => {
-    const s = myStore(req.user.id);
-    if (!s) return res.json({ orders: [], stats: null });
-    const ids = db.prepare(`SELECT id FROM orders WHERE store_id = ? AND status <> 'pending_payment' ORDER BY
-      CASE WHEN status IN ('placed','accepted','preparing','ready','picked_up') THEN 0 ELSE 1 END, id DESC LIMIT 80`).all(s.id);
-    const stats = db.prepare(`
-      SELECT COUNT(*) AS orders, COALESCE(SUM(subtotal_cents), 0) AS sales_cents
-      FROM orders WHERE store_id = ? AND status = 'delivered' AND date(delivered_at) = date('now')
-    `).get(s.id);
-    res.json({ orders: ids.map(({ id }) => orders.orderView(db, id, 'merchant')), stats: { todayOrders: stats.orders, todaySalesCents: stats.sales_cents } });
-  });
-
-  app.post('/api/merchant/orders/:id/status', auth('merchant'), (req, res) => {
-    const s = myStore(req.user.id);
-    const order = s && db.prepare('SELECT * FROM orders WHERE id = ? AND store_id = ?').get(req.params.id, s.id);
-    if (!order) return res.status(404).json({ error: 'Order not found' });
-    orders.transition(db, order.id, 'merchant', req.body?.status, { note: req.body?.reason, refund });
-    res.json({ order: orders.orderView(db, order.id, 'merchant') });
-  });
+  // ---- Merchant ----------------------------------------------------------
+  registerMerchantRoutes(app, { db, auth, requireAdult, audit, refund, storeSummary, productView, categoriesById, settings, slugify });
 
   // ---- Rider -------------------------------------------------------------
   registerRiderRoutes(app, { db, auth, requireAdult, audit, refund });

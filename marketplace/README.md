@@ -71,6 +71,10 @@ R18 per trip + R5 per km (to the store and on to the customer), at least R25. Cu
 | `PAYSTACK_SECRET_KEY` | | Paystack secret key |
 | `PUBLIC_URL` | `http://localhost:5174` | Where Paystack sends customers back |
 | `CORS_ORIGIN` | any | Comma-separated allowed origins |
+| `MAP_TILE_URL` | OpenStreetMap tiles | Map tile template, e.g. a MapTiler or Stadia URL with your key. OpenStreetMap's own tiles are free for light use only |
+| `MAP_TILE_ATTRIBUTION` | © OpenStreetMap contributors | Credit line shown on maps (required by every provider) |
+| `GEOCODER` | `photon` | Address search: `photon` (free OpenStreetMap search, fair use) or `maptiler` |
+| `MAPTILER_KEY` | | Needed when `GEOCODER=maptiler` |
 
 Paystack webhook: point it at `POST /api/payments/paystack/webhook` (HMAC-SHA512 signature verified). Cancelled and declined paid orders are refunded through the provider.
 

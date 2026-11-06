@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { MapContainer, TileLayer, Marker, Polyline, useMap } from 'react-leaflet';
+import { MapContainer, Marker, Polyline, useMap } from 'react-leaflet';
 import { Empty, STATUS, Spinner, api, deliveryTimeLabel, kmBetween, rand, reorderInto, useCart, useLiveOrder, useToast } from '../lib.jsx';
-import { TILE_ATTR, TILE_URL, pin } from './Address.jsx';
+import { MapTiles, pin } from './Address.jsx';
 
 function OrderAgain({ order, small }) {
   const cart = useCart();
@@ -236,7 +236,7 @@ export function Track() {
 
       <div className="map-box">
         <MapContainer center={[order.dropoff.lat, order.dropoff.lng]} zoom={14} style={{ height: '100%' }}>
-          <TileLayer url={TILE_URL} attribution={TILE_ATTR} />
+          <MapTiles />
           <Marker position={[order.store.lat, order.store.lng]} icon={pin('🏪')} />
           <Marker position={[order.dropoff.lat, order.dropoff.lng]} icon={pin('🏠', 'home')} />
           {rider && <Marker position={[rider.lat, rider.lng]} icon={pin('🛵', 'rider')} />}

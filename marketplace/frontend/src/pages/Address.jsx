@@ -1,11 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Marker, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { api, useAuth, useLoc, useMeta, useToast } from '../lib.jsx';
 
 export const pin = (emoji, cls = '') => L.divIcon({ className: `map-pin ${cls}`, html: `<span><i>${emoji}</i></span>`, iconSize: [36, 36], iconAnchor: [18, 34] });
-export const TILE_URL = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
-export const TILE_ATTR = '&copy; OpenStreetMap contributors &copy; CARTO';
+const DEFAULT_TILES = { url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors', maxZoom: 19 };
+
+// The map background, from whichever tile provider the server is set up
+// with. Tile servers need a Referer to accept requests, so send the origin.
+export function MapTiles() {
+  const meta = useMeta();
+  const t = meta?.mapTiles || DEFAULT_TILES;
+  return <TileLayer key={t.url} url={t.url} attribution={t.attribution} maxZoom={t.maxZoom} referrerPolicy="strict-origin-when-cross-origin" />;
+}
 
 function ClickToMove({ onPick }) {
   useMapEvents({ click: (e) => onPick({ lat: e.latlng.lat, lng: e.latlng.lng }) });
@@ -37,9 +44,58 @@ export function AddressSheet({ onClose, saveOnly = false, onSaved }) {
   }, [isCustomer, saveOnly]);
   const [point, setPoint] = useState(loc ? { lat: loc.lat, lng: loc.lng } : { lat: -26.1076, lng: 28.0567 });
   const [label, setLabel] = useState(loc?.label || '');
+  const [unit, setUnit] = useState('');
   const [city, setCity] = useState(loc?.city || 'johannesburg');
   const [locating, setLocating] = useState(false);
   const [error, setError] = useState('');
+  // Where the address text came from: what the person typed (never
+  // overwrite it), a suggestion they picked, or a lookup of the pin.
+  const source = useRef(loc?.label ? 'pick' : 'auto');
+  const [suggestions, setSuggestions] = useState([]);
+  const [active, setActive] = useState(-1);
+  const [searching, setSearching] = useState(false);
+  const [lookupNote, setLookupNote] = useState('');
+  const searchSeq = useRef(0);
+
+  // Suggestions as you type, biased towards where the pin is now.
+  useEffect(() => {
+    if (source.current !== 'typed' || label.trim().length < 3) { setSuggestions([]); return undefined; }
+    const seq = ++searchSeq.current;
+    setSearching(true);
+    const t = setTimeout(() => {
+      api(`/geocode/search?q=${encodeURIComponent(label.trim())}&lat=${point.lat}&lng=${point.lng}`)
+        .then((d) => { if (seq === searchSeq.current) { setSuggestions(d.results); setActive(-1); setLookupNote(''); } })
+        .catch((e) => { if (seq === searchSeq.current) { setSuggestions([]); setLookupNote(e.message); } })
+        .finally(() => { if (seq === searchSeq.current) setSearching(false); });
+    }, 300);
+    return () => clearTimeout(t);
+  }, [label]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const choose = (s) => {
+    source.current = 'pick';
+    searchSeq.current++;
+    setLabel(s.label);
+    setPoint({ lat: s.lat, lng: s.lng });
+    setSuggestions([]);
+    setError('');
+  };
+
+  // Moving the pin fills in the street address — unless they typed their own.
+  const movePin = (p) => {
+    setPoint(p);
+    if (source.current === 'typed' && label.trim()) return;
+    api(`/geocode/reverse?lat=${p.lat}&lng=${p.lng}`)
+      .then((d) => { if (d.place && (source.current !== 'typed' || !label.trim())) { source.current = 'auto'; setLabel(d.place.label); } })
+      .catch(() => {});
+  };
+
+  const onKey = (e) => {
+    if (!suggestions.length) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActive((i) => Math.min(i + 1, suggestions.length - 1)); }
+    if (e.key === 'ArrowUp') { e.preventDefault(); setActive((i) => Math.max(i - 1, 0)); }
+    if (e.key === 'Enter' && active >= 0) { e.preventDefault(); choose(suggestions[active]); }
+    if (e.key === 'Escape') setSuggestions([]);
+  };
 
   const nearestCity = (p) => {
     if (!meta) return city;
@@ -54,7 +110,8 @@ export function AddressSheet({ onClose, saveOnly = false, onSaved }) {
     navigator.geolocation.getCurrentPosition(
       (p) => {
         const here = { lat: p.coords.latitude, lng: p.coords.longitude };
-        setPoint(here);
+        source.current = 'auto';
+        movePin(here);
         setCity(nearestCity(here));
         setLocating(false);
       },
@@ -70,7 +127,8 @@ export function AddressSheet({ onClose, saveOnly = false, onSaved }) {
 
   const save = async () => {
     if (label.trim().length < 5) return setError('Add your street address so the rider can find you');
-    const here = { ...point, label: label.trim(), city: nearestCity(point) };
+    const full = unit.trim() ? `${unit.trim()}, ${label.trim()}` : label.trim();
+    const here = { ...point, label: full, city: nearestCity(point) };
     if (isCustomer && saveAs.trim()) {
       try {
         const d = await api('/me/addresses', { method: 'POST', body: { label: saveAs.trim(), address: here.label, lat: here.lat, lng: here.lng, city: here.city, notes } });
@@ -109,19 +167,50 @@ export function AddressSheet({ onClose, saveOnly = false, onSaved }) {
             </button>
           ))}
         </div>
+        <div className="addr-search">
+          <label className="field">
+            <span>Street address</span>
+            <input
+              value={label}
+              onChange={(e) => { source.current = 'typed'; setLabel(e.target.value); setError(''); }}
+              onKeyDown={onKey}
+              onBlur={() => setTimeout(() => setSuggestions([]), 150)}
+              placeholder="Start typing, e.g. 14 Jan Smuts"
+              autoComplete="off"
+              role="combobox"
+              aria-expanded={suggestions.length > 0}
+              aria-controls="addr-suggestions"
+              aria-autocomplete="list"
+            />
+          </label>
+          {searching && <span className="addr-spinner" aria-hidden="true" />}
+          {suggestions.length > 0 && (
+            <ul className="addr-suggestions" id="addr-suggestions" role="listbox">
+              {suggestions.map((s, i) => (
+                <li key={`${s.lat},${s.lng},${i}`} role="option" aria-selected={i === active}>
+                  <button type="button" className={i === active ? 'on' : ''} onMouseDown={(e) => e.preventDefault()} onClick={() => choose(s)}>
+                    <span>📍</span>
+                    <span className="grow"><strong>{s.main || s.label}</strong>{s.secondary && <em>{s.secondary}</em>}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {lookupNote && <p className="hint">{lookupNote}</p>}
+        </div>
         <button className="btn btn-ghost full" onClick={useMine} disabled={locating}>{locating ? 'Finding you…' : '📍 Use my current location'}</button>
         <div className="map-box small">
-          <MapContainer center={[point.lat, point.lng]} zoom={14} scrollWheelZoom style={{ height: '100%' }}>
-            <TileLayer url={TILE_URL} attribution={TILE_ATTR} />
-            <Marker position={[point.lat, point.lng]} icon={pin('🏠', 'home')} draggable eventHandlers={{ dragend: (e) => setPoint(e.target.getLatLng()) }} />
-            <ClickToMove onPick={setPoint} />
+          <MapContainer center={[point.lat, point.lng]} zoom={15} scrollWheelZoom style={{ height: '100%' }}>
+            <MapTiles />
+            <Marker position={[point.lat, point.lng]} icon={pin('🏠', 'home')} draggable eventHandlers={{ dragend: (e) => movePin(e.target.getLatLng()) }} />
+            <ClickToMove onPick={movePin} />
             <Recenter point={point} />
           </MapContainer>
         </div>
-        <p className="hint">Tap the map or drag the pin to your exact door.</p>
+        <p className="hint">Check the pin is on your door — drag it if not.</p>
         <label className="field">
-          <span>Street address, unit, complex</span>
-          <input value={label} onChange={(e) => { setLabel(e.target.value); setError(''); }} placeholder="e.g. 14 Jan Smuts Ave, Unit 3" autoComplete="street-address" />
+          <span>Unit, flat or complex (optional)</span>
+          <input value={unit} onChange={(e) => setUnit(e.target.value)} placeholder="e.g. Unit 3, The Avenues" autoComplete="address-line2" />
         </label>
         {isCustomer && (
           <div className="save-as">

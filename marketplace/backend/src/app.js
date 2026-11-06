@@ -16,6 +16,7 @@ const { registerMerchantRoutes } = require('./merchant');
 const { availability } = require('./storeHours');
 const promos = require('./promos');
 const { deliveryStart } = require('./schedule');
+const geocode = require('./geocode');
 const { registerCustomerRoutes } = require('./customer');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-secret-change-me';
@@ -33,8 +34,12 @@ function createApp(db) {
   const app = express();
   app.set('trust proxy', 1);
   // Map tiles come from CARTO's CDN; everything else is same-origin.
+  // Map tiles come from the configured tile server; everything else is
+  // same-origin. Tile servers such as OpenStreetMap's require a Referer, so
+  // send the origin rather than helmet's default of nothing.
   app.use(helmet({
-    contentSecurityPolicy: { directives: { 'img-src': ["'self'", 'data:', 'https://*.basemaps.cartocdn.com'] } },
+    contentSecurityPolicy: { directives: { 'img-src': ["'self'", 'data:', geocode.tileHost()].filter(Boolean) } },
+    referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
   }));
   app.use(cors({ origin: process.env.CORS_ORIGIN?.split(',') || true }));
 
@@ -233,6 +238,7 @@ function createApp(db) {
       fees: pricing.FEES,
       paymentProvider: payments.provider().name,
       tipPresetsCents: [0, 1000, 2000, 3000],
+      mapTiles: geocode.mapTiles(),
       // Demo mode: simulated payments, so the one-tap demo logins and the
       // rider's simulate-move button are safe to show.
       demo: payments.provider().name === 'mock' && process.env.DEMO_MODE !== 'false',
@@ -333,6 +339,26 @@ function createApp(db) {
     if (d.now) return { possible: true, now: true };
     return { possible: true, now: false, scheduledFor: d.at.toISOString(), label: d.label };
   }
+
+  // ---- Address search -------------------------------------------------
+  const geoLimiter = rateLimit({ windowMs: 60 * 1000, limit: 90, standardHeaders: 'draft-7', legacyHeaders: false });
+
+  app.get('/api/geocode/search', geoLimiter, wrap(async (req, res) => {
+    const near = parseOrigin(req.query);
+    try {
+      res.json({ results: await geocode.search(req.query.q, near) });
+    } catch {
+      res.status(502).json({ error: "Address search isn't available right now — drop the pin on the map instead", results: [] });
+    }
+  }));
+
+  app.get('/api/geocode/reverse', geoLimiter, wrap(async (req, res) => {
+    try {
+      res.json({ place: await geocode.reverse(Number(req.query.lat), Number(req.query.lng)) });
+    } catch {
+      res.status(502).json({ error: "Couldn't look up that spot", place: null });
+    }
+  }));
 
   app.get('/api/promos', (req, res) => res.json({ promos: promos.available(db, optionalUser(req)?.id) }));
 

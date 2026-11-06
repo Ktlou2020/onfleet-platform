@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Polyline, Tooltip, useMap } from 'react-leaflet';
+import { MapContainer, Marker, Polyline, Tooltip, useMap } from 'react-leaflet';
 import { BRAND, STATUS, Spinner, api, rand, useAuth, useToast } from '../lib.jsx';
-import { TILE_ATTR, TILE_URL, pin } from './Address.jsx';
+import { MapTiles, pin } from './Address.jsx';
 import '../admin.css';
 import { Columns } from '../charts.jsx';
 
@@ -174,7 +174,7 @@ function LiveMap({ openOrder }) {
     <div className="adm-live">
       <div className="adm-live-map">
         <MapContainer center={[-26.12, 28.05]} zoom={11} style={{ height: '100%' }}>
-          <TileLayer url={TILE_URL} attribution={TILE_ATTR} />
+          <MapTiles />
           {d.stores.map((s) => <Marker key={`s${s.id}`} position={[s.lat, s.lng]} icon={pin('🏪', s.open ? '' : 'closed')}><Tooltip>{s.name}{s.open ? '' : ' (closed)'}</Tooltip></Marker>)}
           {d.orders.map((o) => (
             <span key={`o${o.id}`}>

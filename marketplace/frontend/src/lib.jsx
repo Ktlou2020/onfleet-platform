@@ -119,9 +119,16 @@ export function CartProvider({ children }) {
 export const useCart = () => useContext(CartCtx);
 
 // ---- Small hooks ----------------------------------------------------------
+// Platform settings, fetched once and shared (maps, fees, delivery hours).
+let metaPromise = null;
+let metaValue = null;
 export function useMeta() {
-  const [meta, setMeta] = useState(null);
-  useEffect(() => { api('/meta').then(setMeta).catch(() => {}); }, []);
+  const [meta, setMeta] = useState(metaValue);
+  useEffect(() => {
+    if (metaValue) return;
+    metaPromise = metaPromise || api('/meta').then((m) => { metaValue = m; return m; }).catch((e) => { metaPromise = null; throw e; });
+    metaPromise.then(setMeta).catch(() => {});
+  }, []);
   return meta;
 }
 

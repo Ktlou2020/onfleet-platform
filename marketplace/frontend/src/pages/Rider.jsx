@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Polyline, CircleMarker, Tooltip, useMap } from 'react-leaflet';
+import { MapContainer, Marker, Polyline, CircleMarker, Tooltip, useMap } from 'react-leaflet';
 import { BRAND, Empty, Spinner, api, getToken, rand, useAuth, useMeta, useToast } from '../lib.jsx';
 import { VerifyAge } from './Checkout.jsx';
-import { TILE_ATTR, TILE_URL, pin } from './Address.jsx';
+import { MapTiles, pin } from './Address.jsx';
 import '../rider.css';
 
 // ---- Helpers ----------------------------------------------------------------
@@ -116,7 +116,7 @@ function DriveMap({ me, job, offer, spots, showSpots }) {
   const center = me || job?.store || { lat: -26.1076, lng: 28.0567 };
   return (
     <MapContainer center={[center.lat, center.lng]} zoom={14} zoomControl={false} attributionControl style={{ height: '100%' }}>
-      <TileLayer url={TILE_URL} attribution={TILE_ATTR} />
+      <MapTiles />
       {showSpots && spots.map((s) => (
         <CircleMarker key={s.id} center={[s.lat, s.lng]} radius={s.level === 'high' ? 26 : s.level === 'medium' ? 18 : 10}
           pathOptions={{ color: 'transparent', fillColor: s.level === 'high' ? '#e53e3e' : s.level === 'medium' ? '#dd6b20' : '#38a169', fillOpacity: 0.28 }}>

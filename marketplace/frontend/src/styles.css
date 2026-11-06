@@ -375,3 +375,12 @@ textarea { min-height: 80px; resize: vertical; }
 .schedule-note p { margin: 4px 0 0; font-size: .9rem; }
 .s-scheduled { background: #e9d8fd; color: #553c9a; }
 @media (prefers-color-scheme: dark) { .schedule-note { background: #1e2440; border-color: #3c4a80; } }
+
+/* ---- Address search -------------------------------------------------- */
+.addr-search { position: relative; }
+.addr-search .field { margin-bottom: 8px; }
+.addr-spinner { position: absolute; right: 12px; top: 38px; width: 18px; height: 18px; border: 2px solid var(--line); border-top-color: var(--brand); border-radius: 50%; animation: spin .7s linear infinite; }
+.addr-suggestions { position: absolute; left: 0; right: 0; top: calc(100% - 4px); z-index: 1200; list-style: none; margin: 0; padding: 4px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 32px rgba(0, 0, 0, .18); max-height: 280px; overflow-y: auto; }
+.addr-suggestions button { display: flex; gap: 10px; align-items: flex-start; width: 100%; text-align: left; border: 0; background: none; padding: 10px; border-radius: 8px; color: var(--ink); }
+.addr-suggestions button.on, .addr-suggestions button:hover { background: var(--brand-soft); }
+.addr-suggestions em { display: block; font-style: normal; font-size: .8rem; color: var(--muted); }

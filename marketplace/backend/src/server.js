@@ -1,7 +1,7 @@
 'use strict';
 const { open } = require('./db');
 const { createApp } = require('./app');
-const { expireUnpaid } = require('./orders');
+const { expireUnpaid, sweep } = require('./orders');
 
 const path = require('path');
 const fs = require('fs');
@@ -27,5 +27,15 @@ setInterval(() => {
     console.error('expireUnpaid failed', e);
   }
 }, 60 * 1000).unref();
+
+// Move offers that ran out of time to the next rider, and retry orders
+// still waiting for one.
+setInterval(() => {
+  try {
+    sweep(db);
+  } catch (e) {
+    console.error('dispatch sweep failed', e);
+  }
+}, 5 * 1000).unref();
 
 app.listen(port, () => console.log(`Cloud 9 API on http://localhost:${port}`));

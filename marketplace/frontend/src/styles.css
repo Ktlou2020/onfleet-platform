@@ -300,3 +300,8 @@ textarea { min-height: 80px; resize: vertical; }
 .toast.bad { background: var(--bad); color: #fff; }
 .spinner { width: 32px; height: 32px; border: 3px solid var(--line); border-top-color: var(--brand); border-radius: 50%; animation: spin .7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---- Rider tip at checkout -------------------------------------------- */
+.tip-box { background: var(--brand-soft); border-radius: 12px; padding: 12px; margin: 8px 0; }
+.tip-chips { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 8px; }
+.tip-chips .chip { text-align: center; padding: 8px 4px; }

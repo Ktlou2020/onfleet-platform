@@ -75,17 +75,21 @@ describe('ordering', () => {
     expect((await other.post(`/api/merchant/orders/${order.id}/status`, { status: 'accepted' })).status).toBe(404);
 
     const accepted = await w.merchant.post(`/api/merchant/orders/${order.id}/status`, { status: 'accepted' });
-    expect(accepted.body.order.rider?.name).toBe('Johannesburg Rider'); // auto-dispatched
+    expect(accepted.body.order.rider).toBeNull(); // offered, not yet taken
+    const jobs = (await w.rider.get('/api/rider/jobs')).body;
+    expect(jobs.offer).toMatchObject({ id: order.id, secondsLeft: expect.any(Number) });
+    await w.rider.post(`/api/rider/offers/${order.id}/accept`);
+    expect((await w.merchant.get(`/api/orders/${order.id}`)).body.order.rider?.name).toBe('Johannesburg Rider');
     expect(accepted.body.order.handoverCode).toBeUndefined();
 
     expect((await w.rider.post(`/api/rider/jobs/${order.id}/pickup`)).status).toBe(409); // not ready yet
     await w.merchant.post(`/api/merchant/orders/${order.id}/status`, { status: 'ready' });
-    expect((await w.rider.post(`/api/rider/jobs/${order.id}/pickup`)).body.order.status).toBe('picked_up');
+    expect((await w.rider.post(`/api/rider/jobs/${order.id}/pickup`)).body.current[0].status).toBe('picked_up');
 
     expect((await w.rider.post(`/api/rider/jobs/${order.id}/deliver`, { handoverCode: order.handoverCode })).status).toBe(400); // no ID check
     expect((await w.rider.post(`/api/rider/jobs/${order.id}/deliver`, { handoverCode: '0000x', idChecked: true })).status).toBe(400);
     const done = await w.rider.post(`/api/rider/jobs/${order.id}/deliver`, { handoverCode: order.handoverCode, idChecked: true });
-    expect(done.body.order.status).toBe('delivered');
+    expect(done.body.completed.status).toBe('delivered');
 
     const reviewed = await w.customer.post(`/api/orders/${order.id}/review`, { rating: 5, comment: 'Fast!' });
     expect(reviewed.body.order.review.rating).toBe(5);

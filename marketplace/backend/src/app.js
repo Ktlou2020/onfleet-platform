@@ -10,6 +10,7 @@ const compliance = require('./compliance');
 const pricing = require('./pricing');
 const orders = require('./orders');
 const payments = require('./payments');
+const { registerRiderRoutes } = require('./rider');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-secret-change-me';
 if (process.env.NODE_ENV === 'production' && JWT_SECRET === 'dev-only-secret-change-me') {
@@ -182,6 +183,7 @@ function createApp(db) {
       deliveryHours: { open: st.deliveryOpenHour, close: st.deliveryCloseHour, openNow: compliance.deliveryWindowOpen(st) },
       fees: pricing.FEES,
       paymentProvider: payments.provider().name,
+      tipPresetsCents: [0, 1000, 2000, 3000],
       // Demo mode: simulated payments, so the one-tap demo logins and the
       // rider's simulate-move button are safe to show.
       demo: payments.provider().name === 'mock' && process.env.DEMO_MODE !== 'false',
@@ -278,11 +280,15 @@ function createApp(db) {
       if (!store.is_open) throw new orders.OrderError(`${store.name} is closed right now`, 409);
       const q = quoteFor(store, subtotal, req.body);
       if (q.belowMinimum) throw new orders.OrderError(`The minimum order is R${q.minimumOrderCents / 100}`);
+      // The rider tip is optional, goes to the rider in full, and is not
+      // part of the VAT-able supply.
+      const tip = Math.round(Number(req.body.tipCents || 0));
+      if (!Number.isInteger(tip) || tip < 0 || tip > 50000) throw new orders.OrderError('Tips can be up to R500');
       const { lastInsertRowid: id } = db.prepare(`
         INSERT INTO orders (code, customer_id, store_id, status, subtotal_cents, delivery_fee_cents, service_fee_cents,
-          total_cents, vat_cents, address, lat, lng, distance_km, eta_minutes, notes, handover_code)
-        VALUES (?, ?, ?, 'pending_payment', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(orders.newCode(), req.user.id, store.id, q.subtotalCents, q.deliveryFeeCents, q.serviceFeeCents, q.totalCents, q.vatCents,
+          tip_cents, total_cents, vat_cents, address, lat, lng, distance_km, eta_minutes, notes, handover_code)
+        VALUES (?, ?, ?, 'pending_payment', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(orders.newCode(), req.user.id, store.id, q.subtotalCents, q.deliveryFeeCents, q.serviceFeeCents, tip, q.totalCents + tip, q.vatCents,
         address, Number(req.body.lat), Number(req.body.lng), q.distanceKm, q.etaMinutes, String(req.body.notes || '').slice(0, 300), orders.newHandoverCode());
       const insertItem = db.prepare('INSERT INTO order_items (order_id, product_id, name, price_cents, qty) VALUES (?, ?, ?, ?, ?)');
       const reserve = db.prepare('UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?');
@@ -382,10 +388,16 @@ function createApp(db) {
     if (order.status !== 'delivered') return res.status(409).json({ error: 'You can review once your order has arrived' });
     const rating = Number(req.body?.rating);
     if (!Number.isInteger(rating) || rating < 1 || rating > 5) return res.status(400).json({ error: 'Rating must be 1 to 5 stars' });
+    const riderRating = req.body?.riderRating === undefined || req.body.riderRating === null ? null : Number(req.body.riderRating);
+    if (riderRating !== null && (!Number.isInteger(riderRating) || riderRating < 1 || riderRating > 5)) return res.status(400).json({ error: 'Rider rating must be 1 to 5 stars' });
     const add = db.transaction(() => {
       db.prepare('INSERT INTO reviews (order_id, customer_id, store_id, rating, comment) VALUES (?, ?, ?, ?, ?)')
         .run(order.id, req.user.id, order.store_id, rating, String(req.body.comment || '').slice(0, 500));
       db.prepare('UPDATE stores SET rating_sum = rating_sum + ?, rating_count = rating_count + 1 WHERE id = ?').run(rating, order.store_id);
+      if (riderRating && order.rider_id) {
+        db.prepare('UPDATE orders SET rider_rating = ? WHERE id = ?').run(riderRating, order.id);
+        db.prepare('UPDATE riders SET rating_sum = rating_sum + ?, rating_count = rating_count + 1 WHERE user_id = ?').run(riderRating, order.rider_id);
+      }
     });
     try {
       add();
@@ -526,78 +538,7 @@ function createApp(db) {
   });
 
   // ---- Rider -------------------------------------------------------------
-  function riderRow(userId) {
-    return db.prepare('SELECT * FROM riders WHERE user_id = ?').get(userId);
-  }
-
-  function setLocation(userId, lat, lng) {
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
-    db.prepare("UPDATE riders SET lat = ?, lng = ?, located_at = datetime('now') WHERE user_id = ?").run(lat, lng, userId);
-    const active = db.prepare("SELECT id FROM orders WHERE rider_id = ? AND status IN ('ready','picked_up')").all(userId);
-    for (const { id } of active) orders.bus.emit('order', id);
-  }
-
-  app.post('/api/rider/status', auth('rider'), requireAdult, (req, res) => {
-    const online = req.body?.online ? 1 : 0;
-    db.prepare('UPDATE riders SET online = ?, vehicle = COALESCE(?, vehicle), plate = COALESCE(?, plate) WHERE user_id = ?')
-      .run(online, req.body?.vehicle || null, req.body?.plate || null, req.user.id);
-    setLocation(req.user.id, Number(req.body?.lat), Number(req.body?.lng));
-    // Coming online picks up the oldest unassigned job in range, if any.
-    if (online) {
-      const waiting = db.prepare("SELECT id FROM orders WHERE rider_id IS NULL AND status IN ('accepted','preparing','ready') ORDER BY id").all();
-      for (const { id } of waiting) if (orders.autoDispatch(db, id) === req.user.id) break;
-    }
-    res.json({ rider: riderRow(req.user.id) });
-  });
-
-  app.post('/api/rider/location', auth('rider'), (req, res) => {
-    setLocation(req.user.id, Number(req.body?.lat), Number(req.body?.lng));
-    res.json({ ok: true });
-  });
-
-  app.get('/api/rider/jobs', auth('rider'), (req, res) => {
-    const r = riderRow(req.user.id);
-    const current = db.prepare(`SELECT id FROM orders WHERE rider_id = ? AND status IN (${orders.RIDER_ACTIVE.map(() => '?').join(',')})`).all(req.user.id, ...orders.RIDER_ACTIVE);
-    const open = db.prepare("SELECT id FROM orders WHERE rider_id IS NULL AND status IN ('accepted','preparing','ready') ORDER BY id").all()
-      .map(({ id }) => orders.orderView(db, id, 'rider'))
-      .map((o) => ({ ...o, pickupKm: r?.lat != null ? pricing.roadKm(o.store, r) : null }))
-      .filter((o) => o.pickupKm == null || o.pickupKm <= 15);
-    const earnings = db.prepare(`SELECT COUNT(*) AS trips, COALESCE(SUM(delivery_fee_cents), 0) AS fees FROM orders
-      WHERE rider_id = ? AND status = 'delivered' AND date(delivered_at) = date('now')`).get(req.user.id);
-    res.json({
-      rider: r,
-      current: current.map(({ id }) => orders.orderView(db, id, 'rider')),
-      open,
-      today: { trips: earnings.trips, earningsCents: earnings.fees },
-    });
-  });
-
-  app.post('/api/rider/jobs/:id/claim', auth('rider'), requireAdult, (req, res) => {
-    const busy = db.prepare(`SELECT 1 FROM orders WHERE rider_id = ? AND status IN (${orders.RIDER_ACTIVE.map(() => '?').join(',')})`).get(req.user.id, ...orders.RIDER_ACTIVE);
-    if (busy) return res.status(409).json({ error: 'Finish your current delivery first' });
-    orders.assignRider(db, Number(req.params.id), req.user.id);
-    res.json({ order: orders.orderView(db, Number(req.params.id), 'rider') });
-  });
-
-  app.post('/api/rider/jobs/:id/pickup', auth('rider'), (req, res) => {
-    const order = db.prepare('SELECT * FROM orders WHERE id = ? AND rider_id = ?').get(req.params.id, req.user.id);
-    if (!order) return res.status(404).json({ error: 'Job not found' });
-    orders.transition(db, order.id, 'rider', 'picked_up');
-    res.json({ order: orders.orderView(db, order.id, 'rider') });
-  });
-
-  // Handover at the door: the rider must see an ID that matches an adult
-  // and the customer must give the code from their app. No code, no ID, no
-  // handover — the rider returns the order to the store.
-  app.post('/api/rider/jobs/:id/deliver', auth('rider'), (req, res) => {
-    const order = db.prepare('SELECT * FROM orders WHERE id = ? AND rider_id = ?').get(req.params.id, req.user.id);
-    if (!order) return res.status(404).json({ error: 'Job not found' });
-    if (!req.body?.idChecked) return res.status(400).json({ error: "Check the customer's ID before handing over" });
-    if (String(req.body?.handoverCode || '') !== order.handover_code) return res.status(400).json({ error: "That code doesn't match — ask the customer to read it from their app" });
-    db.prepare('UPDATE orders SET id_checked = 1 WHERE id = ?').run(order.id);
-    orders.transition(db, order.id, 'rider', 'delivered', { note: 'ID checked at the door' });
-    res.json({ order: orders.orderView(db, order.id, 'rider') });
-  });
+  registerRiderRoutes(app, { db, auth, requireAdult, audit, refund });
 
   // ---- Admin -------------------------------------------------------------
   app.get('/api/admin/overview', auth('admin'), (req, res) => {
@@ -611,6 +552,7 @@ function createApp(db) {
       activeOrders: one(`SELECT COUNT(*) AS n FROM orders WHERE status IN (${active})`, ...orders.ACTIVE).n,
       unassigned: one("SELECT COUNT(*) AS n FROM orders WHERE rider_id IS NULL AND status IN ('accepted','preparing','ready')").n,
       ridersOnline: one('SELECT COUNT(*) AS n FROM riders WHERE online = 1').n,
+      openIncidents: one('SELECT COUNT(*) AS n FROM incidents WHERE resolved = 0').n,
       pendingStores: one("SELECT COUNT(*) AS n FROM stores WHERE status = 'pending'").n,
       unverifiedLicences: one("SELECT COUNT(*) AS n FROM stores WHERE licence_number IS NOT NULL AND licence_verified = 0").n,
       customers: one("SELECT COUNT(*) AS n FROM users WHERE role = 'customer'").n,
@@ -661,6 +603,48 @@ function createApp(db) {
   app.get('/api/admin/orders', auth('admin'), (req, res) => {
     const ids = db.prepare('SELECT id FROM orders ORDER BY id DESC LIMIT 100').all();
     res.json({ orders: ids.map(({ id }) => orders.orderView(db, id, 'admin')) });
+  });
+
+  app.get('/api/admin/riders', auth('admin'), (req, res) => {
+    const active = orders.RIDER_ACTIVE.map(() => '?').join(',');
+    const rows = db.prepare(`
+      SELECT u.id, u.name, u.phone, u.suspended, r.online, r.paused, r.vehicle, r.plate, r.lat, r.lng, r.located_at,
+        r.rating_sum, r.rating_count,
+        (SELECT code FROM orders o WHERE o.rider_id = u.id AND o.status IN (${active}) LIMIT 1) AS current_code,
+        (SELECT COUNT(*) FROM orders o WHERE o.rider_id = u.id AND o.status = 'delivered' AND date(o.delivered_at, '+2 hours') = date('now', '+2 hours')) AS trips_today,
+        (SELECT COUNT(*) FROM offer_log l WHERE l.rider_id = u.id AND l.outcome = 'accepted' AND l.at > datetime('now', '-30 days')) AS accepted,
+        (SELECT COUNT(*) FROM offer_log l WHERE l.rider_id = u.id AND l.at > datetime('now', '-30 days')) AS offered
+      FROM users u JOIN riders r ON r.user_id = u.id ORDER BY r.online DESC, u.name
+    `).all(...orders.RIDER_ACTIVE);
+    res.json({
+      riders: rows.map((r) => ({
+        id: r.id, name: r.name, phone: r.phone, suspended: !!r.suspended, online: !!r.online, paused: !!r.paused,
+        vehicle: r.vehicle, plate: r.plate, location: r.lat != null ? { lat: r.lat, lng: r.lng, at: r.located_at } : null,
+        rating: r.rating_count ? Math.round((r.rating_sum / r.rating_count) * 10) / 10 : null,
+        currentOrder: r.current_code, tripsToday: r.trips_today,
+        acceptanceRate: r.offered ? Math.round((r.accepted / r.offered) * 100) : null,
+      })),
+    });
+  });
+
+  app.get('/api/admin/incidents', auth('admin'), (req, res) => {
+    const rows = db.prepare(`SELECT i.*, u.name AS rider_name, u.phone AS rider_phone, o.code AS order_code
+      FROM incidents i JOIN users u ON u.id = i.rider_id LEFT JOIN orders o ON o.id = i.order_id
+      ORDER BY i.resolved, i.id DESC LIMIT 100`).all();
+    res.json({
+      incidents: rows.map((i) => ({
+        id: i.id, type: i.type, note: i.note, at: i.at, resolved: !!i.resolved, orderCode: i.order_code,
+        rider: { id: i.rider_id, name: i.rider_name, phone: i.rider_phone },
+        location: i.lat != null ? { lat: i.lat, lng: i.lng } : null,
+      })),
+    });
+  });
+
+  app.post('/api/admin/incidents/:id/resolve', auth('admin'), (req, res) => {
+    const r = db.prepare('UPDATE incidents SET resolved = 1 WHERE id = ?').run(req.params.id);
+    if (!r.changes) return res.status(404).json({ error: 'Incident not found' });
+    audit(req.user.id, 'incident_resolved', { id: Number(req.params.id) });
+    res.json({ ok: true });
   });
 
   app.get('/api/health', (req, res) => res.json({ ok: true }));

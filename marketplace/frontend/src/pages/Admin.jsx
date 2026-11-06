@@ -46,12 +46,16 @@ export default function Admin() {
   const [ov, setOv] = useState(null);
   const [stores, setStores] = useState(null);
   const [orders, setOrders] = useState(null);
+  const [riders, setRiders] = useState(null);
+  const [incidents, setIncidents] = useState(null);
   const notify = useToast();
 
   const load = useCallback(() => {
     api('/admin/overview').then(setOv);
     api('/admin/stores').then((d) => setStores(d.stores));
     api('/admin/orders').then((d) => setOrders(d.orders));
+    api('/admin/riders').then((d) => setRiders(d.riders));
+    api('/admin/incidents').then((d) => setIncidents(d.incidents));
   }, []);
   useEffect(() => {
     load();
@@ -83,10 +87,11 @@ export default function Admin() {
         <div className={ov.unassigned ? 'alert' : ''}><span>Need a rider</span><strong>{ov.unassigned}</strong></div>
         <div><span>Riders online</span><strong>{ov.ridersOnline}</strong></div>
         <div className={ov.pendingStores ? 'alert' : ''}><span>Stores to review</span><strong>{ov.pendingStores}</strong></div>
+        <div className={ov.openIncidents ? 'alert' : ''}><span>Open incidents</span><strong>{ov.openIncidents}</strong></div>
       </div>
 
       <div className="tabs">
-        {['overview', 'stores', 'orders'].map((t) => <button key={t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)}>{t[0].toUpperCase() + t.slice(1)}</button>)}
+        {['overview', 'stores', 'orders', 'riders', 'incidents'].map((t) => <button key={t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)}>{t[0].toUpperCase() + t.slice(1)}</button>)}
       </div>
 
       {tab === 'overview' && (
@@ -108,6 +113,35 @@ export default function Admin() {
       )}
 
       {tab === 'stores' && (!stores ? <Spinner /> : stores.map((s) => <StoreRow key={s.id} s={s} onChange={load} />))}
+
+      {tab === 'riders' && (!riders ? <Spinner /> : (
+        <div className="table">
+          {riders.map((r) => (
+            <div key={r.id} className="trow">
+              <span className={`status ${r.online ? (r.paused ? 's-placed' : 's-approved') : 's-pending_payment'}`}>{r.online ? (r.paused ? 'Paused' : 'Online') : 'Offline'}</span>
+              <span className="grow small"><strong>{r.name}</strong> · {r.vehicle}{r.plate ? ` ${r.plate}` : ''}<br /><span className="muted">{r.phone || 'no phone'}{r.location ? ` · last seen ${new Date(r.location.at + 'Z').toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit' })}` : ''}</span></span>
+              <span className="small">{r.currentOrder ? `🛵 #${r.currentOrder}` : '—'}</span>
+              <span className="small">{r.tripsToday} today</span>
+              <span className="small">{r.rating ? `★ ${r.rating}` : 'new'}</span>
+              <span className="small">{r.acceptanceRate != null ? `${r.acceptanceRate}% accept` : ''}</span>
+            </div>
+          ))}
+        </div>
+      ))}
+
+      {tab === 'incidents' && (!incidents ? <Spinner /> : incidents.length === 0 ? <p className="muted">No incidents reported.</p> : (
+        <div className="table">
+          {incidents.map((i) => (
+            <div key={i.id} className={`trow ${i.resolved ? 'dim' : ''}`}>
+              <span className={`status ${i.type === 'sos' ? 's-cancelled' : 's-placed'}`}>{i.type === 'sos' ? '🚨 SOS' : i.type.replace('_', ' ')}</span>
+              <span className="grow small"><strong>{i.rider.name}</strong>{i.orderCode ? ` · #${i.orderCode}` : ''} · {new Date(i.at + 'Z').toLocaleString('en-ZA')}<br /><span className="muted">{i.note}</span></span>
+              {i.rider.phone && <a className="link" href={`tel:${i.rider.phone}`}>Call</a>}
+              {i.location && <a className="link" href={`https://www.google.com/maps?q=${i.location.lat},${i.location.lng}`} target="_blank" rel="noreferrer">Map</a>}
+              {!i.resolved && <button className="link" onClick={() => api(`/admin/incidents/${i.id}/resolve`, { method: 'POST' }).then(load)}>Resolve</button>}
+            </div>
+          ))}
+        </div>
+      ))}
 
       {tab === 'orders' && (!orders ? <Spinner /> : (
         <div className="table">

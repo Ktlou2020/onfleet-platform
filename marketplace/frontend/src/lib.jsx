@@ -42,6 +42,9 @@ export const STATUS = {
   cancelled: { label: 'Cancelled', step: -1 },
   rejected: { label: 'Store declined', step: -1 },
   rider_assigned: { label: 'Rider assigned', step: -1 },
+  rider_at_store: { label: 'Rider is at the store', step: -1 },
+  rider_arrived: { label: 'Rider is outside', step: -1 },
+  returned: { label: 'Returned to store', step: -1 },
 };
 
 // ---- Auth -----------------------------------------------------------------

@@ -80,13 +80,15 @@ export default function App() {
     try { return localStorage.getItem('cloud9.adult') === 'yes'; } catch { return false; }
   });
   const { pathname } = useLocation();
+  // The rider app runs full-screen, like a native driver app.
+  const fullScreen = pathname.startsWith('/rider');
   useEffect(() => { window.scrollTo(0, 0); }, [pathname]);
 
   if (!adultConfirmed) return <AgeGate onConfirm={() => setAdultConfirmed(true)} />;
 
   return (
     <div className="app">
-      <Header onAddress={() => setAddressOpen(true)} />
+      {!fullScreen && <Header onAddress={() => setAddressOpen(true)} />}
       <main>
         <Routes>
           <Route path="/" element={<Home onAddress={() => setAddressOpen(true)} />} />
@@ -102,10 +104,10 @@ export default function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
-      <footer className="footer">
+      {!fullScreen && <footer className="footer">
         <p>{BRAND.name} · 18+ only · ID checked on every delivery · Please use responsibly</p>
         <p className="muted">Support: {BRAND.support}</p>
-      </footer>
+      </footer>}
       <BottomNav />
       {(addressOpen || (!loc && pathname === '/')) && <AddressSheet onClose={() => setAddressOpen(false)} />}
     </div>

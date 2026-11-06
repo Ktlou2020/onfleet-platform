@@ -20,8 +20,8 @@ This lives beside the OnFleet bike platform but is fully self-contained: its own
 | **Trust & responsibility** | 18+ gate, SA ID number verification (Luhn check + date of birth + age) before the first order, one ID per account, and a **door handover that needs both an ID check and the customer's 4-digit code**. |
 | **Transparent pricing** | VAT-inclusive prices (as the CPA requires), delivery + service fees shown before payment, free delivery over R600, minimum order R100. |
 | **Merchant tools** | Live order board with sound alerts, accept/decline/pack/ready flow, stock that is reserved on order and returned on cancel, open/close toggle, per-product "why isn't this live?" explanations. |
-| **Rider app** | Online/offline toggle, GPS sharing, job board + auto-assignment, one-tap navigation, today's trips and earnings. |
-| **Control room** | Today's GMV, fees, average order-to-door time, live orders, orders waiting for a rider, store approvals, licence verification, compliance switches, delivery hours. |
+| **Rider app** | Full-screen, map-first driver app. Trip offers with a 30-second countdown that show pay, tip, distances and time up front; a declined or missed offer moves to the next nearest rider. Step-by-step trips (arrive at store → tick off items → collect → arrive at door → ID check + code), a proper return-to-store flow that still pays the rider, busy-area map layer, Google Maps/Waze hand-off, sound + vibration on offers, screen kept awake while online, pause new trips. Earnings by day and trip with tips, acceptance/completion rates and rating. SOS (SAPS 10111, ambulance 10177, alert to the control room) and incident reports. |
+| **Control room** | Today's GMV, fees, average order-to-door time, live orders, orders waiting for a rider, store approvals, licence verification, compliance switches, delivery hours, every rider's status and acceptance rate, SOS and incident queue. |
 
 ## Run it
 
@@ -50,6 +50,10 @@ Open http://localhost:5174. On the sign-in page (dev mode) there are one-tap dem
 To try the whole loop, use three browser windows: the customer orders, the store accepts and marks the order ready, and the rider goes online, collects and delivers. In dev the rider screen has a **Simulate move** button, so you can watch the rider pin move on the customer's map.
 
 Tests: `cd marketplace/backend && npm test` (SA ID parsing, licence gating, delivery hours, the full order lifecycle, stock, permissions).
+
+## Rider pay
+
+R18 per trip + R5 per km (to the store and on to the customer), at least R25. Customer tips (chosen at checkout) are added on top and go to the rider in full. The rider sees the total before accepting. Rates live in `backend/src/orders.js` (`RIDER_PAY`).
 
 ## Configuration
 

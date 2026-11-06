@@ -170,7 +170,60 @@ function migrate(db) {
       detail   TEXT,
       at       TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    -- Every trip offer and what the rider did with it, for acceptance rate
+    -- and so an order is never offered twice to a rider who passed on it.
+    CREATE TABLE IF NOT EXISTS offer_log (
+      id       INTEGER PRIMARY KEY,
+      order_id INTEGER NOT NULL REFERENCES orders(id),
+      rider_id INTEGER NOT NULL REFERENCES users(id),
+      outcome  TEXT NOT NULL CHECK (outcome IN ('accepted','declined','expired')),
+      at       TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS offer_log_rider ON offer_log(rider_id, at);
+    CREATE INDEX IF NOT EXISTS offer_log_order ON offer_log(order_id);
+
+    CREATE TABLE IF NOT EXISTS rider_shifts (
+      id         INTEGER PRIMARY KEY,
+      rider_id   INTEGER NOT NULL REFERENCES users(id),
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      ended_at   TEXT
+    );
+    CREATE INDEX IF NOT EXISTS rider_shifts_rider ON rider_shifts(rider_id, started_at);
+
+    CREATE TABLE IF NOT EXISTS incidents (
+      id         INTEGER PRIMARY KEY,
+      rider_id   INTEGER NOT NULL REFERENCES users(id),
+      order_id   INTEGER REFERENCES orders(id),
+      type       TEXT NOT NULL,
+      note       TEXT NOT NULL DEFAULT '',
+      lat        REAL,
+      lng        REAL,
+      resolved   INTEGER NOT NULL DEFAULT 0,
+      at         TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
+
+  // Columns added after the first release. SQLite has no ADD COLUMN IF NOT
+  // EXISTS, so check first; this is what upgrades a database already in use.
+  const addColumn = (table, column, ddl) => {
+    const has = db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
+    if (!has) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+  };
+  addColumn('orders', 'tip_cents', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('orders', 'rider_payout_cents', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('orders', 'offered_rider_id', 'INTEGER REFERENCES users(id)');
+  addColumn('orders', 'offer_expires_at', 'TEXT');
+  addColumn('orders', 'offer_pickup_km', 'REAL');
+  addColumn('orders', 'rider_assigned_at', 'TEXT');
+  addColumn('orders', 'arrived_store_at', 'TEXT');
+  addColumn('orders', 'picked_up_at', 'TEXT');
+  addColumn('orders', 'arrived_customer_at', 'TEXT');
+  addColumn('orders', 'rider_rating', 'INTEGER');
+  addColumn('riders', 'paused', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('riders', 'rating_sum', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('riders', 'rating_count', 'INTEGER NOT NULL DEFAULT 0');
+  db.exec('CREATE INDEX IF NOT EXISTS orders_offer ON orders(offered_rider_id)');
 }
 
 module.exports = { open };

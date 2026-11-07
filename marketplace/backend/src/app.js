@@ -51,7 +51,10 @@ function createApp(db, { pushSend, emailSend } = {}) {
   app.use(cors({ origin: process.env.CORS_ORIGIN?.split(',') || true }));
 
   const refund = (order, amountCents) => {
-    payments.provider().refund(order, amountCents).catch((e) => audit(null, 'refund_failed', { orderId: order.id, amountCents, error: e.message }));
+    payments.provider().refund(order, amountCents).catch((e) => {
+      audit(null, 'refund_failed', { orderId: order.id, amountCents, error: e.message });
+      orders.bus.emit('refund_failed', order.id, amountCents ?? order.total_cents, e.message, db);
+    });
   };
 
   function audit(userId, action, detail) {
@@ -176,6 +179,7 @@ function createApp(db, { pushSend, emailSend } = {}) {
     db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?').run(await bcrypt.hash(password, 10), userId);
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
     audit(userId, 'password_reset');
+    orders.bus.emit('password_changed', userId, db);
     if (user.suspended) return res.status(403).json({ error: 'This account is suspended' });
     db.prepare("UPDATE users SET last_login_at = datetime('now') WHERE id = ?").run(userId);
     res.json({ token: sign(user), user: publicUser(user) });
@@ -201,6 +205,7 @@ function createApp(db, { pushSend, emailSend } = {}) {
     if (newPassword === currentPassword) return res.status(400).json({ error: 'Choose a password you have not used here' });
     db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?').run(await bcrypt.hash(String(newPassword), 10), req.user.id);
     audit(req.user.id, 'password_changed');
+    orders.bus.emit('password_changed', req.user.id, db);
     res.json({ user: publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)) });
   }));
 
@@ -579,6 +584,19 @@ function createApp(db, { pushSend, emailSend } = {}) {
   registerCustomerRoutes(app, { db, auth, audit, refund, storeSummary, productView, categoriesById, settings });
   registerMoneyRoutes(app, { db, auth, audit, refund, wrap });
   registerStaffRoutes(app, { db, auth, audit, mailer });
+
+  // Admin: what email has gone out, and a test send.
+  app.get('/api/admin/emails', auth('admin'), (req, res) => {
+    const rows = db.prepare('SELECT id, to_email, kind, subject, status, error, at FROM email_log ORDER BY id DESC LIMIT 100').all();
+    const counts = Object.fromEntries(db.prepare("SELECT status, COUNT(*) AS n FROM email_log WHERE at > datetime('now', '-7 days') GROUP BY status").all().map((r) => [r.status, r.n]));
+    res.json({ enabled: mailer.enabled, counts, emails: rows.map((r) => ({ id: r.id, to: r.to_email, kind: r.kind, subject: r.subject, status: r.status, error: r.error, at: r.at })) });
+  });
+  app.post('/api/admin/emails/test', auth('admin'), wrap(async (req, res) => {
+    const result = await mailer.sendEmail({ to: req.user.email, name: req.user.name, userId: req.user.id, kind: 'test', subject: `${'ClickNPuff'} test email`, heading: 'Email is working ✅',
+      blocks: ['If you can read this, the site is sending email through Brevo.'] });
+    const row = db.prepare("SELECT error FROM email_log WHERE kind = 'test' ORDER BY id DESC LIMIT 1").get();
+    res.json({ result, error: row?.error || null, to: req.user.email });
+  }));
   registerPush(app, { db, auth, ...(pushSend ? { send: pushSend } : {}) });
 
   // ---- Admin -------------------------------------------------------------

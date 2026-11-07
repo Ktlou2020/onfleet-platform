@@ -85,6 +85,7 @@ function registerMoneyRoutes(app, { db, auth, audit, refund, wrap }) {
       bank_updated_at = datetime('now') WHERE id = ?`).run(bankName, holder.slice(0, 120), number, branch, type, s.id);
     audit(req.user.id, 'bank_details_changed', { storeId: s.id, bank: bankName, account: mask(number), before: mask(s.bank_account_number) });
     team.log(db, s.id, req.user.id, 'bank_details_changed', `${bankName} ${mask(number)}`);
+    orders.bus.emit('bank_changed', s.id, req.user.id, `${bankName} ${mask(number)}`, db);
     res.json({ bank: bankView(one('SELECT * FROM stores WHERE id = ?', s.id)) });
   }));
 

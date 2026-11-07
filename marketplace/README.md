@@ -110,17 +110,13 @@ The platform side (admin → Payouts) shows what each store is owed, downloads a
 
 ## Emails (Brevo)
 
-Sent through Brevo's transactional API (`backend/src/email.js`):
-- **Customers:** welcome, order confirmed (with receipt), delivered (with a review prompt and invoice link), cancelled, declined or undeliverable (with refund details), refund after delivery, password reset.
-- **Store teams:**
-  - a link for new staff to set their password
-  - store approved or suspended
-  - payout sent
-  - licence reminders
-  - low-rating alerts
-- **Admins:** new store applications.
+Sent through Brevo's transactional API (`backend/src/email.js`). Each email is recorded in `email_log` (admin → Settings shows the log and has a test button). Emails tied to an event are sent once.
 
-Each email is recorded in `email_log`. Order and licence emails are sent at most once per event.
+| Who | Emails |
+|---|---|
+| Customers | welcome · order confirmed (with receipt) · pre-order now being prepared · something sold out, choose · order updated with partial refund · delivered (review and invoice links) · cancelled, declined or undeliverable with refund details · unpaid basket nudge · refund after delivery · help request received and answered · password reset · password changed |
+| Store teams | application received · approved or suspended · set-your-password link for new staff · role changed or removed · order waiting (3 min) · order missed and declined · bank details changed · payout sent · licence reminders · 1–3 star review · weekly summary (Mondays 08:00 SAST) |
+| Admins | new store application · licence to verify · bank details changed · customer help request · rider SOS or incident · refund failed |
 
 ## Configuration
 

@@ -276,6 +276,7 @@ function registerRiderRoutes(app, { db, auth, requireAdult, audit, refund }) {
       Number.isFinite(lat) ? lat : r.lat, Number.isFinite(lng) ? lng : r.lng,
     );
     audit(req.user.id, 'incident', { type: b.type, orderId });
+    orders.bus.emit('incident', req.user.id, b.type, orderId, String(b.note || '').slice(0, 300), db);
     res.status(201).json({ ok: true });
   });
 

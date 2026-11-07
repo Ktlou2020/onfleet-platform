@@ -437,6 +437,42 @@ function CompanyDetails() {
   );
 }
 
+
+function EmailLog() {
+  const notify = useToast();
+  const [d, setD] = useState(null);
+  const load = useCallback(() => api('/admin/emails').then(setD), []);
+  useEffect(() => { load(); }, [load]);
+  if (!d) return null;
+  const test = async () => {
+    try {
+      const r = await api('/admin/emails/test', { method: 'POST' });
+      notify(r.result === 'sent' ? `Test email sent to ${r.to}` : r.result === 'skipped' ? 'Not sent: add BREVO_API_KEY in Railway first' : `Failed: ${r.error}`, r.result === 'sent' ? 'ok' : 'bad');
+      load();
+    } catch (e) { notify(e.message, 'bad'); }
+  };
+  const tone = { sent: 's-approved', failed: 's-cancelled', skipped: 's-pending_payment', queued: 's-placed' };
+  return (
+    <section className="adm-card adm-gap">
+      <div className="row-between">
+        <h3>Email (Brevo)</h3>
+        <button className="btn btn-sm" onClick={test}>Send me a test email</button>
+      </div>
+      <p className="small">{d.enabled ? '✅ Connected — emails are being sent.' : '⚠️ Not connected — add BREVO_API_KEY to the service\'s Variables in Railway. Emails are logged but not sent.'}
+        {' '}<span className="muted">Last 7 days: {d.counts.sent || 0} sent · {d.counts.failed || 0} failed · {d.counts.skipped || 0} skipped</span></p>
+      {d.emails.length > 0 && (
+        <table className="adm-table">
+          <thead><tr><th>When</th><th>To</th><th>Email</th><th>Status</th></tr></thead>
+          <tbody>{d.emails.slice(0, 30).map((e) => (
+            <tr key={e.id}><td>{when(e.at)}</td><td>{e.to}</td><td>{e.subject}</td>
+              <td><span className={`status ${tone[e.status] || ''}`}>{e.status}</span>{e.error && <span className="muted small"><br />{e.error}</span>}</td></tr>
+          ))}</tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
 // ---- Stores, riders, customers, incidents -------------------------------
 
 function StoreRow({ s, onChange }) {
@@ -847,7 +883,7 @@ export default function Admin() {
         {section === 'riders' && <Riders />}
         {section === 'customers' && <Customers />}
         {section === 'incidents' && <Incidents />}
-        {section === 'settings' && <><Settings /><CompanyDetails /></>}
+        {section === 'settings' && <><Settings /><CompanyDetails /><EmailLog /></>}
         {section === 'profile' && <Profile />}
         {section === 'audit' && <Audit />}
       </div>

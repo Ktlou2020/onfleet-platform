@@ -132,6 +132,7 @@ function registerCustomerRoutes(app, { db, auth, audit, refund, storeSummary, pr
     const { lastInsertRowid } = db.prepare('INSERT INTO help_requests (order_id, customer_id, type, note) VALUES (?, ?, ?, ?)')
       .run(o.id, req.user.id, type, String(req.body?.note || '').slice(0, 600));
     audit(req.user.id, 'help_requested', { orderId: o.id, type });
+    orders.bus.emit('help_requested', lastInsertRowid, db);
     res.status(201).json({ request: helpView(lastInsertRowid) });
   });
 
@@ -162,6 +163,7 @@ function registerCustomerRoutes(app, { db, auth, audit, refund, storeSummary, pr
     const r = db.prepare("UPDATE help_requests SET status = 'resolved', resolution = ?, resolved_at = datetime('now') WHERE id = ? AND status = 'open'").run(resolution, req.params.id);
     if (!r.changes) return res.status(404).json({ error: 'No open request with that id' });
     audit(req.user.id, 'help_resolved', { id: Number(req.params.id) });
+    orders.bus.emit('help_resolved', Number(req.params.id), db);
     res.json({ request: helpView(Number(req.params.id)) });
   });
 }

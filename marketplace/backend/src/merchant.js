@@ -122,7 +122,10 @@ function registerMerchantRoutes(app, { db, auth, requireAdult, audit, refund, st
     if (b.pauseMinutes !== undefined) act(req, Number(b.pauseMinutes) ? 'store_paused' : 'store_resumed', Number(b.pauseMinutes) ? `${b.pauseMinutes} min` : null);
     if (b.isOpen !== undefined && !!b.isOpen !== !!s.is_open) act(req, b.isOpen ? 'store_opened' : 'store_closed');
     if (b.busyExtraMinutes !== undefined && Number(b.busyExtraMinutes) !== s.busy_extra_minutes) act(req, 'busy_time', `+${b.busyExtraMinutes} min`);
-    if (licenceChanged) act(req, 'licence_changed', next.licence_number);
+    if (licenceChanged) {
+      act(req, 'licence_changed', next.licence_number);
+      if (next.licence_number) orders.bus.emit('licence_submitted', s.id, db);
+    }
     const other = Object.keys(b).filter((k) => !floor.includes(k));
     if (other.length) act(req, 'settings_changed', other.join(', '));
     if (b.pauseMinutes !== undefined) audit(req.user.id, Number(b.pauseMinutes) ? 'store_paused' : 'store_resumed', { storeId: s.id, minutes: Number(b.pauseMinutes) });
@@ -588,6 +591,7 @@ function merchantSweep(db, refund, now = new Date()) {
   for (const o of waiting) {
     if (o.mins >= timeout) {
       orders.transition(db, o.id, 'system', 'rejected', { note: "The store didn't respond in time. You've been refunded in full.", refund });
+      orders.bus.emit('store_missed', o.id, db);
       out.declined++;
     } else if (o.mins >= ESCALATE_AFTER_MINUTES && !o.escalated_at) {
       db.prepare("UPDATE orders SET escalated_at = datetime('now') WHERE id = ?").run(o.id);

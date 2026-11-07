@@ -60,4 +60,9 @@ const licences = () => { try { licenceSweep(db); } catch (e) { console.error('li
 setTimeout(licences, 10 * 1000).unref();
 setInterval(licences, 60 * 60 * 1000).unref();
 
+// Weekly summary emails to store owners: Mondays from 08:00 SAST, once each.
+const weekly = () => app.locals.mailer.weeklySummaries().catch((e) => console.error('weekly summaries failed', e));
+setTimeout(weekly, 30 * 1000).unref();
+setInterval(weekly, 30 * 60 * 1000).unref();
+
 app.listen(port, () => console.log(`ClickNPuff API on http://localhost:${port}`));

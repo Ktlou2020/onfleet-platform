@@ -192,7 +192,7 @@ function createMailer(db, { send, log = console } = {}) {
 
   // ---- Order emails ---------------------------------------------------------
   function orderData(orderId) {
-    const o = db.prepare(`SELECT o.*, s.name AS store_name, u.email, u.name AS customer_name FROM orders o
+    const o = db.prepare(`SELECT o.*, s.name AS store_name, s.slug AS store_slug, u.email, u.name AS customer_name FROM orders o
       JOIN stores s ON s.id = o.store_id JOIN users u ON u.id = o.customer_id WHERE o.id = ?`).get(orderId);
     if (!o) return null;
     o.items = db.prepare('SELECT name, qty, price_cents, unavailable FROM order_items WHERE order_id = ?').all(orderId);
@@ -212,6 +212,35 @@ function createMailer(db, { send, log = console } = {}) {
     if (!o) return;
     const track = `${site()}/orders/${o.id}`;
     const base = { to: o.email, name: o.customer_name, userId: o.customer_id };
+    const wasScheduled = !!db.prepare("SELECT 1 FROM order_events WHERE order_id = ? AND status = 'scheduled'").get(o.id);
+    // A pre-order's time has come: the store is packing it now.
+    if (to === 'placed' && wasScheduled) {
+      return sendEmail({
+        ...base, kind: 'preorder_started', dedupe: `preorder_started:${o.id}`,
+        subject: `Your pre-order #${o.code} is being prepared`, heading: "Deliveries are open — we're on it",
+        blocks: [`${esc(o.store_name)} is getting your order ready now. It should be with you in about ${o.eta_minutes} minutes.`, { button: 'Track your order', href: track },
+          { note: 'Have your ID ready for the rider.' }],
+      });
+    }
+    // Something in the order sold out: the customer has a few minutes to choose.
+    if (to === 'item_unavailable') {
+      const gone = o.items.filter((i) => i.unavailable).map((i) => i.name);
+      return sendEmail({
+        ...base, kind: 'item_unavailable', dedupe: `item_unavailable:${o.id}`,
+        subject: `Action needed: ${gone[0] || 'an item'} is sold out (order #${o.code})`, heading: 'Something in your order sold out',
+        blocks: [`${esc(o.store_name)} has run out of: <b>${esc(gone.join(', '))}</b>.`,
+          "Choose whether to go ahead without it (you're refunded for it) or cancel the whole order. If we don't hear from you in 5 minutes, we'll go ahead without it.",
+          { button: 'Choose now', href: track }],
+      });
+    }
+    if (to === 'items_removed') {
+      const back = db.prepare("SELECT note FROM order_events WHERE order_id = ? AND status = 'items_removed' ORDER BY id DESC LIMIT 1").get(o.id)?.note || '';
+      return sendEmail({
+        ...base, kind: 'items_removed', dedupe: `items_removed:${o.id}`,
+        subject: `Order #${o.code} updated — sold-out items refunded`, heading: 'Your order is going ahead',
+        blocks: [esc(back), "Here's your updated order:", { rows: receiptRows(o) }, 'Card refunds usually show within 3–7 working days, depending on your bank.', { button: 'Track your order', href: track }],
+      });
+    }
     if ((to === 'placed' || to === 'scheduled') && o.payment_status === 'paid') {
       const when = o.scheduled_for
         ? `We'll deliver from ${new Date(new Date(o.scheduled_for).getTime() + 2 * 3600e3).toISOString().slice(0, 16).replace('T', ' at ')} (SAST), when deliveries open.`
@@ -229,6 +258,15 @@ function createMailer(db, { send, log = console } = {}) {
         subject: `Delivered: order #${o.code}`, heading: 'Your order was delivered',
         blocks: [`Enjoy! Your order from ${esc(o.store_name)} has arrived.`, { rows: receiptRows(o) },
           { button: 'Rate your order', href: track }, `Need a tax invoice? <a href="${esc(`${site()}/orders/${o.id}/invoice`)}" style="color:${GREEN}">Download it here</a>.`],
+      });
+    }
+    if (to === 'cancelled' && o.payment_status === 'unpaid') {
+      // Never paid for: a gentle nudge, not a cancellation notice.
+      return sendEmail({
+        ...base, kind: 'order_unpaid', dedupe: `order_ended:${o.id}`,
+        subject: `Your ${o.store_name} order wasn't completed`, heading: 'Still want it?',
+        blocks: ["Your order wasn't paid for, so we didn't send it to the store. Nothing has been charged.", { rows: o.items.map((i) => [`${i.qty}× ${i.name}`, rands(i.qty * i.price_cents)]) },
+          { button: `Back to ${o.store_name}`, href: `${site()}/store/${o.store_slug}` }],
       });
     }
     if (['cancelled', 'rejected', 'returned'].includes(to)) {
@@ -266,7 +304,9 @@ function createMailer(db, { send, log = console } = {}) {
   const storeEmail = async (storeId, need, msg) => {
     for (const id of team.memberIds(db, storeId, need)) {
       const u = user(id);
-      if (u) await sendEmail({ ...msg(u), to: u.email, name: u.name, userId: u.id });
+      if (!u) continue;
+      const m = msg(u);
+      await sendEmail({ ...m, dedupe: m.dedupe ? `${m.dedupe}:${u.id}` : null, to: u.email, name: u.name, userId: u.id });
     }
   };
 
@@ -309,13 +349,152 @@ function createMailer(db, { send, log = console } = {}) {
   on('store_applied', async (storeId) => {
     const s = db.prepare('SELECT s.name, s.address, u.email FROM stores s JOIN users u ON u.id = s.owner_id WHERE s.id = ?').get(storeId);
     if (!s) return;
+    await storeEmail(storeId, 'owner', () => ({
+      kind: 'store_received', dedupe: `store_received:${storeId}`, subject: `We've received your application for ${s.name}`, heading: 'Application received',
+      blocks: [`Thanks for applying to sell on ${BRAND}. We review stores within one working day and will email you as soon as <b>${esc(s.name)}</b> is approved.`,
+        'While you wait: add your menu with photos, set your opening hours, and add your bank details under Money so payouts can start straight away.',
+        { button: 'Set up your menu', href: `${site()}/merchant?section=menu` }],
+    }));
     for (const a of db.prepare("SELECT id, email, name FROM users WHERE role = 'admin' AND suspended = 0").all()) {
       await sendEmail({ to: a.email, name: a.name, userId: a.id, kind: 'admin_store_applied', subject: `New store to review: ${s.name}`, heading: 'A store wants to join',
         blocks: [`<b>${esc(s.name)}</b> — ${esc(s.address)} (${esc(s.email)})`, { button: 'Review in Stores', href: `${site()}/admin` }] });
     }
   });
 
-  return { sendEmail, emails, makeLink, useLink, enabled: !!sender, close: () => listeners.forEach(([e, h]) => orders.bus.off(e, h)) };
+
+  // ---- Security notices --------------------------------------------------------
+  on('password_changed', async (userId) => {
+    const u = user(userId);
+    if (!u) return;
+    await sendEmail({ to: u.email, name: u.name, userId: u.id, kind: 'password_changed', subject: `Your ${BRAND} password was changed`, heading: 'Your password was changed',
+      blocks: [`Hi ${first(u.name)}, the password for your ${BRAND} account was just changed.`, "If this was you, there's nothing to do.",
+        { note: `If it wasn't you, <a href="${esc(`${site()}/forgot`)}" style="color:${GREEN}">reset your password now</a> and reply to this email so we can secure your account.` }] });
+  });
+
+  // Goes to the owner even when the owner made the change: that's the point.
+  on('bank_changed', async (storeId, byUserId, summary) => {
+    const s = db.prepare('SELECT name FROM stores WHERE id = ?').get(storeId);
+    const by = user(byUserId);
+    await storeEmail(storeId, 'owner', () => ({
+      kind: 'bank_changed', subject: `Bank details changed for ${s?.name}`, heading: 'Your payout bank account was changed',
+      blocks: [`The bank account for <b>${esc(s?.name)}</b> payouts was changed to <b>${esc(summary)}</b> by ${esc(by?.name || 'someone on your team')}.`, 'If this was you, nothing else is needed — our team will confirm the new details with you before the next payout.',
+        { note: 'If you did NOT make this change, reply to this email immediately and change your password. We hold payouts to newly changed accounts until we have confirmed them with you.' }],
+    }));
+    for (const a of db.prepare("SELECT id, email, name FROM users WHERE role = 'admin' AND suspended = 0").all()) {
+      await sendEmail({ to: a.email, name: a.name, userId: a.id, kind: 'admin_bank_changed', subject: `Bank details changed: ${s?.name}`, heading: 'A store changed its payout account',
+        blocks: [`<b>${esc(s?.name)}</b> → ${esc(summary)} (by ${esc(by?.email || 'unknown')}).`, 'Confirm by phone, on the number you already have, before the next payout.', { button: 'Open Payouts', href: `${site()}/admin` }] });
+    }
+  });
+
+  // ---- Help requests ----------------------------------------------------------------
+  const helpRow = (id) => db.prepare(`SELECT h.*, o.code, o.id AS oid, s.name AS store_name, u.email, u.name FROM help_requests h
+    JOIN orders o ON o.id = h.order_id JOIN stores s ON s.id = o.store_id JOIN users u ON u.id = h.customer_id WHERE h.id = ?`).get(id);
+  on('help_requested', async (id) => {
+    const h = helpRow(id);
+    if (!h) return;
+    await sendEmail({ to: h.email, name: h.name, userId: h.customer_id, kind: 'help_received', dedupe: `help_received:${id}`, subject: `We're on it: order #${h.code}`,
+      heading: "We've got your message", blocks: [`Thanks, ${first(h.name)}. Our team is looking into your order #${h.code} from ${esc(h.store_name)} and will get back to you soon — usually within a few hours.`,
+        h.note ? `You told us: “${esc(h.note)}”` : '', { note: 'Reply to this email to add anything else, like a photo.' }].filter(Boolean) });
+    for (const a of db.prepare("SELECT id, email, name FROM users WHERE role = 'admin' AND suspended = 0").all()) {
+      await sendEmail({ to: a.email, name: a.name, userId: a.id, kind: 'admin_help', subject: `Help request: #${h.code} (${h.type.replace(/_/g, ' ')})`, heading: 'A customer needs help',
+        blocks: [`<b>${esc(h.name)}</b> (${esc(h.email)}) · order #${h.code} from ${esc(h.store_name)}`, h.note ? `“${esc(h.note)}”` : 'No note.', { button: 'Open Incidents', href: `${site()}/admin` }] });
+    }
+  });
+  on('help_resolved', async (id) => {
+    const h = helpRow(id);
+    if (!h) return;
+    await sendEmail({ to: h.email, name: h.name, userId: h.customer_id, kind: 'help_resolved', dedupe: `help_resolved:${id}`, subject: `Update on order #${h.code}`,
+      heading: 'Here\'s what we did', blocks: [esc(h.resolution), { button: 'View your order', href: `${site()}/orders/${h.oid}` }, { note: 'Not sorted? Just reply to this email.' }] });
+  });
+
+  // ---- Store: missed and urgent orders, applications, staff ----------------------------
+  on('store_escalation', async (orderId, minutesLeft) => {
+    const o = orderData(orderId);
+    if (!o) return;
+    await storeEmail(o.store_id, 'manager', () => ({
+      kind: 'store_escalation', dedupe: null, subject: `⏰ Order #${o.code} is waiting — ${minutesLeft} min left`, heading: 'An order is waiting for you',
+      blocks: [`Order #${o.code} (${rands(o.subtotal_cents)}) has been waiting. Accept it in the next <b>${minutesLeft} minutes</b> or it will be declined and refunded.`, { button: 'Open the order board', href: `${site()}/merchant` }],
+    }));
+  });
+  on('store_missed', async (orderId) => {
+    const o = orderData(orderId);
+    if (!o) return;
+    await storeEmail(o.store_id, 'manager', () => ({
+      kind: 'store_missed', subject: `Missed order #${o.code} — declined automatically`, heading: 'You missed an order',
+      blocks: [`Order #${o.code} for ${rands(o.subtotal_cents)} wasn't accepted in time, so it was declined and the customer refunded.`,
+        'To avoid this: keep the console open on a device at the counter with alerts on, pause the store when you\'re too busy, or switch on auto-accept in Store settings.',
+        { button: 'Open the store console', href: `${site()}/merchant` }],
+    }));
+  });
+  on('licence_submitted', async (storeId) => {
+    const s = db.prepare('SELECT name, licence_number, licence_expires_on FROM stores WHERE id = ?').get(storeId);
+    for (const a of db.prepare("SELECT id, email, name FROM users WHERE role = 'admin' AND suspended = 0").all()) {
+      await sendEmail({ to: a.email, name: a.name, userId: a.id, kind: 'admin_licence', subject: `Licence to verify: ${s.name}`, heading: 'A licence needs checking',
+        blocks: [`<b>${esc(s.name)}</b> submitted licence ${esc(s.licence_number)}${s.licence_expires_on ? `, expiring ${esc(s.licence_expires_on)}` : ''}. Regulated products stay hidden until you verify it.`, { button: 'Review in Stores', href: `${site()}/admin` }] });
+    }
+  });
+  on('staff_changed', async (storeId, userId, role) => {
+    const u = user(userId);
+    const s = db.prepare('SELECT name FROM stores WHERE id = ?').get(storeId);
+    if (!u || !s) return;
+    await sendEmail({ to: u.email, name: u.name, userId: u.id, kind: role ? 'staff_role' : 'staff_removed',
+      subject: role ? `Your role at ${s.name} changed` : `You've been removed from ${s.name}`,
+      heading: role ? `You're now a ${role}` : 'Your access was removed',
+      blocks: [role ? `You're now a <b>${esc(role)}</b> at ${esc(s.name)}. ${role === 'manager' ? 'You can now manage the menu, promotions, reviews and settings.' : 'You can run the order board and stock.'}`
+        : `You no longer have access to ${esc(s.name)} on ${BRAND}. If you think this is a mistake, speak to the store owner.`] });
+  });
+
+  // ---- Riders and payments: tell the admins ---------------------------------------
+  on('incident', async (riderId, type, orderId, note) => {
+    const r = user(riderId);
+    const urgent = type === 'sos' || type === 'accident';
+    for (const a of db.prepare("SELECT id, email, name FROM users WHERE role = 'admin' AND suspended = 0").all()) {
+      await sendEmail({ to: a.email, name: a.name, userId: a.id, kind: `admin_incident_${type}`, subject: `${urgent ? '🚨 URGENT: ' : ''}${type === 'sos' ? 'SOS' : type.replace(/_/g, ' ')} from rider ${r?.name || ''}`.trim(),
+        heading: urgent ? 'A rider needs help now' : 'A rider reported a problem',
+        blocks: [`<b>${esc(r?.name)}</b>${r?.email ? ` (${esc(r.email)})` : ''}${orderId ? ` · order ${orderId}` : ''}`, note ? `“${esc(note)}”` : 'No note.', urgent ? 'Call the rider now, and emergency services if you can\'t reach them. Their last location is on the live map.' : '', { button: 'Open the live map', href: `${site()}/admin` }].filter(Boolean) });
+    }
+  });
+  on('refund_failed', async (orderId, amountCents, error) => {
+    const o = orderData(orderId);
+    for (const a of db.prepare("SELECT id, email, name FROM users WHERE role = 'admin' AND suspended = 0").all()) {
+      await sendEmail({ to: a.email, name: a.name, userId: a.id, kind: 'admin_refund_failed', subject: `Refund failed: order #${o?.code || orderId}`, heading: 'A refund did not go through',
+        blocks: [`Refunding ${rands(amountCents || 0)} to ${esc(o?.customer_name || 'the customer')} for order #${esc(o?.code || orderId)} failed: ${esc(error)}.`, 'Refund it by hand in the payment provider\'s dashboard, then let the customer know.'] });
+    }
+  });
+
+  // ---- Weekly summary for store owners (Mondays, from 08:00 SAST) ------------------------
+  async function weeklySummaries(now = new Date()) {
+    const sast = new Date(now.getTime() + 2 * 3600e3);
+    if (sast.getUTCDay() !== 1 || sast.getUTCHours() < 8) return 0;
+    const monday = sast.toISOString().slice(0, 10);
+    const from = new Date(Date.parse(`${monday}T00:00:00Z`) - 7 * 864e5).toISOString().slice(0, 10);
+    let n = 0;
+    for (const st of db.prepare("SELECT * FROM stores WHERE status = 'approved'").all()) {
+      const w = db.prepare(`SELECT COUNT(*) AS orders, COALESCE(SUM(subtotal_cents - store_discount_cents - store_refund_cents), 0) AS earned
+        FROM orders WHERE store_id = ? AND status = 'delivered' AND date(delivered_at, '+2 hours') >= ? AND date(delivered_at, '+2 hours') < ?`).get(st.id, from, monday);
+      const missed = db.prepare(`SELECT COUNT(*) AS n FROM orders WHERE store_id = ? AND status = 'rejected' AND date(updated_at, '+2 hours') >= ? AND date(updated_at, '+2 hours') < ?`).get(st.id, from, monday).n;
+      const top = db.prepare(`SELECT i.name, SUM(i.qty) AS q FROM order_items i JOIN orders o ON o.id = i.order_id WHERE o.store_id = ? AND o.status = 'delivered'
+        AND date(o.delivered_at, '+2 hours') >= ? AND date(o.delivered_at, '+2 hours') < ? AND i.unavailable = 0 GROUP BY i.product_id ORDER BY q DESC LIMIT 3`).all(st.id, from, monday);
+      const rating = st.rating_count ? (st.rating_sum / st.rating_count).toFixed(1) : null;
+      const res = await (async () => {
+        let sent = 0;
+        await storeEmail(st.id, 'owner', () => ({
+          kind: 'weekly_summary', dedupe: `weekly:${st.id}:${monday}`, subject: `${st.name}: your week — ${w.orders} order${w.orders === 1 ? '' : 's'}, ${rands(w.earned)}`,
+          heading: 'Your week on ' + BRAND,
+          blocks: [w.orders ? `Here's how ${esc(st.name)} did last week.` : `${esc(st.name)} had no deliveries last week. Is the store switched on, with photos and a few store picks? Those help customers find you.`,
+            { rows: [['Orders delivered', String(w.orders)], ['You earned', rands(w.earned)], ['Declined or missed', String(missed)], ['Rating', rating ? `★ ${rating}` : '—']] },
+            top.length ? `Best sellers: ${top.map((t) => `${esc(t.name)} (${t.q})`).join(', ')}.` : '',
+            { button: 'See your insights', href: `${site()}/merchant?section=insights` }].filter(Boolean),
+        }));
+        sent++;
+        return sent;
+      })();
+      n += res;
+    }
+    return n;
+  }
+
+  return { sendEmail, emails, makeLink, useLink, weeklySummaries, enabled: !!sender, close: () => listeners.forEach(([e, h]) => orders.bus.off(e, h)) };
 }
 
 module.exports = { createMailer, layout };

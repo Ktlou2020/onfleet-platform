@@ -116,6 +116,7 @@ function registerStaffRoutes(app, { db, auth, audit, mailer }) {
     if (!['packer', 'manager'].includes(req.body?.role)) return res.status(400).json({ error: 'Choose packer or manager' });
     db.prepare('UPDATE store_members SET role = ? WHERE store_id = ? AND user_id = ?').run(req.body.role, s.id, m.user_id);
     team.log(db, s.id, req.user.id, 'staff_role', `${m.name}: ${m.role} → ${req.body.role}`);
+    orders.bus.emit('staff_changed', s.id, m.user_id, req.body.role, db);
     res.json({ ok: true });
   });
 
@@ -123,6 +124,7 @@ function registerStaffRoutes(app, { db, auth, audit, mailer }) {
     const { s, m } = member(req);
     db.prepare('DELETE FROM store_members WHERE store_id = ? AND user_id = ?').run(s.id, m.user_id);
     team.log(db, s.id, req.user.id, 'staff_removed', m.name);
+    orders.bus.emit('staff_changed', s.id, m.user_id, null, db);
     audit(req.user.id, 'store_staff_removed', { storeId: s.id, userId: m.user_id });
     res.json({ ok: true });
   });

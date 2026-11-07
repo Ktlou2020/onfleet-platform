@@ -3,6 +3,7 @@ const compliance = require('./compliance');
 const orders = require('./orders');
 const pricing = require('./pricing');
 const { availability, parseHours, validateHours } = require('./storeHours');
+const sms = require('./sms');
 
 // The store owner's console: the live order board, busy controls, opening
 // hours, the menu, insights, payouts and reviews.
@@ -16,6 +17,8 @@ const DECLINE_REASONS = {
 };
 const PREP_CHOICES = [5, 10, 15, 20, 30];
 const LOW_STOCK = 3;
+const ESCALATE_AFTER_MINUTES = 3;
+const DECISION_MINUTES = 5;
 const ph = (list) => list.map(() => '?').join(',');
 const DAY = (col) => `date(${col}, '+2 hours')`;
 
@@ -36,7 +39,7 @@ function registerMerchantRoutes(app, { db, auth, requireAdult, audit, refund, st
       status: s.status, deliveryRadiusKm: s.delivery_radius_km, licenceNumber: s.licence_number,
       licenceCategories: JSON.parse(s.licence_categories), licenceVerified: !!s.licence_verified,
       switchedOn: !!s.is_open, pausedUntil: s.paused_until && new Date(s.paused_until) > new Date() ? s.paused_until : null,
-      busyExtraMinutes: s.busy_extra_minutes, hours: parseHours(s.hours), phone: s.phone,
+      busyExtraMinutes: s.busy_extra_minutes, hours: parseHours(s.hours), phone: s.phone, autoAccept: !!s.auto_accept,
       availability: availability(s),
     };
   }
@@ -88,14 +91,15 @@ function registerMerchantRoutes(app, { db, auth, requireAdult, audit, refund, st
       licence_number: b.licenceNumber === undefined ? s.licence_number : String(b.licenceNumber).trim() || null,
       busy_extra_minutes: b.busyExtraMinutes === undefined ? s.busy_extra_minutes : Number(b.busyExtraMinutes),
       phone: b.phone === undefined ? s.phone : String(b.phone).trim().slice(0, 20) || null,
+      auto_accept: b.autoAccept === undefined ? s.auto_accept : b.autoAccept ? 1 : 0,
     };
     // Changing the licence number puts it back in the review queue.
     const licenceChanged = next.licence_number !== s.licence_number;
     db.prepare(`UPDATE stores SET is_open = ?, description = ?, prep_minutes = ?, delivery_radius_km = ?, licence_number = ?,
-      busy_extra_minutes = ?, phone = ?, hours = ?, paused_until = ?,
+      busy_extra_minutes = ?, phone = ?, hours = ?, paused_until = ?, auto_accept = ?,
       licence_verified = CASE WHEN ? THEN 0 ELSE licence_verified END WHERE id = ?`)
       .run(next.is_open, next.description, next.prep_minutes, next.delivery_radius_km, next.licence_number,
-        next.busy_extra_minutes, next.phone, hours, pausedUntil, licenceChanged ? 1 : 0, s.id);
+        next.busy_extra_minutes, next.phone, hours, pausedUntil, next.auto_accept, licenceChanged ? 1 : 0, s.id);
     if (b.pauseMinutes !== undefined) audit(req.user.id, Number(b.pauseMinutes) ? 'store_paused' : 'store_resumed', { storeId: s.id, minutes: Number(b.pauseMinutes) });
     res.json({ store: storeView(myStore(req.user.id)) });
   });
@@ -183,7 +187,22 @@ function registerMerchantRoutes(app, { db, auth, requireAdult, audit, refund, st
       ...v, lane: lane(v), acceptedAt: extra.accepted_at, readyAt: extra.ready_at, prepMinutes: extra.prep_minutes,
       waitingSeconds: extra.since_change_s, ageSeconds: extra.age_s, prepSecondsLeft: extra.prep_left_s,
       riderAtStore: !!v.milestones.arrivedStoreAt && ['accepted', 'preparing', 'ready'].includes(v.status),
+      riderEtaMinutes: riderEta(v),
+      regulated: hasRegulated(id),
     };
+  }
+
+  // How far off the assigned rider is, so the bag is packed just in time.
+  function riderEta(v) {
+    if (!v.rider || v.milestones.arrivedStoreAt || !['accepted', 'preparing', 'ready'].includes(v.status)) return null;
+    const r = one('SELECT r.lat, r.lng FROM riders r JOIN orders o ON o.rider_id = r.user_id WHERE o.id = ?', v.id);
+    if (!r || r.lat == null) return null;
+    return Math.max(1, Math.round((pricing.roadKm(r, v.store) / 25) * 60 + 1));
+  }
+
+  function hasRegulated(orderId) {
+    return !!one(`SELECT 1 FROM order_items i JOIN products p ON p.id = i.product_id JOIN categories c ON c.id = p.category_id
+      WHERE i.order_id = ? AND c.regulated = 1 AND i.unavailable = 0`, orderId);
   }
 
   app.get('/api/merchant/orders', merchant, (req, res) => {
@@ -221,24 +240,73 @@ function registerMerchantRoutes(app, { db, auth, requireAdult, audit, refund, st
       if (!DECLINE_REASONS[code]) return res.status(400).json({ error: 'Choose why you are declining' });
       note = `${DECLINE_REASONS[code]}${note ? ` — ${String(note).slice(0, 160)}` : ''}`;
     }
-    let prep = null;
+    if (order.awaiting_customer && to === 'accepted') return res.status(409).json({ error: 'Waiting for the customer to decide about the missing items' });
     if (to === 'accepted') {
-      prep = Number(req.body?.prepMinutes ?? s.prep_minutes + s.busy_extra_minutes);
+      const prep = Number(req.body?.prepMinutes ?? s.prep_minutes + s.busy_extra_minutes);
       if (!Number.isInteger(prep) || prep < 3 || prep > 60) return res.status(400).json({ error: 'Choose a prep time between 3 and 60 minutes' });
+      acceptOrder(order, prep);
+      return res.json({ order: boardView(order.id) });
+    }
+    if (to === 'ready' && hasRegulated(order.id) && !req.body?.sealed) {
+      return res.status(400).json({ error: 'Seal the bag and label it 18+ before marking it ready' });
     }
     orders.transition(db, order.id, 'merchant', to, { note, refund });
-    if (to === 'accepted') {
-      // The customer's ETA follows the store's own prep promise: time so
-      // far, plus prep, plus dispatch and the ride.
-      const elapsed = one("SELECT (julianday('now') - julianday(created_at)) * 1440 AS m FROM orders WHERE id = ?", order.id).m;
-      const eta = Math.round(elapsed + pricing.etaMinutes(order.distance_km, prep));
-      db.prepare("UPDATE orders SET accepted_at = datetime('now'), prep_minutes = ?, eta_minutes = ? WHERE id = ?").run(prep, eta, order.id);
-      orders.bus.emit('order', order.id);
-    }
     if (to === 'ready') {
-      db.prepare("UPDATE orders SET ready_at = datetime('now') WHERE id = ?").run(order.id);
+      db.prepare("UPDATE orders SET ready_at = datetime('now'), sealed = ? WHERE id = ?").run(req.body?.sealed ? 1 : 0, order.id);
       orders.bus.emit('order', order.id);
     }
+    res.json({ order: boardView(order.id) });
+  });
+
+  // The customer's ETA follows the store's own prep promise: time so far,
+  // plus prep, plus dispatch and the ride.
+  function acceptOrder(order, prep, note) {
+    orders.transition(db, order.id, 'merchant', 'accepted', { note, refund });
+    const elapsed = one("SELECT (julianday('now') - julianday(created_at)) * 1440 AS m FROM orders WHERE id = ?", order.id).m;
+    const eta = Math.round(elapsed + pricing.etaMinutes(order.distance_km, prep));
+    db.prepare("UPDATE orders SET accepted_at = datetime('now'), prep_minutes = ?, eta_minutes = ? WHERE id = ?").run(prep, eta, order.id);
+    orders.bus.emit('order', order.id);
+  }
+
+  // Auto-accept: stores that trust their stock take every order straight
+  // away at their usual prep time.
+  orders.bus.on('status', (orderId, to, evDb) => {
+    if (evDb !== db || !['placed', 'items_removed'].includes(to)) return;
+    setImmediate(() => {
+      const o = one(`SELECT o.*, s.auto_accept, s.prep_minutes AS store_prep, s.busy_extra_minutes FROM orders o JOIN stores s ON s.id = o.store_id WHERE o.id = ?`, orderId);
+      if (!o || !o.auto_accept || o.status !== 'placed' || o.awaiting_customer) return;
+      try { acceptOrder(o, o.store_prep + o.busy_extra_minutes, 'Accepted automatically'); } catch { /* moved on meanwhile */ }
+    });
+  });
+
+  // Something in the order is sold out: mark it, and let the customer choose
+  // to go ahead without it (refunded for that item) or cancel.
+  app.post('/api/merchant/orders/:id/unavailable', merchant, (req, res) => {
+    const s = requireStore(req);
+    const order = one('SELECT * FROM orders WHERE id = ? AND store_id = ?', req.params.id, s.id);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (order.status !== 'placed' || order.awaiting_customer) return res.status(409).json({ error: 'You can only do this on a new order' });
+    const ids = (Array.isArray(req.body?.productIds) ? req.body.productIds : []).map(Number);
+    const items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(order.id);
+    const hit = items.filter((i) => ids.includes(i.product_id));
+    if (!hit.length) return res.status(400).json({ error: 'Choose which items are out of stock' });
+    db.transaction(() => {
+      for (const i of hit) {
+        db.prepare('UPDATE order_items SET unavailable = 1 WHERE id = ?').run(i.id);
+        db.prepare('UPDATE products SET stock = 0 WHERE id = ?').run(i.product_id);
+      }
+    })();
+    const names = hit.map((i) => i.name).join(', ');
+    if (hit.length === items.length) {
+      orders.transition(db, order.id, 'merchant', 'rejected', { note: `${DECLINE_REASONS.out_of_stock} — ${names}`, refund });
+      return res.json({ order: boardView(order.id), declined: true });
+    }
+    db.prepare("UPDATE orders SET awaiting_customer = 'item_unavailable', awaiting_until = ?, updated_at = datetime('now') WHERE id = ?")
+      .run(new Date(Date.now() + DECISION_MINUTES * 60000).toISOString(), order.id);
+    orders.logEvent(db, order.id, 'item_unavailable', `${names} — sold out`);
+    orders.bus.emit('order', order.id);
+    orders.bus.emit('status', order.id, 'item_unavailable', db);
+    audit(req.user.id, 'items_unavailable', { orderId: order.id, productIds: hit.map((i) => i.product_id) });
     res.json({ order: boardView(order.id) });
   });
 
@@ -329,4 +397,30 @@ function registerMerchantRoutes(app, { db, auth, requireAdult, audit, refund, st
   });
 }
 
-module.exports = { registerMerchantRoutes, DECLINE_REASONS };
+// Every few seconds: nudge stores that haven't answered a new order, decline
+// it for them once it's waited too long (refunding the customer), and go
+// ahead without sold-out items when the customer hasn't chosen in time.
+function merchantSweep(db, refund, now = new Date()) {
+  const timeout = Number(db.prepare("SELECT value FROM settings WHERE key = 'store_accept_timeout_minutes'").get()?.value || 10);
+  const out = { escalated: 0, declined: 0, continued: 0 };
+  for (const o of db.prepare(`SELECT id FROM orders WHERE status = 'placed' AND awaiting_customer = 'item_unavailable' AND awaiting_until <= ?`).all(now.toISOString())) {
+    if (orders.removeUnavailable(db, o.id, refund, "Customer didn't choose in time — continued without the unavailable items") != null) out.continued++;
+  }
+  const waiting = db.prepare(`SELECT o.id, o.code, o.escalated_at, s.phone, s.name, s.owner_id,
+      (julianday('now') - julianday(o.updated_at)) * 1440 AS mins
+    FROM orders o JOIN stores s ON s.id = o.store_id WHERE o.status = 'placed' AND o.awaiting_customer IS NULL`).all();
+  for (const o of waiting) {
+    if (o.mins >= timeout) {
+      orders.transition(db, o.id, 'system', 'rejected', { note: "The store didn't respond in time. You've been refunded in full.", refund });
+      out.declined++;
+    } else if (o.mins >= ESCALATE_AFTER_MINUTES && !o.escalated_at) {
+      db.prepare("UPDATE orders SET escalated_at = datetime('now') WHERE id = ?").run(o.id);
+      orders.bus.emit('store_escalation', o.id, Math.max(1, Math.ceil(timeout - o.mins)), db);
+      sms.send(o.phone, `ClickNPuff: order #${o.code} is waiting at ${o.name}. Accept it in the next ${Math.max(1, Math.ceil(timeout - o.mins))} min or it will be declined.`).catch(() => {});
+      out.escalated++;
+    }
+  }
+  return out;
+}
+
+module.exports = { registerMerchantRoutes, merchantSweep, DECLINE_REASONS };

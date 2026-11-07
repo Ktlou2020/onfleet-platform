@@ -190,3 +190,6 @@
 .r-app .push-box .link { color: var(--r-brand); }
 .r-app .install-banner { background: var(--r-card); border-color: var(--r-line); color: var(--r-ink); }
 .r-app .install-banner p { color: var(--r-muted); }
+.bag-row { margin-top: 0; }
+.r-code.small-code { flex: 1; font-size: 1.6rem !important; letter-spacing: .4em; }
+.r-scan { width: 100%; border-radius: 14px; background: #000; aspect-ratio: 4 / 3; object-fit: cover; }

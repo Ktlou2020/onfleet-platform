@@ -400,3 +400,7 @@ textarea { min-height: 80px; resize: vertical; }
 .m-push { align-self: center; margin-left: auto; }
 .m-nav .m-push + .m-sound { margin-left: 8px; }
 .offline-bar { position: sticky; top: 0; z-index: 80; background: #744210; color: #fefcbf; text-align: center; font-size: .85rem; font-weight: 600; padding: 6px 12px; }
+.decision-card { border: 2px solid var(--gold); }
+.decision-items { list-style: none; padding: 0; margin: 6px 0; }
+.decision-items li { display: flex; justify-content: space-between; padding: 4px 0; }
+.sum.gone { color: var(--muted); text-decoration: line-through; }

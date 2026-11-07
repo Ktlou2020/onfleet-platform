@@ -124,3 +124,22 @@
   .m-slip td { padding: 1mm 0; vertical-align: top; }
   .m-slip-foot { border-top: 1px dashed #000; padding-top: 2mm; font-size: 10pt; }
 }
+
+/* Sold-out items, waiting on the customer, regulated orders */
+.m-items li.gone { text-decoration: line-through; color: var(--muted); }
+.m-items li em { font-style: normal; font-size: .75rem; color: var(--bad); font-weight: 700; margin-left: 4px; }
+.m-await { background: var(--warn-bg); border-radius: 10px; padding: 8px 10px; font-size: .85rem; margin: 0 0 8px; }
+.m-badge { display: inline-block; font-size: .72rem; font-weight: 700; background: #fed7d7; color: #9b2c2c; border-radius: 999px; padding: 2px 9px; margin-top: 6px; }
+.m-soldout { display: block; margin: 8px auto 0; }
+
+/* Receipt-printer slips: sized to the paper set on this device */
+.m-slip-code { display: flex; justify-content: space-between; align-items: baseline; border: 2px solid #000; padding: 1mm 2mm; margin: 2mm 0; }
+.m-slip-code strong { font-size: 22pt; letter-spacing: .2em; }
+.m-slip-sealed { font-weight: 800; text-align: center; border: 2px dashed #000; padding: 1mm; }
+.m-slip .barcode { display: block; max-width: 100%; height: auto; margin: 1mm auto; }
+@media print {
+  .m-slip.w-58 { width: 48mm; font-size: 9pt; }
+  .m-slip.w-80 { width: 72mm; }
+  .m-slip.w-a4 { width: 120mm; }
+  @page { margin: 2mm; }
+}

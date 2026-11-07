@@ -207,6 +207,10 @@ function registerRiderRoutes(app, { db, auth, requireAdult, audit, refund }) {
   app.post('/api/rider/jobs/:id/pickup', auth('rider'), (req, res) => {
     const o = myOrder(req.user.id, req.params.id);
     if (o.status !== 'ready') return res.status(409).json({ error: 'The store has not marked this order ready yet' });
+    // Match the bag: the last four characters printed on its slip.
+    const given = String(req.body?.bagCode || '').trim().toUpperCase();
+    if (!given) return res.status(400).json({ error: "Enter the last 4 characters of the code on the bag's slip" });
+    if (given !== o.code.slice(-4).toUpperCase() && given !== o.code.toUpperCase()) return res.status(400).json({ error: "That's not this order's bag — check the code on the slip" });
     if (!o.arrived_store_at) db.prepare("UPDATE orders SET arrived_store_at = datetime('now') WHERE id = ?").run(o.id);
     orders.transition(db, o.id, 'rider', 'picked_up');
     res.json(jobsPayload(req.user.id));

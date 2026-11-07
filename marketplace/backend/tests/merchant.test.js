@@ -116,7 +116,7 @@ describe('insights, payouts and reviews', () => {
     await w.merchant.post(`/api/merchant/orders/${o.id}/status`, { status: 'accepted', prepMinutes: 10 });
     await rider.post(`/api/rider/offers/${o.id}/accept`);
     await w.merchant.post(`/api/merchant/orders/${o.id}/status`, { status: 'ready' });
-    await rider.post(`/api/rider/jobs/${o.id}/pickup`);
+    await rider.post(`/api/rider/jobs/${o.id}/pickup`, { bagCode: o.code.slice(-4) });
     await rider.post(`/api/rider/jobs/${o.id}/deliver`, { handoverCode: o.handoverCode, idChecked: true });
     return o;
   }

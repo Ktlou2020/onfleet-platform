@@ -5,6 +5,7 @@ import { Columns } from '../charts.jsx';
 import '../admin.css';
 import '../merchant.css';
 import { PushButton } from '../pwa.jsx';
+import { Barcode } from '../barcode.jsx';
 
 const clock = (secs) => {
   const s = Math.abs(Math.round(secs));
@@ -79,20 +80,31 @@ function useTick(ms = 1000) {
   useEffect(() => { const t = setInterval(() => set((n) => n + 1), ms); return () => clearInterval(t); }, [ms]);
 }
 
+const PRINT_KEY = 'clicknpuff.printer';
+function printerSettings() {
+  try { return { width: '80', autoPrint: false, ...JSON.parse(localStorage.getItem(PRINT_KEY) || '{}') }; } catch { return { width: '80', autoPrint: false }; }
+}
+function savePrinter(p) { try { localStorage.setItem(PRINT_KEY, JSON.stringify(p)); } catch { /* private mode */ } }
+
 function Slip({ o, store }) {
+  const { width } = printerSettings();
+  const live = o.items.filter((i) => !i.unavailable);
   return (
-    <div className="m-slip" id="m-slip">
+    <div className={`m-slip w-${width}`} id="m-slip">
       <h2>{store.name}</h2>
       <p>Order <strong>#{o.code}</strong> · {when(o.createdAt)}</p>
       <p>For: <strong>{o.customer.name}</strong></p>
-      <table><tbody>{o.items.map((i) => <tr key={i.product_id}><td>☐ {i.qty}×</td><td>{i.name}</td></tr>)}</tbody></table>
+      <table><tbody>{live.map((i) => <tr key={i.product_id}><td>☐ {i.qty}×</td><td>{i.name}</td></tr>)}</tbody></table>
       {o.notes && <p>Note: {o.notes}</p>}
+      <div className="m-slip-code"><span>Bag code</span><strong>{o.code.slice(-4)}</strong></div>
+      <Barcode value={o.code} height={52} module={2} />
+      {o.regulated && <p className="m-slip-sealed">SEALED · 18+ ONLY</p>}
       <p className="m-slip-foot">18+ only — rider checks ID at the door</p>
     </div>
   );
 }
 
-function OrderCard({ o, store, onAccept, onDecline, act, onPrint }) {
+function OrderCard({ o, onAccept, onDecline, act, onPrint, onSoldOut, onSeal }) {
   useTick();
   const startedAt = useRef(Date.now());
   useEffect(() => { startedAt.current = Date.now(); }, [o.waitingSeconds, o.prepSecondsLeft]);
@@ -100,6 +112,7 @@ function OrderCard({ o, store, onAccept, onDecline, act, onPrint }) {
   const waited = o.waitingSeconds + drift;
   const prepLeft = o.prepSecondsLeft != null ? o.prepSecondsLeft - drift : null;
   const items = o.items.reduce((n, i) => n + i.qty, 0);
+  const waitLeft = o.awaitingUntil ? Math.max(0, (new Date(o.awaitingUntil).getTime() - Date.now()) / 1000) : null;
   return (
     <article className={`m-order lane-${o.lane} ${o.lane === 'new' && waited > 180 ? 'urgent' : ''}`}>
       <header>
@@ -107,26 +120,30 @@ function OrderCard({ o, store, onAccept, onDecline, act, onPrint }) {
         {o.lane === 'new' && <span className={`m-timer ${waited > 180 ? 'bad' : ''}`}>{clock(waited)}</span>}
         {o.lane === 'preparing' && prepLeft != null && <span className={`m-timer ${prepLeft < 0 ? 'bad' : prepLeft < 120 ? 'warn' : ''}`}>{prepLeft < 0 ? `${clock(-prepLeft)} late` : `${clock(prepLeft)} left`}</span>}
       </header>
-      <ul className="m-items">{o.items.map((i) => <li key={i.product_id}><b>{i.qty}×</b> {i.name}</li>)}</ul>
+      {o.regulated && <span className="m-badge">🔞 Regulated — seal the bag</span>}
+      <ul className="m-items">{o.items.map((i) => <li key={i.product_id} className={i.unavailable ? 'gone' : ''}><b>{i.qty}×</b> {i.name}{i.unavailable && <em> sold out</em>}</li>)}</ul>
       {o.notes && <p className="m-note">📝 {o.notes}</p>}
+      {o.awaitingCustomer && <p className="m-await">⏳ Waiting for the customer to decide about the sold-out item{waitLeft != null ? ` (${clock(waitLeft)})` : ''}</p>}
       <p className="m-rider">
         {o.riderAtStore ? <span className="m-here">🛵 {o.rider.name} is at the counter</span>
-          : o.rider ? <>🛵 {o.rider.name} assigned{o.lane === 'out' ? ' — on the way' : ' — heading to you'}</>
+          : o.rider ? <>🛵 {o.rider.name}{o.lane === 'out' ? ' — on the way to the customer' : o.riderEtaMinutes ? ` arrives in ~${o.riderEtaMinutes} min` : ' — heading to you'}</>
             : o.lane === 'new' ? <>{items} item{items === 1 ? '' : 's'} · {rand(o.totals.subtotalCents)}</>
               : <span className="muted">⏳ Finding a rider…</span>}
       </p>
       <footer>
-        {o.lane === 'new' && <>
+        {o.lane === 'new' && !o.awaitingCustomer && <>
           <button className="btn btn-ghost" onClick={() => onDecline(o)}>Decline</button>
           <button className="btn grow" onClick={() => onAccept(o)}>Accept</button>
         </>}
+        {o.lane === 'new' && o.awaitingCustomer && <button className="btn btn-ghost grow" onClick={() => onDecline(o)}>Decline instead</button>}
         {o.lane === 'preparing' && <>
           <button className="btn btn-ghost" onClick={() => onPrint(o)} aria-label="Print packing slip">🖨️</button>
-          <button className="btn grow" onClick={() => act(o, 'ready')}>Mark ready</button>
+          <button className="btn grow" onClick={() => (o.regulated ? onSeal(o) : act(o, 'ready'))}>Mark ready</button>
         </>}
         {o.lane === 'ready' && <p className="muted small">{o.riderAtStore ? 'Hand the bag to the rider and check it against the list.' : 'Packed — waiting for the rider.'}</p>}
         {o.lane === 'out' && <p className="muted small">Collected {when(o.milestones.pickedUpAt, { hour: '2-digit', minute: '2-digit' })}</p>}
       </footer>
+      {o.lane === 'new' && !o.awaitingCustomer && o.items.length > 0 && <button className="link small m-soldout" onClick={() => onSoldOut(o)}>Something sold out?</button>}
     </article>
   );
 }
@@ -147,6 +164,10 @@ function Board({ data, reload, setStore }) {
   const [accepting, setAccepting] = useState(null);
   const [declining, setDeclining] = useState(null);
   const [printing, setPrinting] = useState(null);
+  const [soldOut, setSoldOut] = useState(null);
+  const [soldIds, setSoldIds] = useState([]);
+  const [sealing, setSealing] = useState(null);
+  const [sealed, setSealed] = useState(false);
   const [lane, setLane] = useState('new');
   const [reason, setReason] = useState('out_of_stock');
   const [note, setNote] = useState('');
@@ -154,7 +175,19 @@ function Board({ data, reload, setStore }) {
   useEffect(() => { api('/merchant/store').then((d) => setMeta({ prepChoices: d.prepChoices, declineReasons: d.declineReasons })); }, []);
 
   const act = async (o, status, extra = {}) => {
-    try { await api(`/merchant/orders/${o.id}/status`, { method: 'POST', body: { status, ...extra } }); reload(); } catch (e) { notify(e.message, 'bad'); }
+    try {
+      const d = await api(`/merchant/orders/${o.id}/status`, { method: 'POST', body: { status, ...extra } });
+      reload();
+      if (status === 'accepted' && printerSettings().autoPrint) print(d.order);
+    } catch (e) { notify(e.message, 'bad'); }
+  };
+  const markSoldOut = async () => {
+    try {
+      const d = await api(`/merchant/orders/${soldOut.id}/unavailable`, { method: 'POST', body: { productIds: soldIds } });
+      notify(d.declined ? 'Nothing left on that order — declined and refunded' : 'Asked the customer — they have 5 minutes to choose', d.declined ? 'bad' : 'ok');
+      setSoldOut(null);
+      reload();
+    } catch (e) { notify(e.message, 'bad'); }
   };
   const print = (o) => { setPrinting(o); setTimeout(() => window.print(), 50); };
 
@@ -183,7 +216,8 @@ function Board({ data, reload, setStore }) {
           <section key={k} className={`m-lane ${lane === k ? 'shown' : ''}`}>
             <h3>{l} <span>{byLane[k].length}</span></h3>
             {byLane[k].length === 0 ? <p className="m-empty">{k === 'new' ? 'New orders appear here with a chime.' : 'Nothing here.'}</p>
-              : byLane[k].map((o) => <OrderCard key={o.id} o={o} store={s} act={act} onPrint={print}
+              : byLane[k].map((o) => <OrderCard key={o.id} o={o} act={act} onPrint={print}
+                onSoldOut={(x) => { setSoldIds([]); setSoldOut(x); }} onSeal={(x) => { setSealed(false); setSealing(x); }}
                 onAccept={(x) => { unlockAudio(); setAccepting(x); }} onDecline={(x) => { setReason('out_of_stock'); setNote(''); setDeclining(x); }} />)}
           </section>
         ))}
@@ -236,6 +270,26 @@ function Board({ data, reload, setStore }) {
             <button className="btn btn-ghost" onClick={() => { setDeclining(null); api('/merchant/store', { method: 'PATCH', body: { pauseMinutes: 30 } }).then((d) => setStore(d.store)); }}>Pause 30 min instead</button>
             <button className="btn" onClick={() => { act(declining, 'rejected', { reasonCode: reason, reason: note }); setDeclining(null); }}>Decline order</button>
           </div>
+        </Modal>
+      )}
+      {soldOut && (
+        <Modal title={`What's sold out on #${soldOut.code}?`} onClose={() => setSoldOut(null)}>
+          <p className="muted">We'll ask the customer to continue without it (refunded for that item) or cancel. They have 5 minutes, then it goes ahead without it. The item is also marked sold out on your menu.</p>
+          {soldOut.items.map((i) => (
+            <label key={i.product_id} className={`m-reason ${soldIds.includes(i.product_id) ? 'on' : ''}`}>
+              <input type="checkbox" checked={soldIds.includes(i.product_id)} onChange={() => setSoldIds((x) => (x.includes(i.product_id) ? x.filter((v) => v !== i.product_id) : [...x, i.product_id]))} />
+              {i.qty}× {i.name} <span className="muted small">· {rand(i.qty * i.price_cents)}</span>
+            </label>
+          ))}
+          <div className="actions"><button className="btn" disabled={!soldIds.length} onClick={markSoldOut}>{soldIds.length === soldOut.items.length ? 'All sold out — decline order' : 'Ask the customer'}</button></div>
+        </Modal>
+      )}
+
+      {sealing && (
+        <Modal title={`Seal #${sealing.code}`} onClose={() => setSealing(null)}>
+          <p className="muted">This order has regulated items. Before it goes:</p>
+          <label className={`m-reason ${sealed ? 'on' : ''}`}><input type="checkbox" checked={sealed} onChange={(e) => setSealed(e.target.checked)} /> The bag is sealed and labelled 18+, with the slip attached</label>
+          <div className="actions"><button className="btn" disabled={!sealed} onClick={() => { act(sealing, 'ready', { sealed: true }); setSealing(null); }}>Mark ready</button></div>
         </Modal>
       )}
       {printing && <Slip o={printing} store={s} />}
@@ -465,6 +519,34 @@ function Reviews() {
 
 // ---- Store settings ---------------------------------------------------------
 
+function CounterSettings({ store, onSaved }) {
+  const notify = useToast();
+  const [p, setP] = useState(printerSettings());
+  const update = (next) => { setP(next); savePrinter(next); };
+  return (
+    <div className="adm-card">
+      <h3>Counter</h3>
+      <label className="switch-row">
+        <div><strong>Accept orders automatically</strong><p className="muted small">Every new order is accepted straight away at your usual packing time. Use it when you're confident about your stock.</p></div>
+        <span className="switch"><input type="checkbox" checked={store.autoAccept} aria-label="Accept orders automatically" onChange={(e) => api('/merchant/store', { method: 'PATCH', body: { autoAccept: e.target.checked } }).then((d) => { onSaved(d.store); notify(e.target.checked ? 'New orders will be accepted automatically' : 'Auto-accept off', 'ok'); })} /><span /></span>
+      </label>
+      <h4 className="adm-gap">Printer on this device</h4>
+      <label className="field"><span>Paper</span>
+        <select value={p.width} onChange={(e) => update({ ...p, width: e.target.value })}>
+          <option value="58">58 mm receipt printer</option>
+          <option value="80">80 mm receipt printer</option>
+          <option value="a4">A4 / normal printer</option>
+        </select>
+      </label>
+      <label className="switch-row">
+        <div><strong>Print a slip when an order is accepted</strong><p className="muted small">Each slip has the bag code and a barcode the rider checks at pickup.</p></div>
+        <span className="switch"><input type="checkbox" checked={p.autoPrint} aria-label="Print automatically" onChange={(e) => update({ ...p, autoPrint: e.target.checked })} /><span /></span>
+      </label>
+      <p className="muted small">If a store doesn't accept within 3 minutes we send a reminder{store.phone ? ` (and an SMS to ${store.phone} once SMS is switched on)` : ''}; after 10 minutes the order is declined and the customer refunded.</p>
+    </div>
+  );
+}
+
 function StoreSettings({ store, onSaved }) {
   const notify = useToast();
   const [f, setF] = useState({ description: store.description, prepMinutes: store.prepMinutes - (store.busyExtraMinutes || 0), deliveryRadiusKm: store.deliveryRadiusKm, licenceNumber: store.licenceNumber || '', phone: store.phone || '' });
@@ -610,7 +692,7 @@ export default function Merchant() {
         {section === 'insights' && <Insights />}
         {section === 'payouts' && <Payouts />}
         {section === 'reviews' && <Reviews />}
-        {section === 'store' && <StoreSettings store={store} onSaved={setStore} />}
+        {section === 'store' && <><CounterSettings store={store} onSaved={setStore} /><StoreSettings store={store} onSaved={setStore} /></>}
       </div>
     </div>
   );

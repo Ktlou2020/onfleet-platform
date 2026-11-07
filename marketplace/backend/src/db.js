@@ -280,6 +280,14 @@ function migrate(db) {
   addColumn('riders', 'rating_sum', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('riders', 'rating_count', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('orders', 'scheduled_for', 'TEXT');
+  addColumn('order_items', 'unavailable', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('orders', 'awaiting_customer', 'TEXT');
+  addColumn('orders', 'awaiting_until', 'TEXT');
+  addColumn('orders', 'refund_cents', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('orders', 'escalated_at', 'TEXT');
+  addColumn('orders', 'sealed', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('stores', 'auto_accept', 'INTEGER NOT NULL DEFAULT 0');
+  db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('store_accept_timeout_minutes', '10')");
   addColumn('orders', 'base_eta_minutes', 'INTEGER');
   addColumn('orders', 'promo_code', 'TEXT');
   addColumn('orders', 'discount_cents', 'INTEGER NOT NULL DEFAULT 0');

@@ -54,6 +54,8 @@ const TRANSITIONS = {
   system: {
     pending_payment: ['placed', 'scheduled', 'cancelled'],
     scheduled: ['placed', 'cancelled'],
+    // A store that never answers: the order is declined for it.
+    placed: ['rejected'],
   },
 };
 
@@ -83,7 +85,8 @@ function logEvent(db, orderId, status, note) {
 }
 
 function restock(db, orderId) {
-  const items = db.prepare('SELECT product_id, qty FROM order_items WHERE order_id = ?').all(orderId);
+  // Items the store marked unavailable were sold out — they don't go back.
+  const items = db.prepare('SELECT product_id, qty FROM order_items WHERE order_id = ? AND unavailable = 0').all(orderId);
   const upd = db.prepare('UPDATE products SET stock = stock + ? WHERE id = ?');
   for (const it of items) upd.run(it.qty, it.product_id);
 }
@@ -105,7 +108,7 @@ function transition(db, orderId, actor, to, { note, refund } = {}) {
     if (to === 'delivered') sets.push("delivered_at = datetime('now')");
     if (to === 'picked_up') sets.push("picked_up_at = datetime('now')");
     if (ENDED_WITHOUT_DELIVERY.includes(to)) {
-      sets.push('cancel_reason = ?', 'offered_rider_id = NULL', 'offer_expires_at = NULL');
+      sets.push('cancel_reason = ?', 'offered_rider_id = NULL', 'offer_expires_at = NULL', 'awaiting_customer = NULL');
       args.push(note || null);
       restock(db, orderId);
       if (order.payment_status === 'paid') {
@@ -120,7 +123,7 @@ function transition(db, orderId, actor, to, { note, refund } = {}) {
   const before = run();
   if (to === 'accepted') offerNext(db, orderId);
   bus.emit('order', orderId);
-  bus.emit('status', orderId, to);
+  bus.emit('status', orderId, to, db);
   if (before.offered_rider_id) bus.emit('rider', before.offered_rider_id);
   if (before.rider_id) bus.emit('rider', before.rider_id);
   // A rider who just finished is free for the next waiting order.
@@ -166,7 +169,7 @@ function offerNext(db, orderId) {
   db.prepare(`UPDATE orders SET offered_rider_id = ?, offer_expires_at = datetime('now', ?), offer_pickup_km = ?, rider_payout_cents = ?
     WHERE id = ?`).run(best.id, `+${OFFER_SECONDS} seconds`, pickupKm, riderPayoutCents(pickupKm, order.distance_km), orderId);
   bus.emit('rider', best.id);
-  bus.emit('offer', best.id, orderId);
+  bus.emit('offer', best.id, orderId, db);
   return best.id;
 }
 
@@ -255,15 +258,20 @@ function orderView(db, orderId, viewer) {
     WHERE o.id = ?
   `).get(orderId);
   if (!o) return null;
-  const items = db.prepare('SELECT product_id, name, price_cents, qty FROM order_items WHERE order_id = ?').all(orderId);
+  const items = db.prepare('SELECT product_id, name, price_cents, qty, unavailable FROM order_items WHERE order_id = ?').all(orderId)
+    .map((i) => ({ ...i, unavailable: !!i.unavailable }));
   const events = db.prepare('SELECT status, note, at FROM order_events WHERE order_id = ? ORDER BY id').all(orderId);
   const review = db.prepare('SELECT rating, comment FROM reviews WHERE order_id = ?').get(orderId) || null;
   const riderSide = viewer === 'rider' || viewer === 'admin';
 
   const view = {
     id: o.id,
-    code: o.code,
+    // Riders match the bag by its last four characters, so they don't see them here.
+    code: viewer === 'rider' ? `${o.code.slice(0, -4)}••••` : o.code,
     status: o.status,
+    awaitingCustomer: o.awaiting_customer,
+    awaitingUntil: o.awaiting_until,
+    sealed: !!o.sealed,
     paymentStatus: o.payment_status,
     createdAt: o.created_at,
     deliveredAt: o.delivered_at,
@@ -284,6 +292,7 @@ function orderView(db, orderId, viewer) {
       serviceFeeCents: o.service_fee_cents,
       tipCents: o.tip_cents,
       discountCents: o.discount_cents,
+      refundedCents: o.refund_cents,
       promoCode: o.promo_code,
       totalCents: o.total_cents,
       vatCents: o.vat_cents,
@@ -367,6 +376,33 @@ function releaseScheduled(db, now = new Date()) {
   return due.length;
 }
 
+// The store marked some items unavailable and the customer is going ahead
+// without them (or didn't answer in time): take those items off the order
+// and refund what they cost. Fees stay as charged; a promo can't discount
+// more than what's left.
+function removeUnavailable(db, orderId, refund, note = 'Customer continued without unavailable items') {
+  const run = db.transaction(() => {
+    const o = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
+    if (!o || o.status !== 'placed' || o.awaiting_customer !== 'item_unavailable') return null;
+    const gone = db.prepare('SELECT COALESCE(SUM(price_cents * qty), 0) AS c FROM order_items WHERE order_id = ? AND unavailable = 1').get(orderId).c;
+    const subtotal = o.subtotal_cents - gone;
+    const discount = Math.min(o.discount_cents, subtotal);
+    const back = gone - (o.discount_cents - discount);
+    const total = o.total_cents - back;
+    db.prepare(`UPDATE orders SET subtotal_cents = ?, discount_cents = ?, total_cents = ?, vat_cents = ?, refund_cents = refund_cents + ?,
+      awaiting_customer = NULL, awaiting_until = NULL, updated_at = datetime('now') WHERE id = ?`)
+      .run(subtotal, discount, total, Math.round(((total - o.tip_cents) * 15) / 115), back, orderId);
+    logEvent(db, orderId, 'items_removed', `${note}. Refunded R${(back / 100).toFixed(2)}.`);
+    return { order: o, back };
+  });
+  const r = run();
+  if (!r) return null;
+  if (r.back > 0 && r.order.payment_status === 'paid' && refund) refund(r.order, r.back);
+  bus.emit('order', orderId);
+  bus.emit('status', orderId, 'items_removed', db);
+  return r.back;
+}
+
 function expireUnpaid(db, refund) {
   const stale = db.prepare(`
     SELECT id FROM orders WHERE status = 'pending_payment'
@@ -380,5 +416,5 @@ module.exports = {
   bus, ACTIVE, RIDER_ACTIVE, WAITING_FOR_RIDER, OrderError, TRANSITIONS, RIDER_PAY, OFFER_SECONDS, NO_ANSWER_WAIT_MINUTES,
   newCode, newHandoverCode, canTransition, transition, riderPayoutCents,
   offerNext, acceptOffer, declineOffer, expireOffers, dispatchWaiting, sweep, assignRider,
-  orderView, offerView, logEvent, expireUnpaid, releaseScheduled,
+  orderView, offerView, logEvent, expireUnpaid, releaseScheduled, removeUnavailable,
 };

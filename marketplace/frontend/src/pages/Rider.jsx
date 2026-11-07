@@ -230,16 +230,51 @@ function ReturnSheet({ job, onClose, run }) {
   );
 }
 
+// Reads the barcode on the bag's slip with the camera, where the phone's
+// browser can (Chrome on Android). Otherwise the rider types the 4 characters.
+function BagScanner({ onCode, onClose }) {
+  const video = useRef(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let stream;
+    let stop = false;
+    (async () => {
+      try {
+        const detector = new window.BarcodeDetector({ formats: ['code_128'] });
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        video.current.srcObject = stream;
+        await video.current.play();
+        while (!stop) {
+          const found = await detector.detect(video.current).catch(() => []);
+          if (found[0]?.rawValue) { onCode(found[0].rawValue); return; }
+          await new Promise((r) => setTimeout(r, 250));
+        }
+      } catch { setError("Couldn't open the camera — type the code instead"); }
+    })();
+    return () => { stop = true; stream?.getTracks().forEach((t) => t.stop()); };
+  }, [onCode]);
+  return (
+    <Sheet title="Scan the bag" onClose={onClose}>
+      {error ? <p className="r-muted">{error}</p> : <video ref={video} className="r-scan" playsInline muted />}
+      <p className="r-muted small">Point the camera at the barcode on the slip.</p>
+    </Sheet>
+  );
+}
+const canScan = typeof window !== 'undefined' && 'BarcodeDetector' in window && !!navigator.mediaDevices?.getUserMedia;
+
 function TripPanel({ job, run, busy, onProblem }) {
   const [ticked, setTicked] = useState([]);
   const [code, setCode] = useState('');
   const [idChecked, setIdChecked] = useState(false);
   const [returning, setReturning] = useState(false);
-  useEffect(() => { setTicked([]); setCode(''); setIdChecked(false); }, [job.id]);
+  const [bagCode, setBagCode] = useState('');
+  const [scanning, setScanning] = useState(false);
+  useEffect(() => { setTicked([]); setCode(''); setIdChecked(false); setBagCode(''); }, [job.id]);
+  const items = job.items.filter((i) => !i.unavailable);
 
   const m = job.milestones;
   const toStore = job.status !== 'picked_up';
-  const allTicked = ticked.length === job.items.length;
+  const allTicked = ticked.length === items.length;
   const step = toStore ? (m.arrivedStoreAt ? 2 : 1) : (m.arrivedCustomerAt ? 4 : 3);
 
   return (
@@ -267,11 +302,22 @@ function TripPanel({ job, run, busy, onProblem }) {
       {step === 2 && (
         <>
           <p className="r-hint">Tick each item as the store hands it over.</p>
-          <Checklist items={job.items} ticked={ticked} setTicked={setTicked} />
+          <Checklist items={items} ticked={ticked} setTicked={setTicked} />
+          {job.sealed && <p className="r-note">🔒 Sealed 18+ bag — don't open it. Check the seal is intact.</p>}
           {job.status !== 'ready' && <p className="r-wait"><span className="r-pulse" /> Waiting for the store to mark it ready…</p>}
-          <button className="r-btn primary full" disabled={busy || job.status !== 'ready' || !allTicked} onClick={() => run(`/rider/jobs/${job.id}/pickup`)}>
-            {job.status !== 'ready' ? 'Waiting for the store' : allTicked ? 'I have everything — start delivery' : `Tick all ${job.items.length} items`}
+          {job.status === 'ready' && (
+            <label className="r-field">
+              <span>Bag code — last 4 characters on the slip</span>
+              <div className="r-row bag-row">
+                <input className="r-code small-code" value={bagCode} maxLength={4} autoCapitalize="characters" autoComplete="off" onChange={(e) => setBagCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))} aria-label="Bag code" />
+                {canScan && <button type="button" className="r-btn ghost" onClick={() => setScanning(true)}>📷 Scan</button>}
+              </div>
+            </label>
+          )}
+          <button className="r-btn primary full" disabled={busy || job.status !== 'ready' || !allTicked || bagCode.length < 4} onClick={() => run(`/rider/jobs/${job.id}/pickup`, { bagCode })}>
+            {job.status !== 'ready' ? 'Waiting for the store' : !allTicked ? `Tick all ${items.length} items` : bagCode.length < 4 ? 'Enter the bag code' : 'I have everything — start delivery'}
           </button>
+          {scanning && <BagScanner onClose={() => setScanning(false)} onCode={(v) => { setBagCode(v.slice(-4).toUpperCase()); setScanning(false); }} />}
         </>
       )}
 

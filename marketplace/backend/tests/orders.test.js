@@ -82,9 +82,9 @@ describe('ordering', () => {
     expect((await w.merchant.get(`/api/orders/${order.id}`)).body.order.rider?.name).toBe('Johannesburg Rider');
     expect(accepted.body.order.handoverCode).toBeUndefined();
 
-    expect((await w.rider.post(`/api/rider/jobs/${order.id}/pickup`)).status).toBe(409); // not ready yet
+    expect((await w.rider.post(`/api/rider/jobs/${order.id}/pickup`, { bagCode: order.code.slice(-4) })).status).toBe(409); // not ready yet
     await w.merchant.post(`/api/merchant/orders/${order.id}/status`, { status: 'ready' });
-    expect((await w.rider.post(`/api/rider/jobs/${order.id}/pickup`)).body.current[0].status).toBe('picked_up');
+    expect((await w.rider.post(`/api/rider/jobs/${order.id}/pickup`, { bagCode: order.code.slice(-4) })).body.current[0].status).toBe('picked_up');
 
     expect((await w.rider.post(`/api/rider/jobs/${order.id}/deliver`, { handoverCode: order.handoverCode })).status).toBe(400); // no ID check
     expect((await w.rider.post(`/api/rider/jobs/${order.id}/deliver`, { handoverCode: '0000x', idChecked: true })).status).toBe(400);

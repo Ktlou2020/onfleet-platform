@@ -57,9 +57,9 @@ const paystack = {
     const data = await paystackCall(`/transaction/verify/${encodeURIComponent(reference)}`);
     return { ok: data.status === 'success' && data.amount === expectedCents && data.currency === 'ZAR' };
   },
-  async refund(order) {
+  async refund(order, amountCents) {
     if (!order.payment_ref) return { ok: false };
-    await paystackCall('/refund', { transaction: order.payment_ref });
+    await paystackCall('/refund', { transaction: order.payment_ref, ...(amountCents ? { amount: amountCents } : {}) });
     return { ok: true };
   },
   verifyWebhook(rawBody, signature) {

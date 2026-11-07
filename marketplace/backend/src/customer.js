@@ -16,7 +16,7 @@ const HELP_TYPES = {
 };
 const MAX_ADDRESSES = 10;
 
-function registerCustomerRoutes(app, { db, auth, audit, storeSummary, productView, categoriesById, settings }) {
+function registerCustomerRoutes(app, { db, auth, audit, refund, storeSummary, productView, categoriesById, settings }) {
   const customer = auth('customer');
   const one = (sql, ...a) => db.prepare(sql).get(...a);
 
@@ -105,6 +105,19 @@ function registerCustomerRoutes(app, { db, auth, audit, storeSummary, productVie
       return { ...view, productId: p.id, qty: Math.min(i.qty, p.stock), available: true, reduced: p.stock < i.qty };
     });
     res.json({ store: storeSummary(s), items });
+  });
+
+  // ---- Sold-out items: the customer chooses --------------------------------
+  app.post('/api/orders/:id/item-decision', customer, (req, res) => {
+    const o = one('SELECT * FROM orders WHERE id = ? AND customer_id = ?', req.params.id, req.user.id);
+    if (!o) return res.status(404).json({ error: 'Order not found' });
+    if (o.awaiting_customer !== 'item_unavailable') return res.status(409).json({ error: 'Nothing to decide on this order' });
+    if (req.body?.decision === 'continue') {
+      orders.removeUnavailable(db, o.id, refund);
+    } else if (req.body?.decision === 'cancel') {
+      orders.transition(db, o.id, 'customer', 'cancelled', { note: 'Cancelled by customer after items sold out', refund });
+    } else return res.status(400).json({ error: 'Choose to continue or cancel' });
+    res.json({ order: orders.orderView(db, o.id, 'customer') });
   });
 
   // ---- Help with an order ---------------------------------------------------

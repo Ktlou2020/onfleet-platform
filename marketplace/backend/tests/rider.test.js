@@ -116,7 +116,7 @@ describe('a trip, step by step', () => {
     await w.rider.post(`/api/rider/jobs/${order.id}/arrived-store`);
     expect((await w.rider.post(`/api/rider/jobs/${order.id}/arrived`)).status).toBe(409); // not collected yet
     await w.merchant.post(`/api/merchant/orders/${order.id}/status`, { status: 'ready' });
-    const collected = (await w.rider.post(`/api/rider/jobs/${order.id}/pickup`)).body.current[0];
+    const collected = (await w.rider.post(`/api/rider/jobs/${order.id}/pickup`, { bagCode: order.code.slice(-4) })).body.current[0];
     expect(collected.customer.phone).toBeTruthy();
     await w.rider.post(`/api/rider/jobs/${order.id}/arrived`);
 
@@ -147,7 +147,7 @@ describe('a trip, step by step', () => {
     const stockBefore = w.db.prepare('SELECT stock FROM products WHERE id = ?').get(productId).stock;
     await w.rider.post(`/api/rider/offers/${order.id}/accept`);
     await w.merchant.post(`/api/merchant/orders/${order.id}/status`, { status: 'ready' });
-    await w.rider.post(`/api/rider/jobs/${order.id}/pickup`);
+    await w.rider.post(`/api/rider/jobs/${order.id}/pickup`, { bagCode: order.code.slice(-4) });
 
     expect((await w.rider.post(`/api/rider/jobs/${order.id}/return`, { reason: 'no_answer' })).status).toBe(409); // not arrived
     await w.rider.post(`/api/rider/jobs/${order.id}/arrived`);

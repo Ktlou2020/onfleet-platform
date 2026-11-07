@@ -2,6 +2,7 @@
 const { open } = require('./db');
 const { createApp } = require('./app');
 const { expireUnpaid, sweep, releaseScheduled } = require('./orders');
+const { merchantSweep } = require('./merchant');
 
 const path = require('path');
 const fs = require('fs');
@@ -44,6 +45,7 @@ setInterval(() => {
 setInterval(() => {
   try {
     releaseScheduled(db);
+    merchantSweep(db, app.locals.refund);
     sweep(db);
   } catch (e) {
     console.error('dispatch sweep failed', e);

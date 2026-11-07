@@ -52,6 +52,8 @@ const CUSTOMER_MESSAGES = {
   rejected: (o) => ({ title: 'Order declined', body: `${o.store} couldn't take your order. You've been refunded in full.` }),
   cancelled: () => ({ title: 'Order cancelled', body: "Your order was cancelled and you've been refunded." }),
   returned: () => ({ title: "We couldn't deliver", body: 'Your order went back to the store and you have been refunded. Tap for details.' }),
+  item_unavailable: (o) => ({ title: 'Something is sold out', body: `${o.store} is out of part of your order. Tap to continue without it or cancel.`, urgent: true }),
+  items_removed: (o) => ({ title: 'Order updated', body: `We've refunded the sold-out item${o.refund_cents ? ` (R${(o.refund_cents / 100).toFixed(2)})` : ''}. ${o.store} is on it.` }),
 };
 
 function registerPush(app, { db, auth, send = (sub, payload, opts) => webpush.sendNotification(sub, payload, opts) }) {
@@ -101,8 +103,9 @@ function registerPush(app, { db, auth, send = (sub, payload, opts) => webpush.se
 
   const fire = (p) => p.catch(() => {});
 
-  orders.bus.on('status', (orderId, to) => {
-    const o = db.prepare(`SELECT o.id, o.code, o.customer_id, s.name AS store, s.owner_id FROM orders o JOIN stores s ON s.id = o.store_id WHERE o.id = ?`).get(orderId);
+  orders.bus.on('status', (orderId, to, evDb) => {
+    if (evDb && evDb !== db) return;
+    const o = db.prepare(`SELECT o.id, o.code, o.customer_id, o.refund_cents, s.name AS store, s.owner_id FROM orders o JOIN stores s ON s.id = o.store_id WHERE o.id = ?`).get(orderId);
     if (!o) return;
     const msg = CUSTOMER_MESSAGES[to];
     if (msg) {
@@ -116,7 +119,8 @@ function registerPush(app, { db, auth, send = (sub, payload, opts) => webpush.se
     }
   });
 
-  orders.bus.on('offer', (riderId, orderId) => {
+  orders.bus.on('offer', (riderId, orderId, evDb) => {
+    if (evDb && evDb !== db) return;
     const offer = orders.offerView(db, orderId);
     if (!offer) return;
     const rand = (c) => `R${(c / 100).toFixed(c % 100 ? 2 : 0)}`;
@@ -125,6 +129,12 @@ function registerPush(app, { db, auth, send = (sub, payload, opts) => webpush.se
       body: `${offer.store.name} · ${offer.totalKm} km · ${offer.secondsLeft}s to accept`,
       url: '/rider', tag: 'rider-offer', urgent: true, offer: true, ttl: Math.max(5, offer.secondsLeft),
     }));
+  });
+
+  orders.bus.on('store_escalation', (orderId, minutesLeft, evDb) => {
+    if (evDb !== db) return;
+    const o = db.prepare('SELECT o.code, s.owner_id FROM orders o JOIN stores s ON s.id = o.store_id WHERE o.id = ?').get(orderId);
+    if (o) fire(notifyUser(o.owner_id, { title: `⏰ Still waiting: #${o.code}`, body: `Accept in the next ${minutesLeft} min or it will be declined and refunded.`, url: '/merchant', tag: `store-order-${orderId}`, urgent: true }));
   });
 
   app.locals.notifyUser = notifyUser;

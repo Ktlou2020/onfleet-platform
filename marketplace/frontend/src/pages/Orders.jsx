@@ -65,6 +65,37 @@ function Help({ order }) {
   );
 }
 
+// Something in the order sold out: the customer chooses what happens.
+function SoldOutDecision({ order, onDone }) {
+  const notify = useToast();
+  const [busy, setBusy] = useState(false);
+  const [, tick] = useState(0);
+  useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 1000); return () => clearInterval(t); }, []);
+  const gone = order.items.filter((i) => i.unavailable);
+  const back = gone.reduce((n, i) => n + i.qty * i.price_cents, 0);
+  const left = Math.max(0, Math.round((new Date(order.awaitingUntil).getTime() - Date.now()) / 1000));
+  const decide = async (decision) => {
+    setBusy(true);
+    try {
+      const d = await api(`/orders/${order.id}/item-decision`, { method: 'POST', body: { decision } });
+      onDone(d.order);
+      notify(decision === 'continue' ? `Going ahead — ${rand(back)} refunded` : 'Cancelled and refunded in full', 'ok');
+    } catch (e) { notify(e.message, 'bad'); } finally { setBusy(false); }
+  };
+  return (
+    <div className="card decision-card" role="alert">
+      <h3>😕 {order.store.name} is out of something</h3>
+      <ul className="decision-items">{gone.map((i) => <li key={i.product_id}><s>{i.qty}× {i.name}</s> <span>{rand(i.qty * i.price_cents)}</span></li>)}</ul>
+      <p className="small">Go ahead without {gone.length === 1 ? 'it' : 'them'} and we'll refund <b>{rand(back)}</b>, or cancel the whole order for a full refund.</p>
+      <div className="actions">
+        <button className="btn grow" disabled={busy} onClick={() => decide('continue')}>Continue without · get {rand(back)} back</button>
+        <button className="btn btn-ghost" disabled={busy} onClick={() => decide('cancel')}>Cancel order</button>
+      </div>
+      <p className="muted small">If you don't choose in {Math.floor(left / 60)}:{String(left % 60).padStart(2, '0')}, we'll go ahead without {gone.length === 1 ? 'it' : 'them'}.</p>
+    </div>
+  );
+}
+
 export function Orders() {
   const [orders, setOrders] = useState(null);
   useEffect(() => { api('/orders').then((d) => setOrders(d.orders)).catch(() => setOrders([])); }, []);
@@ -193,6 +224,7 @@ export function Track() {
         {order.status === 'picked_up' && <div className="live-dot">LIVE</div>}
       </div>
 
+      {order.awaitingCustomer === 'item_unavailable' && <SoldOutDecision order={order} onDone={setOrder} />}
       {!ended && (
         <ol className="progress">
           {STEPS.map((label, i) => <li key={label} className={i + 1 <= step ? 'done' : i + 1 === step + 1 ? 'next' : ''}><span />{label}</li>)}
@@ -236,7 +268,8 @@ export function Track() {
 
       <div className="card">
         <h3>Receipt</h3>
-        {order.items.map((i) => <div key={i.product_id} className="sum"><span>{i.qty}× {i.name}</span><span>{rand(i.qty * i.price_cents)}</span></div>)}
+        {order.items.map((i) => <div key={i.product_id} className={`sum ${i.unavailable ? 'gone' : ''}`}><span>{i.qty}× {i.name}{i.unavailable ? ' — sold out' : ''}</span><span>{i.unavailable ? '—' : rand(i.qty * i.price_cents)}</span></div>)}
+        {order.totals.refundedCents > 0 && <div className="sum discount"><span>Refunded (sold-out items)</span><span>{rand(order.totals.refundedCents)}</span></div>}
         <div className="sum"><span>Delivery</span><span>{order.totals.deliveryFeeCents ? rand(order.totals.deliveryFeeCents) : 'Free'}</span></div>
         <div className="sum"><span>Service fee</span><span>{rand(order.totals.serviceFeeCents)}</span></div>
         {order.totals.discountCents > 0 && <div className="sum discount"><span>🏷️ {order.totals.promoCode}</span><span>−{rand(order.totals.discountCents)}</span></div>}

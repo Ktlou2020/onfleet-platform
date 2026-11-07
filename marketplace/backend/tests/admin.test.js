@@ -88,7 +88,7 @@ describe('control room', () => {
     const o = await w.order();
     await w.rider.post(`/api/rider/offers/${o.id}/accept`);
     await w.merchant.post(`/api/merchant/orders/${o.id}/status`, { status: 'ready' });
-    await w.rider.post(`/api/rider/jobs/${o.id}/pickup`);
+    await w.rider.post(`/api/rider/jobs/${o.id}/pickup`, { bagCode: o.code.slice(-4) });
     await w.rider.post(`/api/rider/jobs/${o.id}/deliver`, { handoverCode: o.handoverCode, idChecked: true });
     const row = w.db.prepare('SELECT * FROM orders WHERE id = ?').get(o.id);
     const d = (await w.admin.get('/api/admin/dashboard')).body;

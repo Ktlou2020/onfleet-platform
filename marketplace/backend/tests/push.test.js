@@ -65,7 +65,7 @@ describe('push notifications', () => {
 
     await w.rider.post(`/api/rider/offers/${o.id}/accept`);
     await w.merchant.post(`/api/merchant/orders/${o.id}/status`, { status: 'ready' });
-    await w.rider.post(`/api/rider/jobs/${o.id}/pickup`);
+    await w.rider.post(`/api/rider/jobs/${o.id}/pickup`, { bagCode: o.code.slice(-4) });
     await w.rider.post(`/api/rider/jobs/${o.id}/arrived`);
     await w.rider.post(`/api/rider/jobs/${o.id}/deliver`, { handoverCode: o.handoverCode, idChecked: true });
     await flush();

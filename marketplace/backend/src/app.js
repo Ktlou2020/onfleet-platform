@@ -44,8 +44,8 @@ function createApp(db, { pushSend } = {}) {
   }));
   app.use(cors({ origin: process.env.CORS_ORIGIN?.split(',') || true }));
 
-  const refund = (order) => {
-    payments.provider().refund(order).catch((e) => audit(null, 'refund_failed', { orderId: order.id, error: e.message }));
+  const refund = (order, amountCents) => {
+    payments.provider().refund(order, amountCents).catch((e) => audit(null, 'refund_failed', { orderId: order.id, amountCents, error: e.message }));
   };
 
   function audit(userId, action, detail) {
@@ -526,7 +526,7 @@ function createApp(db, { pushSend } = {}) {
   // ---- Rider -------------------------------------------------------------
   registerRiderRoutes(app, { db, auth, requireAdult, audit, refund });
   registerAdminRoutes(app, { db, auth, audit });
-  registerCustomerRoutes(app, { db, auth, audit, storeSummary, productView, categoriesById, settings });
+  registerCustomerRoutes(app, { db, auth, audit, refund, storeSummary, productView, categoriesById, settings });
   registerPush(app, { db, auth, ...(pushSend ? { send: pushSend } : {}) });
 
   // ---- Admin -------------------------------------------------------------

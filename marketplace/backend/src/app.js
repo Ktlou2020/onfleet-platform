@@ -22,6 +22,7 @@ const { productAvailability } = require('./storeHours');
 const { registerCustomerRoutes } = require('./customer');
 const { registerPush } = require('./push');
 const { registerMoneyRoutes } = require('./money');
+const { createMailer } = require('./email');
 const team = require('./team');
 const { registerStaffRoutes, LOW_RATING, licenceStatus } = require('./staff');
 
@@ -36,7 +37,7 @@ function slugify(s) {
   return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
 }
 
-function createApp(db, { pushSend } = {}) {
+function createApp(db, { pushSend, emailSend } = {}) {
   const app = express();
   app.set('trust proxy', 1);
   // Map tiles come from CARTO's CDN; everything else is same-origin.
@@ -137,6 +138,7 @@ function createApp(db, { pushSend } = {}) {
     if (role === 'rider') db.prepare('INSERT INTO riders (user_id) VALUES (?)').run(lastInsertRowid);
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(lastInsertRowid);
     audit(user.id, 'register', { role });
+    mailer.emails.welcome(user).catch(() => {});
     res.status(201).json({ token: sign(user), user: publicUser(user) });
   }));
 
@@ -151,6 +153,32 @@ function createApp(db, { pushSend } = {}) {
     db.prepare("UPDATE users SET last_login_at = datetime('now') WHERE id = ?").run(user.id);
     if (user.role === 'admin') audit(user.id, 'signed_in');
     res.json({ token: sign(user), user: { ...publicUser(user), lastLoginAt: previous } });
+  }));
+
+  // Forgot password: always the same answer, so it can't be used to find
+  // out who has an account.
+  app.post('/api/auth/forgot', authLimiter, wrap(async (req, res) => {
+    const email = String(req.body?.email || '').trim();
+    const user = email && db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+    if (user && !user.suspended) {
+      // Not awaited: the reply takes the same time whether or not the account exists.
+      mailer.emails.passwordReset(user, mailer.makeLink(user.id, 'reset', 1)).catch(() => {});
+      audit(user.id, 'password_reset_requested');
+    }
+    res.json({ ok: true, message: "If that email has an account, we've sent a link to reset the password. Check your inbox (and spam)." });
+  }));
+
+  app.post('/api/auth/reset', authLimiter, wrap(async (req, res) => {
+    const password = String(req.body?.password || '');
+    if (password.length < 10) return res.status(400).json({ error: 'Use a password of at least 10 characters' });
+    const userId = mailer.useLink(req.body?.token);
+    if (!userId) return res.status(400).json({ error: 'That link has expired or was already used — ask for a new one' });
+    db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?').run(await bcrypt.hash(password, 10), userId);
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+    audit(userId, 'password_reset');
+    if (user.suspended) return res.status(403).json({ error: 'This account is suspended' });
+    db.prepare("UPDATE users SET last_login_at = datetime('now') WHERE id = ?").run(userId);
+    res.json({ token: sign(user), user: publicUser(user) });
   }));
 
   app.get('/api/me', auth(), (req, res) => res.json({ user: publicUser(req.user) }));
@@ -192,6 +220,8 @@ function createApp(db, { pushSend } = {}) {
 
   // ---- Catalogue ---------------------------------------------------------
   const settings = () => compliance.getSettings(db);
+  const mailer = createMailer(db, emailSend ? { send: emailSend } : {});
+  app.locals.mailer = mailer;
   const categoriesById = () => Object.fromEntries(db.prepare('SELECT * FROM categories').all().map((c) => [c.id, c]));
 
   function productView(p, cat) {
@@ -548,7 +578,7 @@ function createApp(db, { pushSend } = {}) {
   registerAdminRoutes(app, { db, auth, audit });
   registerCustomerRoutes(app, { db, auth, audit, refund, storeSummary, productView, categoriesById, settings });
   registerMoneyRoutes(app, { db, auth, audit, refund, wrap });
-  registerStaffRoutes(app, { db, auth, audit });
+  registerStaffRoutes(app, { db, auth, audit, mailer });
   registerPush(app, { db, auth, ...(pushSend ? { send: pushSend } : {}) });
 
   // ---- Admin -------------------------------------------------------------
@@ -600,6 +630,7 @@ function createApp(db, { pushSend } = {}) {
       licence_reminded = CASE WHEN ? THEN NULL ELSE licence_reminded END WHERE id = ?`)
       .run(b.status || null, licenceCats, verified, expires, expires !== s.licence_expires_on ? 1 : 0, s.id);
     audit(req.user.id, 'store_updated', { storeId: s.id, ...b });
+    if (b.status && b.status !== s.status) orders.bus.emit('store_status', s.id, b.status, db);
     res.json({ ok: true });
   });
 

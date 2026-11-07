@@ -301,6 +301,7 @@ function registerMoneyRoutes(app, { db, auth, audit, refund, wrap }) {
     })();
     if (refund) refund(o, amount);
     audit(req.user.id, 'order_refunded', { orderId: o.id, amountCents: amount, storeCents, platformCents, reason });
+    orders.bus.emit('refund_after_delivery', o.id, amount, reason, db);
     orders.bus.emit('order', o.id);
     res.json({ order: orders.orderView(db, o.id, 'admin'), storeCents, platformCents });
   });

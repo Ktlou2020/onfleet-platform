@@ -5,7 +5,7 @@ import Home from './pages/Home.jsx';
 import Store from './pages/Store.jsx';
 import Checkout from './pages/Checkout.jsx';
 import { Orders, Track } from './pages/Orders.jsx';
-import Auth from './pages/Auth.jsx';
+import Auth, { Forgot, Reset } from './pages/Auth.jsx';
 import Merchant from './pages/Merchant.jsx';
 import Rider from './pages/Rider.jsx';
 import Admin from './pages/Admin.jsx';
@@ -107,6 +107,8 @@ export default function App() {
           <Route path="/merchant/statement" element={<Guard role="merchant"><Statement /></Guard>} />
           <Route path="/account" element={<Guard role="customer"><Account /></Guard>} />
           <Route path="/login" element={<Auth />} />
+          <Route path="/forgot" element={<Forgot />} />
+          <Route path="/reset" element={<Reset />} />
           <Route path="/merchant/*" element={<Guard role="merchant"><Merchant /></Guard>} />
           <Route path="/rider" element={<Guard role="rider"><Rider /></Guard>} />
           <Route path="/admin" element={<Guard role="admin"><Admin /></Guard>} />

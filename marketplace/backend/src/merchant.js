@@ -77,6 +77,7 @@ function registerMerchantRoutes(app, { db, auth, requireAdult, audit, refund, st
     db.prepare("INSERT OR IGNORE INTO store_members (store_id, user_id, role) VALUES (?, ?, 'owner')").run(lastInsertRowid, req.user.id);
     team.log(db, lastInsertRowid, req.user.id, 'store_created', b.name.trim());
     audit(req.user.id, 'store_applied', { storeId: lastInsertRowid });
+    orders.bus.emit('store_applied', lastInsertRowid, db);
     res.status(201).json({ store: storeView(one('SELECT * FROM stores WHERE id = ?', lastInsertRowid)) });
   });
 

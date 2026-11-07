@@ -108,6 +108,20 @@ Stores run everything from `/merchant`, on a counter tablet or a phone.
 
 The platform side (admin → Payouts) shows what each store is owed, downloads a payment list, and records each EFT with its bank reference. Bank details changed in the past 7 days are flagged so they can be confirmed by phone first. Refunds after delivery are charged to the store (up to what it earned on that order) or the platform. Customers get a tax invoice that splits the goods (from the store) from delivery and service (from the platform). Set the platform's VAT number under admin → Settings once registered.
 
+## Emails (Brevo)
+
+Sent through Brevo's transactional API (`backend/src/email.js`):
+- **Customers:** welcome, order confirmed (with receipt), delivered (with a review prompt and invoice link), cancelled, declined or undeliverable (with refund details), refund after delivery, password reset.
+- **Store teams:**
+  - a link for new staff to set their password
+  - store approved or suspended
+  - payout sent
+  - licence reminders
+  - low-rating alerts
+- **Admins:** new store applications.
+
+Each email is recorded in `email_log`. Order and licence emails are sent at most once per event.
+
 ## Configuration
 
 | Variable | Default | |
@@ -117,6 +131,9 @@ The platform side (admin → Payouts) shows what each store is owed, downloads a
 | `JWT_SECRET` | dev value | **Required** in production |
 | `PAYMENT_PROVIDER` | `mock` | `paystack` for live payments |
 | `PAYSTACK_SECRET_KEY` | | Paystack secret key |
+| `BREVO_API_KEY` | | Brevo API key for emails (Brevo → SMTP & API → API keys). Without it emails are logged in `email_log` and skipped |
+| `EMAIL_FROM` | `ClickNPuff <hello@clicknpuff.co.za>` | Sender; must be on a domain authenticated in Brevo |
+| `EMAIL_REPLY_TO` | `help@clicknpuff.co.za` | Where customer replies go |
 | `DEMO_MODE` | on while payments are mocked | `false` hides the one-tap demo logins, the rider's "move the rider" button and the "payment is simulated" note (the live site runs with `false`) |
 | `PUBLIC_URL` | `http://localhost:5174` | Where Paystack sends customers back |
 | `CORS_ORIGIN` | any | Comma-separated allowed origins |

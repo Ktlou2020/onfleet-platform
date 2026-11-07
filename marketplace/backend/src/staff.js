@@ -37,7 +37,7 @@ function reviewsToReply(db, storeId) {
     AND created_at > datetime('now', ?)`).get(storeId, LOW_RATING, `-${REPLY_WINDOW_DAYS} days`).n;
 }
 
-function registerStaffRoutes(app, { db, auth, audit }) {
+function registerStaffRoutes(app, { db, auth, audit, mailer }) {
   const merchant = auth('merchant');
   const one = (sql, ...a) => db.prepare(sql).get(...a);
 
@@ -90,6 +90,13 @@ function registerStaffRoutes(app, { db, auth, audit }) {
       }
       db.prepare('INSERT INTO store_members (store_id, user_id, role, added_by) VALUES (?, ?, ?, ?)').run(s.id, userId, role, req.user.id);
       team.log(db, s.id, req.user.id, 'staff_added', `${existing?.name || name} as ${role}`);
+      // Email them a link to set their own password (7 days), or just let
+      // existing staff know. The temporary password is still shown to the
+      // owner, for people without email to hand.
+      if (mailer) {
+        const u = db.prepare('SELECT id, email, name, role FROM users WHERE id = ?').get(userId);
+        mailer.emails.staffInvite(u, s.name, role, existing ? null : mailer.makeLink(userId, 'invite', 24 * 7), req.user.name).catch(() => {});
+      }
       audit(req.user.id, 'store_staff_added', { storeId: s.id, userId, role });
       res.status(201).json({ id: userId, email, temporaryPassword: temp });
     } catch (e) { next(e); }

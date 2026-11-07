@@ -942,7 +942,7 @@ function ChooseOwnPassword() {
       <p className="muted small">You signed in with a temporary password. Pick one only you know before you start.</p>
       <div className="grid-2">
         <label className="field"><span>Temporary password</span><input type="password" value={f.currentPassword} onChange={(e) => setF({ ...f, currentPassword: e.target.value })} required autoComplete="current-password" /></label>
-        <label className="field"><span>New password (8+ characters)</span><input type="password" minLength={8} value={f.newPassword} onChange={(e) => setF({ ...f, newPassword: e.target.value })} required autoComplete="new-password" /></label>
+        <label className="field"><span>New password (10+ characters)</span><input type="password" minLength={10} value={f.newPassword} onChange={(e) => setF({ ...f, newPassword: e.target.value })} required autoComplete="new-password" /></label>
       </div>
       <button className="btn">Save password</button>
     </form>

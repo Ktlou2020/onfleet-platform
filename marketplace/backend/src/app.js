@@ -21,6 +21,7 @@ const media = require('./media');
 const { productAvailability } = require('./storeHours');
 const { registerCustomerRoutes } = require('./customer');
 const { registerPush } = require('./push');
+const { registerMoneyRoutes } = require('./money');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-secret-change-me';
 if (process.env.NODE_ENV === 'production' && JWT_SECRET === 'dev-only-secret-change-me') {
@@ -274,7 +275,8 @@ function createApp(db, { pushSend } = {}) {
       SELECT r.rating, r.comment, r.created_at, r.store_reply AS reply, u.name FROM reviews r JOIN users u ON u.id = r.customer_id
       WHERE r.store_id = ? ORDER BY r.id DESC LIMIT 10
     `).all(s.id).map((r) => ({ ...r, name: r.name.split(' ')[0] }));
-    res.json({ store: storeSummary(s, parseOrigin(req.query)), products: sellableProducts(s), reviews });
+    const offers = promos.available(db, optionalUser(req)?.id, s.id).filter((p) => p.store);
+    res.json({ store: storeSummary(s, parseOrigin(req.query)), products: sellableProducts(s), reviews, promos: offers });
   });
 
   app.get('/api/search', (req, res) => {
@@ -331,18 +333,18 @@ function createApp(db, { pushSend } = {}) {
 
   // Takes a promo off a quote. Discount comes off before VAT is worked out;
   // a bad code is reported, not fatal, so checkout can show why.
-  function withPromo(q, code, userId) {
+  function withPromo(q, code, userId, storeId) {
     if (!code) return q;
-    const r = promos.apply(db, code, { userId, subtotalCents: q.subtotalCents, deliveryFeeCents: q.deliveryFeeCents });
+    const r = promos.apply(db, code, { userId, storeId, subtotalCents: q.subtotalCents, deliveryFeeCents: q.deliveryFeeCents });
     if (!r.ok) return { ...q, promoError: r.reason };
     const total = q.totalCents - r.discountCents;
-    return { ...q, discountCents: r.discountCents, promo: r.promo, totalCents: total, vatCents: Math.round((total * 0.15) / 1.15) };
+    return { ...q, discountCents: r.discountCents, storeDiscountCents: r.storeFunded ? r.discountCents : 0, promo: r.promo, totalCents: total, vatCents: Math.round((total * 0.15) / 1.15) };
   }
 
   app.post('/api/quote', wrap(async (req, res) => {
     const { store, subtotal } = buildBasket(req.body.storeId, req.body.items);
     const user = optionalUser(req);
-    const q = withPromo(quoteFor(store, subtotal, req.body), req.body.promoCode, user?.id);
+    const q = withPromo(quoteFor(store, subtotal, req.body), req.body.promoCode, user?.id, store.id);
     res.json({ quote: { ...q, delivery: deliveryView(deliveryStart(store, settings())) } });
   }));
 
@@ -372,7 +374,7 @@ function createApp(db, { pushSend } = {}) {
     }
   }));
 
-  app.get('/api/promos', (req, res) => res.json({ promos: promos.available(db, optionalUser(req)?.id) }));
+  app.get('/api/promos', (req, res) => res.json({ promos: promos.available(db, optionalUser(req)?.id, Number(req.query.storeId) || null) }));
 
   app.post('/api/orders', auth('customer'), requireAdult, wrap(async (req, res) => {
     const address = String(req.body.address || '').trim();
@@ -386,7 +388,7 @@ function createApp(db, { pushSend } = {}) {
       const when = deliveryStart(store, settings());
       if (when.blocked) throw new orders.OrderError(when.blocked, 409);
       const scheduledFor = when.now ? null : when.at.toISOString();
-      const q = withPromo(quoteFor(store, subtotal, req.body), req.body.promoCode, req.user.id);
+      const q = withPromo(quoteFor(store, subtotal, req.body), req.body.promoCode, req.user.id, store.id);
       if (q.promoError) throw new orders.OrderError(q.promoError);
       if (q.belowMinimum) throw new orders.OrderError(`The minimum order is R${q.minimumOrderCents / 100}`);
       // The rider tip is optional, goes to the rider in full, and is not
@@ -396,12 +398,12 @@ function createApp(db, { pushSend } = {}) {
       const { lastInsertRowid: id } = db.prepare(`
         INSERT INTO orders (code, customer_id, store_id, status, subtotal_cents, delivery_fee_cents, service_fee_cents,
           tip_cents, promo_code, discount_cents, total_cents, vat_cents, address, lat, lng, distance_km, eta_minutes, notes, handover_code,
-          scheduled_for, base_eta_minutes)
-        VALUES (?, ?, ?, 'pending_payment', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          scheduled_for, base_eta_minutes, store_discount_cents)
+        VALUES (?, ?, ?, 'pending_payment', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(orders.newCode(), req.user.id, store.id, q.subtotalCents, q.deliveryFeeCents, q.serviceFeeCents, tip,
         q.promo?.code || null, q.discountCents || 0, q.totalCents + tip, q.vatCents,
         address, Number(req.body.lat), Number(req.body.lng), q.distanceKm, q.etaMinutes, String(req.body.notes || '').slice(0, 300), orders.newHandoverCode(),
-        scheduledFor, q.etaMinutes);
+        scheduledFor, q.etaMinutes, q.storeDiscountCents || 0);
       const insertItem = db.prepare('INSERT INTO order_items (order_id, product_id, name, price_cents, qty) VALUES (?, ?, ?, ?, ?)');
       const reserve = db.prepare('UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?');
       for (const l of lines) {
@@ -541,6 +543,7 @@ function createApp(db, { pushSend } = {}) {
   registerRiderRoutes(app, { db, auth, requireAdult, audit, refund });
   registerAdminRoutes(app, { db, auth, audit });
   registerCustomerRoutes(app, { db, auth, audit, refund, storeSummary, productView, categoriesById, settings });
+  registerMoneyRoutes(app, { db, auth, audit, refund, wrap });
   registerPush(app, { db, auth, ...(pushSend ? { send: pushSend } : {}) });
 
   // ---- Admin -------------------------------------------------------------

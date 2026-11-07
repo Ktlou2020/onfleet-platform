@@ -308,6 +308,36 @@ function migrate(db) {
   addColumn('orders', 'prep_minutes', 'INTEGER');
   addColumn('reviews', 'store_reply', 'TEXT');
   addColumn('reviews', 'replied_at', 'TEXT');
+  // Money: bank and tax details, who funds discounts and refunds, payouts.
+  for (const c of ['bank_name', 'bank_account_holder', 'bank_account_number', 'bank_branch_code', 'bank_account_type', 'bank_updated_at', 'legal_name', 'vat_number', 'company_reg']) addColumn('stores', c, 'TEXT');
+  addColumn('promos', 'store_id', 'INTEGER REFERENCES stores(id)');
+  addColumn('promos', 'created_at', 'TEXT');
+  addColumn('orders', 'store_discount_cents', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('orders', 'store_refund_cents', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('orders', 'platform_refund_cents', 'INTEGER NOT NULL DEFAULT 0');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS payouts (
+      id           INTEGER PRIMARY KEY,
+      store_id     INTEGER NOT NULL REFERENCES stores(id),
+      amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+      reference    TEXT NOT NULL,
+      period_end   TEXT,
+      note         TEXT,
+      paid_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      created_by   INTEGER REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS payouts_store ON payouts(store_id, paid_at);
+    CREATE TABLE IF NOT EXISTS refunds (
+      id           INTEGER PRIMARY KEY,
+      order_id     INTEGER NOT NULL REFERENCES orders(id),
+      amount_cents INTEGER NOT NULL,
+      store_cents  INTEGER NOT NULL DEFAULT 0,
+      reason       TEXT NOT NULL,
+      created_by   INTEGER REFERENCES users(id),
+      created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('company_name', 'ClickNPuff (Pty) Ltd'), ('company_vat_number', ''), ('company_reg', ''), ('company_address', '');
+  `);
   db.exec('CREATE INDEX IF NOT EXISTS orders_offer ON orders(offered_rider_id)');
   // The platform was called Cloud 9: move accounts on its placeholder demo
   // domain to the new one (skipping any address already taken).

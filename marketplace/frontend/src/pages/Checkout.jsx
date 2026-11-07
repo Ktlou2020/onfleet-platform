@@ -49,7 +49,7 @@ export default function Checkout({ onAddress }) {
   const [promoInput, setPromoInput] = useState('');
   const [promoCode, setPromoCode] = useState('');
   const [offers, setOffers] = useState([]);
-  useEffect(() => { api('/promos').then((d) => setOffers(d.promos)).catch(() => {}); }, [user?.id]);
+  useEffect(() => { api(`/promos${cart.store ? `?storeId=${cart.store.id}` : ''}`).then((d) => setOffers(d.promos)).catch(() => {}); }, [user?.id, cart.store?.id]);
   const [busy, setBusy] = useState(false);
 
   const itemsKey = JSON.stringify(cart.items.map((i) => [i.id, i.qty]));

@@ -99,7 +99,7 @@ function Follow({ point, bounds }) {
   const map = useMap();
   const key = bounds ? bounds.map((p) => p.join(',')).join('|') : point ? `${point.lat.toFixed(4)},${point.lng.toFixed(4)}` : '';
   useEffect(() => {
-    if (bounds && bounds.length > 1) map.fitBounds(bounds, { padding: [60, 60], maxZoom: 16 });
+    if (bounds && bounds.length > 1) map.fitBounds(bounds, { padding: [60, 60], maxZoom: 16, animate: false });
     else if (point) map.setView([point.lat, point.lng], Math.max(map.getZoom(), 14));
   }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
   return null;

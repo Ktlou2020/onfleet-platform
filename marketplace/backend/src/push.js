@@ -143,6 +143,12 @@ function registerPush(app, { db, auth, send = (sub, payload, opts) => webpush.se
     if (o) fire(notifyUser(o.owner_id, { title: `⏰ Still waiting: #${o.code}`, body: `Accept in the next ${minutesLeft} min or it will be declined and refunded.`, url: '/merchant', tag: `store-order-${orderId}`, urgent: true }));
   });
 
+  orders.bus.on('payout', (storeId, amountCents, evDb) => {
+    if (evDb !== db) return;
+    const s = db.prepare('SELECT owner_id FROM stores WHERE id = ?').get(storeId);
+    if (s) fire(notifyUser(s.owner_id, { title: `💸 Payout sent: R${(amountCents / 100).toFixed(2)}`, body: 'It should reach your account within 1–2 working days.', url: '/merchant', tag: `payout-${storeId}` }));
+  });
+
   app.locals.notifyUser = notifyUser;
 }
 

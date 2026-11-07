@@ -389,9 +389,9 @@ function removeUnavailable(db, orderId, refund, note = 'Customer continued witho
     const discount = Math.min(o.discount_cents, subtotal);
     const back = gone - (o.discount_cents - discount);
     const total = o.total_cents - back;
-    db.prepare(`UPDATE orders SET subtotal_cents = ?, discount_cents = ?, total_cents = ?, vat_cents = ?, refund_cents = refund_cents + ?,
+    db.prepare(`UPDATE orders SET subtotal_cents = ?, discount_cents = ?, store_discount_cents = MIN(store_discount_cents, ?), total_cents = ?, vat_cents = ?, refund_cents = refund_cents + ?,
       awaiting_customer = NULL, awaiting_until = NULL, updated_at = datetime('now') WHERE id = ?`)
-      .run(subtotal, discount, total, Math.round(((total - o.tip_cents) * 15) / 115), back, orderId);
+      .run(subtotal, discount, discount, total, Math.round(((total - o.tip_cents) * 15) / 115), back, orderId);
     logEvent(db, orderId, 'items_removed', `${note}. Refunded R${(back / 100).toFixed(2)}.`);
     return { order: o, back };
   });

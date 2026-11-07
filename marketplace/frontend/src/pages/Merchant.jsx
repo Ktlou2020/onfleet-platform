@@ -14,7 +14,7 @@ const clock = (secs) => {
 };
 const when = (s, opts = { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) => (s ? new Date(s.replace(' ', 'T') + 'Z').toLocaleString('en-ZA', opts) : '—');
 const DAYS = [['mon', 'Monday'], ['tue', 'Tuesday'], ['wed', 'Wednesday'], ['thu', 'Thursday'], ['fri', 'Friday'], ['sat', 'Saturday'], ['sun', 'Sunday']];
-const SECTIONS = [['orders', '🧾', 'Orders'], ['menu', '📦', 'Menu'], ['insights', '📈', 'Insights'], ['payouts', '💳', 'Payouts'], ['reviews', '⭐', 'Reviews'], ['store', '🏪', 'Store settings']];
+const SECTIONS = [['orders', '🧾', 'Orders'], ['menu', '📦', 'Menu'], ['insights', '📈', 'Insights'], ['promos', '🏷️', 'Promotions'], ['payouts', '💳', 'Money'], ['reviews', '⭐', 'Reviews'], ['store', '🏪', 'Store settings']];
 
 // A repeating chime while orders are waiting to be accepted, the way a
 // kitchen printer keeps beeping until someone deals with the ticket.
@@ -190,6 +190,12 @@ function Board({ data, reload, setStore }) {
       reload();
     } catch (e) { notify(e.message, 'bad'); }
   };
+  // While the board is open, printing prints the slip (as before); the
+  // class comes off when leaving it so statements print normally.
+  useEffect(() => {
+    document.body.classList.add('print-slip');
+    return () => document.body.classList.remove('print-slip');
+  }, []);
   const print = (o) => { setPrinting(o); setTimeout(() => window.print(), 50); };
 
   const lanes = [['new', 'New'], ['preparing', 'Preparing'], ['ready', 'Ready'], ['out', 'With rider']];
@@ -587,25 +593,202 @@ function Insights() {
 
 // ---- Payouts and reviews -------------------------------------------------
 
-function Payouts() {
+const todaySast = () => new Date(Date.now() + 2 * 3600e3).toISOString().slice(0, 10);
+const daysAgo = (n) => new Date(Date.now() + 2 * 3600e3 - n * 864e5).toISOString().slice(0, 10);
+
+function BankForm({ billing, onSaved, onCancel }) {
+  const notify = useToast();
+  const [f, setF] = useState({ bankName: billing.bank?.bankName || '', accountHolder: billing.bank?.accountHolder || '', accountNumber: '', branchCode: billing.bank?.branchCode || '', accountType: billing.bank?.accountType || 'cheque', password: '' });
+  const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
+  const pickBank = (e) => {
+    const b = billing.banks.find((x) => x.name === e.target.value);
+    setF((x) => ({ ...x, bankName: e.target.value, branchCode: b?.branchCode || x.branchCode }));
+  };
+  const submit = async (e) => {
+    e.preventDefault();
+    try {
+      const d = await api('/merchant/bank', { method: 'PUT', body: f });
+      notify('Bank details saved', 'ok');
+      onSaved(d.bank);
+    } catch (err) { notify(err.message, 'bad'); }
+  };
+  return (
+    <form onSubmit={submit}>
+      <div className="grid-2">
+        <label className="field"><span>Bank</span>
+          <select value={f.bankName} onChange={pickBank} required><option value="">Choose…</option>{billing.banks.map((b) => <option key={b.name}>{b.name}</option>)}</select>
+        </label>
+        <label className="field"><span>Account type</span>
+          <select value={f.accountType} onChange={set('accountType')}>{billing.accountTypes.map((t) => <option key={t} value={t}>{t[0].toUpperCase() + t.slice(1)}</option>)}</select>
+        </label>
+        <label className="field"><span>Account holder</span><input value={f.accountHolder} onChange={set('accountHolder')} required autoComplete="off" /></label>
+        <label className="field"><span>Account number</span><input value={f.accountNumber} onChange={set('accountNumber')} inputMode="numeric" required autoComplete="off" placeholder={billing.bank ? `Currently ${billing.bank.accountNumber}` : ''} /></label>
+        <label className="field"><span>Branch code</span><input value={f.branchCode} onChange={set('branchCode')} inputMode="numeric" required /></label>
+        <label className="field"><span>Your password</span><input type="password" value={f.password} onChange={set('password')} required autoComplete="current-password" /></label>
+      </div>
+      <p className="muted small">🔒 For your safety we ask for your password whenever bank details change, and our team confirms new details with you before the next payout.</p>
+      <div className="actions"><button className="btn">Save bank details</button>{onCancel && <button type="button" className="btn btn-ghost" onClick={onCancel}>Cancel</button>}</div>
+    </form>
+  );
+}
+
+function TaxForm({ tax, onSaved }) {
+  const notify = useToast();
+  const [f, setF] = useState(tax);
+  const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
+  const submit = async (e) => {
+    e.preventDefault();
+    try { const d = await api('/merchant/tax', { method: 'PUT', body: f }); notify('Tax details saved', 'ok'); onSaved(d.tax); } catch (err) { notify(err.message, 'bad'); }
+  };
+  return (
+    <form onSubmit={submit}>
+      <div className="grid-2">
+        <label className="field"><span>Registered business name</span><input value={f.legalName} onChange={set('legalName')} placeholder="e.g. RB Trading (Pty) Ltd" /></label>
+        <label className="field"><span>Company registration no.</span><input value={f.companyReg} onChange={set('companyReg')} placeholder="e.g. 2021/123456/07" /></label>
+        <label className="field"><span>VAT number (if registered)</span><input value={f.vatNumber} onChange={set('vatNumber')} inputMode="numeric" placeholder="10 digits, starts with 4" /></label>
+      </div>
+      <p className="muted small">With a VAT number, customers get a proper tax invoice from your business for the goods. Without one, the invoice says you aren't VAT-registered.</p>
+      <div className="actions"><button className="btn btn-ghost">Save tax details</button></div>
+    </form>
+  );
+}
+
+function Money() {
+  const notify = useToast();
   const [d, setD] = useState(null);
-  useEffect(() => { api('/merchant/payouts').then(setD); }, []);
-  if (!d) return <Spinner />;
+  const [billing, setBilling] = useState(null);
+  const [editBank, setEditBank] = useState(false);
+  const [from, setFrom] = useState(daysAgo(30));
+  const [to, setTo] = useState(todaySast());
+  const load = useCallback(() => { api('/merchant/payouts').then(setD); api('/merchant/billing').then(setBilling); }, []);
+  useEffect(() => { load(); }, [load]);
+  if (!d || !billing) return <Spinner />;
   const weekLabel = (w) => {
     const a = new Date(w + 'T12:00:00Z');
     const b = new Date(a.getTime() + 6 * 864e5);
     return `${a.toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })} – ${b.toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })}`;
   };
+  const range = `from=${from}&to=${to}`;
   return (
     <>
-      <div className="m-stats"><div><span>Owed to you · last 12 weeks</span><strong>{rand(d.owedCents)}</strong><em>before any payouts made</em></div></div>
-      <p className="muted small">{d.note}</p>
-      {d.statements.length === 0 ? <Empty icon="💳" title="No payouts yet">Your weekly statements appear here after your first delivery.</Empty> : (
+      <div className="m-stats">
+        <div><span>Owed to you now</span><strong>{rand(d.balanceCents)}</strong><em>paid out weekly by EFT</em></div>
+        <div><span>Earned, all time</span><strong>{rand(d.earnedCents)}</strong></div>
+        <div><span>Paid to you, all time</span><strong>{rand(d.paidCents)}</strong></div>
+      </div>
+      {!d.bank && <p className="banner warn">Add your bank details so we can pay you.</p>}
+
+      <div className="card">
+        <div className="row-between"><h3>🏦 Bank account</h3>{d.bank && !editBank && <button className="link" onClick={() => setEditBank(true)}>Change</button>}</div>
+        {d.bank && !editBank ? (
+          <p>{d.bank.bankName} · {d.bank.accountType} · <strong>{d.bank.accountNumber}</strong> · branch {d.bank.branchCode}<br /><span className="muted small">{d.bank.accountHolder}{d.bank.updatedAt ? ` · updated ${when(d.bank.updatedAt, { day: 'numeric', month: 'short', year: 'numeric' })}` : ''}</span></p>
+        ) : <BankForm billing={billing} onSaved={() => { setEditBank(false); load(); }} onCancel={d.bank ? () => setEditBank(false) : null} />}
+      </div>
+
+      <div className="card">
+        <h3>📄 Statement</h3>
+        <div className="m-range">
+          <label className="field"><span>From</span><input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} /></label>
+          <label className="field"><span>To</span><input type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} /></label>
+          <div className="actions">
+            <a className="btn" href={`/merchant/statement?${range}`} target="_blank" rel="noreferrer">View / save as PDF</a>
+            <button className="btn btn-ghost" onClick={() => download(`/merchant/statement?${range}&format=csv`, `statement-${from}-to-${to}.csv`).catch((e) => notify(e.message, 'bad'))}>⬇ Spreadsheet (CSV)</button>
+          </div>
+        </div>
+        <p className="muted small">{d.note}</p>
+      </div>
+
+      <div className="card">
+        <h3>💸 Payouts</h3>
+        {d.payouts.length === 0 ? <p className="muted">No payouts yet. They go out weekly once you have a balance and bank details.</p> : (
+          <table className="adm-table">
+            <thead><tr><th>Paid</th><th>Reference</th><th className="num">Amount</th></tr></thead>
+            <tbody>{d.payouts.map((p) => <tr key={p.id}><td>{when(p.paidAt, { day: 'numeric', month: 'short', year: 'numeric' })}</td><td>{p.reference}</td><td className="num"><strong>{rand(p.amountCents)}</strong></td></tr>)}</tbody>
+          </table>
+        )}
+      </div>
+
+      <div className="card">
+        <h3>📅 Earnings by week</h3>
+        {d.weeks.length === 0 ? <Empty icon="💳" title="Nothing yet">Your weekly earnings appear here after your first delivery.</Empty> : (
+          <table className="adm-table">
+            <thead><tr><th>Week</th><th className="num">Orders</th><th className="num">Sales</th><th className="num">Your promos</th><th className="num">Refunds</th><th className="num">Earned</th></tr></thead>
+            <tbody>{d.weeks.map((w) => (
+              <tr key={w.weekStart}><td>{weekLabel(w.weekStart)}</td><td className="num">{w.orders}</td><td className="num">{rand(w.salesCents)}</td>
+                <td className="num">{w.storePromoCents ? `−${rand(w.storePromoCents)}` : '—'}</td><td className="num">{w.storeRefundCents ? `−${rand(w.storeRefundCents)}` : '—'}</td><td className="num"><strong>{rand(w.earnedCents)}</strong></td></tr>
+            ))}</tbody>
+          </table>
+        )}
+      </div>
+
+      <div className="card">
+        <h3>🧾 Tax details</h3>
+        <TaxForm tax={billing.tax} onSaved={(tax) => setBilling({ ...billing, tax })} />
+      </div>
+    </>
+  );
+}
+
+function PromoForm({ onSaved, onCancel }) {
+  const notify = useToast();
+  const [f, setF] = useState({ code: '', kind: 'percent', value: '10', minSpend: '', maxOff: '', perUserLimit: '1', expiresAt: '', description: '', public: true });
+  const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
+  const submit = async (e) => {
+    e.preventDefault();
+    const body = {
+      code: f.code, kind: f.kind, value: f.kind === 'percent' ? Number(f.value) : Math.round(Number(f.value) * 100),
+      minSubtotalCents: Math.round(Number(f.minSpend || 0) * 100), maxDiscountCents: f.kind === 'percent' && f.maxOff ? Math.round(Number(f.maxOff) * 100) : null,
+      perUserLimit: Number(f.perUserLimit), expiresAt: f.expiresAt || null, description: f.description, public: f.public,
+    };
+    try { await api('/merchant/promos', { method: 'POST', body }); notify(`${f.code.toUpperCase()} is live`, 'ok'); onSaved(); } catch (err) { notify(err.message, 'bad'); }
+  };
+  return (
+    <form className="card" onSubmit={submit}>
+      <h3>New promo code</h3>
+      <div className="grid-2">
+        <label className="field"><span>Code</span><input value={f.code} onChange={(e) => setF({ ...f, code: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '') })} maxLength={16} placeholder="e.g. ROSE15" required /></label>
+        <label className="field"><span>Type</span>
+          <select value={f.kind} onChange={set('kind')}><option value="percent">Percentage off</option><option value="fixed">Rand amount off</option></select>
+        </label>
+        <label className="field"><span>{f.kind === 'percent' ? '% off' : 'R off'}</span><input type="number" min="1" max={f.kind === 'percent' ? 50 : 1000} step={f.kind === 'percent' ? 1 : 0.01} value={f.value} onChange={set('value')} required /></label>
+        <label className="field"><span>Minimum spend (R, optional)</span><input type="number" min="0" step="0.01" value={f.minSpend} onChange={set('minSpend')} /></label>
+        {f.kind === 'percent' && <label className="field"><span>Most it takes off (R, optional)</span><input type="number" min="0" step="0.01" value={f.maxOff} onChange={set('maxOff')} /></label>}
+        <label className="field"><span>Uses per customer</span><input type="number" min="1" max="20" value={f.perUserLimit} onChange={set('perUserLimit')} /></label>
+        <label className="field"><span>Last day (optional)</span><input type="date" value={f.expiresAt} min={todaySast()} onChange={set('expiresAt')} /></label>
+        <label className="field"><span>Description (optional)</span><input value={f.description} onChange={set('description')} maxLength={120} placeholder="We'll write one if you leave it" /></label>
+      </div>
+      <label className="m-check"><input type="checkbox" checked={f.public} onChange={(e) => setF({ ...f, public: e.target.checked })} /> Show it on my store page (untick to share it only yourself, e.g. on Instagram)</label>
+      <p className="muted small">Your store pays for its own codes: the discount comes off your payout for that order. Codes only work at your store.</p>
+      <div className="actions"><button className="btn">Create code</button><button type="button" className="btn btn-ghost" onClick={onCancel}>Cancel</button></div>
+    </form>
+  );
+}
+
+function Promotions() {
+  const notify = useToast();
+  const [list, setList] = useState(null);
+  const [adding, setAdding] = useState(false);
+  const load = useCallback(() => api('/merchant/promos').then((d) => setList(d.promos)), []);
+  useEffect(() => { load(); }, [load]);
+  if (!list) return <Spinner />;
+  if (adding) return <PromoForm onSaved={() => { setAdding(false); load(); }} onCancel={() => setAdding(false)} />;
+  const toggle = async (p) => {
+    try { await api(`/merchant/promos/${p.code}`, { method: 'PATCH', body: { active: !p.active } }); notify(p.active ? `${p.code} switched off` : `${p.code} is live`, 'ok'); load(); } catch (e) { notify(e.message, 'bad'); }
+  };
+  return (
+    <>
+      <div className="adm-toolbar"><p className="muted">Bring customers back with your own codes. You choose the discount; it comes off your payout only when an order is delivered.</p><button className="btn" onClick={() => setAdding(true)}>+ New code</button></div>
+      {list.length === 0 ? <Empty icon="🏷️" title="No promo codes yet">Try 10% off for new customers, or R50 off orders over R400.</Empty> : (
         <table className="adm-table">
-          <thead><tr><th>Week</th><th className="num">Orders</th><th className="num">Refunded</th><th className="num">Payout</th><th>Status</th></tr></thead>
-          <tbody>{d.statements.map((s) => (
-            <tr key={s.weekStart}><td>{weekLabel(s.weekStart)}</td><td className="num">{s.orders}</td><td className="num">{s.refundedOrders}</td><td className="num"><strong>{rand(s.payoutCents)}</strong></td>
-              <td>{s.status === 'in_progress' ? <span className="status s-placed">This week</span> : <span className="status s-approved">Due</span>}</td></tr>
+          <thead><tr><th>Code</th><th>Offer</th><th className="num">Orders</th><th className="num">Sales</th><th className="num">Discount given</th><th>Status</th><th /></tr></thead>
+          <tbody>{list.map((p) => (
+            <tr key={p.code}>
+              <td><strong>{p.code}</strong>{!p.public && <span className="muted small"> · private</span>}</td>
+              <td>{p.description}{p.expiresAt && <span className="muted small"><br />until {when(p.expiresAt, { day: 'numeric', month: 'short' })}</span>}</td>
+              <td className="num">{p.uses}</td><td className="num">{rand(p.salesCents)}</td><td className="num">{rand(p.discountGivenCents)}</td>
+              <td>{p.expired ? <span className="status s-cancelled">Ended</span> : p.active ? <span className="status s-approved">Live</span> : <span className="status s-placed">Off</span>}</td>
+              <td>{!p.expired && <button className="link" onClick={() => toggle(p)}>{p.active ? 'Switch off' : 'Switch on'}</button>}</td>
+            </tr>
           ))}</tbody>
         </table>
       )}
@@ -824,7 +1007,8 @@ export default function Merchant() {
         {section === 'orders' && (board ? <Board data={board} reload={loadBoard} setStore={setStore} /> : <Spinner />)}
         {section === 'menu' && <Menu />}
         {section === 'insights' && <Insights />}
-        {section === 'payouts' && <Payouts />}
+        {section === 'payouts' && <Money />}
+        {section === 'promos' && <Promotions />}
         {section === 'reviews' && <Reviews />}
         {section === 'store' && <><CounterSettings store={store} onSaved={setStore} /><StoreSettings store={store} onSaved={setStore} /></>}
       </div>

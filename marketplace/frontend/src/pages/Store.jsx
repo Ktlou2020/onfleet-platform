@@ -80,6 +80,9 @@ export default function Store() {
         </div>
       </div>
 
+      {data.promos?.map((p) => (
+        <div key={p.code} className="promo-banner">🏷️ <span>Use <code>{p.code}</code> at checkout — {p.description}</span></div>
+      ))}
       {cat === 'all' && !q && picks.length > 0 && (
         <section>
           <h2 className="section-title">⭐ Store picks</h2>

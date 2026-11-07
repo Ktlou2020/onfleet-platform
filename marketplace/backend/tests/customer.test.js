@@ -86,7 +86,7 @@ describe('promo codes', () => {
     expect(d.discountsCents).toBe(row.discount_cents);
     expect(d.netRevenueCents).toBe(row.service_fee_cents + row.delivery_fee_cents - row.rider_payout_cents - row.discount_cents);
     // The store is still owed its full item total.
-    expect((await w.merchant.get('/api/merchant/payouts')).body.statements[0].payoutCents).toBe(row.subtotal_cents);
+    expect((await w.merchant.get('/api/merchant/payouts')).body.weeks[0].earnedCents).toBe(row.subtotal_cents);
   });
 });
 

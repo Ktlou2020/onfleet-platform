@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, Marker, Polyline, Tooltip, useMap } from 'react-leaflet';
-import { BRAND, STATUS, Spinner, api, rand, useAuth, useToast } from '../lib.jsx';
+import { BRAND, STATUS, Spinner, api, download, rand, useAuth, useToast } from '../lib.jsx';
 import { MapTiles, pin } from './Address.jsx';
 import '../admin.css';
 import { Columns } from '../charts.jsx';
@@ -22,6 +22,7 @@ const SECTIONS = [
   ['live', '🗺️', 'Live map'],
   ['orders', '🧾', 'Orders'],
   ['stores', '🏪', 'Stores'],
+  ['payouts', '💸', 'Payouts'],
   ['riders', '🛵', 'Riders'],
   ['customers', '👥', 'Customers'],
   ['incidents', '🚨', 'Incidents'],
@@ -147,7 +148,7 @@ function FitAll({ points }) {
   const done = useRef(false);
   useEffect(() => {
     if (done.current || points.length < 2) return;
-    map.fitBounds(points, { padding: [40, 40], maxZoom: 14 });
+    map.fitBounds(points, { padding: [40, 40], maxZoom: 14, animate: false });
     done.current = true;
   }, [points, map]);
   return null;
@@ -254,6 +255,7 @@ function Orders({ openOrder, refreshKey }) {
 
 function OrderDrawer({ id, onClose, onChanged }) {
   const [d, setD] = useState(null);
+  const [refunding, setRefunding] = useState(false);
   const notify = useToast();
   const load = useCallback(() => api(`/admin/orders/${id}`).then(setD).catch((e) => notify(e.message, 'bad')), [id, notify]);
   useEffect(() => { load(); }, [load]);
@@ -286,13 +288,18 @@ function OrderDrawer({ id, onClose, onChanged }) {
                   if (reason) act(`/orders/${o.id}/cancel`, { reason }, 'Cancelled and refunded');
                 }}>Cancel & refund</button>
               )}
+              {o.status === 'delivered' && o.totals.refundedCents < o.totals.totalCents && !refunding && <button className="btn btn-sm btn-ghost" onClick={() => setRefunding(true)}>Refund…</button>}
+              {o.status === 'delivered' && <a className="btn btn-sm btn-ghost" href={`/orders/${o.id}/invoice`} target="_blank" rel="noreferrer">Invoice</a>}
             </div>
+            {refunding && <RefundForm o={o} onDone={() => { setRefunding(false); load(); onChanged(); }} onCancel={() => setRefunding(false)} />}
             <h4>Items</h4>
             {o.items.map((i) => <div key={i.product_id} className="sum"><span>{i.qty}× {i.name}</span><span>{rand(i.qty * i.price_cents)}</span></div>)}
             <div className="sum"><span>Delivery</span><span>{rand(o.totals.deliveryFeeCents)}</span></div>
             <div className="sum"><span>Service fee</span><span>{rand(o.totals.serviceFeeCents)}</span></div>
+            {o.totals.discountCents > 0 && <div className="sum discount"><span>🏷️ {o.totals.promoCode}</span><span>−{rand(o.totals.discountCents)}</span></div>}
             {o.totals.tipCents > 0 && <div className="sum"><span>Tip</span><span>{rand(o.totals.tipCents)}</span></div>}
             <div className="sum total"><span>Total</span><span>{rand(o.totals.totalCents)}</span></div>
+            {o.totals.refundedCents > 0 && <div className="sum discount"><span>Refunded</span><span>{rand(o.totals.refundedCents)}</span></div>}
             <p className="muted small">Handover code {o.handoverCode} · ID checked at door: {d.idChecked ? 'yes' : 'no'}{d.paymentRef ? ` · ref ${d.paymentRef}` : ''}</p>
             <h4>Timeline</h4>
             <ul className="timeline">{o.events.map((e, i) => <li key={i}><span>{when(e.at, { hour: '2-digit', minute: '2-digit' })}</span> {STATUS[e.status]?.label || e.status.replace(/_/g, ' ')}{e.note ? ` — ${e.note}` : ''}</li>)}</ul>
@@ -306,6 +313,127 @@ function OrderDrawer({ id, onClose, onChanged }) {
         )}
       </aside>
     </div>
+  );
+}
+
+// ---- Payouts ------------------------------------------------------------
+
+function PayoutForm({ s, onDone, onCancel }) {
+  const notify = useToast();
+  const [amount, setAmount] = useState((Math.max(0, s.balanceCents) / 100).toFixed(2));
+  const [reference, setReference] = useState('');
+  const submit = async (e) => {
+    e.preventDefault();
+    try {
+      await api('/admin/payouts', { method: 'POST', body: { storeId: s.storeId, amountCents: Math.round(Number(amount) * 100), reference } });
+      notify(`Payout to ${s.name} recorded`, 'ok');
+      onDone();
+    } catch (err) { notify(err.message, 'bad'); }
+  };
+  return (
+    <form className="adm-inline-form" onSubmit={submit}>
+      <label className="field"><span>Amount paid (R)</span><input type="number" step="0.01" min="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} required /></label>
+      <label className="field"><span>Bank reference</span><input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="From your banking app" required /></label>
+      <div className="actions"><button className="btn btn-sm">Record payout</button><button type="button" className="btn btn-sm btn-ghost" onClick={onCancel}>Cancel</button></div>
+    </form>
+  );
+}
+
+function Payouts() {
+  const notify = useToast();
+  const [d, setD] = useState(null);
+  const [paying, setPaying] = useState(null);
+  const load = useCallback(() => api('/admin/payouts').then(setD), []);
+  useEffect(() => { load(); }, [load]);
+  if (!d) return <Spinner />;
+  const due = d.stores.filter((s) => s.balanceCents > 0);
+  return (
+    <>
+      <div className="adm-toolbar">
+        <div><strong>{rand(d.totalOwedCents)}</strong> owed to {due.length} store{due.length === 1 ? '' : 's'}</div>
+        <button className="btn btn-ghost" onClick={() => download('/admin/payouts/batch.csv', `payouts-${new Date().toISOString().slice(0, 10)}.csv`).catch((e) => notify(e.message, 'bad'))}>⬇ Payment list (CSV)</button>
+      </div>
+      <p className="muted small">Pay each store by EFT from the company account, then record it here with the bank's reference so it shows on their statement. Stores whose bank details changed in the last 7 days are flagged — call them on the number you already have before paying.</p>
+      <table className="adm-table">
+        <thead><tr><th>Store</th><th>Bank account</th><th className="num">Earned</th><th className="num">Paid</th><th className="num">Owed</th><th>Last payout</th><th /></tr></thead>
+        <tbody>{d.stores.map((s) => (
+          <tr key={s.storeId} className={s.bankChangedRecently ? 'adm-flag' : ''}>
+            <td><strong>{s.name}</strong></td>
+            <td>{s.bank ? <>{s.bank.bankName} {s.bank.accountNumber} <span className="muted small">· {s.bank.branchCode} · {s.bank.accountHolder}</span>{s.bankChangedRecently && <><br /><b className="m-bad small">⚠ Changed {ago(s.bank.updatedAt)} — confirm by phone</b></>}</> : <span className="muted">No bank details</span>}</td>
+            <td className="num">{rand(s.earnedCents)}</td><td className="num">{rand(s.paidCents)}</td><td className="num"><strong>{rand(s.balanceCents)}</strong></td>
+            <td>{s.lastPayout ? <>{rand(s.lastPayout.amountCents)} <span className="muted small">{ago(s.lastPayout.paidAt)}</span></> : <span className="muted">—</span>}</td>
+            <td>{paying === s.storeId ? null : s.balanceCents > 0 && s.bank && <button className="btn btn-sm" onClick={() => setPaying(s.storeId)}>Record payout</button>}</td>
+          </tr>
+        )).flatMap((row, i) => (paying === d.stores[i].storeId ? [row, <tr key={`pay-${paying}`}><td colSpan={7}><PayoutForm s={d.stores[i]} onDone={() => { setPaying(null); load(); }} onCancel={() => setPaying(null)} /></td></tr>] : [row]))}</tbody>
+      </table>
+      {d.recent.length > 0 && (
+        <>
+          <h3 className="adm-gap">Recent payouts</h3>
+          <table className="adm-table">
+            <thead><tr><th>Paid</th><th>Store</th><th>Reference</th><th className="num">Amount</th></tr></thead>
+            <tbody>{d.recent.map((p) => <tr key={p.id}><td>{when(p.paidAt)}</td><td>{p.store}</td><td>{p.reference}</td><td className="num">{rand(p.amountCents)}</td></tr>)}</tbody>
+          </table>
+        </>
+      )}
+    </>
+  );
+}
+
+function RefundForm({ o, onDone, onCancel }) {
+  const notify = useToast();
+  const left = o.totals.totalCents - o.totals.refundedCents;
+  const [amount, setAmount] = useState('');
+  const [reason, setReason] = useState('');
+  const [borneBy, setBorneBy] = useState('store');
+  const submit = async (e) => {
+    e.preventDefault();
+    try {
+      const r = await api(`/admin/orders/${o.id}/refund`, { method: 'POST', body: { amountCents: Math.round(Number(amount) * 100), reason, borneBy } });
+      notify(r.platformCents && borneBy === 'store' ? `Refunded — the store covers ${rand(r.storeCents)}, the platform ${rand(r.platformCents)}` : 'Refunded', 'ok');
+      onDone();
+    } catch (err) { notify(err.message, 'bad'); }
+  };
+  return (
+    <form className="card adm-gap" onSubmit={submit}>
+      <h4>Refund after delivery</h4>
+      <div className="grid-2">
+        <label className="field"><span>Amount (R) — up to {rand(left)}</span><input type="number" step="0.01" min="0.01" max={left / 100} value={amount} onChange={(e) => setAmount(e.target.value)} required /></label>
+        <label className="field"><span>Who pays for it</span>
+          <select value={borneBy} onChange={(e) => setBorneBy(e.target.value)}>
+            <option value="store">The store (wrong, damaged or missing item)</option>
+            <option value="platform">{BRAND.name} (late delivery, goodwill)</option>
+          </select>
+        </label>
+      </div>
+      <label className="field"><span>Reason (the customer and store see this)</span><input value={reason} onChange={(e) => setReason(e.target.value)} maxLength={200} required /></label>
+      {borneBy === 'store' && <p className="muted small">Comes off the store's next payout, up to what they earned on this order; anything above that is on {BRAND.name}.</p>}
+      <div className="actions"><button className="btn btn-sm">Refund {amount ? rand(Math.round(Number(amount) * 100)) : ''}</button><button type="button" className="btn btn-sm btn-ghost" onClick={onCancel}>Cancel</button></div>
+    </form>
+  );
+}
+
+function CompanyDetails() {
+  const notify = useToast();
+  const [c, setC] = useState(null);
+  useEffect(() => { api('/admin/company').then((d) => setC(d.company)); }, []);
+  if (!c) return null;
+  const set = (k) => (e) => setC({ ...c, [k]: e.target.value });
+  const save = async (e) => {
+    e.preventDefault();
+    try { const d = await api('/admin/company', { method: 'PUT', body: c }); setC(d.company); notify('Company details saved', 'ok'); } catch (err) { notify(err.message, 'bad'); }
+  };
+  return (
+    <form className="adm-card narrow-card adm-gap" onSubmit={save}>
+      <h3>Company details for invoices</h3>
+      <p className="muted small">Shown on customer invoices for delivery and service fees, and on store statements. Add the VAT number once {BRAND.name} is VAT-registered — invoices then become tax invoices.</p>
+      <div className="grid-2">
+        <label className="field"><span>Registered name</span><input value={c.name} onChange={set('name')} /></label>
+        <label className="field"><span>Company registration no.</span><input value={c.companyReg} onChange={set('companyReg')} /></label>
+        <label className="field"><span>VAT number</span><input value={c.vatNumber} onChange={set('vatNumber')} inputMode="numeric" placeholder="10 digits, starts with 4" /></label>
+        <label className="field"><span>Address</span><input value={c.address} onChange={set('address')} /></label>
+      </div>
+      <div className="actions"><button className="btn">Save</button></div>
+    </form>
   );
 }
 
@@ -709,10 +837,11 @@ export default function Admin() {
         {section === 'live' && <LiveMap openOrder={setOrderId} />}
         {section === 'orders' && <Orders openOrder={setOrderId} refreshKey={refreshKey} />}
         {section === 'stores' && <Stores />}
+        {section === 'payouts' && <Payouts />}
         {section === 'riders' && <Riders />}
         {section === 'customers' && <Customers />}
         {section === 'incidents' && <Incidents />}
-        {section === 'settings' && <Settings />}
+        {section === 'settings' && <><Settings /><CompanyDetails /></>}
         {section === 'profile' && <Profile />}
         {section === 'audit' && <Audit />}
       </div>

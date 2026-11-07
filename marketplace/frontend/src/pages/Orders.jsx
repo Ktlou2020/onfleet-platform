@@ -126,7 +126,7 @@ function FitBounds({ points }) {
   const map = useMap();
   const key = points.map((p) => p.join(',')).join('|');
   useEffect(() => {
-    if (points.length > 1) map.fitBounds(points, { padding: [40, 40], maxZoom: 16 });
+    if (points.length > 1) map.fitBounds(points, { padding: [40, 40], maxZoom: 16, animate: false });
   }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
   return null;
 }
@@ -269,13 +269,14 @@ export function Track() {
       <div className="card">
         <h3>Receipt</h3>
         {order.items.map((i) => <div key={i.product_id} className={`sum ${i.unavailable ? 'gone' : ''}`}><span>{i.qty}× {i.name}{i.unavailable ? ' — sold out' : ''}</span><span>{i.unavailable ? '—' : rand(i.qty * i.price_cents)}</span></div>)}
-        {order.totals.refundedCents > 0 && <div className="sum discount"><span>Refunded (sold-out items)</span><span>{rand(order.totals.refundedCents)}</span></div>}
+        {order.totals.refundedCents > 0 && <div className="sum discount"><span>Refunded</span><span>{rand(order.totals.refundedCents)}</span></div>}
         <div className="sum"><span>Delivery</span><span>{order.totals.deliveryFeeCents ? rand(order.totals.deliveryFeeCents) : 'Free'}</span></div>
         <div className="sum"><span>Service fee</span><span>{rand(order.totals.serviceFeeCents)}</span></div>
         {order.totals.discountCents > 0 && <div className="sum discount"><span>🏷️ {order.totals.promoCode}</span><span>−{rand(order.totals.discountCents)}</span></div>}
         {order.totals.tipCents > 0 && <div className="sum"><span>Rider tip</span><span>{rand(order.totals.tipCents)}</span></div>}
         <div className="sum total"><span>Total</span><span>{rand(order.totals.totalCents)}</span></div>
         <p className="muted small">Incl. VAT {rand(order.totals.vatCents)} · Paid: {order.paymentStatus}</p>
+        {order.status === 'delivered' && <Link className="btn btn-ghost btn-sm" to={`/orders/${order.id}/invoice`}>🧾 Tax invoice</Link>}
       </div>
 
       <div className="card">

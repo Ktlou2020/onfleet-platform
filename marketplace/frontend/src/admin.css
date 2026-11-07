@@ -107,3 +107,8 @@
 .adm-invite-row input { border: 1px solid var(--line); background: var(--bg); border-radius: 12px; padding: 10px 12px; outline: none; min-width: 0; }
 @media (max-width: 640px) { .adm-invite-row { grid-template-columns: 1fr; } }
 .adm-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--card); border: 1px solid var(--line); padding: 2px 8px; border-radius: 6px; font-weight: 700; letter-spacing: .04em; }
+
+/* Payouts */
+.adm-table tr.adm-flag td { background: var(--warn-bg); }
+.adm-inline-form { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; padding: 8px 0; }
+.adm-inline-form .field { margin: 0; }

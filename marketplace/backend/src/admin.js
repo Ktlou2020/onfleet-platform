@@ -23,7 +23,7 @@ function registerAdminRoutes(app, { db, auth, audit }) {
   function dayKpis(day) {
     const placed = one(`SELECT COUNT(*) AS n FROM orders WHERE status <> 'pending_payment' AND ${DAY('created_at')} = ${day}`).n;
     const d = one(`SELECT COUNT(*) AS n, COALESCE(SUM(total_cents), 0) AS gmv, COALESCE(SUM(service_fee_cents), 0) AS service,
-        COALESCE(SUM(delivery_fee_cents), 0) AS delivery, COALESCE(SUM(rider_payout_cents), 0) AS payouts, COALESCE(SUM(tip_cents), 0) AS tips, COALESCE(SUM(discount_cents), 0) AS discounts,
+        COALESCE(SUM(delivery_fee_cents), 0) AS delivery, COALESCE(SUM(rider_payout_cents), 0) AS payouts, COALESCE(SUM(tip_cents), 0) AS tips, COALESCE(SUM(discount_cents - store_discount_cents), 0) AS discounts, COALESCE(SUM(platform_refund_cents), 0) AS refunds,
         AVG((julianday(delivered_at) - julianday(created_at)) * 1440) AS minutes
       FROM orders WHERE status = 'delivered' AND ${DAY('delivered_at')} = ${day}`);
     const failed = one(`SELECT COUNT(*) AS n FROM orders WHERE status IN ('cancelled','rejected','returned') AND payment_status <> 'unpaid'
@@ -33,9 +33,11 @@ function registerAdminRoutes(app, { db, auth, audit }) {
       ordersPlaced: placed,
       ordersDelivered: d.n,
       gmvCents: d.gmv,
-      // What the platform keeps: its fees, less what it pays riders and the
-      // promo discounts it funds. Tips pass straight through to riders.
-      netRevenueCents: d.service + d.delivery - d.payouts - d.discounts,
+      // What the platform keeps: its fees, less what it pays riders, the
+      // promo discounts it funds and refunds it carries. Tips pass straight
+      // through to riders; stores fund their own promo codes.
+      netRevenueCents: d.service + d.delivery - d.payouts - d.discounts - d.refunds,
+      refundsCents: d.refunds,
       discountsCents: d.discounts,
       avgDeliveryMinutes: d.minutes == null ? null : Math.round(d.minutes),
       cancellationRate: placed ? Math.round((failed / placed) * 1000) / 10 : null,

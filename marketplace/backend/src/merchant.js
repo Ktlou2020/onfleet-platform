@@ -487,26 +487,6 @@ function registerMerchantRoutes(app, { db, auth, requireAdult, audit, refund, st
   // ---- Payouts -----------------------------------------------------------------
   // The store is owed the item subtotal of every delivered order; the
   // platform keeps delivery and service fees. Refunded orders owe nothing.
-  app.get('/api/merchant/payouts', merchant, (req, res) => {
-    const s = requireStore(req);
-    // Weeks run Monday to Sunday, SAST.
-    const rows = db.prepare(`SELECT date(delivered_at, '+2 hours', 'weekday 0', '-6 days') AS week,
-        COUNT(*) AS orders, SUM(subtotal_cents) AS sales
-      FROM orders WHERE store_id = ? AND status = 'delivered' AND delivered_at > datetime('now', '-84 days')
-      GROUP BY week ORDER BY week DESC`).all(s.id);
-    const refunds = Object.fromEntries(db.prepare(`SELECT date(updated_at, '+2 hours', 'weekday 0', '-6 days') AS week, COUNT(*) AS n
-      FROM orders WHERE store_id = ? AND payment_status = 'refunded' AND updated_at > datetime('now', '-84 days') GROUP BY week`).all(s.id).map((r) => [r.week, r.n]));
-    const thisWeek = one("SELECT date('now', '+2 hours', 'weekday 0', '-6 days') AS w").w;
-    res.json({
-      statements: rows.map((r) => ({
-        weekStart: r.week, orders: r.orders, salesCents: r.sales, refundedOrders: refunds[r.week] || 0, payoutCents: r.sales,
-        status: r.week === thisWeek ? 'in_progress' : 'due',
-      })),
-      owedCents: rows.reduce((n, r) => n + r.sales, 0),
-      note: 'You receive the item total of every delivered order. Delivery and service fees are kept by the platform. Payouts are made weekly by EFT.',
-    });
-  });
-
   // ---- Reviews -----------------------------------------------------------------
   app.get('/api/merchant/reviews', merchant, (req, res) => {
     const s = requireStore(req);

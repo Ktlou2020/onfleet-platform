@@ -13,6 +13,7 @@ import Account from './pages/Account.jsx';
 import AgeGate from './pages/AgeGate.jsx';
 import { AddressSheet } from './pages/Address.jsx';
 import { InstallBanner, OfflineBanner, PushSync } from './pwa.jsx';
+import { Invoice, Statement } from './pages/Docs.jsx';
 
 const HOME_FOR = { merchant: '/merchant', rider: '/rider', admin: '/admin', customer: '/' };
 
@@ -102,6 +103,8 @@ export default function App() {
           <Route path="/checkout" element={<Checkout onAddress={() => setAddressOpen(true)} />} />
           <Route path="/orders" element={<Guard role="customer"><Orders /></Guard>} />
           <Route path="/orders/:id" element={<Guard role="customer"><Track /></Guard>} />
+          <Route path="/orders/:id/invoice" element={<Guard><Invoice /></Guard>} />
+          <Route path="/merchant/statement" element={<Guard role="merchant"><Statement /></Guard>} />
           <Route path="/account" element={<Guard role="customer"><Account /></Guard>} />
           <Route path="/login" element={<Auth />} />
           <Route path="/merchant/*" element={<Guard role="merchant"><Merchant /></Guard>} />

@@ -134,7 +134,8 @@ describe('insights, payouts and reviews', () => {
     expect((await w.merchant.get('/api/merchant/insights?days=30')).body.series).toHaveLength(30);
 
     const pay = (await w.merchant.get('/api/merchant/payouts')).body;
-    expect(pay.statements[0]).toMatchObject({ orders: 1, payoutCents: o.totals.subtotalCents, refundedOrders: 1, status: 'in_progress' });
+    expect(pay.weeks[0]).toMatchObject({ orders: 1, earnedCents: o.totals.subtotalCents });
+    expect(pay).toMatchObject({ earnedCents: o.totals.subtotalCents, paidCents: 0, balanceCents: o.totals.subtotalCents });
   });
 
   it('lets the store reply to a review, shown on its public page', async () => {

@@ -117,6 +117,7 @@ The platform side (admin → Payouts) shows what each store is owed, downloads a
 | `JWT_SECRET` | dev value | **Required** in production |
 | `PAYMENT_PROVIDER` | `mock` | `paystack` for live payments |
 | `PAYSTACK_SECRET_KEY` | | Paystack secret key |
+| `DEMO_MODE` | on while payments are mocked | `false` hides the one-tap demo logins, the rider's "move the rider" button and the "payment is simulated" note (the live site runs with `false`) |
 | `PUBLIC_URL` | `http://localhost:5174` | Where Paystack sends customers back |
 | `CORS_ORIGIN` | any | Comma-separated allowed origins |
 | `MAP_TILE_URL` | OpenStreetMap tiles | Map tile template, e.g. a MapTiler or Stadia URL with your key. OpenStreetMap's own tiles are free for light use only |

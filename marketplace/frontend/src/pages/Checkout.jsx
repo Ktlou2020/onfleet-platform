@@ -190,7 +190,7 @@ export default function Checkout({ onAddress }) {
       <button className="btn btn-lg full sticky-cta" disabled={!canPlace || busy} onClick={place}>
         {busy ? 'Placing order…' : quote ? `${later ? 'Pre-order · ' : ''}Pay ${rand(quote.totalCents + tipCents)}` : 'Pay'}
       </button>
-      {meta?.paymentProvider === 'mock' && <p className="muted small center-text">Demo mode: payment is simulated.</p>}
+      {meta?.demo && <p className="muted small center-text">Demo mode: payment is simulated.</p>}
     </div>
   );
 }

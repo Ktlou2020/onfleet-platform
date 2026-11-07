@@ -18,17 +18,33 @@ export default function Store() {
     api(`/stores/${slug}${p}`).then(setData).catch((e) => setError(e.message));
   }, [slug, loc]);
 
-  const groups = useMemo(() => {
+  // Sizes and flavours sit on their main product's card.
+  const families = useMemo(() => {
     if (!data) return [];
-    const by = new Map();
+    const byRoot = new Map();
     for (const p of data.products) {
+      const root = p.variantOf || p.id;
+      if (!byRoot.has(root)) byRoot.set(root, []);
+      byRoot.get(root).push(p);
+    }
+    return [...byRoot.values()].map((list) => {
+      const main = list.find((p) => !p.variantOf) || list[0];
+      return { main, options: [main, ...list.filter((p) => p !== main)] };
+    });
+  }, [data]);
+
+  const groups = useMemo(() => {
+    const by = new Map();
+    for (const f of families) {
+      const p = f.main;
       if (cat !== 'all' && p.category.slug !== cat) continue;
-      if (q && !`${p.name} ${p.description}`.toLowerCase().includes(q.toLowerCase())) continue;
+      if (q && !f.options.some((o) => `${o.name} ${o.description} ${o.variantLabel || ''}`.toLowerCase().includes(q.toLowerCase()))) continue;
       if (!by.has(p.category.slug)) by.set(p.category.slug, { ...p.category, items: [] });
-      by.get(p.category.slug).items.push(p);
+      by.get(p.category.slug).items.push(f);
     }
     return [...by.values()];
-  }, [data, cat, q]);
+  }, [families, cat, q]);
+  const picks = families.filter((f) => f.options.some((o) => o.featured));
 
   if (error) return <div className="page"><Empty icon="🏪" title="Store not found"><Link to="/">Back to stores</Link></Empty></div>;
   if (!data) return <div className="page center pad"><Spinner /></div>;
@@ -64,10 +80,16 @@ export default function Store() {
         </div>
       </div>
 
+      {cat === 'all' && !q && picks.length > 0 && (
+        <section>
+          <h2 className="section-title">⭐ Store picks</h2>
+          <div className="product-list">{picks.map((f) => <ProductRow key={`pick-${f.main.id}`} p={f.main} options={f.options} store={{ ...s, hideName: true }} />)}</div>
+        </section>
+      )}
       {groups.length === 0 ? <Empty icon="🔍" title="No matching products" /> : groups.map((g) => (
         <section key={g.slug}>
           <h2 className="section-title">{g.icon} {g.name}</h2>
-          <div className="product-list">{g.items.map((p) => <ProductRow key={p.id} p={p} store={{ ...s, hideName: true }} />)}</div>
+          <div className="product-list">{g.items.map((f) => <ProductRow key={f.main.id} p={f.main} options={f.options} store={{ ...s, hideName: true }} />)}</div>
         </section>
       ))}
 

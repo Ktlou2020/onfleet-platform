@@ -271,3 +271,15 @@ export function deliveryTimeLabel(iso) {
   const day = days === 0 ? 'today' : days === 1 ? 'tomorrow' : t.toLocaleDateString('en-ZA', { weekday: 'long', timeZone: 'UTC' });
   return `${day} at ${hhmm}`;
 }
+
+// Download a file the server makes for the signed-in person (CSV exports).
+export async function download(path, filename) {
+  const res = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${getToken()}` } });
+  if (!res.ok) throw new Error('Download failed');
+  const url = URL.createObjectURL(await res.blob());
+  const a = Object.assign(document.createElement('a'), { href: url, download: filename });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}

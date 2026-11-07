@@ -131,6 +131,12 @@ function registerPush(app, { db, auth, send = (sub, payload, opts) => webpush.se
     }));
   });
 
+  orders.bus.on('low_stock', (productId, evDb) => {
+    if (evDb !== db) return;
+    const r = db.prepare('SELECT p.name, p.stock, s.owner_id FROM products p JOIN stores s ON s.id = p.store_id WHERE p.id = ?').get(productId);
+    if (r) fire(notifyUser(r.owner_id, { title: r.stock ? `Running low: ${r.name}` : `Sold out: ${r.name}`, body: r.stock ? `Only ${r.stock} left. Tap to restock.` : 'Customers can no longer order it. Tap to restock.', url: '/merchant', tag: `stock-${productId}` }));
+  });
+
   orders.bus.on('store_escalation', (orderId, minutesLeft, evDb) => {
     if (evDb !== db) return;
     const o = db.prepare('SELECT o.code, s.owner_id FROM orders o JOIN stores s ON s.id = o.store_id WHERE o.id = ?').get(orderId);

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BRAND, Empty, STATUS, Spinner, api, deliveryTimeLabel, rand, useAuth, useMeta, useToast } from '../lib.jsx';
+import { BRAND, Empty, STATUS, Spinner, api, deliveryTimeLabel, download, rand, useAuth, useMeta, useToast } from '../lib.jsx';
+import { resizeToDataUrl } from '../image.js';
 import { VerifyAge } from './Checkout.jsx';
 import { Columns } from '../charts.jsx';
 import '../admin.css';
@@ -299,14 +300,22 @@ function Board({ data, reload, setStore }) {
 
 // ---- Menu ---------------------------------------------------------------------
 
-function ProductForm({ categories, initial, onSaved, onCancel }) {
+const WEEK = [['mon', 'Mon'], ['tue', 'Tue'], ['wed', 'Wed'], ['thu', 'Thu'], ['fri', 'Fri'], ['sat', 'Sat'], ['sun', 'Sun']];
+
+function ProductForm({ categories, mains, initial, onSaved, onCancel }) {
   const notify = useToast();
-  const [f, setF] = useState(initial || { name: '', category: categories.find((c) => !c.regulated)?.slug, price: '', stock: 10, unit: 'each', description: '', thcPct: '', cbdPct: '', strainType: '' });
+  const [f, setF] = useState(() => ({
+    name: '', category: categories.find((c) => !c.regulated)?.slug, price: '', stock: 10, unit: 'each', description: '', thcPct: '', cbdPct: '', strainType: '',
+    variantOf: '', variantLabel: '', featured: false, lowStockAt: 3, availableDays: [], availableFrom: '', availableTo: '',
+    ...(initial || {}),
+    variantOf: initial?.variantOf || '', variantLabel: initial?.variantLabel || '', availableFrom: initial?.availableFrom || '', availableTo: initial?.availableTo || '',
+  }));
   const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
   const cat = categories.find((c) => c.slug === f.category);
+  const parentChoices = mains.filter((m) => m.id !== initial?.id);
   const submit = async (e) => {
     e.preventDefault();
-    const body = { ...f, priceCents: Math.round(Number(f.price) * 100), stock: Number(f.stock) };
+    const body = { ...f, priceCents: Math.round(Number(f.price) * 100), stock: Number(f.stock), lowStockAt: Number(f.lowStockAt), variantOf: f.variantOf ? Number(f.variantOf) : null };
     try {
       if (initial?.id) await api(`/merchant/products/${initial.id}`, { method: 'PATCH', body });
       else await api('/merchant/products', { method: 'POST', body });
@@ -314,6 +323,7 @@ function ProductForm({ categories, initial, onSaved, onCancel }) {
       onSaved();
     } catch (err) { notify(err.message, 'bad'); }
   };
+  const toggleDay = (d) => setF((x) => ({ ...x, availableDays: x.availableDays.includes(d) ? x.availableDays.filter((v) => v !== d) : [...x.availableDays, d] }));
   return (
     <form className="card" onSubmit={submit}>
       <h3>{initial?.id ? `Edit ${initial.name}` : 'New product'}</h3>
@@ -333,54 +343,178 @@ function ProductForm({ categories, initial, onSaved, onCancel }) {
         </div>
       ) : null}
       <label className="field"><span>Description</span><textarea value={f.description} onChange={set('description')} maxLength={600} /></label>
+
+      <fieldset className="m-fieldset">
+        <legend>Sizes & options</legend>
+        <p className="muted small">Selling the same thing in sizes or flavours? Make one the main product and add the others as its options — customers pick on one card.</p>
+        <div className="grid-2">
+          <label className="field"><span>This is an option of</span>
+            <select value={f.variantOf} onChange={set('variantOf')}>
+              <option value="">— none, it's a main product —</option>
+              {parentChoices.map((m) => <option key={m.id} value={m.id}>{m.name}{m.variantLabel ? ` (${m.variantLabel})` : ''}</option>)}
+            </select>
+          </label>
+          <label className="field"><span>Option name</span><input value={f.variantLabel} onChange={set('variantLabel')} placeholder="e.g. Small, 3.5 g, Mint" maxLength={30} /></label>
+        </div>
+      </fieldset>
+
+      <fieldset className="m-fieldset">
+        <legend>When it's on sale</legend>
+        <div className="chips">{WEEK.map(([d, l]) => <button key={d} type="button" className={`chip ${f.availableDays.includes(d) ? 'on' : ''}`} onClick={() => toggleDay(d)}>{l}</button>)}</div>
+        <p className="muted small">{f.availableDays.length ? 'Only on the days picked.' : 'Every day (pick days to limit it).'}</p>
+        <div className="grid-2">
+          <label className="field"><span>From (optional)</span><input type="time" value={f.availableFrom} onChange={set('availableFrom')} /></label>
+          <label className="field"><span>Until (optional)</span><input type="time" value={f.availableTo} onChange={set('availableTo')} /></label>
+        </div>
+      </fieldset>
+
+      <div className="grid-2">
+        <label className="field"><span>Warn me when stock is at or below</span><input type="number" min="0" max="1000" value={f.lowStockAt} onChange={set('lowStockAt')} /></label>
+        <label className="m-check"><input type="checkbox" checked={!!f.featured} onChange={(e) => setF((x) => ({ ...x, featured: e.target.checked }))} /> ⭐ Store pick — show at the top of your store</label>
+      </div>
       {cat?.regulated ? <p className="banner warn small">This category only goes live once your licence is verified and covers it.</p> : null}
       <div className="actions"><button className="btn">Save</button><button type="button" className="btn btn-ghost" onClick={onCancel}>Cancel</button></div>
     </form>
   );
 }
 
+function PhotoButton({ p, onDone }) {
+  const notify = useToast();
+  const input = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const pick = async (file) => {
+    setBusy(true);
+    try {
+      const dataUrl = await resizeToDataUrl(file);
+      await api(`/merchant/products/${p.id}/photo`, { method: 'POST', body: { dataUrl } });
+      notify('Photo saved', 'ok');
+      onDone();
+    } catch (e) { notify(e.message, 'bad'); } finally { setBusy(false); }
+  };
+  return (
+    <button type="button" className={`m-thumb ${busy ? 'busy' : ''}`} onClick={() => input.current?.click()} title={p.photoUrl ? 'Change photo' : 'Add a photo'} aria-label={p.photoUrl ? `Change photo of ${p.name}` : `Add a photo of ${p.name}`}>
+      {p.photoUrl ? <img src={p.photoUrl} alt="" /> : <span>{busy ? '…' : '📷'}</span>}
+      <input ref={input} type="file" accept="image/*" hidden onChange={(e) => e.target.files[0] && pick(e.target.files[0])} />
+    </button>
+  );
+}
+
+function Restock({ onClose }) {
+  const [items, setItems] = useState(null);
+  const notify = useToast();
+  useEffect(() => { api('/merchant/restock').then((d) => setItems(d.items)); }, []);
+  return (
+    <div className="adm-card">
+      <div className="row-between"><h3>Restock list</h3><button className="nav-link" onClick={onClose} aria-label="Close">✕</button></div>
+      <p className="muted small">Enough to cover the next 7 days at your last 2 weeks' sales, plus anything at or below its low-stock line.</p>
+      {!items ? <Spinner /> : items.length === 0 ? <p className="muted">✅ Nothing to reorder right now.</p> : (
+        <>
+          <table className="adm-table">
+            <thead><tr><th>Product</th><th className="num">In stock</th><th className="num">Sold (14 days)</th><th className="num">Order</th></tr></thead>
+            <tbody>{items.map((r) => <tr key={r.id}><td>{r.name}</td><td className="num">{r.stock}</td><td className="num">{r.soldLast14Days}</td><td className="num"><strong>{r.suggestedOrder}</strong></td></tr>)}</tbody>
+          </table>
+          <button className="btn btn-ghost adm-gap" onClick={() => download('/merchant/restock?format=csv', 'restock-list.csv').catch((e) => notify(e.message, 'bad'))}>⬇ Download for your supplier</button>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ImportExport({ onClose, onDone }) {
+  const notify = useToast();
+  const [text, setText] = useState('');
+  const [preview, setPreview] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const run = async (apply) => {
+    setBusy(true);
+    try {
+      const d = await api('/merchant/products/import', { method: 'POST', body: { csv: text, apply } });
+      setPreview(d);
+      if (d.applied) { notify(`Menu updated — ${d.created} added, ${d.updated} changed`, 'ok'); onDone(); }
+    } catch (e) { notify(e.message, 'bad'); } finally { setBusy(false); }
+  };
+  return (
+    <div className="adm-card">
+      <div className="row-between"><h3>Spreadsheet import / export</h3><button className="nav-link" onClick={onClose} aria-label="Close">✕</button></div>
+      <ol className="m-steps">
+        <li><button className="link" onClick={() => download('/merchant/products.csv', 'menu.csv').catch((e) => notify(e.message, 'bad'))}>⬇ Download your menu</button> as a spreadsheet (opens in Excel or Google Sheets).</li>
+        <li>Change prices, stock or anything else; add new rows at the bottom (leave <code>id</code> empty for new products).</li>
+        <li>Save it as CSV and upload it here. You'll see what will change before anything does.</li>
+      </ol>
+      <input type="file" accept=".csv,text/csv" onChange={async (e) => { const f = e.target.files[0]; if (f) { setText(await f.text()); setPreview(null); } }} aria-label="Choose a CSV file" />
+      {text && !preview && <button className="btn adm-gap" disabled={busy} onClick={() => run(false)}>Check the file</button>}
+      {preview && (
+        <div className="adm-gap">
+          <p><strong>{preview.created}</strong> new · <strong>{preview.updated}</strong> changed · {preview.unchanged || 0} the same · <strong className={preview.errors ? 'm-bad' : ''}>{preview.errors}</strong> with problems</p>
+          {preview.errors > 0 && (
+            <ul className="m-errors">{preview.rows.filter((r) => r.action === 'error').map((r) => <li key={r.row}>Row {r.row}{r.name ? ` (${r.name})` : ''}: {r.error}</li>)}</ul>
+          )}
+          {!preview.applied && (preview.errors
+            ? <p className="muted small">Fix those rows and upload again — nothing has been changed.</p>
+            : preview.created + preview.updated === 0 ? <p className="muted small">Nothing to change — the file matches your menu.</p>
+            : <button className="btn" disabled={busy} onClick={() => run(true)}>Apply {preview.created + preview.updated} change{preview.created + preview.updated === 1 ? '' : 's'}</button>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Menu() {
   const [data, setData] = useState(null);
   const [editing, setEditing] = useState(null);
+  const [panel, setPanel] = useState(null);
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState('all');
   const notify = useToast();
   const load = useCallback(() => api('/merchant/products').then(setData), []);
   useEffect(() => { load(); }, [load]);
-  const shown = useMemo(() => (data?.products || []).filter((p) => (!q || p.name.toLowerCase().includes(q.toLowerCase()))
-    && (filter === 'all' || (filter === 'low' && p.lowStock) || (filter === 'out' && p.active && !p.inStock) || (filter === 'hidden' && (!p.active || p.blockedReason)) || filter === p.category.slug)), [data, q, filter]);
+  const shown = useMemo(() => (data?.products || []).filter((p) => (!q || `${p.name} ${p.variantLabel || ''}`.toLowerCase().includes(q.toLowerCase()))
+    && (filter === 'all' || (filter === 'low' && p.lowStock) || (filter === 'out' && p.active && !p.inStock) || (filter === 'hidden' && (!p.active || p.blockedReason || !p.availableNow)) || (filter === 'picks' && p.featured) || (filter === 'nophoto' && !p.photoUrl) || filter === p.category.slug)), [data, q, filter]);
   if (!data) return <Spinner />;
   const patch = async (p, body, msg) => {
     try { await api(`/merchant/products/${p.id}`, { method: 'PATCH', body }); if (msg) notify(msg, 'ok'); load(); } catch (e) { notify(e.message, 'bad'); }
   };
-  const counts = { low: data.products.filter((p) => p.lowStock).length, out: data.products.filter((p) => p.active && !p.inStock).length };
+  const counts = { low: data.products.filter((p) => p.lowStock).length, out: data.products.filter((p) => p.active && !p.inStock).length, nophoto: data.products.filter((p) => !p.photoUrl).length };
   const cats = [...new Map(data.products.map((p) => [p.category.slug, p.category])).values()];
-  if (editing) return <ProductForm categories={data.categories} initial={editing === 'new' ? null : editing} onSaved={() => { setEditing(null); load(); }} onCancel={() => setEditing(null)} />;
+  const mains = data.products.filter((p) => !p.variantOf);
+  const nameOf = (id) => data.products.find((x) => x.id === id)?.name;
+  if (editing) return <ProductForm categories={data.categories} mains={mains} initial={editing === 'new' ? null : editing} onSaved={() => { setEditing(null); load(); }} onCancel={() => setEditing(null)} />;
   return (
     <>
       <div className="adm-toolbar">
         <input className="adm-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search your menu" aria-label="Search menu" />
-        <button className="btn" onClick={() => setEditing('new')}>+ Add product</button>
+        <div className="actions">
+          <button className="btn btn-ghost" onClick={() => setPanel(panel === 'restock' ? null : 'restock')}>📋 Restock list</button>
+          <button className="btn btn-ghost" onClick={() => setPanel(panel === 'import' ? null : 'import')}>⇅ Import / export</button>
+          <button className="btn" onClick={() => setEditing('new')}>+ Add product</button>
+        </div>
       </div>
+      {panel === 'restock' && <Restock onClose={() => setPanel(null)} />}
+      {panel === 'import' && <ImportExport onClose={() => setPanel(null)} onDone={load} />}
       <div className="chips">
         <button className={`chip ${filter === 'all' ? 'on' : ''}`} onClick={() => setFilter('all')}>All {data.products.length}</button>
         <button className={`chip ${filter === 'low' ? 'on' : ''}`} onClick={() => setFilter('low')}>Low stock {counts.low}</button>
         <button className={`chip ${filter === 'out' ? 'on' : ''}`} onClick={() => setFilter('out')}>Sold out {counts.out}</button>
+        <button className={`chip ${filter === 'nophoto' ? 'on' : ''}`} onClick={() => setFilter('nophoto')}>No photo {counts.nophoto}</button>
+        <button className={`chip ${filter === 'picks' ? 'on' : ''}`} onClick={() => setFilter('picks')}>⭐ Picks</button>
         <button className={`chip ${filter === 'hidden' ? 'on' : ''}`} onClick={() => setFilter('hidden')}>Hidden</button>
         {cats.map((c) => <button key={c.slug} className={`chip ${filter === c.slug ? 'on' : ''}`} onClick={() => setFilter(c.slug)}>{c.icon} {c.name}</button>)}
       </div>
+      {counts.nophoto > 0 && filter === 'all' && <p className="muted small">📷 Products with photos sell noticeably better — tap the camera on any product to add one.</p>}
       <div className="m-menu">
         {shown.length === 0 && <p className="muted">Nothing matches.</p>}
         {shown.map((p) => (
-          <div key={p.id} className={`m-product ${!p.live ? 'dim' : ''}`}>
-            <span className="product-icon sm">{p.category.icon}</span>
+          <div key={p.id} className={`m-product ${!p.live ? 'dim' : ''} ${p.variantOf ? 'is-option' : ''}`}>
+            <PhotoButton p={p} onDone={load} />
             <div className="grow">
-              <strong>{p.name}</strong>
+              <strong>{p.name}{p.variantLabel && <span className="muted"> · {p.variantLabel}</span>}</strong>
               <p className="muted small">
+                {p.variantOf && <>Option of {nameOf(p.variantOf)} · </>}
                 {rand(p.priceCents)} / {p.unit} · {p.soldThisWeek} sold this week ·{' '}
-                {!p.active ? 'switched off' : p.blockedReason ? `hidden — ${p.blockedReason}` : !p.inStock ? <b className="m-bad">sold out</b> : p.lowStock ? <b className="m-warn">only {p.stock} left</b> : 'live'}
+                {!p.active ? 'switched off' : p.blockedReason ? `hidden — ${p.blockedReason}` : !p.availableNow ? <b className="m-warn">{p.availabilityNote}</b> : !p.inStock ? <b className="m-bad">sold out</b> : p.lowStock ? <b className="m-warn">only {p.stock} left</b> : 'live'}
               </p>
             </div>
+            <button className={`m-star ${p.featured ? 'on' : ''}`} onClick={() => patch(p, { featured: !p.featured }, p.featured ? 'Removed from store picks' : 'Added to store picks')} aria-pressed={p.featured} aria-label={`${p.featured ? 'Remove' : 'Make'} ${p.name} a store pick`}>{p.featured ? '⭐' : '☆'}</button>
             <div className="stepper">
               <button onClick={() => patch(p, { stock: Math.max(0, p.stock - 1) })} aria-label={`Less ${p.name}`}>−</button>
               <span>{p.stock}</span>
@@ -388,7 +522,7 @@ function Menu() {
             </div>
             {p.inStock
               ? <button className="btn btn-sm btn-ghost" onClick={() => patch(p, { stock: 0 }, `${p.name} marked sold out`)}>Sold out</button>
-              : <button className="btn btn-sm" onClick={() => patch(p, { stock: 10 }, `${p.name} back in stock`)}>Restock 10</button>}
+              : <button className="btn btn-sm" onClick={() => patch(p, { stock: Math.max(10, p.lowStockAt * 2) }, `${p.name} back in stock`)}>Restock</button>}
             <button className="link" onClick={() => setEditing({ ...p, category: p.category.slug, price: (p.priceCents / 100).toFixed(2) })}>Edit</button>
             <label className="switch" title={p.active ? 'Listed' : 'Not listed'}>
               <input type="checkbox" checked={p.active} onChange={(e) => patch(p, { active: e.target.checked })} aria-label={`List ${p.name}`} />

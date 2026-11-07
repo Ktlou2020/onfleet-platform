@@ -17,6 +17,8 @@ const { availability } = require('./storeHours');
 const promos = require('./promos');
 const { deliveryStart } = require('./schedule');
 const geocode = require('./geocode');
+const media = require('./media');
+const { productAvailability } = require('./storeHours');
 const { registerCustomerRoutes } = require('./customer');
 const { registerPush } = require('./push');
 
@@ -63,7 +65,11 @@ function createApp(db, { pushSend } = {}) {
     res.sendStatus(200);
   }));
 
-  app.use(express.json({ limit: '200kb' }));
+  // Small JSON bodies everywhere, except photo uploads and menu imports.
+  const smallJson = express.json({ limit: '200kb' });
+  const bigJson = express.json({ limit: '3mb' });
+  app.use((req, res, next) => (/^\/api\/merchant\/products\/(\d+\/photo|import)$/.test(req.path) ? bigJson : smallJson)(req, res, next));
+  media.register(app);
 
   const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: 'draft-7', legacyHeaders: false });
 
@@ -190,6 +196,8 @@ function createApp(db, { pushSend } = {}) {
       id: p.id, storeId: p.store_id, name: p.name, description: p.description, priceCents: p.price_cents, unit: p.unit,
       inStock: p.stock > 0, stock: p.stock, thcPct: p.thc_pct, cbdPct: p.cbd_pct, strainType: p.strain_type,
       category: { slug: cat.slug, name: cat.name, icon: cat.icon },
+      photoUrl: media.url(p.photo), featured: !!p.featured,
+      variantOf: p.variant_of || null, variantLabel: p.variant_label || null,
     };
   }
 
@@ -223,6 +231,7 @@ function createApp(db, { pushSend } = {}) {
     const st = settings();
     return db.prepare('SELECT * FROM products WHERE store_id = ? AND active = 1 ORDER BY name').all(store.id)
       .filter((p) => compliance.canSell({ category: cats[p.category_id], store, settings: st }).ok)
+      .filter((p) => productAvailability(p).now)
       .filter((p) => !categorySlug || cats[p.category_id].slug === categorySlug)
       .filter((p) => !q || `${p.name} ${p.description}`.toLowerCase().includes(q.toLowerCase()))
       .map((p) => productView(p, cats[p.category_id]));
@@ -302,6 +311,8 @@ function createApp(db, { pushSend } = {}) {
       const p = db.prepare('SELECT * FROM products WHERE id = ? AND store_id = ? AND active = 1').get(productId, store.id);
       if (!p) throw new orders.OrderError('An item in your basket is no longer available');
       if (!compliance.canSell({ category: cats[p.category_id], store, settings: st }).ok) throw new orders.OrderError(`${p.name} cannot be sold right now`);
+      const window = productAvailability(p);
+      if (!window.now) throw new orders.OrderError(`${p.name}: ${window.label.toLowerCase()}`, 409);
       if (p.stock < qty) throw new orders.OrderError(p.stock ? `Only ${p.stock} × ${p.name} left` : `${p.name} is sold out`, 409);
       lines.push({ product: p, qty });
     }
@@ -401,6 +412,9 @@ function createApp(db, { pushSend } = {}) {
       return id;
     });
     const id = create();
+    for (const it of db.prepare(`SELECT p.id, p.name, p.stock, p.low_stock_at, i.qty FROM order_items i JOIN products p ON p.id = i.product_id WHERE i.order_id = ?`).all(id)) {
+      if (it.stock <= it.low_stock_at && it.stock + it.qty > it.low_stock_at) orders.bus.emit('low_stock', it.id, db);
+    }
     res.status(201).json({ order: orders.orderView(db, id, 'customer') });
   }));
 

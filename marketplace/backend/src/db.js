@@ -281,6 +281,14 @@ function migrate(db) {
   addColumn('riders', 'rating_count', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('orders', 'scheduled_for', 'TEXT');
   addColumn('order_items', 'unavailable', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('products', 'photo', 'TEXT');
+  addColumn('products', 'variant_of', 'INTEGER REFERENCES products(id)');
+  addColumn('products', 'variant_label', 'TEXT');
+  addColumn('products', 'featured', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('products', 'available_days', 'TEXT');
+  addColumn('products', 'available_from', 'TEXT');
+  addColumn('products', 'available_to', 'TEXT');
+  addColumn('products', 'low_stock_at', 'INTEGER NOT NULL DEFAULT 3');
   addColumn('orders', 'awaiting_customer', 'TEXT');
   addColumn('orders', 'awaiting_until', 'TEXT');
   addColumn('orders', 'refund_cents', 'INTEGER NOT NULL DEFAULT 0');

@@ -404,3 +404,10 @@ textarea { min-height: 80px; resize: vertical; }
 .decision-items { list-style: none; padding: 0; margin: 6px 0; }
 .decision-items li { display: flex; justify-content: space-between; padding: 4px 0; }
 .sum.gone { color: var(--muted); text-decoration: line-through; }
+
+/* ---- Product photos, variants, picks --------------------------------- */
+.product-photo { width: 72px; height: 72px; border-radius: 12px; object-fit: cover; flex: none; background: var(--brand-soft); }
+.variant-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 6px; }
+.variant-chips .chip { padding: 4px 10px; font-size: .8rem; }
+.variant-chips .chip.out { text-decoration: line-through; opacity: .6; }
+.pick { font-size: .85em; }

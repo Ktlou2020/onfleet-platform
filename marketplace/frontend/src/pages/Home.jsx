@@ -53,22 +53,38 @@ export function StoreCard({ s }) {
   );
 }
 
-export function ProductRow({ p, store }) {
+// One product card. With `options` (a main product and its sizes or
+// flavours) the customer picks one with chips, and price and stock follow.
+export function ProductRow({ p: main, store, options }) {
   const { add, cart } = useCart();
   const notify = useToast();
+  const choices = options && options.length > 1 ? options : null;
+  const [chosen, setChosen] = useState(() => (choices ? (choices.find((o) => o.inStock) || choices[0]).id : main.id));
+  const p = choices ? choices.find((o) => o.id === chosen) || main : main;
   const inCart = cart.items.find((i) => i.id === p.id)?.qty || 0;
   const onAdd = () => {
     if (cart.store && cart.store.id !== store.id && cart.items.length) {
       if (!window.confirm(`Your basket has items from ${cart.store.name}. Start a new basket from ${store.name}?`)) return;
     }
-    add(store, p);
-    notify(`Added ${p.name}`);
+    add(store, { ...p, name: p.variantLabel ? `${p.name} (${p.variantLabel})` : p.name });
+    notify(`Added ${p.name}${p.variantLabel ? ` (${p.variantLabel})` : ''}`);
   };
   return (
     <div className={`product ${!p.inStock ? 'dim' : ''}`}>
-      <div className="product-icon">{p.category.icon}</div>
+      {p.photoUrl || main.photoUrl
+        ? <img className="product-photo" src={p.photoUrl || main.photoUrl} alt="" loading="lazy" width="72" height="72" />
+        : <div className="product-icon">{p.category.icon}</div>}
       <div className="product-main">
-        <h4>{p.name}</h4>
+        <h4>{p.featured && <span className="pick" title="Store pick">⭐ </span>}{p.name}{!choices && p.variantLabel ? <span className="muted"> · {p.variantLabel}</span> : null}</h4>
+        {choices && (
+          <div className="variant-chips" role="radiogroup" aria-label={`${main.name} options`}>
+            {choices.map((o) => (
+              <button key={o.id} type="button" role="radio" aria-checked={o.id === chosen} className={`chip ${o.id === chosen ? 'on' : ''} ${!o.inStock ? 'out' : ''}`} onClick={() => setChosen(o.id)}>
+                {o.variantLabel || 'Standard'}
+              </button>
+            ))}
+          </div>
+        )}
         <p className="muted clamp">{p.description}</p>
         <div className="product-tags">
           {p.strainType && <span className="tag">{p.strainType}</span>}

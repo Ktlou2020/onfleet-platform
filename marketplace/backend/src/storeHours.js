@@ -75,4 +75,22 @@ function availability(store, now = new Date()) {
   return { open: true, label: 'Open' };
 }
 
-module.exports = { DAYS, availability, parseHours, validateHours };
+// A product can be limited to some days and/or a time of day ("from 10:00",
+// "not on Sundays"). Empty means always, when the store is open.
+function productAvailability(p, now = new Date()) {
+  const { day, minutes } = sastNow(now);
+  let days = null;
+  try { days = p.available_days ? JSON.parse(p.available_days) : null; } catch { days = null; }
+  if (Array.isArray(days) && days.length && !days.includes(DAYS[day])) return { now: false, label: 'Not available today' };
+  if (p.available_from && minutes < toMinutes(p.available_from)) return { now: false, label: `Available from ${p.available_from}` };
+  if (p.available_to && minutes >= toMinutes(p.available_to)) return { now: false, label: 'Finished for today' };
+  return { now: true, label: null };
+}
+
+function validateWindow(days, from, to) {
+  if (days != null && (!Array.isArray(days) || days.some((d) => !DAYS.includes(d)))) throw new Error('Pick days from mon to sun');
+  for (const t of [from, to]) if (t && !TIME.test(t)) throw new Error('Use HH:MM times');
+  if (from && to && toMinutes(to) <= toMinutes(from)) throw new Error('The end time must be after the start time');
+}
+
+module.exports = { DAYS, availability, parseHours, validateHours, productAvailability, validateWindow };

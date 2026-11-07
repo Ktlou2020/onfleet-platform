@@ -143,3 +143,15 @@
   .m-slip.w-a4 { width: 120mm; }
   @page { margin: 2mm; }
 }
+
+/* Menu: photos, picks, options, import */
+.m-thumb { width: 52px; height: 52px; flex: none; border-radius: 12px; border: 1px dashed var(--line); background: var(--bg); display: grid; place-items: center; overflow: hidden; padding: 0; font-size: 1.3rem; }
+.m-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.m-thumb.busy { opacity: .5; }
+.m-star { border: 0; background: none; font-size: 1.3rem; color: var(--gold); padding: 4px; }
+.m-product.is-option { margin-left: 28px; border-left: 3px solid var(--brand-soft); }
+.m-fieldset { border: 1px solid var(--line); border-radius: 12px; padding: 4px 12px 8px; margin: 12px 0; }
+.m-fieldset legend { font-weight: 700; font-size: .85rem; padding: 0 6px; }
+.m-check { display: flex; align-items: center; gap: 8px; font-size: .9rem; margin: 12px 0; }
+.m-steps { padding-left: 20px; font-size: .9rem; display: grid; gap: 4px; }
+.m-errors { color: var(--bad); font-size: .85rem; padding-left: 18px; }

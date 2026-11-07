@@ -4,6 +4,9 @@ const orders = require('./orders');
 const pricing = require('./pricing');
 const { availability, parseHours, validateHours } = require('./storeHours');
 const sms = require('./sms');
+const media = require('./media');
+const csv = require('./csv');
+const { productAvailability, validateWindow } = require('./storeHours');
 
 // The store owner's console: the live order board, busy controls, opening
 // hours, the menu, insights, payouts and reviews.
@@ -116,7 +119,9 @@ function registerMerchantRoutes(app, { db, auth, requireAdult, audit, refund, st
       const sell = compliance.canSell({ category: cats[p.category_id], store: s, settings: st });
       return {
         ...productView(p, cats[p.category_id]), active: !!p.active, live: !!p.active && sell.ok && p.stock > 0,
-        blockedReason: sell.ok ? null : sell.reason, lowStock: p.active && p.stock > 0 && p.stock <= LOW_STOCK, soldThisWeek: sold[p.id] || 0,
+        blockedReason: sell.ok ? null : sell.reason, lowStock: !!p.active && p.stock > 0 && p.stock <= p.low_stock_at, soldThisWeek: sold[p.id] || 0,
+        lowStockAt: p.low_stock_at, availableDays: p.available_days ? JSON.parse(p.available_days) : [], availableFrom: p.available_from, availableTo: p.available_to,
+        availableNow: productAvailability(p).now, availabilityNote: productAvailability(p).label,
       };
     });
     res.json({ products, categories: db.prepare('SELECT slug, name, icon, regulated FROM categories ORDER BY sort').all() });
@@ -140,18 +145,52 @@ function registerMerchantRoutes(app, { db, auth, requireAdult, audit, refund, st
       thc_pct: num(b.thcPct, existing.thc_pct), cbd_pct: num(b.cbdPct, existing.cbd_pct),
       strain_type: b.strainType === undefined ? existing.strain_type ?? null : b.strainType || null,
       active: b.active === undefined ? existing.active ?? 1 : b.active ? 1 : 0,
+      ...extraInput(b, existing),
     };
+  }
+
+  // Variants, featuring, availability windows and the low-stock line.
+  function extraInput(b, existing) {
+    const out = {
+      variant_of: b.variantOf === undefined ? existing.variant_of ?? null : b.variantOf ? Number(b.variantOf) : null,
+      variant_label: b.variantLabel === undefined ? existing.variant_label ?? null : String(b.variantLabel || '').trim().slice(0, 30) || null,
+      featured: b.featured === undefined ? existing.featured ?? 0 : b.featured ? 1 : 0,
+      available_days: b.availableDays === undefined ? existing.available_days ?? null : b.availableDays && b.availableDays.length ? JSON.stringify(b.availableDays) : null,
+      available_from: b.availableFrom === undefined ? existing.available_from ?? null : b.availableFrom || null,
+      available_to: b.availableTo === undefined ? existing.available_to ?? null : b.availableTo || null,
+      low_stock_at: b.lowStockAt === undefined ? existing.low_stock_at ?? LOW_STOCK : Math.round(Number(b.lowStockAt)),
+    };
+    if (!Number.isInteger(out.low_stock_at) || out.low_stock_at < 0 || out.low_stock_at > 1000) throw new orders.OrderError('Low-stock alert must be 0 to 1000');
+    try { validateWindow(out.available_days ? JSON.parse(out.available_days) : null, out.available_from, out.available_to); } catch (e) { throw new orders.OrderError(e.message); }
+    return out;
+  }
+
+  // A variant hangs off one main product in the same store, one level deep.
+  function checkVariant(storeId, p, selfId) {
+    if (!p.variant_of) return;
+    if (p.variant_of === selfId) throw new orders.OrderError("A product can't be an option of itself");
+    const parent = one('SELECT * FROM products WHERE id = ? AND store_id = ?', p.variant_of, storeId);
+    if (!parent) throw new orders.OrderError('Choose a main product from your menu');
+    if (parent.variant_of) throw new orders.OrderError('Pick the main product, not another option');
+    if (selfId && one('SELECT 1 FROM products WHERE variant_of = ?', selfId)) throw new orders.OrderError('This product has its own options, so it must stay a main product');
+  }
+
+  const PRODUCT_COLS = ['category_id', 'name', 'description', 'price_cents', 'unit', 'stock', 'thc_pct', 'cbd_pct', 'strain_type', 'active',
+    'variant_of', 'variant_label', 'featured', 'available_days', 'available_from', 'available_to', 'low_stock_at'];
+  function insertProduct(storeId, p) {
+    return db.prepare(`INSERT INTO products (store_id, ${PRODUCT_COLS.join(', ')}) VALUES (?, ${PRODUCT_COLS.map(() => '?').join(', ')})`)
+      .run(storeId, ...PRODUCT_COLS.map((c) => p[c])).lastInsertRowid;
+  }
+  function updateProduct(id, p) {
+    db.prepare(`UPDATE products SET ${PRODUCT_COLS.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`).run(...PRODUCT_COLS.map((c) => p[c]), id);
   }
 
   app.post('/api/merchant/products', merchant, (req, res) => {
     const s = requireStore(req);
     if (!req.body?.category) return res.status(400).json({ error: 'Choose a category' });
     const p = productInput(req.body);
-    const { lastInsertRowid } = db.prepare(`
-      INSERT INTO products (store_id, category_id, name, description, price_cents, unit, stock, thc_pct, cbd_pct, strain_type, active)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(s.id, p.category_id, p.name, p.description, p.price_cents, p.unit, p.stock, p.thc_pct, p.cbd_pct, p.strain_type, p.active);
-    res.status(201).json({ id: lastInsertRowid });
+    checkVariant(s.id, p, null);
+    res.status(201).json({ id: insertProduct(s.id, p) });
   });
 
   app.patch('/api/merchant/products/:id', merchant, (req, res) => {
@@ -159,10 +198,106 @@ function registerMerchantRoutes(app, { db, auth, requireAdult, audit, refund, st
     const existing = one('SELECT * FROM products WHERE id = ? AND store_id = ?', req.params.id, s.id);
     if (!existing) return res.status(404).json({ error: 'Product not found' });
     const p = productInput(req.body || {}, existing);
-    db.prepare(`UPDATE products SET category_id = ?, name = ?, description = ?, price_cents = ?, unit = ?, stock = ?,
-      thc_pct = ?, cbd_pct = ?, strain_type = ?, active = ? WHERE id = ?`)
-      .run(p.category_id, p.name, p.description, p.price_cents, p.unit, p.stock, p.thc_pct, p.cbd_pct, p.strain_type, p.active, existing.id);
+    checkVariant(s.id, p, existing.id);
+    updateProduct(existing.id, p);
     res.json({ ok: true });
+  });
+
+  // ---- Photos -------------------------------------------------------------------
+  app.post('/api/merchant/products/:id/photo', merchant, (req, res) => {
+    const s = requireStore(req);
+    const p = one('SELECT * FROM products WHERE id = ? AND store_id = ?', req.params.id, s.id);
+    if (!p) return res.status(404).json({ error: 'Product not found' });
+    let name;
+    try { name = media.saveDataUrl(req.body?.dataUrl); } catch (e) { return res.status(e.status || 400).json({ error: e.message }); }
+    db.prepare('UPDATE products SET photo = ? WHERE id = ?').run(name, p.id);
+    media.remove(p.photo);
+    res.json({ photoUrl: media.url(name) });
+  });
+
+  app.delete('/api/merchant/products/:id/photo', merchant, (req, res) => {
+    const s = requireStore(req);
+    const p = one('SELECT * FROM products WHERE id = ? AND store_id = ?', req.params.id, s.id);
+    if (!p) return res.status(404).json({ error: 'Product not found' });
+    db.prepare('UPDATE products SET photo = NULL WHERE id = ?').run(p.id);
+    media.remove(p.photo);
+    res.json({ ok: true });
+  });
+
+  // ---- What to reorder --------------------------------------------------------
+  // Enough to cover the next week at the last fortnight's pace.
+  function restockList(storeId) {
+    const sold = Object.fromEntries(db.prepare(`SELECT i.product_id, SUM(i.qty) AS n FROM order_items i JOIN orders o ON o.id = i.order_id
+      WHERE o.store_id = ? AND o.status = 'delivered' AND i.unavailable = 0 AND o.delivered_at > datetime('now', '-14 days') GROUP BY i.product_id`).all(storeId).map((r) => [r.product_id, r.n]));
+    return db.prepare('SELECT * FROM products WHERE store_id = ? AND active = 1 ORDER BY name').all(storeId).map((p) => {
+      const perDay = (sold[p.id] || 0) / 14;
+      const need = Math.max(0, Math.ceil(perDay * 7) - p.stock, p.stock <= p.low_stock_at ? p.low_stock_at * 2 - p.stock : 0);
+      return { id: p.id, name: p.name + (p.variant_label ? ` (${p.variant_label})` : ''), stock: p.stock, lowStockAt: p.low_stock_at, soldLast14Days: sold[p.id] || 0, perDay: Math.round(perDay * 10) / 10, suggestedOrder: need };
+    }).filter((r) => r.suggestedOrder > 0).sort((a, b) => b.suggestedOrder - a.suggestedOrder);
+  }
+
+  app.get('/api/merchant/restock', merchant, (req, res) => {
+    const s = requireStore(req);
+    const list = restockList(s.id);
+    if (req.query.format === 'csv') {
+      res.type('text/csv').attachment(`restock-${s.slug}.csv`);
+      return res.send(csv.stringify(['name', 'stock', 'sold_last_14_days', 'suggested_order'], list.map((r) => ({ name: r.name, stock: r.stock, sold_last_14_days: r.soldLast14Days, suggested_order: r.suggestedOrder }))));
+    }
+    res.json({ items: list });
+  });
+
+  // ---- Spreadsheet import / export --------------------------------------------
+  const CSV_COLS = ['id', 'name', 'category', 'price', 'unit', 'stock', 'low_stock_at', 'active', 'featured', 'option_of', 'option_label', 'description'];
+
+  app.get('/api/merchant/products.csv', merchant, (req, res) => {
+    const s = requireStore(req);
+    const cats = categoriesById();
+    const rows = db.prepare('SELECT * FROM products WHERE store_id = ? ORDER BY COALESCE(variant_of, id), id').all(s.id).map((p) => ({
+      id: p.id, name: p.name, category: cats[p.category_id].slug, price: (p.price_cents / 100).toFixed(2), unit: p.unit, stock: p.stock,
+      low_stock_at: p.low_stock_at, active: p.active ? 'yes' : 'no', featured: p.featured ? 'yes' : 'no', option_of: p.variant_of || '', option_label: p.variant_label || '', description: p.description,
+    }));
+    res.type('text/csv').attachment(`menu-${s.slug}.csv`).send(csv.stringify(CSV_COLS, rows));
+  });
+
+  // Upload the same sheet back (or a new one). Rows with an id update that
+  // product; rows without create one. Run with apply=false first to preview.
+  app.post('/api/merchant/products/import', merchant, (req, res) => {
+    const s = requireStore(req);
+    const rows = csv.parse(req.body?.csv);
+    if (!rows.length) return res.status(400).json({ error: 'That file has no rows under the header' });
+    if (rows.length > 2000) return res.status(400).json({ error: 'Import up to 2 000 rows at a time' });
+    const yes = (v, dflt) => (v === '' || v == null ? dflt : /^(yes|y|true|1)$/i.test(v));
+    const results = [];
+    const plan = [];
+    for (const r of rows) {
+      try {
+        const existing = r.id ? one('SELECT * FROM products WHERE id = ? AND store_id = ?', Number(r.id), s.id) : null;
+        if (r.id && !existing) throw new orders.OrderError(`No product with id ${r.id} in your store`);
+        const price = r.price === '' || r.price == null ? undefined : Math.round(Number(String(r.price).replace(/[R\s,]/g, '')) * 100);
+        const input = {
+          name: r.name || undefined, category: r.category || undefined, priceCents: price, unit: r.unit || undefined,
+          stock: r.stock === '' || r.stock == null ? undefined : Number(r.stock), lowStockAt: r.low_stock_at === '' || r.low_stock_at == null ? undefined : Number(r.low_stock_at),
+          description: r.description === undefined ? undefined : r.description,
+          active: r.active === undefined || r.active === '' ? undefined : yes(r.active, true), featured: r.featured === undefined || r.featured === '' ? undefined : yes(r.featured, false),
+          variantOf: r.option_of === undefined ? undefined : r.option_of || null, variantLabel: r.option_label,
+        };
+        if (!existing && !input.category) throw new orders.OrderError('New products need a category');
+        const p = productInput(input, existing || {});
+        checkVariant(s.id, p, existing?.id || null);
+        const norm = (v) => (typeof v === 'boolean' ? Number(v) : v ?? null);
+        const same = existing && PRODUCT_COLS.every((c) => String(norm(p[c])) === String(norm(existing[c])));
+        if (!same) plan.push({ existing, p });
+        results.push({ row: r._row, action: same ? 'unchanged' : existing ? 'update' : 'create', name: p.name });
+      } catch (e) {
+        results.push({ row: r._row, action: 'error', name: r.name, error: e.message });
+      }
+    }
+    const errors = results.filter((x) => x.action === 'error').length;
+    if (req.body?.apply && !errors) {
+      db.transaction(() => { for (const { existing, p } of plan) if (existing) updateProduct(existing.id, p); else insertProduct(s.id, p); })();
+      audit(req.user.id, 'menu_imported', { storeId: s.id, rows: plan.length });
+    }
+    res.json({ applied: !!req.body?.apply && !errors, created: results.filter((x) => x.action === 'create').length, updated: results.filter((x) => x.action === 'update').length, unchanged: results.filter((x) => x.action === 'unchanged').length, errors, rows: results });
   });
 
   // ---- Live orders --------------------------------------------------------------
@@ -215,7 +350,7 @@ function registerMerchantRoutes(app, { db, auth, requireAdult, audit, refund, st
       WHERE store_id = ? AND status = 'delivered' AND ${DAY('delivered_at')} = date('now', '+2 hours')`, s.id);
     const prep = one(`SELECT AVG((julianday(ready_at) - julianday(accepted_at)) * 1440) AS m FROM orders
       WHERE store_id = ? AND ready_at IS NOT NULL AND ${DAY('ready_at')} = date('now', '+2 hours')`, s.id);
-    const lowStock = db.prepare('SELECT id, name, stock FROM products WHERE store_id = ? AND active = 1 AND stock <= ? ORDER BY stock, name LIMIT 10').all(s.id, LOW_STOCK);
+    const lowStock = db.prepare('SELECT id, name, stock FROM products WHERE store_id = ? AND active = 1 AND stock <= low_stock_at ORDER BY stock, name LIMIT 10').all(s.id);
     // Pre-orders waiting for delivery time, so the store can plan stock and staff.
     const scheduled = db.prepare("SELECT id FROM orders WHERE store_id = ? AND status = 'scheduled' ORDER BY scheduled_for, id").all(s.id)
       .map(({ id }) => orders.orderView(db, id, 'merchant'));

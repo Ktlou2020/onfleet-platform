@@ -56,6 +56,18 @@ Tests: `cd marketplace/backend && npm test` (SA ID parsing, licence gating, deli
 
 Customers can order and pay at any time. If the platform isn't delivering yet (outside the hours set under Admin → Settings), or the store is closed by its own opening hours, the order is held as **Scheduled**, and the customer is told exactly when it will be delivered, for example "tomorrow at 08:00". The server releases it to the store as a normal new order at that time. The delivery estimate restarts from then, and the customer can cancel for a full refund until it's released. Stores see upcoming pre-orders under their board. A store that is paused or switched off still can't take orders. Logic: `backend/src/schedule.js`.
 
+## Installable app (PWA)
+
+ClickNPuff installs to the home screen on Android and iPhone (Share → Add to Home Screen), opens full-screen, and still opens with no signal (`frontend/public/sw.js`; live data is never cached). Push notifications reach phones with the app closed:
+
+- **Customers:** store accepted, packed, on the way, rider outside, delivered, declined, refunded.
+- **Riders:** new trip offers with the payout, even with the screen off.
+- **Stores:** new orders.
+
+iPhone needs iOS 16.4+ and the app added to the home screen before push works. A PWA can't track GPS in the background, so riders keep the app on screen on a mount. A native Android wrapper is the next step for background GPS.
+
+Push keys: set `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` to pin them. Otherwise a pair is generated once and kept in the database (`VAPID_SUBJECT` defaults to `mailto:help@clicknpuff.co.za`).
+
 ## Rider pay
 
 R18 per trip + R5 per km (to the store and on to the customer), at least R25. Customer tips (chosen at checkout) are added on top and go to the rider in full. The rider sees the total before accepting. Rates live in `backend/src/orders.js` (`RIDER_PAY`).

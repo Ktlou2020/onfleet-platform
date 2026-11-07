@@ -183,3 +183,10 @@
 .r-tabs button.on { color: var(--r-brand); }
 .r-app .empty { color: var(--r-muted); }
 .r-app .empty h3 { color: var(--r-ink); }
+
+/* Install & notifications in the dark rider theme */
+.r-app .push-btn { background: var(--r-card); color: var(--r-ink); border: 1px solid var(--r-brand); min-height: 48px; border-radius: 14px; margin-top: 12px; }
+.r-app .push-box { background: #173326; color: var(--r-ink); }
+.r-app .push-box .link { color: var(--r-brand); }
+.r-app .install-banner { background: var(--r-card); border-color: var(--r-line); color: var(--r-ink); }
+.r-app .install-banner p { color: var(--r-muted); }

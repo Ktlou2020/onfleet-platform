@@ -12,6 +12,7 @@ import Admin from './pages/Admin.jsx';
 import Account from './pages/Account.jsx';
 import AgeGate from './pages/AgeGate.jsx';
 import { AddressSheet } from './pages/Address.jsx';
+import { InstallBanner, OfflineBanner, PushSync } from './pwa.jsx';
 
 const HOME_FOR = { merchant: '/merchant', rider: '/rider', admin: '/admin', customer: '/' };
 
@@ -91,6 +92,7 @@ export default function App() {
 
   return (
     <div className="app">
+      <OfflineBanner />
       {!fullScreen && <Header onAddress={() => setAddressOpen(true)} />}
       <main>
         <Routes>
@@ -112,7 +114,9 @@ export default function App() {
         <p>{BRAND.name} · 18+ only · ID checked on every delivery · Please use responsibly</p>
         <p className="muted">Support: {BRAND.support}</p>
       </footer>}
+      {!fullScreen && pathname === '/' && <div className="install-slot"><InstallBanner /></div>}
       <BottomNav />
+      <PushSync />
       {(addressOpen || (!loc && pathname === '/')) && <AddressSheet onClose={() => setAddressOpen(false)} />}
     </div>
   );

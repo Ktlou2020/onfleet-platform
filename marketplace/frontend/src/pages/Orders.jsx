@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { MapContainer, Marker, Polyline, useMap } from 'react-leaflet';
 import { Empty, STATUS, Spinner, api, deliveryTimeLabel, kmBetween, rand, reorderInto, useCart, useLiveOrder, useToast } from '../lib.jsx';
 import { MapTiles, pin } from './Address.jsx';
+import { PushButton } from '../pwa.jsx';
 
 function OrderAgain({ order, small }) {
   const cart = useCart();
@@ -62,29 +63,6 @@ function Help({ order }) {
       )}
     </div>
   );
-}
-
-// Optional browser alerts when the order moves on, for people who switch
-// to another tab while they wait.
-function useStatusAlerts(order) {
-  const [on, setOn] = useState(() => typeof Notification !== 'undefined' && Notification.permission === 'granted');
-  const last = useRef(null);
-  useEffect(() => {
-    if (!order) return;
-    const key = `${order.status}|${order.milestones?.arrivedCustomerAt || ''}`;
-    if (last.current && last.current !== key && on && document.visibilityState !== 'visible') {
-      const body = order.milestones?.arrivedCustomerAt && order.status === 'picked_up' ? 'Your rider is outside 👋' : STATUS[order.status]?.label;
-      try { new Notification(`Order #${order.code}`, { body }); } catch { /* not supported */ }
-    }
-    last.current = key;
-  }, [order, on]);
-  const enable = async () => {
-    if (typeof Notification === 'undefined') return false;
-    const p = await Notification.requestPermission();
-    setOn(p === 'granted');
-    return p === 'granted';
-  };
-  return { on, enable, supported: typeof Notification !== 'undefined' };
 }
 
 export function Orders() {
@@ -161,7 +139,6 @@ export function Track() {
   const { id } = useParams();
   const [params] = useSearchParams();
   const { order, setOrder, error } = useLiveOrder(id);
-  const alerts = useStatusAlerts(order);
   const notify = useToast();
 
   // Back from Paystack: confirm the payment straight away rather than
@@ -210,9 +187,7 @@ export function Track() {
           {!ended && order.status !== 'delivered' && order.status !== 'scheduled' && (liveMinutes && !m.arrivedCustomerAt
             ? <p className="arriving">Arriving in <strong>~{liveMinutes} min</strong></p>
             : <p className="muted">Arriving around <strong>{eta.toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit' })}</strong></p>)}
-          {!ended && order.status !== 'delivered' && alerts.supported && !alerts.on && (
-            <button className="link small" onClick={() => alerts.enable().then((ok) => notify(ok ? "We'll alert you when your order moves on" : 'Alerts are blocked in your browser settings'))}>🔔 Alert me when it moves on</button>
-          )}
+          {!ended && order.status !== 'delivered' && <PushButton compact className="track-push" />}
           {ended && order.cancelReason && <p className="muted">{order.cancelReason}{order.paymentStatus === 'refunded' && ' · Refunded in full'}</p>}
         </div>
         {order.status === 'picked_up' && <div className="live-dot">LIVE</div>}

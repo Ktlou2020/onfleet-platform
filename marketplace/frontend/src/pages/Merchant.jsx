@@ -4,6 +4,7 @@ import { VerifyAge } from './Checkout.jsx';
 import { Columns } from '../charts.jsx';
 import '../admin.css';
 import '../merchant.css';
+import { PushButton } from '../pwa.jsx';
 
 const clock = (secs) => {
   const s = Math.abs(Math.round(secs));
@@ -598,6 +599,7 @@ export default function Merchant() {
             {icon} {label}{k === 'orders' && waiting ? <b className="adm-badge hot">{waiting}</b> : null}
           </button>
         ))}
+        <PushButton compact className="m-push" />
         <button className={`m-sound ${sound ? 'on' : ''}`} onClick={() => { unlockAudio(); setSound((x) => !x); }} title="Order alerts">
           {sound ? '🔔 Alerts on' : '🔕 Turn on alerts'}
         </button>

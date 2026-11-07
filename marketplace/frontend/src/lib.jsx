@@ -19,6 +19,7 @@ try {
 } catch { /* storage unavailable */ }
 
 const TOKEN_KEY = 'clicknpuff.token';
+const USER_KEY = 'clicknpuff.user';
 const safe = (fn, fallback = null) => { try { return fn(); } catch { return fallback; } };
 export const getToken = () => safe(() => localStorage.getItem(TOKEN_KEY));
 
@@ -67,19 +68,36 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     if (!getToken()) { setReady(true); return; }
-    api('/me').then((d) => setUser(d.user)).catch(() => safe(() => localStorage.removeItem(TOKEN_KEY))).finally(() => setReady(true));
+    // Only a real "not signed in" answer signs someone out. With no signal
+    // (or the server briefly down) keep them signed in as they last were.
+    api('/me')
+      .then((d) => { setUser(d.user); safe(() => localStorage.setItem(USER_KEY, JSON.stringify(d.user))); })
+      .catch((e) => {
+        if (e.status === 401 || e.status === 403) {
+          safe(() => { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY); });
+        } else {
+          const last = safe(() => JSON.parse(localStorage.getItem(USER_KEY)));
+          if (last) setUser(last);
+        }
+      })
+      .finally(() => setReady(true));
   }, []);
 
   const signIn = useCallback(({ token, user: u }) => {
-    safe(() => localStorage.setItem(TOKEN_KEY, token));
+    safe(() => { localStorage.setItem(TOKEN_KEY, token); localStorage.setItem(USER_KEY, JSON.stringify(u)); });
     setUser(u);
   }, []);
   const signOut = useCallback(() => {
-    safe(() => localStorage.removeItem(TOKEN_KEY));
+    safe(() => { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY); });
     setUser(null);
   }, []);
 
-  const value = useMemo(() => ({ user, setUser, ready, signIn, signOut }), [user, ready, signIn, signOut]);
+  // Pages that update the person (profile, age check) keep the offline copy in step.
+  const updateUser = useCallback((u) => {
+    setUser(u);
+    safe(() => (u ? localStorage.setItem(USER_KEY, JSON.stringify(u)) : localStorage.removeItem(USER_KEY)));
+  }, []);
+  const value = useMemo(() => ({ user, setUser: updateUser, ready, signIn, signOut }), [user, ready, signIn, signOut, updateUser]);
   return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;
 }
 export const useAuth = () => useContext(AuthCtx);

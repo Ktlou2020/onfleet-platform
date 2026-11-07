@@ -120,6 +120,7 @@ function transition(db, orderId, actor, to, { note, refund } = {}) {
   const before = run();
   if (to === 'accepted') offerNext(db, orderId);
   bus.emit('order', orderId);
+  bus.emit('status', orderId, to);
   if (before.offered_rider_id) bus.emit('rider', before.offered_rider_id);
   if (before.rider_id) bus.emit('rider', before.rider_id);
   // A rider who just finished is free for the next waiting order.
@@ -165,6 +166,7 @@ function offerNext(db, orderId) {
   db.prepare(`UPDATE orders SET offered_rider_id = ?, offer_expires_at = datetime('now', ?), offer_pickup_km = ?, rider_payout_cents = ?
     WHERE id = ?`).run(best.id, `+${OFFER_SECONDS} seconds`, pickupKm, riderPayoutCents(pickupKm, order.distance_km), orderId);
   bus.emit('rider', best.id);
+  bus.emit('offer', best.id, orderId);
   return best.id;
 }
 

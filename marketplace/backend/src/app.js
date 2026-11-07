@@ -18,6 +18,7 @@ const promos = require('./promos');
 const { deliveryStart } = require('./schedule');
 const geocode = require('./geocode');
 const { registerCustomerRoutes } = require('./customer');
+const { registerPush } = require('./push');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-secret-change-me';
 if (process.env.NODE_ENV === 'production' && JWT_SECRET === 'dev-only-secret-change-me') {
@@ -30,7 +31,7 @@ function slugify(s) {
   return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
 }
 
-function createApp(db) {
+function createApp(db, { pushSend } = {}) {
   const app = express();
   app.set('trust proxy', 1);
   // Map tiles come from CARTO's CDN; everything else is same-origin.
@@ -526,6 +527,7 @@ function createApp(db) {
   registerRiderRoutes(app, { db, auth, requireAdult, audit, refund });
   registerAdminRoutes(app, { db, auth, audit });
   registerCustomerRoutes(app, { db, auth, audit, storeSummary, productView, categoriesById, settings });
+  registerPush(app, { db, auth, ...(pushSend ? { send: pushSend } : {}) });
 
   // ---- Admin -------------------------------------------------------------
   app.get('/api/admin/overview', auth('admin'), (req, res) => {

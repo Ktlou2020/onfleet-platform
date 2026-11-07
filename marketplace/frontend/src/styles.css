@@ -384,3 +384,19 @@ textarea { min-height: 80px; resize: vertical; }
 .addr-suggestions button { display: flex; gap: 10px; align-items: flex-start; width: 100%; text-align: left; border: 0; background: none; padding: 10px; border-radius: 8px; color: var(--ink); }
 .addr-suggestions button.on, .addr-suggestions button:hover { background: var(--brand-soft); }
 .addr-suggestions em { display: block; font-style: normal; font-size: .8rem; color: var(--muted); }
+
+/* ---- Install & notifications ---------------------------------------- */
+.install-slot { position: fixed; left: 12px; right: 12px; bottom: calc(76px + env(safe-area-inset-bottom)); z-index: 58; display: grid; justify-items: center; pointer-events: none; }
+@media (min-width: 721px) { .install-slot { bottom: 20px; } }
+.install-banner { pointer-events: auto; display: flex; gap: 12px; align-items: center; width: min(520px, 100%); background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 10px 12px; box-shadow: 0 12px 32px rgba(0, 0, 0, .18); animation: up .25s ease-out; }
+.install-banner img { border-radius: 10px; flex: none; }
+.install-banner p { margin: 0; font-size: .85rem; color: var(--muted); }
+.install-x { border: 0; background: none; color: var(--muted); font-size: 1rem; padding: 6px; }
+.account .install-banner, .r-card .install-banner { box-shadow: none; margin-top: 10px; width: 100%; animation: none; }
+.push-box { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; background: var(--brand-soft); border-radius: 12px; padding: 10px 12px; font-size: .9rem; margin: 6px 0; }
+.push-box.on { background: var(--brand-soft); }
+.push-on { font-size: .85rem; color: var(--brand-2); font-weight: 600; }
+.track-push { margin: 4px 0 0; }
+.m-push { align-self: center; margin-left: auto; }
+.m-nav .m-push + .m-sound { margin-left: 8px; }
+.offline-bar { position: sticky; top: 0; z-index: 80; background: #744210; color: #fefcbf; text-align: center; font-size: .85rem; font-weight: 600; padding: 6px 12px; }

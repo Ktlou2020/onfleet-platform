@@ -4,6 +4,7 @@ import { BRAND, Empty, Spinner, api, getToken, rand, useAuth, useMeta, useToast 
 import { VerifyAge } from './Checkout.jsx';
 import { MapTiles, pin } from './Address.jsx';
 import '../rider.css';
+import { InstallBanner, PushButton } from '../pwa.jsx';
 
 // ---- Helpers ----------------------------------------------------------------
 
@@ -449,6 +450,7 @@ function Drive({ drive, me, setMe, demo }) {
                   <h2>You're offline</h2>
                   <p className="r-muted">Go online to start getting trips. {spots.filter((s) => s.level !== 'low').length ? `${spots.filter((s) => s.level !== 'low').length} busy area${spots.filter((s) => s.level !== 'low').length > 1 ? 's' : ''} near you right now.` : ''}</p>
                   <TodayStrip today={data.today} />
+                  <PushButton why="get trip offers with your screen off" className="r-push" />
                 </div>
               ) : (
                 <div className="r-waiting">
@@ -459,6 +461,7 @@ function Drive({ drive, me, setMe, demo }) {
                     </div>
                   </div>
                   <TodayStrip today={data.today} />
+                  <PushButton why="get trip offers with your screen off" className="r-push" />
                   {data.board.length > 0 && (
                     <div className="r-board">
                       <button className="r-board-toggle" onClick={() => setBoardOpen((x) => !x)}>
@@ -594,6 +597,12 @@ function Account({ rider, onSaved }) {
         <label className="r-field"><span>Mobile number (customers see it only during a delivery)</span><input value={f.phone} inputMode="tel" onChange={(e) => setF({ ...f, phone: e.target.value })} /></label>
         <button className="r-btn primary full">Save</button>
       </form>
+      <div className="r-card">
+        <h3>App & alerts</h3>
+        <InstallBanner audience="rider" />
+        <PushButton why="trip offers" className="r-push" />
+        <p className="r-muted small">Tip: keep ClickNPuff open on a phone mount while you ride — your location only updates while the app is on screen.</p>
+      </div>
       <div className="r-card">
         <h3>Riding safely</h3>
         <ul className="r-tips-list">

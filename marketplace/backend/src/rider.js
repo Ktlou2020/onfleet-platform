@@ -219,6 +219,7 @@ function registerRiderRoutes(app, { db, auth, requireAdult, audit, refund }) {
       db.prepare("UPDATE orders SET arrived_customer_at = datetime('now') WHERE id = ?").run(o.id);
       orders.logEvent(db, o.id, 'rider_arrived', null);
       orders.bus.emit('order', o.id);
+      orders.bus.emit('status', o.id, 'rider_arrived');
     }
     res.json(jobsPayload(req.user.id));
   });

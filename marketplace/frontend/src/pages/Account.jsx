@@ -4,6 +4,7 @@ import { Spinner, api, useAuth, useLoc, useToast } from '../lib.jsx';
 import { VerifyAge } from './Checkout.jsx';
 import { AddressSheet } from './Address.jsx';
 import { StoreCard } from './Home.jsx';
+import { InstallBanner, PushButton } from '../pwa.jsx';
 
 // The customer's own page: who they are, where they get deliveries,
 // favourite stores, and account security.
@@ -115,6 +116,13 @@ export default function Account() {
         <label className="field"><span>Repeat new password</span><input type="password" value={pw.confirm} onChange={(e) => setPw({ ...pw, confirm: e.target.value })} required autoComplete="new-password" /></label>
         <button className="btn">Change password</button>
       </form>
+
+      <section className="card">
+        <h3>Notifications</h3>
+        <p className="muted small">We'll tell you when the store accepts, when your rider is on the way and outside, and when your order arrives.</p>
+        <PushButton why="order updates" />
+        <InstallBanner />
+      </section>
 
       <section className="card">
         <h3>Help & safety</h3>

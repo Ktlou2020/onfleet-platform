@@ -14,8 +14,19 @@ const app = createApp(db);
 // process (and one URL) runs the whole thing in production.
 const web = process.env.WEB_DIST || path.join(__dirname, '..', '..', 'frontend', 'dist');
 if (fs.existsSync(path.join(web, 'index.html'))) {
-  app.use(express.static(web, { index: false, maxAge: '1h' }));
-  app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(path.join(web, 'index.html')));
+  // The service worker, manifest and page must always be checked for
+  // updates, or phones would keep running an old version of the app.
+  const fresh = (p) => /(?:sw\.js|manifest\.webmanifest|index\.html)$/.test(p);
+  app.use(express.static(web, {
+    index: false,
+    maxAge: '1h',
+    setHeaders: (res, p) => {
+      if (fresh(p)) res.setHeader('Cache-Control', 'no-cache');
+      if (/\/assets\//.test(p)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      if (p.endsWith('sw.js')) res.setHeader('Service-Worker-Allowed', '/');
+    },
+  }));
+  app.get(/^\/(?!api\/).*/, (req, res) => { res.setHeader('Cache-Control', 'no-cache'); res.sendFile(path.join(web, 'index.html')); });
 }
 const port = Number(process.env.PORT || 4100);
 

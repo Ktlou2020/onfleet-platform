@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 export const BRAND = {
   name: 'ClickNPuff',
   tagline: 'Delivered to your door in minutes',
-  support: 'help@clicknpuff.africa',
+  support: 'help@clicknpuff.co.za',
 };
 
 // ---- API ------------------------------------------------------------------

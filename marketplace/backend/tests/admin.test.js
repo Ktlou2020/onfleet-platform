@@ -9,10 +9,10 @@ const DROP = { lat: -26.1400, lng: 28.0450, address: '5 Tyrwhitt Ave, Rosebank' 
 
 async function world() {
   const t = await setup();
-  const admin = t.api(await t.login('admin@cloud9.africa'));
-  const customer = t.api(await t.login('customer@cloud9.africa'));
-  const merchant = t.api(await t.login('merchant1@cloud9.africa'));
-  const rider = t.api(await t.login('rider1@cloud9.africa'));
+  const admin = t.api(await t.login('admin@clicknpuff.africa'));
+  const customer = t.api(await t.login('customer@clicknpuff.africa'));
+  const merchant = t.api(await t.login('merchant1@clicknpuff.africa'));
+  const rider = t.api(await t.login('rider1@clicknpuff.africa'));
   const store = (await request(t.app).get('/api/stores/rosebank-botanicals')).body;
   const order = async (status = 'accepted') => {
     const p = store.products.find((x) => x.stock >= 10);
@@ -33,31 +33,31 @@ describe('admin profile and team', () => {
     expect((await w.admin.post('/api/me/password', { currentPassword: 'wrong', newPassword: 'a-much-longer-one' })).status).toBe(400);
     expect((await w.admin.post('/api/me/password', { currentPassword: 'password123', newPassword: 'short' })).status).toBe(400);
     expect((await w.admin.post('/api/me/password', { currentPassword: 'password123', newPassword: 'a-much-longer-one' })).status).toBe(200);
-    expect((await request(w.app).post('/api/auth/login').send({ email: 'admin@cloud9.africa', password: 'a-much-longer-one' })).status).toBe(200);
+    expect((await request(w.app).post('/api/auth/login').send({ email: 'admin@clicknpuff.africa', password: 'a-much-longer-one' })).status).toBe(200);
     const mine = (await w.admin.get('/api/admin/audit?mine=1')).body.entries.map((e) => e.action);
     expect(mine).toEqual(expect.arrayContaining(['password_changed', 'profile_updated']));
   });
 
   it('remembers the previous sign-in', async () => {
     const w = await world();
-    const again = (await request(w.app).post('/api/auth/login').send({ email: 'admin@cloud9.africa', password: 'password123' })).body.user;
+    const again = (await request(w.app).post('/api/auth/login').send({ email: 'admin@clicknpuff.africa', password: 'password123' })).body.user;
     expect(again.lastLoginAt).toBeTruthy(); // the sign-in from world()
   });
 
   it('adds an admin with a one-time password they must change', async () => {
     const w = await world();
-    const added = (await w.admin.post('/api/admin/team', { name: 'Thandi Support', email: 'thandi@cloud9.africa' })).body;
+    const added = (await w.admin.post('/api/admin/team', { name: 'Thandi Support', email: 'thandi@clicknpuff.africa' })).body;
     expect(added.temporaryPassword).toHaveLength(12);
-    const login = (await request(w.app).post('/api/auth/login').send({ email: 'thandi@cloud9.africa', password: added.temporaryPassword })).body;
+    const login = (await request(w.app).post('/api/auth/login').send({ email: 'thandi@clicknpuff.africa', password: added.temporaryPassword })).body;
     expect(login.user).toMatchObject({ role: 'admin', mustChangePassword: true });
-    expect((await w.admin.post('/api/admin/team', { name: 'Dup', email: 'thandi@cloud9.africa' })).status).toBe(409);
+    expect((await w.admin.post('/api/admin/team', { name: 'Dup', email: 'thandi@clicknpuff.africa' })).status).toBe(409);
 
     const team = (await w.admin.get('/api/admin/team')).body.team;
-    expect(team.find((m) => m.you)).toMatchObject({ email: 'admin@cloud9.africa', active: true });
+    expect(team.find((m) => m.you)).toMatchObject({ email: 'admin@clicknpuff.africa', active: true });
     const me = team.find((m) => m.you);
     expect((await w.admin.post(`/api/admin/team/${me.id}/access`, { active: false })).status).toBe(400);
     expect((await w.admin.post(`/api/admin/team/${added.id}/access`, { active: false })).status).toBe(200);
-    expect((await request(w.app).post('/api/auth/login').send({ email: 'thandi@cloud9.africa', password: added.temporaryPassword })).status).toBe(403);
+    expect((await request(w.app).post('/api/auth/login').send({ email: 'thandi@clicknpuff.africa', password: added.temporaryPassword })).status).toBe(403);
   });
 
   it('keeps the admin area to admins', async () => {
@@ -117,7 +117,7 @@ describe('control room', () => {
     expect((await w.admin.get('/api/admin/orders?q=Naledi')).body.orders.length).toBeGreaterThan(0);
     const detail = (await w.admin.get(`/api/admin/orders/${o.id}`)).body;
     expect(detail.offers).toEqual([expect.objectContaining({ outcome: 'declined', name: 'Johannesburg Rider' })]);
-    expect(detail.customer.email).toBe('customer@cloud9.africa');
+    expect(detail.customer.email).toBe('customer@clicknpuff.africa');
   });
 
   it('takes an uncollected order off a rider and offers it to someone else', async () => {
@@ -135,15 +135,15 @@ describe('control room', () => {
   it('lists and suspends customers, and takes a suspended rider offline', async () => {
     const w = await world();
     const list = (await w.admin.get('/api/admin/customers?q=naledi')).body.customers;
-    expect(list[0]).toMatchObject({ email: 'customer@cloud9.africa', suspended: false });
+    expect(list[0]).toMatchObject({ email: 'customer@clicknpuff.africa', suspended: false });
     await w.admin.post(`/api/admin/users/${list[0].id}/suspend`, { suspended: true });
     expect((await w.customer.get('/api/me')).status).toBe(401);
 
     await w.rider.post('/api/rider/status', { online: true, lat: -26.146, lng: 28.043 });
-    const riderId = w.db.prepare("SELECT id FROM users WHERE email = 'rider1@cloud9.africa'").get().id;
+    const riderId = w.db.prepare("SELECT id FROM users WHERE email = 'rider1@clicknpuff.africa'").get().id;
     await w.admin.post(`/api/admin/users/${riderId}/suspend`, { suspended: true });
     expect(w.db.prepare('SELECT online FROM riders WHERE user_id = ?').get(riderId).online).toBe(0);
-    const adminId = w.db.prepare("SELECT id FROM users WHERE email = 'admin@cloud9.africa'").get().id;
+    const adminId = w.db.prepare("SELECT id FROM users WHERE email = 'admin@clicknpuff.africa'").get().id;
     expect((await w.admin.post(`/api/admin/users/${adminId}/suspend`, { suspended: true })).status).toBe(400);
   });
 });

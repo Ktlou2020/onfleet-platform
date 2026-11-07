@@ -9,10 +9,10 @@ const DROP = { lat: -26.1400, lng: 28.0450, address: '5 Tyrwhitt Ave, Rosebank' 
 
 async function world() {
   const t = await setup();
-  const token = await t.login('customer@cloud9.africa');
+  const token = await t.login('customer@clicknpuff.africa');
   const customer = t.api(token);
-  const admin = t.api(await t.login('admin@cloud9.africa'));
-  const merchant = t.api(await t.login('merchant1@cloud9.africa'));
+  const admin = t.api(await t.login('admin@clicknpuff.africa'));
+  const merchant = t.api(await t.login('merchant1@clicknpuff.africa'));
   const store = (await request(t.app).get('/api/stores/rosebank-botanicals')).body;
   const p = store.products.find((x) => x.stock >= 10 && x.priceCents >= 20000) || store.products.find((x) => x.stock >= 10);
   const basket = (rand) => ({ storeId: store.store.id, items: [{ productId: p.id, qty: Math.ceil(rand / p.priceCents) }], ...DROP });
@@ -74,7 +74,7 @@ describe('promo codes', () => {
   it('takes funded discounts out of net revenue', async () => {
     const w = await world();
     const o = await w.place({ ...w.basket(40000), promoCode: 'WELCOME20' });
-    const rider = w.api(await w.login('rider1@cloud9.africa'));
+    const rider = w.api(await w.login('rider1@clicknpuff.africa'));
     await rider.post('/api/rider/status', { online: true, lat: -26.146, lng: 28.043 });
     await w.merchant.post(`/api/merchant/orders/${o.id}/status`, { status: 'accepted', prepMinutes: 10 });
     await rider.post(`/api/rider/offers/${o.id}/accept`);
@@ -138,7 +138,7 @@ describe('help with an order', () => {
     expect((await w.admin.get('/api/admin/dashboard')).body.actions.map((a) => a.type)).toContain('help');
 
     const list = (await w.admin.get('/api/admin/help')).body.requests;
-    expect(list[0]).toMatchObject({ orderCode: o.code, customer: { email: 'customer@cloud9.africa' } });
+    expect(list[0]).toMatchObject({ orderCode: o.code, customer: { email: 'customer@clicknpuff.africa' } });
     expect((await w.admin.post(`/api/admin/help/${r.id}/resolve`, {})).status).toBe(400);
     await w.admin.post(`/api/admin/help/${r.id}/resolve`, { resolution: 'Refunded R35 for the papers' });
     expect((await w.customer.get(`/api/orders/${o.id}/help`)).body.requests[0]).toMatchObject({ status: 'resolved', resolution: 'Refunded R35 for the papers' });

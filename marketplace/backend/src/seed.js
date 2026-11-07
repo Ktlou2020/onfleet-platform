@@ -72,14 +72,14 @@ async function seed(db = open()) {
       INSERT INTO users (email, password_hash, name, phone, role, id_number, dob, age_verified) VALUES (?, ?, ?, ?, ?, ?, ?, 1)
     `).run(email, hash, name, extra.phone || '0821234567', role, extra.id || null, '1990-01-01').lastInsertRowid;
 
-    user('admin@cloud9.africa', 'Platform Admin', 'admin');
-    user('customer@cloud9.africa', 'Naledi Dlamini', 'customer');
+    user('admin@clicknpuff.africa', 'Platform Admin', 'admin');
+    user('customer@clicknpuff.africa', 'Naledi Dlamini', 'customer');
 
     const cityId = (slug) => db.prepare('SELECT id FROM cities WHERE slug = ?').get(slug).id;
     const catId = (slug) => db.prepare('SELECT id FROM categories WHERE slug = ?').get(slug).id;
 
     STORES.forEach(([city, name, description, address, lat, lng, accent], i) => {
-      const owner = user(`merchant${i + 1}@cloud9.africa`, `${name} Owner`, 'merchant');
+      const owner = user(`merchant${i + 1}@clicknpuff.africa`, `${name} Owner`, 'merchant');
       const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-$/, '');
       const storeId = db.prepare(`
         INSERT INTO stores (owner_id, slug, name, description, city_id, address, lat, lng, status, accent, prep_minutes, licence_number, rating_sum, rating_count)
@@ -93,7 +93,7 @@ async function seed(db = open()) {
     });
 
     CITIES.forEach(([city, name, lat, lng], i) => {
-      const id = user(`rider${i + 1}@cloud9.africa`, `${name} Rider`, 'rider');
+      const id = user(`rider${i + 1}@clicknpuff.africa`, `${name} Rider`, 'rider');
       db.prepare('INSERT INTO riders (user_id, vehicle, plate, online, lat, lng) VALUES (?, ?, ?, 0, ?, ?)').run(id, 'motorbike', `DEMO ${100 + i} GP`, lat, lng);
     });
     return true;

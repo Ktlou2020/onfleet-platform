@@ -12,9 +12,9 @@ const DROP = { lat: -26.1400, lng: 28.0450, address: '5 Tyrwhitt Ave, Rosebank' 
 
 async function world() {
   const t = await setup();
-  const customer = t.api(await t.login('customer@cloud9.africa'));
-  const merchant = t.api(await t.login('merchant1@cloud9.africa'));
-  const admin = t.api(await t.login('admin@cloud9.africa'));
+  const customer = t.api(await t.login('customer@clicknpuff.africa'));
+  const merchant = t.api(await t.login('merchant1@clicknpuff.africa'));
+  const admin = t.api(await t.login('admin@clicknpuff.africa'));
   const store = (await request(t.app).get('/api/stores/rosebank-botanicals')).body;
   const place = async () => {
     const p = store.products.find((x) => x.stock >= 10);
@@ -110,7 +110,7 @@ describe('the order board', () => {
 
 describe('insights, payouts and reviews', () => {
   async function deliver(w) {
-    const rider = w.api(await w.login('rider1@cloud9.africa'));
+    const rider = w.api(await w.login('rider1@clicknpuff.africa'));
     await rider.post('/api/rider/status', { online: true, lat: -26.146, lng: 28.043 });
     const o = await w.place();
     await w.merchant.post(`/api/merchant/orders/${o.id}/status`, { status: 'accepted', prepMinutes: 10 });
@@ -148,13 +148,13 @@ describe('insights, payouts and reviews', () => {
     const pub = (await request(w.app).get('/api/stores/rosebank-botanicals')).body.reviews;
     expect(pub[0]).toMatchObject({ comment: 'Quick, thanks', reply: 'Thank you, see you soon!' });
     // Another store can't reply to it.
-    const other = w.api(await w.login('merchant2@cloud9.africa'));
+    const other = w.api(await w.login('merchant2@clicknpuff.africa'));
     expect((await other.post(`/api/merchant/reviews/${r.reviews[0].id}/reply`, { reply: 'hi' })).status).toBe(404);
   });
 
   it('still lists stores for admin', async () => {
     const w = await world();
     const stores = (await w.admin.get('/api/admin/stores')).body.stores;
-    expect(stores.find((s) => s.name === 'Rosebank Botanicals')).toMatchObject({ status: 'approved', owner: { email: 'merchant1@cloud9.africa' } });
+    expect(stores.find((s) => s.name === 'Rosebank Botanicals')).toMatchObject({ status: 'approved', owner: { email: 'merchant1@clicknpuff.africa' } });
   });
 });

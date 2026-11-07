@@ -1,4 +1,4 @@
-# Cloud 9 — on-demand delivery marketplace
+# ClickNPuff — on-demand delivery marketplace
 
 A multi-store, one-hour delivery marketplace for South Africa's four biggest metros (Johannesburg, Cape Town, Durban, Pretoria). Customers order from nearby local stores, riders are dispatched automatically, and the order is tracked live from store to door.
 
@@ -43,10 +43,10 @@ Open http://localhost:5174. On the sign-in page (dev mode) there are one-tap dem
 
 | Role | Email |
 |---|---|
-| Customer | `customer@cloud9.africa` |
-| Store (Rosebank Botanicals) | `merchant1@cloud9.africa` … `merchant8@` |
-| Rider (Jo'burg, CPT, DBN, PTA) | `rider1@cloud9.africa` … `rider4@` |
-| Admin | `admin@cloud9.africa` |
+| Customer | `customer@clicknpuff.africa` |
+| Store (Rosebank Botanicals) | `merchant1@clicknpuff.africa` … `merchant8@` |
+| Rider (Jo'burg, CPT, DBN, PTA) | `rider1@clicknpuff.africa` … `rider4@` |
+| Admin | `admin@clicknpuff.africa` |
 
 To try the whole loop, use three browser windows: the customer orders, the store accepts and marks the order ready, and the rider goes online, collects and delivers. In dev the rider screen has a **Simulate move** button, so you can watch the rider pin move on the customer's map.
 
@@ -65,7 +65,7 @@ R18 per trip + R5 per km (to the store and on to the customer), at least R25. Cu
 | Variable | Default | |
 |---|---|---|
 | `PORT` | `4100` | API port |
-| `CLOUD9_DB` | `backend/cloud9.db` | SQLite file |
+| `CLICKNPUFF_DB` | `backend/clicknpuff.db` | SQLite file (`CLOUD9_DB`, the old name, still works) |
 | `JWT_SECRET` | dev value | **Required** in production |
 | `PAYMENT_PROVIDER` | `mock` | `paystack` for live payments |
 | `PAYSTACK_SECRET_KEY` | | Paystack secret key |

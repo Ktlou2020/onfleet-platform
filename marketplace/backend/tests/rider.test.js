@@ -13,10 +13,10 @@ const NEAR_STORE = { lat: -26.146, lng: 28.043 };
 
 async function world() {
   const t = await setup();
-  const customer = t.api(await t.login('customer@cloud9.africa'));
-  const merchant = t.api(await t.login('merchant1@cloud9.africa'));
-  const rider = t.api(await t.login('rider1@cloud9.africa'));
-  const admin = t.api(await t.login('admin@cloud9.africa'));
+  const customer = t.api(await t.login('customer@clicknpuff.africa'));
+  const merchant = t.api(await t.login('merchant1@clicknpuff.africa'));
+  const rider = t.api(await t.login('rider1@clicknpuff.africa'));
+  const admin = t.api(await t.login('admin@clicknpuff.africa'));
   // A second Jo'burg rider, a little further from the store.
   const reg = await request(t.app).post('/api/auth/register').send({ email: 'rider-b@x.co.za', password: 'longenough', name: 'Second Rider', role: 'rider' });
   t.db.prepare("UPDATE users SET age_verified = 1, dob = '1990-01-01' WHERE email = 'rider-b@x.co.za'").run();

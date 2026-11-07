@@ -38,9 +38,9 @@ describe('scheduled orders', () => {
 
   async function scheduledOrder() {
     const t = await setup();
-    const customer = t.api(await t.login('customer@cloud9.africa'));
-    const merchant = t.api(await t.login('merchant1@cloud9.africa'));
-    const rider = t.api(await t.login('rider1@cloud9.africa'));
+    const customer = t.api(await t.login('customer@clicknpuff.africa'));
+    const merchant = t.api(await t.login('merchant1@clicknpuff.africa'));
+    const rider = t.api(await t.login('rider1@clicknpuff.africa'));
     const store = (await request(t.app).get('/api/stores/rosebank-botanicals')).body;
     const p = store.products.find((x) => x.stock >= 10);
     const created = await customer.post('/api/orders', { storeId: store.store.id, items: [{ productId: p.id, qty: Math.ceil(10000 / p.priceCents) }], ...DROP });
@@ -77,8 +77,8 @@ describe('scheduled orders', () => {
 
   it('still refuses a paused store', async () => {
     const t = await setup();
-    const customer = t.api(await t.login('customer@cloud9.africa'));
-    const merchant = t.api(await t.login('merchant1@cloud9.africa'));
+    const customer = t.api(await t.login('customer@clicknpuff.africa'));
+    const merchant = t.api(await t.login('merchant1@clicknpuff.africa'));
     await merchant.patch('/api/merchant/store', { pauseMinutes: 60 });
     const store = (await request(t.app).get('/api/stores/rosebank-botanicals')).body;
     const res = await customer.post('/api/orders', { storeId: store.store.id, items: [{ productId: store.products[0].id, qty: 5 }], ...DROP });

@@ -12,7 +12,7 @@
 //   maptiler — MapTiler Geocoding, needs MAPTILER_KEY.
 
 const SA_BBOX = { minLng: 16.3, minLat: -35.0, maxLng: 33.0, maxLat: -22.0 };
-const UA = process.env.GEOCODER_USER_AGENT || 'Cloud9Delivery/0.1 (+help@cloud9.africa)';
+const UA = process.env.GEOCODER_USER_AGENT || 'ClickNPuffDelivery/0.1 (+help@clicknpuff.africa)';
 const CACHE_MAX = 1000;
 const CACHE_MS = 60 * 60 * 1000;
 

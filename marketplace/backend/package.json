@@ -1,8 +1,8 @@
 {
-  "name": "cloud9-backend",
+  "name": "clicknpuff-backend",
   "version": "0.1.0",
   "private": true,
-  "description": "Cloud 9 — on-demand delivery marketplace API",
+  "description": "ClickNPuff — on-demand delivery marketplace API",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",

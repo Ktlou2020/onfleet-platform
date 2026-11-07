@@ -2,9 +2,11 @@
 const path = require('path');
 const Database = require('better-sqlite3');
 
-// One connection per process. Tests pass ':memory:' through CLOUD9_DB so
+// One connection per process. Tests pass ':memory:' through CLICKNPUFF_DB so
 // each test file gets a clean database.
-function open(file = process.env.CLOUD9_DB || path.join(__dirname, '..', 'cloud9.db')) {
+// CLOUD9_DB is the setting's name from before the rename; still honoured so
+// a running deployment keeps its database.
+function open(file = process.env.CLICKNPUFF_DB || process.env.CLOUD9_DB || path.join(__dirname, '..', 'clicknpuff.db')) {
   const db = new Database(file);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
@@ -291,6 +293,11 @@ function migrate(db) {
   addColumn('reviews', 'store_reply', 'TEXT');
   addColumn('reviews', 'replied_at', 'TEXT');
   db.exec('CREATE INDEX IF NOT EXISTS orders_offer ON orders(offered_rider_id)');
+  // The platform was called Cloud 9: move accounts on its placeholder demo
+  // domain to the new one (skipping any address already taken).
+  db.exec(`UPDATE users SET email = replace(email, '@cloud9.africa', '@clicknpuff.africa')
+    WHERE email LIKE '%@cloud9.africa'
+      AND NOT EXISTS (SELECT 1 FROM users u2 WHERE u2.email = replace(users.email, '@cloud9.africa', '@clicknpuff.africa'))`);
 }
 
 module.exports = { open };

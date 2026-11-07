@@ -39,4 +39,4 @@ setInterval(() => {
   }
 }, 5 * 1000).unref();
 
-app.listen(port, () => console.log(`Cloud 9 API on http://localhost:${port}`));
+app.listen(port, () => console.log(`ClickNPuff API on http://localhost:${port}`));

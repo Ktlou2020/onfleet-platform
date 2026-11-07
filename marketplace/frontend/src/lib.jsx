@@ -2,13 +2,23 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 
 // ---- Brand: change the name here and it changes everywhere ---------------
 export const BRAND = {
-  name: 'Cloud 9',
+  name: 'ClickNPuff',
   tagline: 'Delivered to your door in minutes',
-  support: 'help@cloud9.africa',
+  support: 'help@clicknpuff.africa',
 };
 
 // ---- API ------------------------------------------------------------------
-const TOKEN_KEY = 'cloud9.token';
+// Carry browser storage over from the platform's old name (Cloud 9), so
+// nobody is signed out or loses their basket by the rename.
+try {
+  for (const k of ['token', 'location', 'cart', 'adult']) {
+    const old = localStorage.getItem(`cloud9.${k}`);
+    if (old !== null && localStorage.getItem(`clicknpuff.${k}`) === null) localStorage.setItem(`clicknpuff.${k}`, old);
+    if (old !== null) localStorage.removeItem(`cloud9.${k}`);
+  }
+} catch { /* storage unavailable */ }
+
+const TOKEN_KEY = 'clicknpuff.token';
 const safe = (fn, fallback = null) => { try { return fn(); } catch { return fallback; } };
 export const getToken = () => safe(() => localStorage.getItem(TOKEN_KEY));
 
@@ -75,7 +85,7 @@ export function AuthProvider({ children }) {
 export const useAuth = () => useContext(AuthCtx);
 
 // ---- Location: where the customer wants things delivered ----------------
-const LOC_KEY = 'cloud9.location';
+const LOC_KEY = 'clicknpuff.location';
 const LocCtx = createContext(null);
 
 export function LocationProvider({ children }) {
@@ -89,7 +99,7 @@ export function LocationProvider({ children }) {
 export const useLoc = () => useContext(LocCtx);
 
 // ---- Basket: one store at a time, like every serious delivery app -------
-const CART_KEY = 'cloud9.cart';
+const CART_KEY = 'clicknpuff.cart';
 const CartCtx = createContext(null);
 
 export function CartProvider({ children }) {

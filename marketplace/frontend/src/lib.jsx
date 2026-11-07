@@ -23,11 +23,20 @@ const USER_KEY = 'clicknpuff.user';
 const safe = (fn, fallback = null) => { try { return fn(); } catch { return fallback; } };
 export const getToken = () => safe(() => localStorage.getItem(TOKEN_KEY));
 
-export async function api(path, { method = 'GET', body } = {}) {
+// Which of their stores a store owner or staff member is working in.
+const STORE_KEY = 'clicknpuff.store';
+export function getStoreId() { try { return localStorage.getItem(STORE_KEY) || ''; } catch { return ''; } }
+export function setStoreId(id) { try { if (id) localStorage.setItem(STORE_KEY, String(id)); else localStorage.removeItem(STORE_KEY); } catch { /* private mode */ } }
+const authHeaders = () => {
   const token = getToken();
+  const store = getStoreId();
+  return { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(store ? { 'X-Store-Id': store } : {}) };
+};
+
+export async function api(path, { method = 'GET', body } = {}) {
   const res = await fetch(`/api${path}`, {
     method,
-    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
@@ -74,7 +83,7 @@ export function AuthProvider({ children }) {
       .then((d) => { setUser(d.user); safe(() => localStorage.setItem(USER_KEY, JSON.stringify(d.user))); })
       .catch((e) => {
         if (e.status === 401 || e.status === 403) {
-          safe(() => { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY); });
+          safe(() => { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY); localStorage.removeItem(STORE_KEY); });
         } else {
           const last = safe(() => JSON.parse(localStorage.getItem(USER_KEY)));
           if (last) setUser(last);
@@ -88,7 +97,7 @@ export function AuthProvider({ children }) {
     setUser(u);
   }, []);
   const signOut = useCallback(() => {
-    safe(() => { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY); });
+    safe(() => { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY); localStorage.removeItem(STORE_KEY); });
     setUser(null);
   }, []);
 
@@ -274,8 +283,8 @@ export function deliveryTimeLabel(iso) {
 
 // Download a file the server makes for the signed-in person (CSV exports).
 export async function download(path, filename) {
-  const res = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${getToken()}` } });
-  if (!res.ok) throw new Error('Download failed');
+  const res = await fetch(`/api${path}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Download failed');
   const url = URL.createObjectURL(await res.blob());
   const a = Object.assign(document.createElement('a'), { href: url, download: filename });
   document.body.appendChild(a);

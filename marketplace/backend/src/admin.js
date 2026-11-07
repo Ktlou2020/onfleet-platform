@@ -68,6 +68,12 @@ function registerAdminRoutes(app, { db, auth, audit }) {
     if (pending) add('info', 'stores', `${pending} store${pending > 1 ? 's' : ''} waiting for approval`, 'Review in Stores', { section: 'stores' });
     const licences = one('SELECT COUNT(*) AS n FROM stores WHERE licence_number IS NOT NULL AND licence_verified = 0').n;
     if (licences) add('info', 'licences', `${licences} licence${licences > 1 ? 's' : ''} to verify`, 'Review in Stores', { section: 'stores' });
+    for (const s of db.prepare(`SELECT id, name, licence_expires_on FROM stores WHERE status = 'approved' AND licence_expires_on IS NOT NULL
+      AND licence_expires_on <= date('now', '+2 hours', '+30 days') ORDER BY licence_expires_on`).all()) {
+      const expired = s.licence_expires_on < one("SELECT date('now', '+2 hours') AS d").d;
+      add(expired ? 'serious' : 'info', 'licence_expiry', expired ? `${s.name}'s licence has expired` : `${s.name}'s licence expires ${s.licence_expires_on}`,
+        expired ? 'Regulated products are hidden until a renewed licence is verified' : 'They have been reminded — check the renewal when it comes in', { section: 'stores' });
+    }
     const rank = { critical: 0, serious: 1, warning: 2, info: 3 };
     return items.sort((a, b) => rank[a.severity] - rank[b.severity]);
   }

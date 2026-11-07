@@ -22,6 +22,8 @@ const { productAvailability } = require('./storeHours');
 const { registerCustomerRoutes } = require('./customer');
 const { registerPush } = require('./push');
 const { registerMoneyRoutes } = require('./money');
+const team = require('./team');
+const { registerStaffRoutes, LOW_RATING, licenceStatus } = require('./staff');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-secret-change-me';
 if (process.env.NODE_ENV === 'production' && JWT_SECRET === 'dev-only-secret-change-me') {
@@ -462,7 +464,7 @@ function createApp(db, { pushSend } = {}) {
     if (user.role === 'admin') return 'admin';
     if (user.role === 'customer' && order.customer_id === user.id) return 'customer';
     if (user.role === 'rider' && order.rider_id === user.id) return 'rider';
-    if (user.role === 'merchant' && db.prepare('SELECT 1 FROM stores WHERE id = ? AND owner_id = ?').get(order.store_id, user.id)) return 'merchant';
+    if (user.role === 'merchant' && team.isMember(db, order.store_id, user.id)) return 'merchant';
     return null;
   }
 
@@ -524,6 +526,7 @@ function createApp(db, { pushSend } = {}) {
       if (String(e.message).includes('UNIQUE')) return res.status(409).json({ error: 'You have already reviewed this order' });
       throw e;
     }
+    if (rating <= LOW_RATING) orders.bus.emit('low_rating', order.store_id, rating, String(req.body.comment || '').slice(0, 120), db);
     res.status(201).json({ order: orders.orderView(db, order.id, 'customer') });
   });
 
@@ -533,6 +536,7 @@ function createApp(db, { pushSend } = {}) {
       ...storeSummary({ ...s, city_slug: db.prepare('SELECT slug FROM cities WHERE id = ?').get(s.city_id)?.slug }),
       status: s.status, deliveryRadiusKm: s.delivery_radius_km, licenceNumber: s.licence_number,
       licenceCategories: JSON.parse(s.licence_categories), licenceVerified: !!s.licence_verified,
+      licenceExpiresOn: s.licence_expires_on || null, licence: licenceStatus(s),
     };
   }
 
@@ -544,6 +548,7 @@ function createApp(db, { pushSend } = {}) {
   registerAdminRoutes(app, { db, auth, audit });
   registerCustomerRoutes(app, { db, auth, audit, refund, storeSummary, productView, categoriesById, settings });
   registerMoneyRoutes(app, { db, auth, audit, refund, wrap });
+  registerStaffRoutes(app, { db, auth, audit });
   registerPush(app, { db, auth, ...(pushSend ? { send: pushSend } : {}) });
 
   // ---- Admin -------------------------------------------------------------
@@ -586,8 +591,14 @@ function createApp(db, { pushSend } = {}) {
     }
     const verified = b.licenceVerified === undefined ? s.licence_verified : b.licenceVerified ? 1 : 0;
     if (verified && !s.licence_number) return res.status(400).json({ error: 'The store has not given a licence number' });
-    db.prepare('UPDATE stores SET status = COALESCE(?, status), licence_categories = ?, licence_verified = ? WHERE id = ?')
-      .run(b.status || null, licenceCats, verified, s.id);
+    let expires = s.licence_expires_on;
+    if (b.licenceExpiresOn !== undefined) {
+      if (b.licenceExpiresOn && !/^\d{4}-\d{2}-\d{2}$/.test(b.licenceExpiresOn)) return res.status(400).json({ error: 'Enter the expiry as a date' });
+      expires = b.licenceExpiresOn || null;
+    }
+    db.prepare(`UPDATE stores SET status = COALESCE(?, status), licence_categories = ?, licence_verified = ?, licence_expires_on = ?,
+      licence_reminded = CASE WHEN ? THEN NULL ELSE licence_reminded END WHERE id = ?`)
+      .run(b.status || null, licenceCats, verified, expires, expires !== s.licence_expires_on ? 1 : 0, s.id);
     audit(req.user.id, 'store_updated', { storeId: s.id, ...b });
     res.json({ ok: true });
   });

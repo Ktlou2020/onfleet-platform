@@ -3,6 +3,7 @@ const { open } = require('./db');
 const { createApp } = require('./app');
 const { expireUnpaid, sweep, releaseScheduled } = require('./orders');
 const { merchantSweep } = require('./merchant');
+const { licenceSweep } = require('./staff');
 
 const path = require('path');
 const fs = require('fs');
@@ -51,5 +52,12 @@ setInterval(() => {
     console.error('dispatch sweep failed', e);
   }
 }, 5 * 1000).unref();
+
+// Licence expiry reminders, and hiding regulated products once one lapses
+// (canSell already refuses them; this sends the notices). Once at start-up
+// and hourly after that.
+const licences = () => { try { licenceSweep(db); } catch (e) { console.error('licence sweep failed', e); } };
+setTimeout(licences, 10 * 1000).unref();
+setInterval(licences, 60 * 60 * 1000).unref();
 
 app.listen(port, () => console.log(`ClickNPuff API on http://localhost:${port}`));

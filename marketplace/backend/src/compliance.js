@@ -72,10 +72,20 @@ function getSettings(db) {
 // store's licence has been verified by an admin AND covers that category.
 // Unregulated categories (accessories, papers, grow kit, exempt CBD) are
 // always live.
+// SAST calendar date, YYYY-MM-DD.
+function sastToday(now = new Date()) {
+  return new Date(now.getTime() + 2 * 3600e3).toISOString().slice(0, 10);
+}
+// A licence is good up to and including its expiry date.
+function licenceExpired(store, now = new Date()) {
+  return !!store.licence_expires_on && store.licence_expires_on < sastToday(now);
+}
+
 function canSell({ category, store, settings }) {
   if (!category.regulated) return { ok: true };
   if (!settings.regulatedSalesEnabled) return { ok: false, reason: 'Regulated sales are switched off platform-wide' };
   if (!store.licence_verified) return { ok: false, reason: 'Store licence not yet verified' };
+  if (licenceExpired(store)) return { ok: false, reason: 'Store licence has expired' };
   const covered = JSON.parse(store.licence_categories || '[]');
   if (!covered.includes(category.slug)) return { ok: false, reason: `Licence does not cover ${category.name}` };
   return { ok: true };
@@ -91,4 +101,4 @@ function deliveryWindowOpen(settings, now = new Date()) {
   return h >= settings.deliveryOpenHour && h < settings.deliveryCloseHour;
 }
 
-module.exports = { MIN_AGE, parseSaId, isAdult, getSettings, canSell, deliveryWindowOpen, sastHour };
+module.exports = { MIN_AGE, parseSaId, isAdult, getSettings, canSell, deliveryWindowOpen, sastHour, sastToday, licenceExpired };

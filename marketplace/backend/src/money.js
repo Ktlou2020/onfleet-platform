@@ -2,6 +2,7 @@
 const bcrypt = require('bcryptjs');
 const orders = require('./orders');
 const csv = require('./csv');
+const team = require('./team');
 
 // Money for stores and the platform: bank and tax details, what each store
 // has earned and been paid, statements, refunds after delivery (and who
@@ -38,11 +39,7 @@ function registerMoneyRoutes(app, { db, auth, audit, refund, wrap }) {
   const one = (sql, ...a) => db.prepare(sql).get(...a);
   const setting = (k) => one('SELECT value FROM settings WHERE key = ?', k)?.value || '';
 
-  function requireStore(req) {
-    const s = one('SELECT * FROM stores WHERE owner_id = ?', req.user.id);
-    if (!s) throw new orders.OrderError('Set up your store first', 404);
-    return s;
-  }
+  const requireStore = (req, need = 'owner') => team.storeFor(db, req, need);
 
   function bankView(s, full = false) {
     if (!s.bank_account_number) return null;
@@ -87,6 +84,7 @@ function registerMoneyRoutes(app, { db, auth, audit, refund, wrap }) {
     db.prepare(`UPDATE stores SET bank_name = ?, bank_account_holder = ?, bank_account_number = ?, bank_branch_code = ?, bank_account_type = ?,
       bank_updated_at = datetime('now') WHERE id = ?`).run(bankName, holder.slice(0, 120), number, branch, type, s.id);
     audit(req.user.id, 'bank_details_changed', { storeId: s.id, bank: bankName, account: mask(number), before: mask(s.bank_account_number) });
+    team.log(db, s.id, req.user.id, 'bank_details_changed', `${bankName} ${mask(number)}`);
     res.json({ bank: bankView(one('SELECT * FROM stores WHERE id = ?', s.id)) });
   }));
 
@@ -198,12 +196,12 @@ function registerMoneyRoutes(app, { db, auth, audit, refund, wrap }) {
   }
 
   app.get('/api/merchant/promos', merchant, (req, res) => {
-    const s = requireStore(req);
+    const s = requireStore(req, 'manager');
     res.json({ promos: db.prepare('SELECT * FROM promos WHERE store_id = ? ORDER BY active DESC, created_at DESC').all(s.id).map(promoView) });
   });
 
   app.post('/api/merchant/promos', merchant, (req, res) => {
-    const s = requireStore(req);
+    const s = requireStore(req, 'manager');
     const code = String(req.body?.code || '').trim().toUpperCase();
     if (!/^[A-Z0-9]{4,16}$/.test(code)) return res.status(400).json({ error: 'Codes are 4 to 16 letters or numbers' });
     if (one('SELECT 1 FROM promos WHERE code = ?', code)) return res.status(409).json({ error: 'That code is taken — try another' });
@@ -211,16 +209,18 @@ function registerMoneyRoutes(app, { db, auth, audit, refund, wrap }) {
     db.prepare(`INSERT INTO promos (code, description, kind, value, max_discount_cents, min_subtotal_cents, first_order_only, per_user_limit, public, active, expires_at, store_id, created_at)
       VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, datetime('now'))`).run(code, p.description, p.kind, p.value, p.max, p.min, p.per, p.public, p.active, p.expires, s.id);
     audit(req.user.id, 'store_promo_created', { storeId: s.id, code });
+    team.log(db, s.id, req.user.id, 'promo_created', `${code} · ${p.description}`);
     res.status(201).json({ promo: promoView(one('SELECT * FROM promos WHERE code = ?', code)) });
   });
 
   app.patch('/api/merchant/promos/:code', merchant, (req, res) => {
-    const s = requireStore(req);
+    const s = requireStore(req, 'manager');
     const existing = one('SELECT * FROM promos WHERE code = ? AND store_id = ?', req.params.code, s.id);
     if (!existing) return res.status(404).json({ error: 'Promo not found' });
     const p = promoInput(req.body || {}, existing);
     db.prepare(`UPDATE promos SET description = ?, kind = ?, value = ?, max_discount_cents = ?, min_subtotal_cents = ?, per_user_limit = ?, public = ?, active = ?, expires_at = ?
       WHERE code = ?`).run(p.description, p.kind, p.value, p.max, p.min, p.per, p.public, p.active, p.expires, existing.code);
+    if (req.body?.active !== undefined && !!req.body.active !== !!existing.active) team.log(db, s.id, req.user.id, req.body.active ? 'promo_on' : 'promo_off', existing.code);
     res.json({ promo: promoView(one('SELECT * FROM promos WHERE code = ?', existing.code)) });
   });
 

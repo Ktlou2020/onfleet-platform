@@ -458,7 +458,13 @@ function StoreRow({ s, onChange }) {
         </div>
       </div>
       <div className="licence">
-        <p className="small">Licence: <strong>{s.licenceNumber || 'none given'}</strong> {s.licenceVerified ? '✅ verified' : s.licenceNumber ? '⏳ unverified' : ''}</p>
+        <p className="small">Licence: <strong>{s.licenceNumber || 'none given'}</strong> {s.licenceVerified ? '✅ verified' : s.licenceNumber ? '⏳ unverified' : ''}
+          {s.licence && <> · {s.licence.expired ? <b className="m-bad">expired {s.licence.expiresOn}</b> : s.licence.soon ? <b>expires {s.licence.expiresOn} ({s.licence.daysLeft} d)</b> : <>expires {s.licence.expiresOn}</>}</>}</p>
+        {s.licenceNumber && (
+          <label className="field adm-inline-date"><span>Expiry date (from the licence document)</span>
+            <input type="date" defaultValue={s.licenceExpiresOn || ''} onBlur={(e) => e.target.value !== (s.licenceExpiresOn || '') && update({ licenceExpiresOn: e.target.value || null })} />
+          </label>
+        )}
         {s.licenceNumber && (
           <>
             <div className="chips">

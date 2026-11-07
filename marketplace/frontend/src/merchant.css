@@ -159,3 +159,23 @@
 /* Money */
 .m-range { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
 .m-range .field { margin: 0; }
+
+/* Team, branches, licence, reviews */
+.m-switch { display: flex; gap: 12px; align-items: center; justify-content: flex-end; margin-bottom: 8px; flex-wrap: wrap; }
+.m-switch select { font: inherit; font-weight: 700; padding: 6px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--ink); max-width: 100%; }
+.m-team { list-style: none; padding: 0; margin: 0; }
+.m-team li { display: flex; gap: 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.m-team select { font: inherit; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+.m-roles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0; }
+.m-role { display: flex; flex-direction: column; gap: 2px; border: 1.5px solid var(--line); border-radius: 12px; padding: 10px 12px; cursor: pointer; }
+.m-role.on { border-color: var(--brand); background: var(--brand-soft); }
+.m-role input { position: absolute; opacity: 0; pointer-events: none; }
+.m-activity { list-style: none; padding: 0; margin: 0; max-height: 520px; overflow: auto; font-size: .9rem; }
+.m-activity li { padding: 7px 0; border-bottom: 1px solid var(--line); }
+.m-own-pass { border: 2px solid var(--gold); }
+.m-licence { margin: 8px 0; }
+.m-needs-reply { border: 1.5px solid var(--gold); }
+.m-reply-nudge { margin: 0 0 8px; font-size: .85rem; font-weight: 600; }
+.m-stats-tight { margin: 0 0 8px; }
+.banner code { font-size: 1rem; font-weight: 800; background: var(--card); padding: 2px 6px; border-radius: 6px; user-select: all; }
+@media (max-width: 600px) { .m-roles { grid-template-columns: 1fr; } }

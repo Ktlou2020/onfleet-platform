@@ -142,6 +142,8 @@ export function PushButton({ why, className = '', compact = false }) {
     );
   }
   if (push.permission === 'denied') {
+    const how = `Notifications are blocked for ${BRAND.name}. Turn them on in your browser or phone settings${install.installed ? ' for the app' : ''}.`;
+    if (compact) return <span className={`push-blocked small muted ${className}`} title={how}>🔕 Notifications blocked</span>;
     return <div className={`push-box ${className}`}><span>🔕 Notifications are blocked for {BRAND.name}. Turn them on in your browser or phone settings{install.installed ? ' for the app' : ''}.</span></div>;
   }
   return (

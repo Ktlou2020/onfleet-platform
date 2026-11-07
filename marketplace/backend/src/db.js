@@ -11,6 +11,7 @@ function open(file = process.env.CLICKNPUFF_DB || process.env.CLOUD9_DB || path.
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   migrate(db);
+  require('./team').init(db);
   return db;
 }
 
@@ -308,6 +309,11 @@ function migrate(db) {
   addColumn('orders', 'prep_minutes', 'INTEGER');
   addColumn('reviews', 'store_reply', 'TEXT');
   addColumn('reviews', 'replied_at', 'TEXT');
+  // Licence expiry: reminders go out at 60, 30 and 7 days; regulated
+  // products hide themselves once it has passed.
+  addColumn('stores', 'licence_expires_on', 'TEXT');
+  addColumn('stores', 'licence_reminded', 'TEXT');
+  addColumn('reviews', 'flagged_at', 'TEXT');
   // Money: bank and tax details, who funds discounts and refunds, payouts.
   for (const c of ['bank_name', 'bank_account_holder', 'bank_account_number', 'bank_branch_code', 'bank_account_type', 'bank_updated_at', 'legal_name', 'vat_number', 'company_reg']) addColumn('stores', c, 'TEXT');
   addColumn('promos', 'store_id', 'INTEGER REFERENCES stores(id)');

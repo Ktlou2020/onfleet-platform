@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BRAND, Empty, STATUS, Spinner, api, deliveryTimeLabel, download, rand, useAuth, useMeta, useToast } from '../lib.jsx';
+import { BRAND, Empty, STATUS, Spinner, api, deliveryTimeLabel, download, rand, setStoreId, useAuth, useMeta, useToast } from '../lib.jsx';
 import { resizeToDataUrl } from '../image.js';
 import { VerifyAge } from './Checkout.jsx';
 import { Columns } from '../charts.jsx';
@@ -14,7 +14,10 @@ const clock = (secs) => {
 };
 const when = (s, opts = { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) => (s ? new Date(s.replace(' ', 'T') + 'Z').toLocaleString('en-ZA', opts) : '—');
 const DAYS = [['mon', 'Monday'], ['tue', 'Tuesday'], ['wed', 'Wednesday'], ['thu', 'Thursday'], ['fri', 'Friday'], ['sat', 'Saturday'], ['sun', 'Sunday']];
-const SECTIONS = [['orders', '🧾', 'Orders'], ['menu', '📦', 'Menu'], ['insights', '📈', 'Insights'], ['promos', '🏷️', 'Promotions'], ['payouts', '💳', 'Money'], ['reviews', '⭐', 'Reviews'], ['store', '🏪', 'Store settings']];
+// [key, icon, label, who can see it]
+const SECTIONS = [['orders', '🧾', 'Orders', 'packer'], ['menu', '📦', 'Menu', 'packer'], ['insights', '📈', 'Insights', 'manager'], ['promos', '🏷️', 'Promotions', 'manager'],
+  ['payouts', '💳', 'Money', 'owner'], ['reviews', '⭐', 'Reviews', 'manager'], ['team', '👥', 'Team', 'manager'], ['store', '🏪', 'Store settings', 'manager']];
+const RANK = { packer: 1, manager: 2, owner: 3 };
 
 // A repeating chime while orders are waiting to be accepted, the way a
 // kitchen printer keeps beeping until someone deals with the ticket.
@@ -40,11 +43,11 @@ function ding() {
 
 // ---- Setup (no store yet) ---------------------------------------------------
 
-function Setup({ onCreated }) {
+function Setup({ onCreated, onCancel, branch }) {
   const meta = useMeta();
   const { user } = useAuth();
   const notify = useToast();
-  const [f, setF] = useState({ name: '', city: 'johannesburg', address: '', phone: '', description: '', licenceNumber: '' });
+  const [f, setF] = useState({ name: '', city: 'johannesburg', address: '', phone: '', description: '', licenceNumber: '', licenceExpiresOn: '' });
   const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
   if (!user.ageVerified) return <div className="page narrow"><h1>Open your store</h1><VerifyAge /></div>;
   const submit = async (e) => {
@@ -57,8 +60,9 @@ function Setup({ onCreated }) {
   };
   return (
     <div className="page narrow">
-      <h1>Open your store on {BRAND.name}</h1>
-      <p className="muted">Reach customers across your city. Riders, payments, tracking and ID checks are handled for you — you pack, we deliver.</p>
+      {onCancel && <button className="link" onClick={onCancel}>← Back to my store</button>}
+      <h1>{branch ? 'Add a branch' : `Open your store on ${BRAND.name}`}</h1>
+      <p className="muted">{branch ? 'Each branch has its own menu, orders and team, and is approved separately. You run them all from one login. ' : ''}Reach customers across your city. Riders, payments, tracking and ID checks are handled for you — you pack, we deliver.</p>
       <form className="card" onSubmit={submit}>
         <label className="field"><span>Store name</span><input value={f.name} onChange={set('name')} required /></label>
         <label className="field"><span>City</span>
@@ -67,7 +71,10 @@ function Setup({ onCreated }) {
         <label className="field"><span>Street address (riders collect here)</span><input value={f.address} onChange={set('address')} required /></label>
         <label className="field"><span>Store phone (for riders and support)</span><input value={f.phone} onChange={set('phone')} inputMode="tel" /></label>
         <label className="field"><span>Short description</span><textarea value={f.description} onChange={set('description')} maxLength={400} /></label>
-        <label className="field"><span>Licence or permit number (if you hold one)</span><input value={f.licenceNumber} onChange={set('licenceNumber')} /></label>
+        <div className="grid-2">
+          <label className="field"><span>Licence or permit number (if you hold one)</span><input value={f.licenceNumber} onChange={set('licenceNumber')} /></label>
+          <label className="field"><span>Licence expiry date</span><input type="date" value={f.licenceExpiresOn} onChange={set('licenceExpiresOn')} /></label>
+        </div>
         <button className="btn btn-lg full">Apply</button>
       </form>
     </div>
@@ -465,7 +472,8 @@ function ImportExport({ onClose, onDone }) {
   );
 }
 
-function Menu() {
+function Menu({ role }) {
+  const canEdit = role !== 'packer';
   const [data, setData] = useState(null);
   const [editing, setEditing] = useState(null);
   const [panel, setPanel] = useState(null);
@@ -490,9 +498,11 @@ function Menu() {
       <div className="adm-toolbar">
         <input className="adm-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search your menu" aria-label="Search menu" />
         <div className="actions">
-          <button className="btn btn-ghost" onClick={() => setPanel(panel === 'restock' ? null : 'restock')}>📋 Restock list</button>
-          <button className="btn btn-ghost" onClick={() => setPanel(panel === 'import' ? null : 'import')}>⇅ Import / export</button>
-          <button className="btn" onClick={() => setEditing('new')}>+ Add product</button>
+          {canEdit && <>
+            <button className="btn btn-ghost" onClick={() => setPanel(panel === 'restock' ? null : 'restock')}>📋 Restock list</button>
+            <button className="btn btn-ghost" onClick={() => setPanel(panel === 'import' ? null : 'import')}>⇅ Import / export</button>
+            <button className="btn" onClick={() => setEditing('new')}>+ Add product</button>
+          </>}
         </div>
       </div>
       {panel === 'restock' && <Restock onClose={() => setPanel(null)} />}
@@ -506,12 +516,12 @@ function Menu() {
         <button className={`chip ${filter === 'hidden' ? 'on' : ''}`} onClick={() => setFilter('hidden')}>Hidden</button>
         {cats.map((c) => <button key={c.slug} className={`chip ${filter === c.slug ? 'on' : ''}`} onClick={() => setFilter(c.slug)}>{c.icon} {c.name}</button>)}
       </div>
-      {counts.nophoto > 0 && filter === 'all' && <p className="muted small">📷 Products with photos sell noticeably better — tap the camera on any product to add one.</p>}
+      {canEdit && counts.nophoto > 0 && filter === 'all' && <p className="muted small">📷 Products with photos sell noticeably better — tap the camera on any product to add one.</p>}
       <div className="m-menu">
         {shown.length === 0 && <p className="muted">Nothing matches.</p>}
         {shown.map((p) => (
           <div key={p.id} className={`m-product ${!p.live ? 'dim' : ''} ${p.variantOf ? 'is-option' : ''}`}>
-            <PhotoButton p={p} onDone={load} />
+            {canEdit ? <PhotoButton p={p} onDone={load} /> : <span className="m-thumb">{p.photoUrl ? <img src={p.photoUrl} alt="" /> : '📦'}</span>}
             <div className="grow">
               <strong>{p.name}{p.variantLabel && <span className="muted"> · {p.variantLabel}</span>}</strong>
               <p className="muted small">
@@ -520,7 +530,7 @@ function Menu() {
                 {!p.active ? 'switched off' : p.blockedReason ? `hidden — ${p.blockedReason}` : !p.availableNow ? <b className="m-warn">{p.availabilityNote}</b> : !p.inStock ? <b className="m-bad">sold out</b> : p.lowStock ? <b className="m-warn">only {p.stock} left</b> : 'live'}
               </p>
             </div>
-            <button className={`m-star ${p.featured ? 'on' : ''}`} onClick={() => patch(p, { featured: !p.featured }, p.featured ? 'Removed from store picks' : 'Added to store picks')} aria-pressed={p.featured} aria-label={`${p.featured ? 'Remove' : 'Make'} ${p.name} a store pick`}>{p.featured ? '⭐' : '☆'}</button>
+            {canEdit && <button className={`m-star ${p.featured ? 'on' : ''}`} onClick={() => patch(p, { featured: !p.featured }, p.featured ? 'Removed from store picks' : 'Added to store picks')} aria-pressed={p.featured} aria-label={`${p.featured ? 'Remove' : 'Make'} ${p.name} a store pick`}>{p.featured ? '⭐' : '☆'}</button>}
             <div className="stepper">
               <button onClick={() => patch(p, { stock: Math.max(0, p.stock - 1) })} aria-label={`Less ${p.name}`}>−</button>
               <span>{p.stock}</span>
@@ -529,7 +539,7 @@ function Menu() {
             {p.inStock
               ? <button className="btn btn-sm btn-ghost" onClick={() => patch(p, { stock: 0 }, `${p.name} marked sold out`)}>Sold out</button>
               : <button className="btn btn-sm" onClick={() => patch(p, { stock: Math.max(10, p.lowStockAt * 2) }, `${p.name} back in stock`)}>Restock</button>}
-            <button className="link" onClick={() => setEditing({ ...p, category: p.category.slug, price: (p.priceCents / 100).toFixed(2) })}>Edit</button>
+            {canEdit && <button className="link" onClick={() => setEditing({ ...p, category: p.category.slug, price: (p.priceCents / 100).toFixed(2) })}>Edit</button>}
             <label className="switch" title={p.active ? 'Listed' : 'Not listed'}>
               <input type="checkbox" checked={p.active} onChange={(e) => patch(p, { active: e.target.checked })} aria-label={`List ${p.name}`} />
               <span />
@@ -578,6 +588,29 @@ function Insights() {
           <p className="muted small">{busiest.orders ? `Busiest around ${busiest.hour}:00 — have stock packed and staff on hand.` : 'Not enough orders yet to show a pattern.'}</p>
         </section>
       </div>
+      {d.customers && (
+        <div className="adm-two">
+          <section className="adm-card">
+            <h3>Customers</h3>
+            <div className="m-stats m-stats-tight">
+              <div><span>Customers</span><strong>{d.customers.total}</strong></div>
+              <div><span>New to you</span><strong>{d.customers.new}</strong></div>
+              <div><span>Came back</span><strong>{d.customers.returning}</strong></div>
+              <div><span>Repeat rate</span><strong>{d.customers.repeatRate == null ? '—' : `${d.customers.repeatRate}%`}</strong></div>
+            </div>
+            <p className="muted small">{d.customers.total ? (d.customers.repeatRate >= 40 ? 'Good loyalty — people come back.' : 'Try a promo code for second orders to bring people back.') : 'No deliveries in this period yet.'}</p>
+          </section>
+          <section className="adm-card">
+            <h3>Top suburbs</h3>
+            {d.customers.topSuburbs.length === 0 ? <p className="muted">No deliveries in this period yet.</p> : (
+              <table className="adm-table">
+                <thead><tr><th>Suburb</th><th className="num">Orders</th><th className="num">Sales</th></tr></thead>
+                <tbody>{d.customers.topSuburbs.map((x) => <tr key={x.suburb}><td>{x.suburb}</td><td className="num">{x.orders}</td><td className="num">{rand(x.salesCents)}</td></tr>)}</tbody>
+              </table>
+            )}
+          </section>
+        </div>
+      )}
       <section className="adm-card">
         <h3>Best sellers</h3>
         {d.topProducts.length === 0 ? <p className="muted">No deliveries in this period yet.</p> : (
@@ -796,7 +829,153 @@ function Promotions() {
   );
 }
 
-function Reviews() {
+function TeamAndActivity({ role }) {
+  const notify = useToast();
+  const [team, setTeam] = useState(null);
+  const [log, setLog] = useState(null);
+  const [f, setF] = useState({ name: '', email: '', role: 'packer' });
+  const [invite, setInvite] = useState(null);
+  const owner = role === 'owner';
+  const load = useCallback(() => {
+    if (owner) api('/merchant/team').then(setTeam);
+    api('/merchant/activity').then((d) => setLog(d.entries));
+  }, [owner]);
+  useEffect(() => { load(); }, [load]);
+  const add = async (e) => {
+    e.preventDefault();
+    try {
+      const d = await api('/merchant/team', { method: 'POST', body: f });
+      setInvite({ ...f, password: d.temporaryPassword });
+      setF({ name: '', email: '', role: 'packer' });
+      load();
+    } catch (err) { notify(err.message, 'bad'); }
+  };
+  const change = async (m, body, msg) => {
+    try { await api(`/merchant/team/${m.id}`, body ? { method: 'PATCH', body } : { method: 'DELETE' }); notify(msg, 'ok'); load(); } catch (err) { notify(err.message, 'bad'); }
+  };
+  return (
+    <div className="adm-two">
+      {owner && (
+        <section className="adm-card">
+          <h3>👥 Team</h3>
+          {!team ? <Spinner /> : (
+            <>
+              <ul className="m-team">
+                {team.members.map((m) => (
+                  <li key={m.id}>
+                    <div className="grow"><strong>{m.name}</strong> <span className="muted small">{m.email}</span><br />
+                      <span className="muted small">{m.invited ? 'Invited — hasn’t set a password yet' : m.lastLoginAt ? `Last signed in ${when(m.lastLoginAt)}` : 'Never signed in'}</span></div>
+                    {m.role === 'owner' ? <span className="status s-approved">Owner</span> : (
+                      <>
+                        <select value={m.role} onChange={(e) => change(m, { role: e.target.value }, `${m.name} is now a ${e.target.value}`)} aria-label={`Role for ${m.name}`}>
+                          <option value="packer">Packer</option><option value="manager">Manager</option>
+                        </select>
+                        <button className="link" onClick={() => window.confirm(`Remove ${m.name}? They lose access straight away.`) && change(m, null, `${m.name} removed`)}>Remove</button>
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              {invite ? (
+                <div className="banner adm-gap">
+                  <p><strong>Send {invite.name || invite.email} their login</strong> (shown once):</p>
+                  <p>Sign in at <b>{window.location.origin}/login</b><br />Email: <b>{invite.email}</b><br />{invite.password ? <>Temporary password: <code>{invite.password}</code></> : 'They use the password they already have.'}</p>
+                  <div className="actions">
+                    {invite.password && <button className="btn btn-sm" onClick={() => navigator.clipboard?.writeText(`ClickNPuff store login\n${window.location.origin}/login\nEmail: ${invite.email}\nTemporary password: ${invite.password}`).then(() => notify('Copied', 'ok'))}>Copy</button>}
+                    <button className="btn btn-sm btn-ghost" onClick={() => setInvite(null)}>Done</button>
+                  </div>
+                </div>
+              ) : (
+                <form className="adm-gap" onSubmit={add}>
+                  <h4>Add someone</h4>
+                  <div className="grid-2">
+                    <label className="field"><span>Name</span><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
+                    <label className="field"><span>Work email</span><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} required /></label>
+                  </div>
+                  <div className="m-roles">
+                    {team.roles.map((r) => (
+                      <label key={r.role} className={`m-role ${f.role === r.role ? 'on' : ''}`}>
+                        <input type="radio" name="role" checked={f.role === r.role} onChange={() => setF({ ...f, role: r.role })} />
+                        <strong>{r.label}</strong><span className="muted small">{r.can}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <p className="muted small">Everyone on your team must be 18 or older. Only you can see money, bank details and the team.</p>
+                  <button className="btn">Add to team</button>
+                </form>
+              )}
+            </>
+          )}
+        </section>
+      )}
+      <section className="adm-card">
+        <h3>📜 Activity</h3>
+        <p className="muted small">Who did what in your store, newest first.</p>
+        {!log ? <Spinner /> : log.length === 0 ? <p className="muted">Nothing yet.</p> : (
+          <ul className="m-activity">
+            {log.map((e) => (
+              <li key={e.id}><span className="muted small">{when(e.at)}</span> <b>{e.by}</b> · {e.label}{e.detail ? <span className="muted"> — {e.detail}</span> : null}</li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function ChooseOwnPassword() {
+  const { user, setUser } = useAuth();
+  const notify = useToast();
+  const [f, setF] = useState({ currentPassword: '', newPassword: '' });
+  if (!user?.mustChangePassword) return null;
+  const save = async (e) => {
+    e.preventDefault();
+    try {
+      await api('/me/password', { method: 'POST', body: f });
+      setUser({ ...user, mustChangePassword: false });
+      notify('Password saved', 'ok');
+    } catch (err) { notify(err.message, 'bad'); }
+  };
+  return (
+    <form className="card m-own-pass" onSubmit={save}>
+      <h3>🔐 Choose your own password</h3>
+      <p className="muted small">You signed in with a temporary password. Pick one only you know before you start.</p>
+      <div className="grid-2">
+        <label className="field"><span>Temporary password</span><input type="password" value={f.currentPassword} onChange={(e) => setF({ ...f, currentPassword: e.target.value })} required autoComplete="current-password" /></label>
+        <label className="field"><span>New password (8+ characters)</span><input type="password" minLength={8} value={f.newPassword} onChange={(e) => setF({ ...f, newPassword: e.target.value })} required autoComplete="new-password" /></label>
+      </div>
+      <button className="btn">Save password</button>
+    </form>
+  );
+}
+
+function LicenceBanner({ store, go }) {
+  const l = store.licence;
+  if (!l || (!l.expired && l.daysLeft > 60)) return null;
+  return (
+    <p className={`banner ${l.expired || l.daysLeft <= 7 ? 'warn' : ''} m-licence`}>
+      {l.expired ? '⚠️ Your licence expired — regulated products are hidden from customers.' : `🪪 Your licence expires in ${l.daysLeft} day${l.daysLeft === 1 ? '' : 's'} (${l.expiresOn}).`}
+      {' '}<button className="link" onClick={() => go('store')}>Add the renewal</button>
+    </p>
+  );
+}
+
+function StoreSwitcher({ stores, current, role, onAdd }) {
+  if (stores.length < 2 && role !== 'owner') return null;
+  const pick = (id) => { setStoreId(id); window.location.reload(); };
+  return (
+    <div className="m-switch">
+      {stores.length > 1 && (
+        <select value={current} onChange={(e) => pick(e.target.value)} aria-label="Choose a store">
+          {stores.map((s) => <option key={s.id} value={s.id}>{s.name}{s.status === 'pending' ? ' (awaiting approval)' : ''}{s.role !== 'owner' ? ` · ${s.role}` : ''}</option>)}
+        </select>
+      )}
+      {role === 'owner' && <button className="link small" onClick={onAdd}>+ Add a branch</button>}
+    </div>
+  );
+}
+
+function Reviews({ onReplied }) {
   const [d, setD] = useState(null);
   const [drafts, setDrafts] = useState({});
   const notify = useToast();
@@ -805,7 +984,7 @@ function Reviews() {
   if (!d) return <Spinner />;
   const max = Math.max(1, ...d.distribution.map((x) => x.count));
   const reply = async (r) => {
-    try { await api(`/merchant/reviews/${r.id}/reply`, { method: 'POST', body: { reply: drafts[r.id] } }); notify('Reply posted', 'ok'); load(); } catch (e) { notify(e.message, 'bad'); }
+    try { await api(`/merchant/reviews/${r.id}/reply`, { method: 'POST', body: { reply: drafts[r.id] } }); notify('Reply posted', 'ok'); load(); onReplied?.(); } catch (e) { notify(e.message, 'bad'); }
   };
   return (
     <>
@@ -819,7 +998,8 @@ function Reviews() {
       </div>
       {d.reviews.length === 0 ? <Empty icon="⭐" title="No reviews yet">Reviews from customers show up here — reply to thank them or put things right.</Empty>
         : d.reviews.map((r) => (
-          <div key={r.id} className="card">
+          <div key={r.id} className={`card ${r.rating <= 3 && !r.reply ? 'm-needs-reply' : ''}`}>
+            {r.rating <= 3 && !r.reply && <p className="m-reply-nudge">💬 Reply needed — a kind, quick answer (and a fix) wins most unhappy customers back, and others see you care.</p>}
             <div className="row-between"><strong className="m-stars">{'★'.repeat(r.rating)}<span>{'★'.repeat(5 - r.rating)}</span></strong><span className="muted small">{r.name} · #{r.orderCode} · {when(r.at, { dateStyle: 'medium' })}</span></div>
             {r.comment ? <p>{r.comment}</p> : <p className="muted small">No comment.</p>}
             {r.reply ? <p className="m-reply"><b>Your reply:</b> {r.reply}</p> : (
@@ -866,7 +1046,7 @@ function CounterSettings({ store, onSaved }) {
 
 function StoreSettings({ store, onSaved }) {
   const notify = useToast();
-  const [f, setF] = useState({ description: store.description, prepMinutes: store.prepMinutes - (store.busyExtraMinutes || 0), deliveryRadiusKm: store.deliveryRadiusKm, licenceNumber: store.licenceNumber || '', phone: store.phone || '' });
+  const [f, setF] = useState({ description: store.description, prepMinutes: store.prepMinutes - (store.busyExtraMinutes || 0), deliveryRadiusKm: store.deliveryRadiusKm, licenceNumber: store.licenceNumber || '', licenceExpiresOn: store.licenceExpiresOn || '', phone: store.phone || '' });
   const [hoursOn, setHoursOn] = useState(!!store.hours);
   const [hours, setHours] = useState(() => Object.fromEntries(DAYS.map(([k]) => [k, store.hours?.[k] || (store.hours ? null : ['09:00', '21:00'])])));
   const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
@@ -883,8 +1063,11 @@ function StoreSettings({ store, onSaved }) {
           <label className="field"><span>Delivery radius (km)</span><input type="number" min="1" max="25" value={f.deliveryRadiusKm} onChange={set('deliveryRadiusKm')} /></label>
         </div>
         <label className="field"><span>Store phone</span><input value={f.phone} onChange={set('phone')} inputMode="tel" /></label>
-        <label className="field"><span>Licence number</span><input value={f.licenceNumber} onChange={set('licenceNumber')} /></label>
-        <p className="small muted">Licence: {store.licenceVerified ? `✅ verified for ${store.licenceCategories.join(', ') || 'no categories yet'}` : store.licenceNumber ? '⏳ awaiting verification' : 'none on file'}. Changing the number sends it back for review.</p>
+        <div className="grid-2">
+          <label className="field"><span>Licence number</span><input value={f.licenceNumber} onChange={set('licenceNumber')} /></label>
+          <label className="field"><span>Licence expiry date</span><input type="date" value={f.licenceExpiresOn} onChange={set('licenceExpiresOn')} /></label>
+        </div>
+        <p className="small muted">Licence: {store.licence?.expired ? '⚠️ expired — regulated products are hidden' : store.licenceVerified ? `✅ verified for ${store.licenceCategories.join(', ') || 'no categories yet'}` : store.licenceNumber ? '⏳ awaiting verification' : 'none on file'}. Changing the number or expiry date sends it back for review. We remind you 60, 30 and 7 days before it expires.</p>
         <button className="btn">Save details</button>
       </form>
       <div className="adm-card">
@@ -954,13 +1137,31 @@ function StatusBar({ store, setStore, stats }) {
 
 export default function Merchant() {
   const [store, setStore] = useState(undefined);
-  const [section, setSection] = useState('orders');
+  const [me, setMe] = useState({ role: null, stores: [] });
+  const [alerts, setAlerts] = useState(null);
+  const [addingBranch, setAddingBranch] = useState(false);
+  const [section, setSection] = useState(() => new URLSearchParams(window.location.search).get('section') || 'orders');
   const [board, setBoard] = useState(null);
   const [sound, setSound] = useState(false);
   const notify = useToast();
   const seen = useRef(null);
 
-  useEffect(() => { api('/merchant/store').then((d) => setStore(d.store)); }, []);
+  useEffect(() => {
+    api('/merchant/store').then((d) => {
+      setStore(d.store);
+      setMe({ role: d.role, stores: d.stores || [] });
+      // Remember the branch actually in use (the saved one may be gone).
+      if (d.store) setStoreId(d.store.id);
+    });
+  }, []);
+  const loadAlerts = useCallback(() => api('/merchant/alerts').then((d) => setAlerts(d.alerts)).catch(() => {}), []);
+  useEffect(() => {
+    if (!store?.id) return undefined;
+    loadAlerts();
+    const t = setInterval(loadAlerts, 60000);
+    return () => clearInterval(t);
+  }, [store?.id, loadAlerts]);
+  useEffect(() => { if (section === 'reviews') loadAlerts(); }, [section, loadAlerts]);
 
   const loadBoard = useCallback(() => api('/merchant/orders').then((d) => {
     const fresh = d.live.filter((o) => o.lane === 'new' && seen.current && !seen.current.has(o.id));
@@ -987,15 +1188,28 @@ export default function Merchant() {
   }, [sound, waiting]);
 
   if (store === undefined) return <div className="page center pad"><Spinner /></div>;
-  if (!store) return <Setup onCreated={setStore} />;
+  if (!store) return <Setup onCreated={(s) => { setStoreId(s.id); window.location.reload(); }} />;
+  if (addingBranch) return <Setup branch onCancel={() => setAddingBranch(false)} onCreated={(s) => { setStoreId(s.id); window.location.reload(); }} />;
+
+  const role = me.role || 'owner';
+  const visible = SECTIONS.filter(([, , , need]) => RANK[role] >= RANK[need]);
+  const current = visible.some(([k]) => k === section) ? section : 'orders';
+  const badge = (k) => {
+    if (k === 'orders' && waiting) return <b className="adm-badge hot">{waiting}</b>;
+    if (k === 'reviews' && alerts?.reviewsToReply) return <b className="adm-badge">{alerts.reviewsToReply}</b>;
+    return null;
+  };
 
   return (
     <div className="m-app">
+      <StoreSwitcher stores={me.stores} current={store.id} role={role} onAdd={() => setAddingBranch(true)} />
+      <ChooseOwnPassword />
       <StatusBar store={store} setStore={setStore} stats={board?.stats} />
+      {RANK[role] >= RANK.manager && <LicenceBanner store={store} go={setSection} />}
       <nav className="m-nav">
-        {SECTIONS.map(([k, icon, label]) => (
-          <button key={k} className={section === k ? 'on' : ''} onClick={() => setSection(k)}>
-            {icon} {label}{k === 'orders' && waiting ? <b className="adm-badge hot">{waiting}</b> : null}
+        {visible.map(([k, icon, label]) => (
+          <button key={k} className={current === k ? 'on' : ''} onClick={() => setSection(k)}>
+            {icon} {k === 'team' && role !== 'owner' ? 'Activity' : label}{badge(k)}
           </button>
         ))}
         <PushButton compact className="m-push" />
@@ -1004,13 +1218,14 @@ export default function Merchant() {
         </button>
       </nav>
       <div className="m-main">
-        {section === 'orders' && (board ? <Board data={board} reload={loadBoard} setStore={setStore} /> : <Spinner />)}
-        {section === 'menu' && <Menu />}
-        {section === 'insights' && <Insights />}
-        {section === 'payouts' && <Money />}
-        {section === 'promos' && <Promotions />}
-        {section === 'reviews' && <Reviews />}
-        {section === 'store' && <><CounterSettings store={store} onSaved={setStore} /><StoreSettings store={store} onSaved={setStore} /></>}
+        {current === 'orders' && (board ? <Board data={board} reload={loadBoard} setStore={setStore} /> : <Spinner />)}
+        {current === 'menu' && <Menu role={role} />}
+        {current === 'insights' && <Insights />}
+        {current === 'payouts' && <Money />}
+        {current === 'promos' && <Promotions />}
+        {current === 'reviews' && <Reviews onReplied={loadAlerts} />}
+        {current === 'team' && <TeamAndActivity role={role} />}
+        {current === 'store' && <><CounterSettings store={store} onSaved={setStore} /><StoreSettings store={store} onSaved={setStore} /></>}
       </div>
     </div>
   );

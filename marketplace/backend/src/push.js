@@ -1,6 +1,7 @@
 'use strict';
 const webpush = require('web-push');
 const orders = require('./orders');
+const team = require('./team');
 
 // Web Push: notifications that reach a phone even when ClickNPuff is
 // closed or the screen is off. Customers hear about their order, riders
@@ -102,10 +103,12 @@ function registerPush(app, { db, auth, send = (sub, payload, opts) => webpush.se
   }
 
   const fire = (p) => p.catch(() => {});
+  // Everyone at a store with at least this role.
+  const notifyStore = (storeId, need, message) => Promise.all(team.memberIds(db, storeId, need).map((id) => notifyUser(id, message)));
 
   orders.bus.on('status', (orderId, to, evDb) => {
     if (evDb && evDb !== db) return;
-    const o = db.prepare(`SELECT o.id, o.code, o.customer_id, o.refund_cents, s.name AS store, s.owner_id FROM orders o JOIN stores s ON s.id = o.store_id WHERE o.id = ?`).get(orderId);
+    const o = db.prepare(`SELECT o.id, o.code, o.customer_id, o.refund_cents, o.store_id, s.name AS store, s.owner_id FROM orders o JOIN stores s ON s.id = o.store_id WHERE o.id = ?`).get(orderId);
     if (!o) return;
     const msg = CUSTOMER_MESSAGES[to];
     if (msg) {
@@ -115,7 +118,7 @@ function registerPush(app, { db, auth, send = (sub, payload, opts) => webpush.se
     // A paid order (or a pre-order whose time has come) lands on the store's board.
     if (to === 'placed') {
       const items = db.prepare('SELECT COALESCE(SUM(qty), 0) AS n FROM order_items WHERE order_id = ?').get(o.id).n;
-      fire(notifyUser(o.owner_id, { title: `New order #${o.code}`, body: `${items} item${items === 1 ? '' : 's'} — tap to accept.`, url: '/merchant', tag: `store-order-${o.id}`, urgent: true }));
+      fire(notifyStore(o.store_id, 'packer', { title: `New order #${o.code}`, body: `${items} item${items === 1 ? '' : 's'} — tap to accept.`, url: '/merchant', tag: `store-order-${o.id}`, urgent: true }));
     }
   });
 
@@ -133,20 +136,33 @@ function registerPush(app, { db, auth, send = (sub, payload, opts) => webpush.se
 
   orders.bus.on('low_stock', (productId, evDb) => {
     if (evDb !== db) return;
-    const r = db.prepare('SELECT p.name, p.stock, s.owner_id FROM products p JOIN stores s ON s.id = p.store_id WHERE p.id = ?').get(productId);
-    if (r) fire(notifyUser(r.owner_id, { title: r.stock ? `Running low: ${r.name}` : `Sold out: ${r.name}`, body: r.stock ? `Only ${r.stock} left. Tap to restock.` : 'Customers can no longer order it. Tap to restock.', url: '/merchant', tag: `stock-${productId}` }));
+    const r = db.prepare('SELECT p.name, p.stock, p.store_id, s.owner_id FROM products p JOIN stores s ON s.id = p.store_id WHERE p.id = ?').get(productId);
+    if (r) fire(notifyStore(r.store_id, 'manager', { title: r.stock ? `Running low: ${r.name}` : `Sold out: ${r.name}`, body: r.stock ? `Only ${r.stock} left. Tap to restock.` : 'Customers can no longer order it. Tap to restock.', url: '/merchant', tag: `stock-${productId}` }));
   });
 
   orders.bus.on('store_escalation', (orderId, minutesLeft, evDb) => {
     if (evDb !== db) return;
-    const o = db.prepare('SELECT o.code, s.owner_id FROM orders o JOIN stores s ON s.id = o.store_id WHERE o.id = ?').get(orderId);
-    if (o) fire(notifyUser(o.owner_id, { title: `⏰ Still waiting: #${o.code}`, body: `Accept in the next ${minutesLeft} min or it will be declined and refunded.`, url: '/merchant', tag: `store-order-${orderId}`, urgent: true }));
+    const o = db.prepare('SELECT o.code, o.store_id, s.owner_id FROM orders o JOIN stores s ON s.id = o.store_id WHERE o.id = ?').get(orderId);
+    if (o) fire(notifyStore(o.store_id, 'packer', { title: `⏰ Still waiting: #${o.code}`, body: `Accept in the next ${minutesLeft} min or it will be declined and refunded.`, url: '/merchant', tag: `store-order-${orderId}`, urgent: true }));
   });
 
   orders.bus.on('payout', (storeId, amountCents, evDb) => {
     if (evDb !== db) return;
     const s = db.prepare('SELECT owner_id FROM stores WHERE id = ?').get(storeId);
-    if (s) fire(notifyUser(s.owner_id, { title: `💸 Payout sent: R${(amountCents / 100).toFixed(2)}`, body: 'It should reach your account within 1–2 working days.', url: '/merchant', tag: `payout-${storeId}` }));
+    if (s) fire(notifyStore(storeId, 'owner', { title: `💸 Payout sent: R${(amountCents / 100).toFixed(2)}`, body: 'It should reach your account within 1–2 working days.', url: '/merchant', tag: `payout-${storeId}` }));
+  });
+
+  orders.bus.on('low_rating', (storeId, rating, comment, evDb) => {
+    if (evDb !== db) return;
+    fire(notifyStore(storeId, 'manager', { title: `${'★'.repeat(rating)}${'☆'.repeat(5 - rating)} A customer wasn't happy`, body: comment ? `"${comment}" — a quick, kind reply helps.` : 'Reply to make it right — other customers see it.', url: '/merchant?section=reviews', tag: `review-${storeId}` }));
+  });
+
+  orders.bus.on('licence', (storeId, step, daysLeft, evDb) => {
+    if (evDb !== db) return;
+    const msg = step === 'expired'
+      ? { title: '⚠️ Your licence has expired', body: 'Regulated products are hidden until you upload the renewed licence in Store settings.' }
+      : { title: `Licence expires in ${daysLeft} days`, body: 'Renew it now and add the new expiry date in Store settings so nothing is hidden.' };
+    fire(notifyStore(storeId, 'owner', { ...msg, url: '/merchant?section=store', tag: `licence-${storeId}` }));
   });
 
   app.locals.notifyUser = notifyUser;

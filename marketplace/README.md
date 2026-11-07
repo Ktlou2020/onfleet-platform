@@ -72,6 +72,42 @@ Push keys: set `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` to pin them. Otherwise a
 
 R18 per trip + R5 per km (to the store and on to the customer), at least R25. Customer tips (chosen at checkout) are added on top and go to the rider in full. The rider sees the total before accepting. Rates live in `backend/src/orders.js` (`RIDER_PAY`).
 
+## Store console
+
+Stores run everything from `/merchant`, on a counter tablet or a phone.
+
+- **Orders:** a live board (New → Preparing → Ready → With rider) with a repeating chime and push alerts. Stores can accept orders by hand or automatically, and set busy time or pause. If an order is still waiting after 3 minutes there's a reminder push (plus an SMS when BulkSMS is set up); after 10 minutes the order is declined and the customer refunded. When something is sold out the customer chooses: go ahead without it (refunded for that item) or cancel. Packing slips fit 58/80 mm receipt printers or A4 and carry a bag code and barcode, which the rider confirms at pickup. Regulated orders must be sealed in a labelled 18+ bag.
+- **Menu:**
+  - photos
+  - sizes and flavours as options of one product
+  - ⭐ store picks
+  - days and hours each product is on sale
+  - a low-stock line per product, with alerts and a restock list
+  - spreadsheet export and import with a preview before anything changes
+- **Money:**
+  - the balance owed
+  - bank details (changing them needs the password)
+  - payout history
+  - statements for any dates, as PDF or CSV
+  - earnings by week
+  - VAT and company details
+- **Promotions:** the store's own codes, paid for by the store (the discount comes off its payout) and valid only at that store.
+- **Insights:**
+  - sales
+  - acceptance
+  - prep time
+  - busy hours
+  - best sellers
+  - new vs returning customers, repeat rate and top suburbs
+- **Reviews:** public replies. Ratings of 3 stars or less send a push and stay flagged until someone replies.
+- **Team:**
+  - The owner adds packers (the order board and stock only) and managers (everything except money and the team). Each person gets their own login and must choose a password at first sign-in.
+  - An activity log records who did what.
+- **Branches:** one owner login runs several stores, switched from the top of the console. The server checks every request is for a store that person belongs to (the `X-Store-Id` header).
+- **Licence:** the expiry date gets reminders at 60, 30 and 7 days. Once it lapses, regulated products hide automatically until a renewal is verified.
+
+The platform side (admin → Payouts) shows what each store is owed, downloads a payment list, and records each EFT with its bank reference. Bank details changed in the past 7 days are flagged so they can be confirmed by phone first. Refunds after delivery are charged to the store (up to what it earned on that order) or the platform. Customers get a tax invoice that splits the goods (from the store) from delivery and service (from the platform). Set the platform's VAT number under admin → Settings once registered.
+
 ## Configuration
 
 | Variable | Default | |
@@ -101,10 +137,15 @@ backend/src
   orders.js      the order state machine, live-update bus, rider dispatch
   pricing.js     distance, fees, VAT, ETA
   payments.js    mock + Paystack (initialise, verify, refund, webhook signature)
+  merchant.js    store console: board, menu, insights, reviews, missed-order sweep
+  money.js       balances, payouts, statements, refunds after delivery, invoices, store promos
+  team.js        store roles and branches (who may do what, in which store)
+  staff.js       staff logins, activity log, review alerts, licence expiry sweep
+  push.js        web push (VAPID) for customers, riders and store teams
   db.js          SQLite schema
 frontend/src
   lib.jsx        API client, auth/cart/location state, live order hook
-  pages/         Home, Store, Checkout, Orders/Track, Merchant, Rider, Admin, Auth
+  pages/         Home, Store, Checkout, Orders/Track, Merchant, Rider, Admin, Auth, Docs (statement, invoice)
 ```
 
 Every order status change goes through `orders.transition()`, which checks who may move the order from which status to which, and handles restocking, refunds, the event log, live pushes and dispatch.

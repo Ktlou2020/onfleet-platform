@@ -112,3 +112,4 @@
 .adm-table tr.adm-flag td { background: var(--warn-bg); }
 .adm-inline-form { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; padding: 8px 0; }
 .adm-inline-form .field { margin: 0; }
+.adm-inline-date { max-width: 260px; }

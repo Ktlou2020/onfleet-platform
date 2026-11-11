@@ -24,6 +24,8 @@ export default function FleetSignup() {
     password: '',
     phone: '',
     city: '',
+    address: '',
+    registration_number: '',
     fleet_size: '',
     plan_interest: 'trial',
     role: 'fleet_owner_admin'
@@ -102,6 +104,20 @@ export default function FleetSignup() {
             <div className="field">
               <label className="label">City</label>
               <input value={form.city} onChange={update('city')} placeholder="Johannesburg" />
+            </div>
+          </div>
+          {/* The lessor's identity on every rider contract this fleet issues.
+              Asked here because a contract cannot be written without them, and
+              a settings screen filled in later is one filled in never. */}
+          <div className="field">
+            <label className="label">Registered business address</label>
+            <input required value={form.address} onChange={update('address')} placeholder="10 Main Street, Johannesburg, 2001" />
+          </div>
+          <div className="field">
+            <label className="label">Company registration number</label>
+            <input required value={form.registration_number} onChange={update('registration_number')} placeholder="2021/123456/07" />
+            <div className="hint" style={{ fontSize: 12, opacity: .7, marginTop: 4 }}>
+              These two appear on the rent-to-own contracts you issue to your riders.
             </div>
           </div>
           <div className="field">

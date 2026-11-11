@@ -154,6 +154,8 @@ router.post('/fleet/signup',
   body('full_name').notEmpty(),
   body('email').isEmail(),
   body('password').isLength({ min: 6 }),
+  body('address').notEmpty(),
+  body('registration_number').notEmpty(),
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
@@ -164,6 +166,8 @@ router.post('/fleet/signup',
     const password = String(req.body.password || '');
     const phone = String(req.body.phone || '').trim();
     const city = String(req.body.city || '').trim();
+    const address = String(req.body.address || '').trim();
+    const registration_number = String(req.body.registration_number || '').trim();
     const fleet_size = Math.max(0, Number(req.body.fleet_size || 0) || 0);
     const requestedPlan = String(req.body.plan_interest || 'trial').trim().toLowerCase();
     const requestedRole = String(req.body.role || 'fleet_owner_admin').trim();
@@ -189,6 +193,8 @@ router.post('/fleet/signup',
         email,
         phone,
         city,
+        address,
+        registrationNumber: registration_number,
         fleetSize: fleet_size,
         planKey,
         role: requestedRole,

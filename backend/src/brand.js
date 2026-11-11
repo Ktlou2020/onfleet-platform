@@ -75,11 +75,16 @@ const BRANDS = {
     // OnFleet Africa's own fleet. It is deliberately not the same thing as the
     // brand: the brand is whose software this is, and this is whose motorcycle
     // it is. Only a company that actually owns bikes has one.
+    // The registered company, not the brand: the brand is OnFleet Africa, the
+    // company is Onfleet (Pty) Ltd, and a lease has to name the latter. A
+    // contract carrying a trading name and no registration number gives a
+    // rider nothing to identify the other party by.
     legalEntity: {
-      name: 'OnFleet Africa',
-      address: 'Unit E20, 472 Spionkop Avenue, Kya Sand, Johannesburg',
+      name: 'Onfleet (Pty) Ltd',
+      registration: '2020/101046/07',
+      address: '63 Peter Place, Bryanston, 2191',
       phone: '081 539 5612',
-      signatory: 'OnFleet Authorised Representative',
+      signatory: 'Onfleet Authorised Representative',
     },
     // The logo route is left alone for OnFleet, so this is the file the
     // frontend already ships and already asks for.

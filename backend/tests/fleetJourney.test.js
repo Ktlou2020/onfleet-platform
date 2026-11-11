@@ -57,6 +57,7 @@ describe.skipIf(!process.env.DATABASE_URL)('a fleet owner from signup to first p
   async function signUp() {
     const res = await request(app).post('/api/auth/fleet/signup').send({
       company_name: COMPANY, ...OWNER, phone: '0820000000', city: 'Johannesburg', fleet_size: 20,
+      address: '1 Test Road, Johannesburg, 2000', registration_number: '2020/000000/07',
     });
     expect(res.status).toBe(200);
     token = res.body.token;

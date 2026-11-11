@@ -14,9 +14,12 @@ const BACKEND = createRequire(import.meta.url)('../src/routes/fleet.js').FLEET_R
 // menu while the endpoint behind it answers perfectly well.
 
 // A section may exist on the frontend alone when there is no API behind it to
-// gate. Help is a static page. Anything else appearing here should be
+// gate, or when what gates it is not this matrix. Help is a static page.
+// Guide is served by routes/guide.js, which gates it with its own `guideReader`
+// over staff and fleet-owner roles rather than with fleetSection() — so it is
+// gated, just not here. Anything else appearing in this list should be
 // questioned rather than added.
-const FRONTEND_ONLY = ['help'];
+const FRONTEND_ONLY = ['help', 'guide'];
 
 describe('the fleet access matrix, on both sides of the wire', () => {
   it('gates every section the API has', () => {

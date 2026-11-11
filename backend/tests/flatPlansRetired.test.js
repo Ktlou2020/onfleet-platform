@@ -155,6 +155,7 @@ describe.skipIf(!process.env.DATABASE_URL)('the retired flat plans', () => {
     it('gives a paid plan a tier, not just a label', async () => {
       const created = await onboarding.createFleetOrganisation({
         companyName: 'Tier At Birth', fullName: 'A Owner',
+        address: '1 Test Road, Johannesburg, 2000', registrationNumber: '2020/000000/07',
         email: `tier-${Date.now()}@example.test`, planKey: 'medium', status: 'active',
       });
       const { rows } = await pgDb.query(
@@ -165,6 +166,7 @@ describe.skipIf(!process.env.DATABASE_URL)('the retired flat plans', () => {
     it('and the largest plan gets the top tier', async () => {
       const created = await onboarding.createFleetOrganisation({
         companyName: 'Big Co', fullName: 'B Owner',
+        address: '1 Test Road, Johannesburg, 2000', registrationNumber: '2020/000000/07',
         email: `big-${Date.now()}@example.test`, planKey: 'enterprise', status: 'active',
       });
       const { rows } = await pgDb.query('SELECT subscription_tier FROM organizations WHERE id = $1', [created.organizationId]);
@@ -176,6 +178,7 @@ describe.skipIf(!process.env.DATABASE_URL)('the retired flat plans', () => {
     it('leaves a trial without one', async () => {
       const created = await onboarding.createFleetOrganisation({
         companyName: 'Trial Co', fullName: 'C Owner',
+        address: '1 Test Road, Johannesburg, 2000', registrationNumber: '2020/000000/07',
         email: `trial-${Date.now()}@example.test`, planKey: 'trial', status: 'trialing',
       });
       const { rows } = await pgDb.query('SELECT subscription_tier, status FROM organizations WHERE id = $1', [created.organizationId]);

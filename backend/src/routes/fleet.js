@@ -35,7 +35,12 @@ const SERVICEABLE_BIKE_STATUSES = ['active', 'ready_to_go', 'repairs', 'not_avai
 const FLEET_RESOURCE_ACCESS = {
   dashboard: {
     view: ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'],
-    manage: []
+    // Everyone sees the dashboard; only the admin may change what is on it.
+    // The one thing that is editable there is the company's registered name,
+    // address and registration number, which print on every rider contract —
+    // so this was the single write in this file gated at 'view', and a
+    // read-only viewer could rewrite the lessor on the next agreement issued.
+    manage: ['fleet_owner_admin']
   },
   bikes: {
     view: ['fleet_owner_admin', 'fleet_owner_ops'],
@@ -1096,7 +1101,7 @@ router.get('/account', fleetSection('dashboard', 'view'), async (req, res) => {
   res.json({ organization, members });
 });
 
-router.patch('/account/org', fleetSection('dashboard', 'view'), async (req, res) => {
+router.patch('/account/org', fleetSection('dashboard', 'manage'), async (req, res) => {
   try {
     const { address, registration_number, vat_number } = req.body || {};
     await pgDb.query(`UPDATE organizations SET address = $1, registration_number = $2, vat_number = $3 WHERE id = $4`,

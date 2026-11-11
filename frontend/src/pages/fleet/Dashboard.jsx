@@ -5,7 +5,7 @@ import toast from 'react-hot-toast';
 import api from '../../api';
 import { useAuth } from '../../auth';
 import { Badge, DashboardSkeleton, EmptyState, Modal, fmt, fmtDate, fmtDateTime } from '../../components/ui';
-import { canAccessFleetRoute } from './access';
+import { canAccessFleetRoute, canManageFleetSection } from './access';
 import { FleetHelpTip } from './helpSupport';
 import TourModal from '../../components/TourModal';
 
@@ -161,6 +161,8 @@ export default function FleetDashboard() {
   const activeBikes = summary.active_bikes || 0;
   const utilization = totalBikes > 0 ? Math.round((activeBikes / totalBikes) * 100) : 0;
 
+  // These print on every rider contract, so only the admin may change them.
+  const canEditOrg = canManageFleetSection(user?.role, 'dashboard');
   const canOpenBikes = canAccessFleetRoute(user?.role, 'bikes');
   const canOpenAgreements = canAccessFleetRoute(user?.role, 'agreements');
   const canOpenPayments = canAccessFleetRoute(user?.role, 'payments');
@@ -349,9 +351,11 @@ export default function FleetDashboard() {
             {organization.registration_number && <div className="fleet-demo-list-item" style={{ fontSize: 12, color: 'var(--muted)' }}>Reg: {organization.registration_number}</div>}
             {organization.vat_number && <div className="fleet-demo-list-item" style={{ fontSize: 12, color: 'var(--muted)' }}>VAT: {organization.vat_number}</div>}
           </div>
-          <div style={{ marginTop: 12 }}>
-            <button className="btn btn-sm btn-secondary" onClick={() => setShowOrgEdit(true)}>Edit company details</button>
-          </div>
+          {canEditOrg && (
+            <div style={{ marginTop: 12 }}>
+              <button className="btn btn-sm btn-secondary" onClick={() => setShowOrgEdit(true)}>Edit company details</button>
+            </div>
+          )}
         </div>
 
         {/* Operations snapshot */}

@@ -20,6 +20,8 @@ const FLEET = {
   email: 'thabo@rapidwheels.test',
   phone: '0810000000',
   city: 'Johannesburg',
+  address: '1 Test Road, Johannesburg, 2000',
+  registration_number: '2020/000000/07',
   fleet_size: 24,
 };
 
@@ -186,6 +188,8 @@ describe.skipIf(!process.env.DATABASE_URL)('the self-serve signup it now shares 
       full_name: 'Lerato M',
       email: 'lerato@kasi.test',
       password: 'Password123!',
+      address: '1 Test Road, Johannesburg, 2000',
+      registration_number: '2020/000000/07',
     });
     expect(res.status).toBe(200);
     expect(res.body.token).toBeTruthy();
@@ -196,6 +200,7 @@ describe.skipIf(!process.env.DATABASE_URL)('the self-serve signup it now shares 
     await request(app).post('/api/auth/fleet/signup').send({
       company_name: 'Kasi Couriers', full_name: 'Lerato M',
       email: 'lerato@kasi.test', password: 'Password123!',
+      address: '1 Test Road, Johannesburg, 2000', registration_number: '2020/000000/07',
     });
     const login = await request(app).post('/api/auth/login')
       .send({ email: 'lerato@kasi.test', password: 'Password123!' });
@@ -203,7 +208,10 @@ describe.skipIf(!process.env.DATABASE_URL)('the self-serve signup it now shares 
   });
 
   it('still refuses an email that is already taken', async () => {
-    const body = { company_name: 'A', full_name: 'B', email: 'dup@kasi.test', password: 'Password123!' };
+    const body = {
+      company_name: 'A', full_name: 'B', email: 'dup@kasi.test', password: 'Password123!',
+      address: '1 Test Road, Johannesburg, 2000', registration_number: '2020/000000/07',
+    };
     await request(app).post('/api/auth/fleet/signup').send(body);
     const again = await request(app).post('/api/auth/fleet/signup').send(body);
     expect(again.status).toBe(409);

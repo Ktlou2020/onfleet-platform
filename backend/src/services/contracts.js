@@ -38,8 +38,8 @@ function lessorFrom(org) {
       name: own.name,
       address: own.address,
       phone: own.phone || '',
-      registration: null,
-      vat: null,
+      registration: own.registration || null,
+      vat: own.vat || null,
       signatory: own.signatory,
     };
   }
@@ -52,6 +52,37 @@ function lessorFrom(org) {
     vat: null,
     signatory: 'Not recorded',
   };
+}
+
+// What a contract may not be written without.
+//
+// The lessor block is what a rider — or a court — reads to know who owns the
+// motorcycle, who is owed the money, and where to serve papers. A fleet owner
+// who has never opened the company-details form leaves the address and the
+// registration number empty, and until now the document was written anyway,
+// with "Address not recorded" standing where the domicilium belongs and the
+// registration line silently omitted. Nobody notices a missing line.
+//
+// So an incomplete lessor stops the document being written at all. The two
+// placeholder strings above count as missing, not as values: they exist so a
+// half-built contract is legible while it is being debugged, never so one can
+// be issued to a rider.
+const REQUIRED_LESSOR_FIELDS = [
+  ['name', 'registered company name'],
+  ['address', 'business address'],
+  ['registration', 'company registration number'],
+];
+
+const NOT_RECORDED = /not recorded/i;
+
+/** The human labels of the lessor fields this contract cannot be issued without. */
+function missingLessorFields(lessor) {
+  return REQUIRED_LESSOR_FIELDS
+    .filter(([key]) => {
+      const value = lessor?.[key];
+      return !value || NOT_RECORDED.test(String(value));
+    })
+    .map(([, label]) => label);
 }
 
 function publicPath(filename) {
@@ -263,6 +294,16 @@ function writeContractSnapshot({ agreement, rider, bike, application, signatureD
   // itself; leaving it out is not.
   if (org === undefined) {
     throw new Error('writeContractSnapshot: pass org — the bike\'s organisation, or null when the deployment owns the bike');
+  }
+  const missing = missingLessorFields(lessorFrom(org));
+  if (missing.length) {
+    const err = new Error(
+      `This contract cannot be issued yet: the lessor's ${missing.join(', ')} ${missing.length > 1 ? 'are' : 'is'} missing. `
+      + 'Record it under Company details and try again.');
+    err.code = 'LESSOR_INCOMPLETE';
+    err.missing = missing;
+    err.status = 422;
+    throw err;
   }
   const filename = buildContractFilename(agreement.agreement_no, kind);
   const filePath = path.join(contractDir, filename);
@@ -538,6 +579,7 @@ module.exports = {
   // tests/contractLessor.test.js so the wording can be asserted without a
   // database or a file write.
   contractTemplate,
+  missingLessorFields,
   lessorFrom,
   // Pure (no DB access) — reused by services/contractsPg.js
   buildContractFilename,

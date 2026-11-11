@@ -13,7 +13,9 @@ export const FLEET_ROLE_LABELS = {
 export const FLEET_RESOURCE_ACCESS = {
   dashboard: {
     view: ['fleet_owner_admin', 'fleet_owner_ops', 'fleet_owner_billing', 'fleet_owner_viewer'],
-    manage: []
+    // Mirrors backend/src/routes/fleet.js: everyone sees the dashboard, only
+    // the admin edits the company details printed on rider contracts.
+    manage: ['fleet_owner_admin']
   },
   bikes: {
     view: ['fleet_owner_admin', 'fleet_owner_ops'],

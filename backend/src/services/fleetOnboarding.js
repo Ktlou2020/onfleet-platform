@@ -110,15 +110,23 @@ function fail(message, status = 400) {
  */
 async function createFleetOrganisation({
   companyName, fullName, email, phone = null, city = null, fleetSize = 0,
+  address = null, registrationNumber = null,
   planKey = 'trial', role = 'fleet_owner_admin', password = null, status = 'trialing',
 } = {}) {
   const name = String(companyName || '').trim();
   const owner = String(fullName || '').trim();
   const mail = String(email || '').trim().toLowerCase();
+  // Asked for here rather than left to a settings screen nobody opens: these
+  // two are the lessor's identity on every rider contract this fleet issues,
+  // and contracts.js refuses to write one without them.
+  const street = String(address || '').trim();
+  const registration = String(registrationNumber || '').trim();
 
   if (!name) throw fail('A company name is needed');
   if (!owner) throw fail('A contact name is needed');
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(mail)) throw fail('A valid email address is needed');
+  if (!street) throw fail('A business address is needed — it is the lessor address on your rider contracts');
+  if (!registration) throw fail('A company registration number is needed — it identifies you on your rider contracts');
   if (!FLEET_ROLE_VALUES.includes(role)) throw fail('That is not a fleet-owner role');
   if (!CREATABLE_STATUSES.includes(status)) throw fail('A new fleet starts either trialing or active');
 
@@ -145,11 +153,13 @@ async function createFleetOrganisation({
   return pgDb.withTransaction(async (tx) => {
     const { rows: orgRows } = await tx.query(
       `INSERT INTO organizations
-         (name, slug, contact_email, contact_phone, city, fleet_size, plan_key, status,
+         (name, slug, contact_email, contact_phone, city, address, registration_number,
+          fleet_size, plan_key, status,
           trial_started_at, trial_ends_at, max_bikes, max_admin_users, subscription_tier)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
        RETURNING id, name, slug, status, plan_key, subscription_tier`,
-      [name, slug, mail, phone || null, city || null, Math.max(0, Number(fleetSize) || 0), plan, status,
+      [name, slug, mail, phone || null, city || null, street, registration,
+        Math.max(0, Number(fleetSize) || 0), plan, status,
         status === 'trialing' ? now.toISOString() : null,
         trialEnds ? trialEnds.toISOString() : null,
         ent.max_bikes, ent.max_admin_users, ent.tier]);

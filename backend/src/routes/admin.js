@@ -1119,6 +1119,8 @@ router.post('/fleet-owners', async (req, res) => {
       email: req.body.email,
       phone: req.body.phone,
       city: req.body.city,
+      address: req.body.address,
+      registrationNumber: req.body.registration_number,
       fleetSize: req.body.fleet_size,
       planKey: req.body.plan_key,
       status: req.body.status || 'trialing',

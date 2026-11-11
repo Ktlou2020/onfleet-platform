@@ -88,13 +88,16 @@ describe('an agreement on a bike the deployment owns itself', () => {
   const mod = loadContracts(null); // no BRAND set = OnFleet
   const html = render(mod, null);
 
-  // OnFleet runs its own fleet, so for its own bikes the old wording was
-  // right all along and must not have moved.
-  it('still names OnFleet Africa, because OnFleet does own those bikes', () => {
-    expect(html).toContain('owned by OnFleet Africa');
-    expect(html).toContain('payment of the Weekly Rental to OnFleet Africa');
-    expect(html).toContain('Unit E20, 472 Spionkop Avenue, Kya Sand, Johannesburg');
-    expect(html).toContain('OnFleet Authorised Representative');
+  // OnFleet runs its own fleet, so for its own bikes the deployment's own
+  // company is the lessor — but it is named by its registered name, not by
+  // the brand on the page, and with the registration number a rider needs to
+  // identify the other party by.
+  it('names the registered company, not the brand', () => {
+    expect(html).toContain('owned by Onfleet (Pty) Ltd');
+    expect(html).toContain('payment of the Weekly Rental to Onfleet (Pty) Ltd');
+    expect(html).toContain('63 Peter Place, Bryanston, 2191');
+    expect(html).toContain('2020/101046/07');
+    expect(html).toContain('Onfleet Authorised Representative');
   });
 });
 
@@ -167,5 +170,61 @@ describe('an operator whose name is hostile to HTML', () => {
     const html = render(mod, { ...OPERATOR, name: 'Bell & <script>Co</script>' });
     expect(html).not.toContain('<script>Co</script>');
     expect(html).toContain('Bell &amp; &lt;script&gt;Co&lt;/script&gt;');
+  });
+});
+
+// A lessor block with holes in it is not a contract anybody should sign, and
+// the holes used to be invisible: "Address not recorded" where the domicilium
+// belongs, and the registration line simply absent. These assert the refusal,
+// not the wording of the document it refuses to write.
+describe('a lessor whose details are incomplete', () => {
+  const mod = loadContracts(null);
+  const { missingLessorFields } = mod;
+
+  it('names every field a fleet operator has not recorded', () => {
+    expect(missingLessorFields({ name: 'Swift Couriers', address: null, registration: null }))
+      .toEqual(['business address', 'company registration number']);
+  });
+
+  it('treats the "not recorded" placeholders as missing, not as values', () => {
+    expect(missingLessorFields({
+      name: 'Lessor not recorded', address: 'Address not recorded', registration: null,
+    })).toEqual(['registered company name', 'business address', 'company registration number']);
+  });
+
+  it('passes a fleet operator who has recorded all three', () => {
+    expect(missingLessorFields({
+      name: 'Swift Couriers (Pty) Ltd', address: '5 Rivonia Road, Sandton', registration: '2019/123456/07',
+    })).toEqual([]);
+  });
+
+  it('passes the deployment\'s own company, which now carries a registration number', () => {
+    const own = mod.contractTemplate({
+      agreement: AGREEMENT, rider: RIDER, bike: BIKE, application: null, org: null,
+    });
+    expect(own).toContain('2020/101046/07');
+  });
+
+  it('refuses to write the file at all, naming what is missing', () => {
+    const incomplete = { name: 'Swift Couriers (Pty) Ltd', address: null, city: null, registration_number: null };
+    expect(() => mod.writeContractSnapshot({
+      agreement: AGREEMENT, rider: RIDER, bike: BIKE, application: null,
+      signatureData: null, kind: 'unsigned', org: incomplete,
+    })).toThrow(/business address, company registration number/);
+  });
+
+  it('gives the caller a code and a status rather than only a sentence', () => {
+    const incomplete = { name: 'Swift Couriers (Pty) Ltd', address: null, city: null, registration_number: null };
+    try {
+      mod.writeContractSnapshot({
+        agreement: AGREEMENT, rider: RIDER, bike: BIKE, application: null,
+        signatureData: null, kind: 'unsigned', org: incomplete,
+      });
+      throw new Error('should have refused');
+    } catch (err) {
+      expect(err.code).toBe('LESSOR_INCOMPLETE');
+      expect(err.status).toBe(422);
+      expect(err.missing).toEqual(['business address', 'company registration number']);
+    }
   });
 });

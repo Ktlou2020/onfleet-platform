@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { CheckCircle2, Menu, X, ArrowRight } from 'lucide-react';
 import Logo from '../components/Logo';
+import brand from '../brand';
+import { entity, LEGAL_LINKS } from '../lib/legalContent';
 import axios from 'axios';
 
 const WHATSAPP_NUMBER = '27815395612';
@@ -339,14 +341,13 @@ export default function FleetOwnerPilot() {
       {/* ── Footer ────────────────────────────────────────────────── */}
       <footer className="fleet-mkt-footer">
         <div>
-          <div style={{ fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>OnFleet Africa</div>
-          <div>Kya Sand, Johannesburg</div>
+          <div style={{ fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>{entity.legalName || brand.fullName}</div>
+          {entity.address && <div>{entity.address}</div>}
         </div>
         <div className="fleet-mkt-footer-links">
           <Link to="/fleet/signup">Start free trial</Link>
           <Link to="/fleet/login">Sign in</Link>
-          <Link to="/privacy">Privacy policy</Link>
-          <Link to="/terms">Terms</Link>
+          {LEGAL_LINKS.map(l => <Link key={l.to} to={l.to}>{l.label}</Link>)}
         </div>
       </footer>
 

@@ -2,6 +2,8 @@ import { Link } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import api from '../api';
 import Logo from '../components/Logo';
+import { brandFullName } from '../brand';
+import { entity, LEGAL_LINKS } from '../lib/legalContent';
 import { fmt } from '../components/ui';
 import { Bike, ShieldCheck, Wrench, MapPin, Zap, CreditCard, Menu, X, CheckCircle2, ArrowRight } from 'lucide-react';
 
@@ -326,7 +328,10 @@ export default function Landing() {
 
       <footer className="footer landing-footer">
         <Logo />
-        <div className="mt-3">© {new Date().getFullYear()} OnFleet Africa · Johannesburg, South Africa · WhatsApp 081 539 5612</div>
+        <div className="mt-3">© {new Date().getFullYear()} {entity.legalName || brandFullName} · Johannesburg, South Africa · WhatsApp 081 539 5612</div>
+        <div className="mt-3" style={{ display: 'flex', flexWrap: 'wrap', gap: 14, justifyContent: 'center' }}>
+          {LEGAL_LINKS.map(l => <Link key={l.to} to={l.to} style={{ color: 'inherit' }}>{l.label}</Link>)}
+        </div>
       </footer>
 
       <div className="mobile-cta-bar">

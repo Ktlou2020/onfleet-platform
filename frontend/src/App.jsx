@@ -99,6 +99,10 @@ const FleetImpersonate = lazy(() => import('./pages/fleet/FleetImpersonate'));
 const FleetRiderApply = lazy(() => import('./pages/FleetRiderApply'));
 const Privacy = lazy(() => import('./pages/Privacy'));
 const Terms = lazy(() => import('./pages/Terms'));
+const AcceptableUse = lazy(() => import('./pages/AcceptableUse'));
+const Cookies = lazy(() => import('./pages/Cookies'));
+const Refunds = lazy(() => import('./pages/Refunds'));
+const Paia = lazy(() => import('./pages/Paia'));
 const ControlRoom = lazy(() => import('./pages/ControlRoom'));
 const ControlRoomAlerts = lazy(() => import('./pages/ControlRoomAlerts'));
 const NightLockBoard = lazy(() => import('./components/NightLockBoard'));
@@ -180,6 +184,10 @@ export default function App() {
           <Route path="/fleet" element={<FleetOwnerPilot />} />
           <Route path="/privacy" element={<Privacy />} />
           <Route path="/terms" element={<Terms />} />
+          <Route path="/acceptable-use" element={<AcceptableUse />} />
+          <Route path="/cookies" element={<Cookies />} />
+          <Route path="/refunds" element={<Refunds />} />
+          <Route path="/paia" element={<Paia />} />
           <Route path="/rider-portal/:token" element={<RiderPortal />} />
           <Route path="/fleet/login" element={<FleetLogin />} />
           <Route path="/fleet/signup" element={<FleetSignup />} />

@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../api';
 import { Loading, Badge, SearchInput, Pagination, EmptyState, fmtDate, matchesSearch, paginateItems } from '../../components/ui';
-import { FolderOpen, LogIn } from 'lucide-react';
+import { Download, FolderOpen, LogIn } from 'lucide-react';
+import { downloadCsv, csvDate, csvToday } from '../../utils/downloadCsv';
 import RiderDocumentsModal from '../../components/RiderDocumentsModal';
 import RiderLoginHistoryModal from '../../components/RiderLoginHistoryModal';
 
@@ -26,6 +27,37 @@ const RATING_FILTERS = [
   { id: 'attention', label: 'Needs attention (<40)' },
   { id: 'unrated', label: 'No rating yet' },
 ];
+
+// The table stacks name over email over phone and hides half the columns on a
+// phone; the export splits them out, because a spreadsheet sorts on columns.
+// The score's two halves travel together — a bare 70 means nothing to someone
+// who does not know where the bands sit — and so do the alert counts, which
+// the page only shows in a tooltip and which are the reason for a low score.
+function exportRiders(rows, ratingFilter) {
+  downloadCsv(
+    `riders-${ratingFilter || 'all'}-${csvToday()}.csv`,
+    ['Rider ID', 'Name', 'Email', 'Phone', 'Status', 'Bike', 'Rating', 'Rating band', 'Critical alerts (90d)', 'Driving alerts (90d)', 'Payments late or overdue', 'Payments reckoned', 'Address check', 'Joined'],
+    rows.map((rider) => {
+      const sc = rider.scorecard;
+      return [
+        rider.id,
+        rider.full_name,
+        rider.email,
+        rider.phone,
+        rider.status,
+        sc?.bike_registration || '',
+        sc ? sc.score : '',
+        sc ? ratingLabel(sc.score) : 'No rating yet',
+        sc ? sc.critical_alerts_90d : '',
+        sc ? sc.driving_alerts_90d : '',
+        sc ? sc.payment_late_or_overdue : '',
+        sc ? sc.payment_reckoned : '',
+        sc?.address_match_status || '',
+        csvDate(rider.created_at),
+      ];
+    })
+  );
+}
 
 export default function AdminRiders() {
   const [riders, setRiders] = useState(null);
@@ -81,6 +113,16 @@ export default function AdminRiders() {
           <h1 className="page-title">Riders</h1>
           <p className="page-sub">All riders and their reliability ratings — computed live from alert history, payment record, and address verification.</p>
         </div>
+        {/* Exports what the filters say, not what the page shows: the rating
+            pill, the search box and every page of results. */}
+        <button
+          className="btn btn-secondary"
+          disabled={!filtered.length}
+          onClick={() => exportRiders(filtered, ratingFilter)}
+          title={`Export ${filtered.length} matching rider${filtered.length === 1 ? '' : 's'} to CSV`}
+        >
+          <Download size={14} /> Export CSV
+        </button>
       </div>
 
       <div className="card" style={{ padding: 0 }}>

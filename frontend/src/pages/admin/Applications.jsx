@@ -5,48 +5,37 @@ import api from '../../api';
 import toast from 'react-hot-toast';
 import { Loading, Badge, Modal, Pagination, SearchInput, fmt, fmtDate, matchesSearch, paginateItems } from '../../components/ui';
 import { sortNewestFirst } from '../../utils/sortNewestFirst';
+import { downloadCsv, csvDate, csvToday } from '../../utils/downloadCsv';
 
 const today = new Date().toISOString().slice(0, 10);
 const canReview = (application) => ['submitted', 'under_review'].includes(application.status);
 
-// A CSV is opened in a spreadsheet rather than read, so the export does not
-// reuse the table's formatting: "15 Nov 2026" and "R1 234,00" both sort as
-// text and neither adds up. Dates go out as YYYY-MM-DD, built from local
-// parts rather than toISOString, which would move an early-morning SAST
-// submission back to the previous day. Money and counts go out bare.
-const csvDate = (value) => {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-};
-
+// The table stacks rider over email over phone, and bike over registration;
+// the export splits them, because a spreadsheet sorts on columns. Money and
+// counts go out bare for the same reason — "R1 234,00" and "0 files" are
+// strings as far as a spreadsheet is concerned.
+//
 // Banking and ID fields are on these rows and are deliberately left out: this
 // file leaves the console as an attachment, and a rider's account number is
 // not something to put in one by default.
-function downloadCsv(applications, status) {
-  const headers = ['Application ID', 'Submitted', 'Rider', 'Email', 'Phone', 'Bike', 'Registration', 'Avg weekly earnings', 'Documents', 'Decision', 'Status'];
-  const rows = applications.map((application) => [
-    application.id,
-    csvDate(application.submitted_at),
-    application.full_name,
-    application.email,
-    application.phone,
-    application.make ? `${application.make} ${application.model}` : '',
-    application.registration,
-    application.average_weekly_earnings ?? '',
-    application.document_count ?? 0,
-    application.auto_decision ? application.auto_decision.replace(/_/g, ' ') : '',
-    application.status
-  ]);
-  const csv = [headers, ...rows].map((row) => row.map((cell) => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
-  const blob = new Blob([csv], { type: 'text/csv' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `applications-${status || 'all'}-${today}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
+function exportApplications(applications, status) {
+  downloadCsv(
+    `applications-${status || 'all'}-${csvToday()}.csv`,
+    ['Application ID', 'Submitted', 'Rider', 'Email', 'Phone', 'Bike', 'Registration', 'Avg weekly earnings', 'Documents', 'Decision', 'Status'],
+    applications.map((application) => [
+      application.id,
+      csvDate(application.submitted_at),
+      application.full_name,
+      application.email,
+      application.phone,
+      application.make ? `${application.make} ${application.model}` : '',
+      application.registration,
+      application.average_weekly_earnings ?? '',
+      application.document_count ?? 0,
+      application.auto_decision ? application.auto_decision.replace(/_/g, ' ') : '',
+      application.status
+    ])
+  );
 }
 
 function bikeOptionLabel(bike) {
@@ -252,7 +241,7 @@ export default function AdminApplications() {
           <button
             className="btn btn-secondary"
             disabled={!filtered.length}
-            onClick={() => downloadCsv(filtered, status)}
+            onClick={() => exportApplications(filtered, status)}
             title={`Export ${filtered.length} matching ${filtered.length === 1 ? 'application' : 'applications'} to CSV`}
           >
             <Download size={14} /> Export CSV

@@ -130,6 +130,57 @@ describe.skipIf(!process.env.DATABASE_URL)('fleet tracking panels', () => {
     });
   });
 
+  // The Controls panel is the same component on both mounts, so what it offers
+  // has to match what these routes implement. It did not: Firmware and FOTA
+  // came back "Unknown preset", and so did the console's own Request current
+  // position button. These pin the list in both directions, because a button
+  // that fails reads as a broken tracker rather than a screen offering
+  // something it was never going to do.
+  describe('what a fleet may send to its own tracker', () => {
+    const send = (deviceId, body) =>
+      request(app).post(`/api/fleet/tracking/devices/${deviceId}/commands`).set(asA()).send(body);
+
+    it.each([
+      ['get_gps',        'getgps'],
+      ['get_status',     'getstatus'],
+      ['get_info',       'getinfo'],
+      ['cut_engine',     'setdigout 1'],
+      ['restore_engine', 'setdigout 0'],
+    ])('sends %s', async (preset, command) => {
+      const res = await send(deviceA.id, { preset });
+      expect(res.status).toBe(200);
+      expect(res.body.command).toBe(command);
+    });
+
+    // Maintaining the hardware is the operator's job: reading a firmware
+    // version, pushing a firmware update, rebooting the device.
+    it.each(['get_ver', 'fota_connect', 'reset_device'])('refuses %s', async (preset) => {
+      const res = await send(deviceA.id, { preset });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/Unknown preset/);
+    });
+
+    // Preset-only, so a fleet cannot post an arbitrary string at a vehicle.
+    it('refuses a raw command string', async () => {
+      const res = await send(deviceA.id, { command: 'setdigout 1' });
+      expect(res.status).toBe(400);
+    });
+
+    it('cannot command another fleet\'s device', async () => {
+      const res = await send(deviceB.id, { preset: 'cut_engine' });
+      expect(res.status).toBe(404);
+    });
+
+    // There is no bulk route here, which is why the console hides the Select
+    // button on this mount rather than offering a toolbar that 404s.
+    it('has no bulk dispatch at all', async () => {
+      const res = await request(app)
+        .post('/api/fleet/tracking/devices/commands-bulk').set(asA())
+        .send({ preset: 'cut_engine', ids: [deviceA.id] });
+      expect(res.status).toBe(404);
+    });
+  });
+
   describe('the command log', () => {
     beforeEach(() => pgDb.query(
       `INSERT INTO tracking_commands (device_id, command, status) VALUES ($1,'setdigout 1','sent')`,

@@ -3628,11 +3628,21 @@ const { deviceStatus } = require('./tracking');
 const { ALL_ALERT_TYPES: ALL_TRACKING_ALERT_TYPES } = require('../constants/alertTypes');
 const trackingEvents  = require('../trackingEvents');
 const { cutCommandForModel, restoreCommandForModel } = require('../services/engineCommands');
+// What a fleet may send to a tracker on its own bike. Deliberately shorter
+// than the operator's list: a fleet watches its vehicles and can stop one, it
+// does not maintain the hardware, so reading a firmware version and pushing a
+// firmware update are not here and are not meant to be.
+//
+// get_gps is, and the console has been offering the button all along. Asking a
+// tracker where it is changes nothing on the device, and the map and live
+// positions are the first thing the basic tier sells — "where is this bike
+// right now" is the question the screen exists to answer.
 const FLEET_TRACKING_PRESETS = {
   cut_engine:     (model) => cutCommandForModel(model),
   restore_engine: (model) => restoreCommandForModel(model),
   get_info:   () => 'getinfo',
   get_status: () => 'getstatus',
+  get_gps:    () => 'getgps',
 };
 
 /**
@@ -4044,6 +4054,14 @@ router.post('/tracking/devices/:id/commands', fleetSection('tracking', 'manage')
   );
   const cmdId = cmdRows[0].id;
   const sentNow = teltonikaServer.sendCommand(device.imei, cmdId, command);
+  // The same nudge the operator's console gets, for the same reason: an FMB920
+  // keeps no socket open between reports, so without this a position request
+  // on a parked bike is queued rather than answered, and the fleet is told to
+  // wait for a connection that may be an hour off.
+  let woke = false;
+  if (!sentNow && command === 'getgps') {
+    woke = teltonikaServer.sendWakePacket(device.imei);
+  }
   await logAudit(req.user.id, `fleet_tracking.${preset}`, 'tracking_devices', device.id, { preset, bike_id: device.bike_id }, req.ip);
 
   // Track cut state persistently — setdigout doesn't survive a device power
@@ -4065,7 +4083,11 @@ router.post('/tracking/devices/:id/commands', fleetSection('tracking', 'manage')
     id: cmdId,
     command,
     status: sentNow ? 'sent' : 'pending',
-    note: sentNow ? 'Command sent to device' : 'Device offline — command queued for when it reconnects',
+    note: sentNow
+      ? 'Command sent to device'
+      : woke
+        ? 'Wake signal sent — device will respond shortly'
+        : 'Device offline — command queued for when it reconnects',
   });
 });
 

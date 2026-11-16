@@ -203,6 +203,13 @@ const DIAG_CMDS = [
   { id: 'get_ver',      label: 'Firmware',    icon: Info },
   { id: 'fota_connect', label: 'FOTA update', icon: Radio },
 ];
+
+// What the fleet's own routes implement, mirroring FLEET_TRACKING_PRESETS in
+// backend/src/routes/fleet.js. A list rather than something derived from the
+// tier, because this is not a question of what a fleet pays for: reading a
+// firmware version and pushing a firmware update are maintenance of the
+// operator's hardware and are not offered at any price.
+const FLEET_COMMANDS = new Set(['cut_engine', 'restore_engine', 'get_info', 'get_status', 'get_gps']);
 const MODELS = [
   { value: 'FMB920', label: 'FMB920 — standard GPS tracker' },
   { value: 'FMB965', label: 'FMB965 — advanced tracker (LTE)' },
@@ -499,6 +506,25 @@ export default function Tracking({ readOnly = false, apiBase = '/tracking', tier
   // /api/fleet/tracking either, so this is what keeps the fleet mount from
   // firing calls that 404.
   const isOperatorConsole = tier === null;
+
+  // Whether this mount can actually send a command, which is a different
+  // question from whether the screen has a button for it — and until now the
+  // screen did not ask. Three mounts, three answers, and the backend gives
+  // them: the platform's command endpoint is adminOnly, so the control room,
+  // which has this screen open all night, could send none of these and every
+  // button in the Controls tab answered 403; the fleet's routes know a shorter
+  // list, so Firmware and FOTA came back "Unknown preset" there.
+  //
+  // A button that fails is worse than no button. It reads as a broken tracker
+  // — which is exactly what somebody is on this screen to find out about —
+  // rather than as a screen offering something it was never going to do.
+  const canSend = useCallback((id) => {
+    if (readOnly) return false;
+    if (isOperatorConsole) return true;
+    return FLEET_COMMANDS.has(id);
+  }, [readOnly, isOperatorConsole]);
+
+  const diagCmds = useMemo(() => DIAG_CMDS.filter((c) => canSend(c.id)), [canSend]);
 
   const tierAllows = useCallback((needed) => {
     if (!tier) return true;
@@ -1539,7 +1565,10 @@ export default function Tracking({ readOnly = false, apiBase = '/tracking', tier
                 style={{ width: '100%', paddingLeft: 26, paddingRight: 8, fontSize: 12, height: 30, boxSizing: 'border-box' }}
               />
             </div>
-            {!readOnly && (
+            {/* Operator only: commanding devices in bulk has no route under
+                /api/fleet/tracking, so on a fleet mount this opened a toolbar
+                whose Cut and Restore buttons answered 404. */}
+            {!readOnly && isOperatorConsole && (
               <button
                 className="btn btn-sm btn-secondary"
                 style={{ fontSize: 11, flexShrink: 0 }}
@@ -1643,12 +1672,12 @@ export default function Tracking({ readOnly = false, apiBase = '/tracking', tier
                     {d.device_status === 'active' && positionIsFresh(mapD || d) && kmh <= 5 && mapD?.ignition !== null && (
                       <span style={{ fontSize: 10, color: mapD?.ignition ? '#22c55e' : 'var(--muted)', flexShrink: 0 }}>{mapD?.ignition ? 'IGN' : 'idle'}</span>
                     )}
-                    <button className="btn btn-sm" style={{ padding: '2px 4px', opacity: requestingPos.has(d.id) ? 1 : 0.45, background: 'transparent', minWidth: 0, color: requestingPos.has(d.id) ? '#1E88D1' : undefined }}
+                    {canSend('get_gps') && <button className="btn btn-sm" style={{ padding: '2px 4px', opacity: requestingPos.has(d.id) ? 1 : 0.45, background: 'transparent', minWidth: 0, color: requestingPos.has(d.id) ? '#1E88D1' : undefined }}
                       title="Request current position"
                       onClick={e => { e.stopPropagation(); requestPosition(d.id); }}
                       disabled={requestingPos.has(d.id)}>
                       <MapPin size={10} />
-                    </button>
+                    </button>}
                     {!readOnly && isOperatorConsole && <button className="btn btn-sm" style={{ padding: '2px 4px', opacity: 0.45, background: 'transparent', minWidth: 0 }}
                       onClick={e => deleteDevice(e, d.id)} title="Remove"><Trash2 size={10} /></button>}
                   </div>
@@ -2798,7 +2827,7 @@ export default function Tracking({ readOnly = false, apiBase = '/tracking', tier
             </div>
 
             {/* Request position */}
-            <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
+            {canSend('get_gps') && <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8 }}>Position</div>
               {!selectedDevice.connected && (
                 <div style={{ fontSize: 11, color: '#6366f1', marginBottom: 8, padding: '5px 8px', background: 'rgba(99,102,241,.08)', borderRadius: 6, border: '1px solid rgba(99,102,241,.18)' }}>
@@ -2810,10 +2839,10 @@ export default function Tracking({ readOnly = false, apiBase = '/tracking', tier
                 <MapPin size={13} />
                 {requestingPos.has(selected) ? 'Waiting for device…' : 'Request current position'}
               </button>
-            </div>
+            </div>}
 
             {/* Engine control */}
-            {!readOnly && <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
+            {canSend('cut_engine') && <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8 }}>Engine control</div>
               {!selectedDevice.connected && (
                 <div style={{ fontSize: 11, color: '#f97316', marginBottom: 8, padding: '6px 8px', background: 'rgba(249,115,22,.1)', borderRadius: 6, border: '1px solid rgba(249,115,22,.2)' }}>
@@ -2834,10 +2863,10 @@ export default function Tracking({ readOnly = false, apiBase = '/tracking', tier
             </div>}
 
             {/* Diagnostics */}
-            <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
+            {diagCmds.length > 0 && <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8 }}>Diagnostics</div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5 }}>
-                {DIAG_CMDS.map(({ id, label, icon: Icon }) => (
+                {diagCmds.map(({ id, label, icon: Icon }) => (
                   <button key={id} className="btn btn-sm btn-secondary"
                     style={{ justifyContent: 'center', gap: 5, fontSize: 11 }}
                     disabled={!!sendingCmd} onClick={() => sendPreset(id)}>
@@ -2845,14 +2874,14 @@ export default function Tracking({ readOnly = false, apiBase = '/tracking', tier
                   </button>
                 ))}
               </div>
-            </div>
+            </div>}
 
             {/* Reset the tracker. Fitting and maintaining the hardware is the
                 operator's job on every deployment — a fleet watches its bikes
                 and can stop one, it does not reboot trackers — so this is
                 gated the same way the install check above it is, and the
                 preset does not exist under /api/fleet/tracking either. */}
-            {!readOnly && isOperatorConsole && <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
+            {canSend('reset_device') && <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8 }}>Device reset</div>
               <button className="btn btn-sm btn-secondary" style={{ width: '100%', gap: 7, justifyContent: 'center' }}
                 disabled={!!sendingCmd} onClick={() => sendPreset('reset_device')}>

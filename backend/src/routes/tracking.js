@@ -28,6 +28,16 @@ const PRESET_COMMANDS = {
   get_status:     () => 'getstatus',
   get_ver:        () => 'getver',
   get_param:      () => 'getparam 2004',
+  // Reboot the tracker. Teltonika's cpureset is documented as returning
+  // nothing: the device restarts, which drops the TCP link, so the reply we
+  // normally wait for never comes and never will. teltonikaServer closes this
+  // one out on dispatch for that reason — see NO_REPLY_COMMANDS there.
+  //
+  // A reboot, not a factory reset: parameters, the server address and the
+  // records still on the device all survive it. It is the thing to try when a
+  // tracker is connected but behaving oddly — stuck ignition, no fix despite
+  // satellites, a firmware update that did not take.
+  reset_device:   () => 'cpureset',
 };
 
 // Device status thresholds.
@@ -795,7 +805,11 @@ router.post('/devices/:id/commands', authRequired, adminOnly, async (req, res) =
   const cmdId = cmdRows[0].id;
   const sentNow = teltonikaServer.sendCommand(device.imei, cmdId, command);
   let woke = false;
-  if (!sentNow && command === 'getgps') {
+  // The same nudge a position request gets, for the same reason: an FMB920
+  // spends most of its life with no socket open, so "queued for the next
+  // connection" can mean hours. Both of these are asked for because somebody
+  // needs an answer about this bike now.
+  if (!sentNow && (command === 'getgps' || command === 'cpureset')) {
     woke = teltonikaServer.sendWakePacket(device.imei);
   }
 
@@ -831,17 +845,36 @@ router.post('/devices/:id/commands', authRequired, adminOnly, async (req, res) =
       { bike_id: device.bike_id, imei: device.imei, curfew_reprieve_until: reprievedUntil }, req.ip);
     notifyRiderEngineState(device.bike_id, 'restored')
       .catch((e) => console.error('[EngineCut] rider notify failed:', e.message));
+  } else if (req.body.preset === 'reset_device') {
+    // Audited like the engine commands rather than left to the command log,
+    // because a reset has a consequence the command log does not record: the
+    // bike is off the network for about a minute, and if it was immobilised
+    // then the cut goes with the reboot until the device reconnects and
+    // flushOnConnect re-asserts it. When somebody later asks why there is a
+    // blind minute in a bike's history, this row is the answer.
+    await logAudit(req.user.id, 'tracking.device_reset', 'tracking_devices', device.id,
+      { bike_id: device.bike_id, imei: device.imei, engine_cut_active: !!device.engine_cut_active }, req.ip);
   }
 
+  // A reset earns its own wording. "Command sent to device" is true but reads
+  // as "done", and the operator's next question is whether to worry when the
+  // tracker drops off the map ten seconds later.
+  const isReset = req.body.preset === 'reset_device';
   res.json({
     id: cmdId,
     command,
     status: sentNow ? 'sent' : 'pending',
     note: sentNow
-      ? 'Command sent to device'
+      ? isReset
+        ? 'Reset sent — the tracker will drop off and reconnect in about a minute'
+        : 'Command sent to device'
       : woke
-        ? 'Wake signal sent — device will respond shortly'
-        : 'Device offline — command queued for next connection',
+        ? isReset
+          ? 'Wake signal sent — the tracker will reset once it connects'
+          : 'Wake signal sent — device will respond shortly'
+        : isReset
+          ? 'Device offline — reset queued for its next connection'
+          : 'Device offline — command queued for next connection',
   });
 });
 

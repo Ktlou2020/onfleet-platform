@@ -346,13 +346,36 @@ async function storeCommandResponse(imei, response, socket) {
   console.log(`[Teltonika] getgps position stored for ${imei}: ${lat},${lng}`);
 }
 
+// Commands a device answers by going away instead of replying.
+//
+// cpureset returns nothing: the tracker reboots, and the reboot drops the TCP
+// link. Every other command here is tracked by putting it in flight and
+// waiting for the device to answer, and both of the things that clear a
+// command out of flight — the reply timeout and the socket closing — mark it
+// failed. So a reset that worked perfectly would land in the command history
+// as "Failed — No reply — connection closed", and the operator, reading that,
+// would send it again.
+//
+// There is no reply to wait for, so it is never put in flight. The write
+// going out on an open socket is the whole of what we will ever know about
+// it, and the response text says exactly that rather than implying the device
+// confirmed anything.
+const NO_REPLY_COMMANDS = new Set(['cpureset']);
+
 // ── Dispatch a command to a connected device ──────────────────────────────────
 function dispatchCommand(socket, imei, cmdId, command) {
   try {
     socket.write(buildCommandPacket(command));
-    (socket.inflight ||= []).push({ id: cmdId, sentAt: Date.now() });
-    pgDb.query(`UPDATE tracking_commands SET status='sent', sent_at=NOW() WHERE id=$1`, [cmdId])
-      .catch(console.error);
+    if (NO_REPLY_COMMANDS.has(command)) {
+      pgDb.query(
+        `UPDATE tracking_commands SET status='delivered', sent_at=NOW(), responded_at=NOW(), response=$2 WHERE id=$1`,
+        [cmdId, 'Sent — this command reboots the device, which replies by disconnecting']
+      ).catch(console.error);
+    } else {
+      (socket.inflight ||= []).push({ id: cmdId, sentAt: Date.now() });
+      pgDb.query(`UPDATE tracking_commands SET status='sent', sent_at=NOW() WHERE id=$1`, [cmdId])
+        .catch(console.error);
+    }
     console.log(`[Teltonika] → ${imei}: ${command}`);
   } catch (err) {
     console.error(`[Teltonika] send failed (${imei}):`, err.message);

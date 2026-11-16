@@ -14,7 +14,7 @@ import {
   AlertCircle, X, Search, Layers, Maximize2, Navigation, Gauge, Mountain, MapPin, Activity,
   Shield, Bell, Route, BellOff, Pencil, Settings, Mail, Moon, Battery, BatteryLow, BatteryMedium,
   BatteryFull, Satellite, Play, Pause, SkipBack, LayoutDashboard, List as ListIcon,
-  Map as MapIcon, Eye,
+  Map as MapIcon, Eye, RotateCcw,
 } from 'lucide-react';
 import api from '../../api';
 import toast from 'react-hot-toast';
@@ -372,6 +372,7 @@ const CMD_LABEL_MAP = {
   'setdigout 1 0':  'Restore Engine',
   'setdigout 2 1':  'Cut Engine',
   'setdigout 2 0':  'Restore Engine',
+  'cpureset':       'Reset Device',
 };
 function getCmdLabel(raw) { return CMD_LABEL_MAP[String(raw || '').trim()] || raw || '—'; }
 
@@ -1164,6 +1165,21 @@ export default function Tracking({ readOnly = false, apiBase = '/tracking', tier
     if (presetId === 'cut_engine') {
       const dev = devices.find(d => d.id === selected);
       if (!window.confirm(`Cut the engine on ${dev?.label || dev?.registration || 'this device'}?\nThe rider will lose ignition power.`)) return;
+    }
+    // A reset is not destructive, but it does buy a blind minute, and on an
+    // immobilised bike the cut goes with the reboot until the tracker comes
+    // back and the server re-asserts it. Both worth reading before clicking.
+    if (presetId === 'reset_device') {
+      const dev = devices.find(d => d.id === selected);
+      const lines = [
+        `Reset the tracker on ${dev?.label || dev?.registration || 'this device'}?`,
+        '',
+        'It reboots and reconnects in about a minute. Settings and stored trips survive; you will have no position for that minute.',
+      ];
+      if (dev?.engine_cut_active) {
+        lines.push('', 'This bike is immobilised. A reboot clears the cut on the device — the engine can start until the tracker reconnects and the cut is re-applied.');
+      }
+      if (!window.confirm(lines.join('\n'))) return;
     }
     setSendingCmd(presetId);
     try {
@@ -2830,6 +2846,26 @@ export default function Tracking({ readOnly = false, apiBase = '/tracking', tier
                 ))}
               </div>
             </div>
+
+            {/* Reset the tracker. Fitting and maintaining the hardware is the
+                operator's job on every deployment — a fleet watches its bikes
+                and can stop one, it does not reboot trackers — so this is
+                gated the same way the install check above it is, and the
+                preset does not exist under /api/fleet/tracking either. */}
+            {!readOnly && isOperatorConsole && <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8 }}>Device reset</div>
+              <button className="btn btn-sm btn-secondary" style={{ width: '100%', gap: 7, justifyContent: 'center' }}
+                disabled={!!sendingCmd} onClick={() => sendPreset('reset_device')}>
+                <RotateCcw size={13} />
+                {sendingCmd === 'reset_device' ? 'Sending…' : 'Reset device'}
+              </button>
+              <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 6, lineHeight: 1.45 }}>
+                Reboots the tracker — settings and stored trips are kept. Try this when a device is connected but reporting nonsense.
+                {selectedDevice.engine_cut_active && <span style={{ color: '#f97316', display: 'block', marginTop: 4 }}>
+                  This bike is immobilised: the cut is re-applied when the tracker reconnects, not during the reboot.
+                </span>}
+              </div>
+            </div>}
 
             {/* Command history */}
             <div style={{ padding: '10px 14px' }}>

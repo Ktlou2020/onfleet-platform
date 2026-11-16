@@ -191,6 +191,36 @@ describe.skipIf(!process.env.DATABASE_URL)('matching device replies to the comma
     sock.destroy();
   });
 
+  // A reset is the one command that is finished the moment it leaves: cpureset
+  // reboots the tracker, and the reboot is what drops the connection. Both of
+  // the paths that clear a command out of flight mark it failed, so without
+  // the no-reply case a reset that worked read as "Failed — No reply" in the
+  // Controls tab, and the operator's reasonable response was to send it again.
+  it('closes a reset out on dispatch rather than waiting for a reply', async () => {
+    const reset = await queue('cpureset');
+    const { sock, commands } = await connectDevice(port);
+
+    await until(() => commands().length >= 1);
+    expect(commands()).toEqual(['cpureset']);
+    await until(async () => (await row(reset)).status === 'delivered');
+    expect(await row(reset)).toEqual({
+      status: 'delivered',
+      response: 'Sent — this command reboots the device, which replies by disconnecting',
+    });
+    sock.destroy();
+  });
+
+  it('leaves a reset delivered when the reboot drops the connection', async () => {
+    const reset = await queue('cpureset');
+    const { sock, commands } = await connectDevice(port);
+    await until(() => commands().length >= 1);
+    await until(async () => (await row(reset)).status === 'delivered');
+
+    sock.destroy(); // the reboot
+    await wait(300); // long enough for the close handler to have failed it
+    expect((await row(reset)).status).toBe('delivered');
+  });
+
   it('does not re-send a restore the device already confirmed', async () => {
     await queue('setdigout ?0', 'delivered', 5);
     const { sock, commands } = await connectDevice(port);

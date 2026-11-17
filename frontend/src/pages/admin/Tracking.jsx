@@ -98,6 +98,62 @@ export function positionIsFresh(d) {
   return Number.isFinite(age) && age >= 0 && age < POSITION_FRESH_MS;
 }
 
+const fmtBacklogDay = (d) => d
+  ? new Date(d).toLocaleDateString('en-ZA', { ...SAST, day: 'numeric', month: 'short' })
+  : '';
+
+// Why a connected tracker has no current position.
+//
+// Three different situations used to share the words "no fix", and they want
+// opposite things from whoever reads them:
+//
+//   catching up   the tracker is talking, and sending positions, but every
+//                 one is months old. It ran without a server, buffered to its
+//                 own memory and is now replaying oldest-first. Nothing is
+//                 broken and nothing will improve by waiting a few minutes —
+//                 Pillion had one that would have taken three weeks. Clear
+//                 the backlog from Controls.
+//   no satellite  the tracker has never reported a position at all. It has
+//                 GSM but no GNSS lock. Somebody has to go and look at the
+//                 antenna.
+//   no fix        it has reported positions before, just not in the last
+//                 quarter of an hour. Usually a parked bike with its GNSS
+//                 asleep, and usually nothing at all.
+//
+// The first two read as "the tracker is broken" when they are labelled the
+// same, and only one of them is.
+export function noFixState(d) {
+  const seen = d?.backlog_seen_at;
+  if (seen) {
+    // Same window a position has to fall inside to count as current. A
+    // too-old record arriving within it means the replay is happening now.
+    const age = Date.now() - new Date(seen).getTime();
+    if (Number.isFinite(age) && age >= 0 && age < POSITION_FRESH_MS) {
+      const reached = fmtBacklogDay(d.backlog_until);
+      return {
+        id: 'catching_up',
+        label: reached ? `catching up · ${reached}` : 'catching up',
+        color: '#6366f1',
+        title: `Replaying stored records${reached ? `, and has reached ${reached}` : ''}. This tracker recorded positions while it had no server and is uploading them oldest-first; it has no live position until it catches up, which can take weeks. Clear the device backlog from Controls to stop it, or use Request current position for a fix right now.`,
+      };
+    }
+  }
+  if (!d?.last_location_at) {
+    return {
+      id: 'no_satellite',
+      label: 'no satellite fix',
+      color: '#f97316',
+      title: 'Connected over the mobile network, but this tracker has never reported a position — it has not achieved a satellite lock. Check the GPS antenna and where the bike is parked.',
+    };
+  }
+  return {
+    id: 'stale',
+    label: 'no fix',
+    color: 'var(--muted)',
+    title: 'Connected, but no position fix in the last 15 minutes — speed and ignition below are the last values reported, not current. Normal for a parked bike with its GPS asleep.',
+  };
+}
+
 function deviceIcon(d) {
   const status = d.device_status || (d.connected ? 'active' : 'offline');
   const riskLevel = (d.risk_level === 'critical' || d.risk_level === 'elevated') ? d.risk_level : null;
@@ -1680,10 +1736,11 @@ export default function Tracking({ readOnly = false, apiBase = '/tracking', tier
                     {d.device_status === 'sleeping' && (
                       <span style={{ fontSize: 10, color: '#6366f1', fontWeight: 600, flexShrink: 0 }}>Sleep</span>
                     )}
-                    {d.device_status === 'active' && !positionIsFresh(mapD || d) && (
-                      <span title="Connected, but no position fix in the last 15 minutes — speed and ignition below are the last values reported, not current"
-                        style={{ fontSize: 10, color: 'var(--muted)', flexShrink: 0 }}>no fix</span>
-                    )}
+                    {d.device_status === 'active' && !positionIsFresh(mapD || d) && (() => {
+                      const nf = noFixState(d);
+                      return <span title={nf.title}
+                        style={{ fontSize: 10, color: nf.color, fontWeight: nf.id === 'stale' ? 400 : 600, flexShrink: 0 }}>{nf.label}</span>;
+                    })()}
                     {d.device_status === 'active' && positionIsFresh(mapD || d) && kmh > 5 && (
                       <span style={{ fontSize: 10, color: speedColor(kmh), fontWeight: 700, flexShrink: 0 }}>{Math.round(kmh)} km/h</span>
                     )}
@@ -2920,6 +2977,14 @@ export default function Tracking({ readOnly = false, apiBase = '/tracking', tier
                   This is the way out, and it throws away what has not been
                   uploaded yet. */}
               <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px dashed var(--border)' }}>
+                {/* Said here as well as in the device list, because this is
+                    where somebody decides whether to press the button, and
+                    the date it has reached is the whole argument for it. */}
+                {noFixState(selectedDevice).id === 'catching_up' && (
+                  <div style={{ fontSize: 11, color: '#6366f1', marginBottom: 8, padding: '6px 8px', background: 'rgba(99,102,241,.08)', borderRadius: 6, border: '1px solid rgba(99,102,241,.18)' }}>
+                    Replaying stored records — up to {fmtBacklogDay(selectedDevice.backlog_until)} so far. No live position until it catches up.
+                  </div>
+                )}
                 <button className="btn btn-sm btn-danger" style={{ width: '100%', gap: 7, justifyContent: 'center' }}
                   disabled={!!sendingCmd} onClick={() => sendPreset('clear_backlog')}>
                   <Trash2 size={13} />

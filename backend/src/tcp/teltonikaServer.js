@@ -178,6 +178,7 @@ async function storeRecords(imei, device, records) {
 
   let latestRec = null;
   let staleCount = 0;
+  let staleNewest = null;
   for (const rec of records) {
     const recAt = new Date(rec.ts).toISOString();
     const ignition = rec.io[239] !== undefined ? rec.io[239] : null;
@@ -197,6 +198,7 @@ async function storeRecords(imei, device, records) {
     // over, and move the bike's last known position to where it was last year.
     if (!isCurrent(rec.ts)) {
       staleCount += 1;
+      if (!staleNewest || rec.ts > staleNewest) staleNewest = rec.ts;
       continue;
     }
 
@@ -212,6 +214,22 @@ async function storeRecords(imei, device, records) {
 
   if (staleCount) {
     console.warn(`[Teltonika] ${imei}: ${staleCount}/${records.length} record(s) outside the live window — stored as history only. Check the device clock if this persists.`);
+  }
+
+  // Write down what the warning above only said out loud. A tracker replaying
+  // months of buffered records and one that has never seen a satellite both
+  // leave the bike with no current position, and the console could not tell
+  // them apart — but they need opposite responses: clear the backlog, or go
+  // and look at the antenna. A current record means the device has caught up,
+  // so the flag is cleared on the same pass that sets the bike's position.
+  if (latestRec) {
+    await pgDb.query(
+      'UPDATE tracking_devices SET backlog_seen_at=NULL, backlog_until=NULL WHERE id=$1 AND backlog_seen_at IS NOT NULL',
+      [device.id]);
+  } else if (staleNewest) {
+    await pgDb.query(
+      'UPDATE tracking_devices SET backlog_seen_at=NOW(), backlog_until=$2 WHERE id=$1',
+      [device.id, new Date(staleNewest).toISOString()]);
   }
 
   if (latestRec) {

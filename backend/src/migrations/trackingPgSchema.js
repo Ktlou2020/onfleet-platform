@@ -29,6 +29,20 @@ async function runTrackingSchema() {
     await pgDb.query(`ALTER TABLE tracking_devices ADD COLUMN IF NOT EXISTS engine_cut_reason TEXT`);
     await pgDb.query(`ALTER TABLE tracking_devices ADD COLUMN IF NOT EXISTS engine_cut_at TIMESTAMPTZ`);
     await pgDb.query(`ALTER TABLE tracking_devices ADD COLUMN IF NOT EXISTS engine_cut_by INTEGER`); // admin user id; NULL = automatic (no-go zone)
+    // Whether this tracker is replaying a backlog, and how far it has got.
+    //
+    // A device that ran without a server buffers to its own memory and, on
+    // connecting, replays the lot oldest-first. Those records are too old to
+    // describe the present, so they never become the bike's position and the
+    // console showed the bike as having no fix — the same words it used for a
+    // tracker with a dead antenna, which is the opposite problem with the
+    // opposite fix. The server could already tell the two apart (it has been
+    // logging the difference all along); it just had nowhere to write it down.
+    //
+    // backlog_seen_at is when a too-old record last arrived, backlog_until is
+    // the newest timestamp in it — the date the replay has reached.
+    await pgDb.query(`ALTER TABLE tracking_devices ADD COLUMN IF NOT EXISTS backlog_seen_at TIMESTAMPTZ`);
+    await pgDb.query(`ALTER TABLE tracking_devices ADD COLUMN IF NOT EXISTS backlog_until TIMESTAMPTZ`);
     await pgDb.query(`
       CREATE TABLE IF NOT EXISTS gps_pings (
         id          BIGSERIAL PRIMARY KEY,

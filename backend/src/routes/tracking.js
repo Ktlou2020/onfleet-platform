@@ -38,6 +38,21 @@ const PRESET_COMMANDS = {
   // tracker is connected but behaving oddly — stuck ignition, no fix despite
   // satellites, a firmware update that did not take.
   reset_device:   () => 'cpureset',
+  // Erase the records still sitting on the tracker.
+  //
+  // A Teltonika that has been running without a server buffers everything to
+  // its own memory and, the moment it does connect, replays the lot
+  // oldest-first. The platform refuses to read a record stamped months ago as
+  // the bike's position right now — it would park the bike where it was in
+  // July — so it files them as history instead, and until the backlog drains
+  // the bike has no current position at all. Worse, nothing that depends on a
+  // live ping runs either: no trips, no geofence checks, no risk scoring, no
+  // overnight curfew. Pillion had three bikes replaying from July and August,
+  // one of them at a rate that would have taken three weeks to catch up.
+  //
+  // This is the way out, and it is destructive: whatever has not yet been
+  // uploaded is gone. What already reached the database stays.
+  clear_backlog:  () => 'deleterecords',
 };
 
 // Device status thresholds.
@@ -845,6 +860,12 @@ router.post('/devices/:id/commands', authRequired, adminOnly, async (req, res) =
       { bike_id: device.bike_id, imei: device.imei, curfew_reprieve_until: reprievedUntil }, req.ip);
     notifyRiderEngineState(device.bike_id, 'restored')
       .catch((e) => console.error('[EngineCut] rider notify failed:', e.message));
+  } else if (req.body.preset === 'clear_backlog') {
+    // Audited because it destroys data on hardware the operator owns, and
+    // because "where did this bike's July trips go" is a question somebody
+    // will eventually ask.
+    await logAudit(req.user.id, 'tracking.backlog_cleared', 'tracking_devices', device.id,
+      { bike_id: device.bike_id, imei: device.imei }, req.ip);
   } else if (req.body.preset === 'reset_device') {
     // Audited like the engine commands rather than left to the command log,
     // because a reset has a consequence the command log does not record: the
@@ -860,6 +881,7 @@ router.post('/devices/:id/commands', authRequired, adminOnly, async (req, res) =
   // as "done", and the operator's next question is whether to worry when the
   // tracker drops off the map ten seconds later.
   const isReset = req.body.preset === 'reset_device';
+  const isClear = req.body.preset === 'clear_backlog';
   res.json({
     id: cmdId,
     command,
@@ -867,7 +889,9 @@ router.post('/devices/:id/commands', authRequired, adminOnly, async (req, res) =
     note: sentNow
       ? isReset
         ? 'Reset sent — the tracker will drop off and reconnect in about a minute'
-        : 'Command sent to device'
+        : isClear
+          ? 'Sent — watch the command history for the device\'s reply before trusting it'
+          : 'Command sent to device'
       : woke
         ? isReset
           ? 'Wake signal sent — the tracker will reset once it connects'

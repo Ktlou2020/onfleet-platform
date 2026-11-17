@@ -154,7 +154,7 @@ describe.skipIf(!process.env.DATABASE_URL)('fleet tracking panels', () => {
 
     // Maintaining the hardware is the operator's job: reading a firmware
     // version, pushing a firmware update, rebooting the device.
-    it.each(['get_ver', 'fota_connect', 'reset_device'])('refuses %s', async (preset) => {
+    it.each(['get_ver', 'fota_connect', 'reset_device', 'clear_backlog'])('refuses %s', async (preset) => {
       const res = await send(deviceA.id, { preset });
       expect(res.status).toBe(400);
       expect(res.body.error).toMatch(/Unknown preset/);

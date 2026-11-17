@@ -380,6 +380,7 @@ const CMD_LABEL_MAP = {
   'setdigout 2 1':  'Cut Engine',
   'setdigout 2 0':  'Restore Engine',
   'cpureset':       'Reset Device',
+  'deleterecords':  'Clear Device Backlog',
 };
 function getCmdLabel(raw) { return CMD_LABEL_MAP[String(raw || '').trim()] || raw || '—'; }
 
@@ -1205,6 +1206,23 @@ export default function Tracking({ readOnly = false, apiBase = '/tracking', tier
       if (dev?.engine_cut_active) {
         lines.push('', 'This bike is immobilised. A reboot clears the cut on the device — the engine can start until the tracker reconnects and the cut is re-applied.');
       }
+      if (!window.confirm(lines.join('\n'))) return;
+    }
+    // The one genuinely destructive command on this screen. It erases records
+    // on the tracker, not in the console, and those are different things:
+    // somebody reading "clear history" will assume this wipes the trips they
+    // can already see, and it does the opposite — it throws away the ones
+    // they have never seen yet.
+    if (presetId === 'clear_backlog') {
+      const dev = devices.find(d => d.id === selected);
+      const lines = [
+        `Erase the records stored on the tracker on ${dev?.label || dev?.registration || 'this device'}?`,
+        '',
+        'This cannot be undone. Any trips the device has recorded but not yet uploaded are lost for good.',
+        'Trips already in the console are not touched.',
+        '',
+        'Do this when a tracker is replaying months of old positions and you need its live position back.',
+      ];
       if (!window.confirm(lines.join('\n'))) return;
     }
     setSendingCmd(presetId);
@@ -2893,6 +2911,24 @@ export default function Tracking({ readOnly = false, apiBase = '/tracking', tier
                 {selectedDevice.engine_cut_active && <span style={{ color: '#f97316', display: 'block', marginTop: 4 }}>
                   This bike is immobilised: the cut is re-applied when the tracker reconnects, not during the reboot.
                 </span>}
+              </div>
+
+              {/* Deliberately below the reset and styled as the danger it is.
+                  A tracker that ran without a server buffers everything and
+                  replays it oldest-first on connect; until that drains the
+                  bike has no live position and nothing that needs one works.
+                  This is the way out, and it throws away what has not been
+                  uploaded yet. */}
+              <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px dashed var(--border)' }}>
+                <button className="btn btn-sm btn-danger" style={{ width: '100%', gap: 7, justifyContent: 'center' }}
+                  disabled={!!sendingCmd} onClick={() => sendPreset('clear_backlog')}>
+                  <Trash2 size={13} />
+                  {sendingCmd === 'clear_backlog' ? 'Sending…' : 'Clear device backlog'}
+                </button>
+                <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 6, lineHeight: 1.45 }}>
+                  Erases the records still on the tracker so it starts sending its current position instead of replaying old ones.
+                  Trips already in the console are kept; anything not yet uploaded is lost.
+                </div>
               </div>
             </div>}
 

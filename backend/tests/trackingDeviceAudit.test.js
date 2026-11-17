@@ -80,6 +80,57 @@ describe.skipIf(!process.env.DATABASE_URL)('tracker audit trail', () => {
   });
 });
 
+// Clearing a tracker's backlog destroys data on hardware the operator owns —
+// whatever the device recorded and has not yet uploaded. The audit row is the
+// only place that decision is recorded, since the device's own memory is the
+// thing being erased.
+describe.skipIf(!process.env.DATABASE_URL)('clearing a tracker backlog', () => {
+  let admin, bike, device;
+
+  beforeEach(async () => {
+    await resetAllPgTables();
+    admin = (await createPgUser({ role: 'admin' })).user;
+    bike = await createPgBike({ registration: 'MX14VSGP' });
+    const { rows } = await pgDb.query(
+      `INSERT INTO tracking_devices (imei, model, bike_id) VALUES ('353201352351578','FMB920',$1) RETURNING *`,
+      [bike.id]);
+    device = rows[0];
+  });
+
+  const send = (preset) =>
+    request(app).post(`/api/tracking/devices/${device.id}/commands`).set(authHeader(admin)).send({ preset });
+
+  it('sends deleterecords and records who did it', async () => {
+    const res = await send('clear_backlog');
+    expect(res.status).toBe(200);
+    expect(res.body.command).toBe('deleterecords');
+
+    const { rows: entries } = await pgDb.query(
+      `SELECT * FROM audit_logs WHERE action = 'tracking.backlog_cleared'`);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].actor_id).toBe(admin.id);
+    const meta = typeof entries[0].metadata === 'string' ? JSON.parse(entries[0].metadata) : entries[0].metadata;
+    expect(meta).toMatchObject({ bike_id: bike.id, imei: '353201352351578' });
+  });
+
+  // It waits for the device to confirm, unlike the reset — the operator needs
+  // to know whether a destructive command actually landed.
+  it('waits for the device to answer rather than closing itself out', async () => {
+    const res = await send('clear_backlog');
+    const { rows } = await pgDb.query(
+      `SELECT status, response FROM tracking_commands WHERE id = $1`, [res.body.id]);
+    expect(rows[0].response).toBeNull();
+    expect(rows[0].status).toBe('pending');
+  });
+
+  it('leaves no audit row for the commands that are not destructive', async () => {
+    await send('get_status');
+    const { rows } = await pgDb.query(
+      `SELECT * FROM audit_logs WHERE action = 'tracking.backlog_cleared'`);
+    expect(rows).toHaveLength(0);
+  });
+});
+
 describe.skipIf(!process.env.DATABASE_URL)('tracker coverage', () => {
   it('counts only active bikes', async () => {
     await resetAllPgTables();
